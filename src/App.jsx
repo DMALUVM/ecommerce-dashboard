@@ -2064,15 +2064,20 @@ const savePeriods = async (d) => {
   // 5. FORECASTING - Simple linear regression based forecast
   const generateForecast = useMemo(() => {
     const sortedWeeks = Object.keys(allWeeksData).sort();
+    const sortedPeriods = Object.keys(allPeriodsData).sort();
     
-    // If we have 4+ weeks of weekly data, use that (most accurate)
+    // Check if we have Amazon forecast data for upcoming weeks
+    const upcomingForecasts = Object.entries(amazonForecasts)
+      .filter(([weekKey]) => new Date(weekKey) > new Date())
+      .sort((a, b) => a[0].localeCompare(b[0]));
+    
+    // Priority 1: If we have 4+ weeks of weekly data, use linear regression (most accurate)
     if (sortedWeeks.length >= 4) {
-      const recentWeeks = sortedWeeks.slice(-8); // Use last 8 weeks for trend
+      const recentWeeks = sortedWeeks.slice(-8);
       const revenues = recentWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
       const profits = recentWeeks.map(w => allWeeksData[w]?.total?.netProfit || 0);
       const units = recentWeeks.map(w => allWeeksData[w]?.total?.units || 0);
       
-      // Simple linear regression
       const calcTrend = (data) => {
         const n = data.length;
         const sumX = data.reduce((s, _, i) => s + i, 0);
@@ -2089,17 +2094,33 @@ const savePeriods = async (d) => {
       const profTrend = calcTrend(profits);
       const unitTrend = calcTrend(units);
       
-      // Project next 4 weeks
       const n = revenues.length;
       const forecast = [];
       for (let i = 0; i < 4; i++) {
         const weekNum = n + i;
-        forecast.push({
-          week: `Week +${i + 1}`,
-          revenue: Math.max(0, revTrend.intercept + revTrend.slope * weekNum),
-          profit: profTrend.intercept + profTrend.slope * weekNum,
-          units: Math.max(0, Math.round(unitTrend.intercept + unitTrend.slope * weekNum)),
-        });
+        // If we have Amazon forecast for this week, blend it
+        const amazonForecast = upcomingForecasts[i]?.[1];
+        const trendRevenue = Math.max(0, revTrend.intercept + revTrend.slope * weekNum);
+        const trendProfit = profTrend.intercept + profTrend.slope * weekNum;
+        const trendUnits = Math.max(0, Math.round(unitTrend.intercept + unitTrend.slope * weekNum));
+        
+        if (amazonForecast) {
+          // Blend: 60% Amazon forecast, 40% trend (Amazon has real-time demand signals)
+          forecast.push({
+            week: `Week +${i + 1}`,
+            revenue: amazonForecast.totals.sales * 0.6 + trendRevenue * 0.4,
+            profit: amazonForecast.totals.proceeds * 0.6 + trendProfit * 0.4,
+            units: Math.round(amazonForecast.totals.units * 0.6 + trendUnits * 0.4),
+            hasAmazonForecast: true,
+          });
+        } else {
+          forecast.push({
+            week: `Week +${i + 1}`,
+            revenue: trendRevenue,
+            profit: trendProfit,
+            units: trendUnits,
+          });
+        }
       }
       
       const monthlyRevenue = forecast.reduce((s, f) => s + f.revenue, 0);
@@ -2120,13 +2141,116 @@ const savePeriods = async (d) => {
         confidence: confidence.toFixed(0),
         basedOn: recentWeeks.length,
         source: 'weekly',
+        amazonBlended: upcomingForecasts.length > 0,
       };
     }
     
-    // Fallback: Use period data if available (less accurate, uses averages)
-    const sortedPeriods = Object.keys(allPeriodsData).sort();
+    // Priority 2: If we have 1-3 weeks of weekly data + period data, blend them
+    if (sortedWeeks.length >= 1 && sortedPeriods.length >= 1) {
+      // Get weekly averages
+      const weeklyRevenues = sortedWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
+      const weeklyProfits = sortedWeeks.map(w => allWeeksData[w]?.total?.netProfit || 0);
+      const weeklyUnits = sortedWeeks.map(w => allWeeksData[w]?.total?.units || 0);
+      const avgWeeklyRev = weeklyRevenues.reduce((s, v) => s + v, 0) / weeklyRevenues.length;
+      const avgWeeklyProfit = weeklyProfits.reduce((s, v) => s + v, 0) / weeklyProfits.length;
+      const avgWeeklyUnits = weeklyUnits.reduce((s, v) => s + v, 0) / weeklyUnits.length;
+      
+      // Get period averages (converted to weekly)
+      let periodTotalRev = 0, periodTotalProfit = 0, periodTotalUnits = 0, periodWeeks = 0;
+      sortedPeriods.forEach(p => {
+        const period = allPeriodsData[p];
+        const rev = (period.amazon?.revenue || 0) + (period.shopify?.revenue || 0);
+        const profit = (period.amazon?.netProfit || 0) + (period.shopify?.netProfit || 0);
+        const units = (period.amazon?.units || 0) + (period.shopify?.units || 0);
+        const startDate = new Date(period.startDate || p);
+        const endDate = new Date(period.endDate || p);
+        const weeks = Math.max(1, Math.round((endDate - startDate) / (1000 * 60 * 60 * 24 * 7)));
+        periodTotalRev += rev;
+        periodTotalProfit += profit;
+        periodTotalUnits += units;
+        periodWeeks += weeks;
+      });
+      const periodWeeklyRev = periodWeeks > 0 ? periodTotalRev / periodWeeks : 0;
+      const periodWeeklyProfit = periodWeeks > 0 ? periodTotalProfit / periodWeeks : 0;
+      const periodWeeklyUnits = periodWeeks > 0 ? periodTotalUnits / periodWeeks : 0;
+      
+      // Blend: Weight recent weekly data more heavily (70%) vs period data (30%)
+      const blendedRev = avgWeeklyRev * 0.7 + periodWeeklyRev * 0.3;
+      const blendedProfit = avgWeeklyProfit * 0.7 + periodWeeklyProfit * 0.3;
+      const blendedUnits = avgWeeklyUnits * 0.7 + periodWeeklyUnits * 0.3;
+      
+      const forecast = [];
+      for (let i = 0; i < 4; i++) {
+        const amazonForecast = upcomingForecasts[i]?.[1];
+        if (amazonForecast) {
+          forecast.push({
+            week: `Week +${i + 1}`,
+            revenue: amazonForecast.totals.sales * 0.5 + blendedRev * 0.5,
+            profit: amazonForecast.totals.proceeds * 0.5 + blendedProfit * 0.5,
+            units: Math.round(amazonForecast.totals.units * 0.5 + blendedUnits * 0.5),
+            hasAmazonForecast: true,
+          });
+        } else {
+          forecast.push({
+            week: `Week +${i + 1}`,
+            revenue: blendedRev,
+            profit: blendedProfit,
+            units: Math.round(blendedUnits),
+          });
+        }
+      }
+      
+      return {
+        weekly: forecast,
+        monthly: { revenue: forecast.reduce((s, f) => s + f.revenue, 0), profit: forecast.reduce((s, f) => s + f.profit, 0), units: forecast.reduce((s, f) => s + f.units, 0) },
+        trend: { revenue: 'flat', revenueChange: 0 },
+        confidence: Math.min(70, 40 + sortedWeeks.length * 10).toFixed(0),
+        basedOn: sortedWeeks.length,
+        source: 'blended',
+        note: `Blending ${sortedWeeks.length} week(s) + ${sortedPeriods.length} period(s). Upload more weekly data for trend analysis.`,
+        amazonBlended: upcomingForecasts.length > 0,
+      };
+    }
+    
+    // Priority 3: Only weekly data (1-3 weeks) - use averages
+    if (sortedWeeks.length >= 1) {
+      const revenues = sortedWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
+      const profits = sortedWeeks.map(w => allWeeksData[w]?.total?.netProfit || 0);
+      const units = sortedWeeks.map(w => allWeeksData[w]?.total?.units || 0);
+      const avgRev = revenues.reduce((s, v) => s + v, 0) / revenues.length;
+      const avgProfit = profits.reduce((s, v) => s + v, 0) / profits.length;
+      const avgUnits = units.reduce((s, v) => s + v, 0) / units.length;
+      
+      const forecast = [];
+      for (let i = 0; i < 4; i++) {
+        const amazonForecast = upcomingForecasts[i]?.[1];
+        if (amazonForecast) {
+          forecast.push({
+            week: `Week +${i + 1}`,
+            revenue: amazonForecast.totals.sales * 0.6 + avgRev * 0.4,
+            profit: amazonForecast.totals.proceeds * 0.6 + avgProfit * 0.4,
+            units: Math.round(amazonForecast.totals.units * 0.6 + avgUnits * 0.4),
+            hasAmazonForecast: true,
+          });
+        } else {
+          forecast.push({ week: `Week +${i + 1}`, revenue: avgRev, profit: avgProfit, units: Math.round(avgUnits) });
+        }
+      }
+      
+      return {
+        weekly: forecast,
+        monthly: { revenue: forecast.reduce((s, f) => s + f.revenue, 0), profit: forecast.reduce((s, f) => s + f.profit, 0), units: forecast.reduce((s, f) => s + f.units, 0) },
+        trend: { revenue: 'flat', revenueChange: 0 },
+        confidence: Math.min(60, 30 + sortedWeeks.length * 10).toFixed(0),
+        basedOn: sortedWeeks.length,
+        source: 'weekly-avg',
+        note: `Based on ${sortedWeeks.length} week average. Need 4+ weeks for trend analysis.`,
+        amazonBlended: upcomingForecasts.length > 0,
+      };
+    }
+    
+    // Priority 4: Only period data - use averages (least accurate)
     if (sortedPeriods.length >= 1) {
-      // Calculate totals from all periods
       let totalRevenue = 0, totalProfit = 0, totalUnits = 0, totalMonths = 0;
       
       sortedPeriods.forEach(p => {
@@ -2134,48 +2258,53 @@ const savePeriods = async (d) => {
         const rev = (period.amazon?.revenue || 0) + (period.shopify?.revenue || 0);
         const profit = (period.amazon?.netProfit || 0) + (period.shopify?.netProfit || 0);
         const units = (period.amazon?.units || 0) + (period.shopify?.units || 0);
-        
-        // Estimate months in period (rough)
         const startDate = new Date(period.startDate || p);
         const endDate = new Date(period.endDate || p);
         const months = Math.max(1, Math.round((endDate - startDate) / (1000 * 60 * 60 * 24 * 30)));
-        
         totalRevenue += rev;
         totalProfit += profit;
         totalUnits += units;
         totalMonths += months;
       });
       
-      // Calculate monthly averages
       const avgMonthlyRevenue = totalMonths > 0 ? totalRevenue / totalMonths : totalRevenue;
       const avgMonthlyProfit = totalMonths > 0 ? totalProfit / totalMonths : totalProfit;
       const avgMonthlyUnits = totalMonths > 0 ? totalUnits / totalMonths : totalUnits;
       
-      // Weekly projections (divide monthly by 4)
       const weeklyRevenue = avgMonthlyRevenue / 4;
       const weeklyProfit = avgMonthlyProfit / 4;
       const weeklyUnits = Math.round(avgMonthlyUnits / 4);
       
-      const forecast = [
-        { week: 'Week +1', revenue: weeklyRevenue, profit: weeklyProfit, units: weeklyUnits },
-        { week: 'Week +2', revenue: weeklyRevenue, profit: weeklyProfit, units: weeklyUnits },
-        { week: 'Week +3', revenue: weeklyRevenue, profit: weeklyProfit, units: weeklyUnits },
-        { week: 'Week +4', revenue: weeklyRevenue, profit: weeklyProfit, units: weeklyUnits },
-      ];
+      const forecast = [];
+      for (let i = 0; i < 4; i++) {
+        const amazonForecast = upcomingForecasts[i]?.[1];
+        if (amazonForecast) {
+          forecast.push({
+            week: `Week +${i + 1}`,
+            revenue: amazonForecast.totals.sales * 0.7 + weeklyRevenue * 0.3,
+            profit: amazonForecast.totals.proceeds * 0.7 + weeklyProfit * 0.3,
+            units: Math.round(amazonForecast.totals.units * 0.7 + weeklyUnits * 0.3),
+            hasAmazonForecast: true,
+          });
+        } else {
+          forecast.push({ week: `Week +${i + 1}`, revenue: weeklyRevenue, profit: weeklyProfit, units: weeklyUnits });
+        }
+      }
       
       return {
         weekly: forecast,
-        monthly: { revenue: avgMonthlyRevenue, profit: avgMonthlyProfit, units: Math.round(avgMonthlyUnits) },
+        monthly: { revenue: forecast.reduce((s, f) => s + f.revenue, 0), profit: forecast.reduce((s, f) => s + f.profit, 0), units: forecast.reduce((s, f) => s + f.units, 0) },
         trend: { revenue: 'flat', revenueChange: 0 },
-        confidence: '50', // Lower confidence for period-based forecast
+        confidence: '50',
         basedOn: sortedPeriods.length,
         source: 'period',
         note: 'Based on period averages. Upload weekly data for trend analysis.',
+        amazonBlended: upcomingForecasts.length > 0,
       };
     }
     
     return null;
-  }, [allWeeksData, allPeriodsData]);
+  }, [allWeeksData, allPeriodsData, amazonForecasts]);
 
   // AMAZON FORECAST - Parse and store Amazon's forecast data
   const processAmazonForecast = (csvData) => {
@@ -3360,6 +3489,13 @@ const savePeriods = async (d) => {
     if (!showForecast || !generateForecast) return null;
     const f = generateForecast;
     
+    const sourceLabels = {
+      'weekly': 'Weekly trend analysis',
+      'blended': 'Blended (weekly + period)',
+      'weekly-avg': 'Weekly averages',
+      'period': 'Period averages',
+    };
+    
     return (
       <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
         <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
@@ -3375,12 +3511,26 @@ const savePeriods = async (d) => {
           
           <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-slate-400">Based on</span>
-              <span className="text-white font-medium">{f.basedOn} {f.source === 'period' ? 'period(s)' : 'weeks'} of data</span>
+              <span className="text-slate-400">Data Source</span>
+              <span className="text-white font-medium">{sourceLabels[f.source] || f.source}</span>
             </div>
-            {f.source === 'period' && (
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-slate-400">Based on</span>
+              <span className="text-white font-medium">
+                {f.basedOn} {f.source === 'period' ? 'period(s)' : f.source === 'blended' ? 'week(s) + periods' : 'week(s)'}
+              </span>
+            </div>
+            {f.amazonBlended && (
+              <div className="mb-2 p-2 bg-orange-900/30 border border-orange-500/30 rounded-lg">
+                <p className="text-orange-300 text-xs flex items-center gap-1">
+                  <Target className="w-3 h-3" />
+                  Includes Amazon forecast data for enhanced accuracy
+                </p>
+              </div>
+            )}
+            {f.note && (
               <div className="mb-2 p-2 bg-amber-900/30 border border-amber-500/30 rounded-lg">
-                <p className="text-amber-300 text-xs">⚠️ Using period averages. Upload weekly data for trend analysis.</p>
+                <p className="text-amber-300 text-xs">⚠️ {f.note}</p>
               </div>
             )}
             <div className="flex items-center justify-between mb-2">
@@ -3399,11 +3549,12 @@ const savePeriods = async (d) => {
           <h3 className="text-sm font-semibold text-slate-400 uppercase mb-3">Weekly Projections</h3>
           <div className="grid grid-cols-4 gap-3 mb-4">
             {f.weekly.map((w, i) => (
-              <div key={i} className="bg-slate-900/50 rounded-xl p-3 text-center">
+              <div key={i} className={`rounded-xl p-3 text-center ${w.hasAmazonForecast ? 'bg-orange-900/20 border border-orange-500/30' : 'bg-slate-900/50'}`}>
                 <p className="text-slate-500 text-xs mb-1">{w.week}</p>
+                {w.hasAmazonForecast && <p className="text-orange-400 text-xs mb-1">📊 Amazon</p>}
                 <p className="text-white font-bold">{formatCurrency(w.revenue)}</p>
                 <p className={`text-sm ${w.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(w.profit)}</p>
-                <p className="text-slate-500 text-xs">{w.units} units</p>
+                <p className="text-slate-500 text-xs">{formatNumber(w.units)} units</p>
               </div>
             ))}
           </div>
@@ -3437,7 +3588,7 @@ const savePeriods = async (d) => {
           </div>
           
           <p className="text-slate-500 text-xs mt-4 text-center">
-            * Forecast based on linear trend analysis. Actual results may vary.
+            * Forecast based on {sourceLabels[f.source] || 'available data'}. Actual results may vary.
           </p>
         </div>
       </div>
@@ -8403,32 +8554,122 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
   // ==================== ANALYTICS VIEW (Forecast & Compare) ====================
   if (view === 'analytics') {
     const sortedWeeks = Object.keys(allWeeksData).sort();
+    const sortedPeriods = Object.keys(allPeriodsData).sort();
     
-    // Build SKU data for forecasting
+    // Build SKU data for forecasting - from weekly data
     const skuWeeklyTotals = {};
     sortedWeeks.forEach(w => {
       const week = allWeeksData[w];
       [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])].forEach(s => {
         const key = s.sku;
-        if (!skuWeeklyTotals[key]) skuWeeklyTotals[key] = { sku: s.sku, name: s.name || '', weeks: {} };
+        if (!skuWeeklyTotals[key]) skuWeeklyTotals[key] = { sku: s.sku, name: s.name || '', weeks: {}, source: 'weekly' };
         if (!skuWeeklyTotals[key].weeks[w]) skuWeeklyTotals[key].weeks[w] = { units: 0, revenue: 0, profit: 0 };
         skuWeeklyTotals[key].weeks[w].units += s.unitsSold || 0;
         skuWeeklyTotals[key].weeks[w].revenue += s.netSales || 0;
-        // Amazon: netProceeds IS profit; Shopify: netSales - cogs
         const profit = s.netProceeds !== undefined ? s.netProceeds : (s.netSales || 0) - (s.cogs || 0);
         skuWeeklyTotals[key].weeks[w].profit += profit;
       });
     });
     
+    // Also pull SKU data from periods if no weekly data
+    const skuPeriodTotals = {};
+    sortedPeriods.forEach(p => {
+      const period = allPeriodsData[p];
+      [...(period.amazon?.skuData || []), ...(period.shopify?.skuData || [])].forEach(s => {
+        const key = s.sku;
+        if (!skuPeriodTotals[key]) {
+          skuPeriodTotals[key] = { 
+            sku: s.sku, 
+            name: s.name || '', 
+            totalUnits: 0, 
+            totalRevenue: 0, 
+            totalProfit: 0,
+            periods: [],
+            source: 'period'
+          };
+        }
+        skuPeriodTotals[key].totalUnits += s.unitsSold || 0;
+        skuPeriodTotals[key].totalRevenue += s.netSales || 0;
+        const profit = s.netProceeds !== undefined ? s.netProceeds : (s.netSales || 0) - (s.cogs || 0);
+        skuPeriodTotals[key].totalProfit += profit;
+        skuPeriodTotals[key].periods.push(p);
+      });
+    });
+    
+    // Combine: prefer weekly data, fall back to period data
+    const allSkuData = { ...skuWeeklyTotals };
+    Object.entries(skuPeriodTotals).forEach(([sku, data]) => {
+      if (!allSkuData[sku]) {
+        allSkuData[sku] = {
+          sku: data.sku,
+          name: data.name,
+          weeks: { 'period-avg': { units: data.totalUnits, revenue: data.totalRevenue, profit: data.totalProfit } },
+          source: 'period',
+          totalFromPeriods: { units: data.totalUnits, revenue: data.totalRevenue, profit: data.totalProfit },
+        };
+      }
+    });
+    
     // Generate SKU-level forecasts
-    const skuForecasts = Object.values(skuWeeklyTotals).map(sku => {
-      const weekDates = Object.keys(sku.weeks).sort();
-      if (weekDates.length < 4) return { ...sku, forecast: null };
+    const skuForecasts = Object.values(allSkuData).map(sku => {
+      const weekDates = Object.keys(sku.weeks).sort().filter(w => w !== 'period-avg');
       
+      // If from period data only, use period totals
+      if (sku.source === 'period' && sku.totalFromPeriods) {
+        return {
+          ...sku,
+          totalRevenue: sku.totalFromPeriods.revenue,
+          totalUnits: sku.totalFromPeriods.units,
+          weeksActive: 0,
+          periodsActive: sku.totalFromPeriods ? 1 : 0,
+          forecast: {
+            nextMonthRevenue: sku.totalFromPeriods.revenue / 3, // Rough monthly estimate
+            nextMonthUnits: Math.round(sku.totalFromPeriods.units / 3),
+            nextMonthProfit: sku.totalFromPeriods.profit / 3,
+            trend: 'flat',
+            avgWeeklyRevenue: sku.totalFromPeriods.revenue / 12, // Rough weekly estimate
+            source: 'period',
+          }
+        };
+      }
+      
+      // Need at least 1 week of data for basic stats
+      if (weekDates.length < 1) return { ...sku, forecast: null };
+      
+      const revenues = weekDates.map(w => sku.weeks[w]?.revenue || 0);
+      const units = weekDates.map(w => sku.weeks[w]?.units || 0);
+      const profits = weekDates.map(w => sku.weeks[w]?.profit || 0);
+      
+      const totalRevenue = revenues.reduce((s, v) => s + v, 0);
+      const totalUnits = units.reduce((s, v) => s + v, 0);
+      const totalProfit = profits.reduce((s, v) => s + v, 0);
+      
+      // If less than 4 weeks, just use averages
+      if (weekDates.length < 4) {
+        const avgRevenue = totalRevenue / weekDates.length;
+        const avgUnits = totalUnits / weekDates.length;
+        const avgProfit = totalProfit / weekDates.length;
+        return {
+          ...sku,
+          totalRevenue,
+          totalUnits,
+          weeksActive: weekDates.length,
+          forecast: {
+            nextMonthRevenue: avgRevenue * 4,
+            nextMonthUnits: Math.round(avgUnits * 4),
+            nextMonthProfit: avgProfit * 4,
+            trend: 'flat',
+            avgWeeklyRevenue: avgRevenue,
+            source: 'weekly-avg',
+          }
+        };
+      }
+      
+      // 4+ weeks: use linear regression
       const recentWeeks = weekDates.slice(-8);
-      const revenues = recentWeeks.map(w => sku.weeks[w]?.revenue || 0);
-      const units = recentWeeks.map(w => sku.weeks[w]?.units || 0);
-      const profits = recentWeeks.map(w => sku.weeks[w]?.profit || 0);
+      const recentRevenues = recentWeeks.map(w => sku.weeks[w]?.revenue || 0);
+      const recentUnits = recentWeeks.map(w => sku.weeks[w]?.units || 0);
+      const recentProfits = recentWeeks.map(w => sku.weeks[w]?.profit || 0);
       
       // Simple linear regression
       const calcTrend = (data) => {
@@ -8444,17 +8685,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         return { slope, intercept, avg: sumY / n };
       };
       
-      const revTrend = calcTrend(revenues);
-      const unitTrend = calcTrend(units);
-      const profTrend = calcTrend(profits);
+      const revTrend = calcTrend(recentRevenues);
+      const unitTrend = calcTrend(recentUnits);
+      const profTrend = calcTrend(recentProfits);
       
-      const n = revenues.length;
+      const n = recentRevenues.length;
       const nextMonthRev = [0, 1, 2, 3].reduce((sum, i) => sum + Math.max(0, revTrend.intercept + revTrend.slope * (n + i)), 0);
       const nextMonthUnits = [0, 1, 2, 3].reduce((sum, i) => sum + Math.max(0, unitTrend.intercept + unitTrend.slope * (n + i)), 0);
       const nextMonthProfit = [0, 1, 2, 3].reduce((sum, i) => sum + profTrend.intercept + profTrend.slope * (n + i), 0);
-      
-      const totalRevenue = Object.values(sku.weeks).reduce((s, w) => s + w.revenue, 0);
-      const totalUnits = Object.values(sku.weeks).reduce((s, w) => s + w.units, 0);
       
       return {
         ...sku,
@@ -8467,9 +8705,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           nextMonthProfit: nextMonthProfit,
           trend: revTrend.slope > 0 ? 'up' : revTrend.slope < 0 ? 'down' : 'flat',
           avgWeeklyRevenue: revTrend.avg,
+          source: 'weekly-trend',
         }
       };
-    }).filter(s => s.totalRevenue > 0).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    }).filter(s => s.totalRevenue > 0 || s.totalUnits > 0).sort((a, b) => b.totalRevenue - a.totalRevenue);
     
     // Week comparison data
     const weekCompareData = selectedWeeksToCompare.map(w => {
@@ -8490,8 +8729,24 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     // SKU comparison data  
     const skuCompareData = selectedSkusToCompare.map(sku => {
-      const data = skuWeeklyTotals[sku];
+      const data = allSkuData[sku];
       if (!data) return null;
+      
+      // Handle period-only data
+      if (data.totalFromPeriods) {
+        return {
+          sku: data.sku,
+          name: data.name,
+          units: data.totalFromPeriods.units,
+          revenue: data.totalFromPeriods.revenue,
+          profit: data.totalFromPeriods.profit,
+          profitPerUnit: data.totalFromPeriods.units > 0 ? data.totalFromPeriods.profit / data.totalFromPeriods.units : 0,
+          margin: data.totalFromPeriods.revenue > 0 ? (data.totalFromPeriods.profit / data.totalFromPeriods.revenue * 100) : 0,
+          weeksActive: 0,
+          source: 'period',
+        };
+      }
+      
       const totals = Object.values(data.weeks).reduce((acc, w) => ({
         units: acc.units + w.units,
         revenue: acc.revenue + w.revenue,
@@ -8503,7 +8758,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         ...totals,
         profitPerUnit: totals.units > 0 ? totals.profit / totals.units : 0,
         margin: totals.revenue > 0 ? (totals.profit / totals.revenue * 100) : 0,
-        weeksActive: Object.keys(data.weeks).length,
+        weeksActive: Object.keys(data.weeks).filter(w => w !== 'period-avg').length,
+        source: 'weekly',
       };
     }).filter(Boolean);
     
