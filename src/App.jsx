@@ -8758,9 +8758,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     <Target className="w-12 h-12 text-slate-600 mx-auto mb-4" />
                     <h3 className="text-xl font-semibold text-white mb-2">No Matching Forecast & Actual Data Yet</h3>
                     <p className="text-slate-400 mb-4">Upload actual weekly data for a forecasted week to see accuracy analysis</p>
-                    <p className="text-slate-500 text-sm mb-4">✨ Fuzzy matching enabled: weeks within 3 days will match automatically</p>
+                    <p className="text-slate-500 text-sm mb-4">Fuzzy matching enabled: weeks within 3 days will match automatically</p>
                   
-                  {/* Debug info to help troubleshoot */}
+                  {/* Debug info */}
                   <div className="bg-slate-900/50 rounded-xl p-4 text-left max-w-lg mx-auto mb-4">
                     <p className="text-slate-500 text-xs uppercase mb-3">Data Matching Status</p>
                     <div className="grid grid-cols-2 gap-4 text-sm">
@@ -8768,30 +8768,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <p className="text-orange-400 font-medium mb-2">Forecast Weeks:</p>
                         {Object.keys(amazonForecasts).length > 0 ? (
                           <ul className="text-slate-400 space-y-1">
-                            {Object.keys(amazonForecasts).sort().map(k => {
-                              // Check fuzzy match
-                              let matchInfo = null;
-                              for (const ak of Object.keys(allWeeksData)) {
-                                const diff = Math.abs((new Date(k + 'T00:00:00') - new Date(ak + 'T00:00:00')) / (1000*60*60*24));
-                                if (diff <= 3) {
-                                  matchInfo = { key: ak, diff: Math.round(diff) };
-                                  break;
-                                }
-                              }
-                              return (
-                                <li key={k} className="flex items-center gap-1">
-                                  {matchInfo ? (
-                                    <span className="text-emerald-400">✓</span>
-                                  ) : (
-                                    <span className="text-slate-600">○</span>
-                                  )}
-                                  <span>{k}</span>
-                                  {matchInfo && matchInfo.diff > 0 && (
-                                    <span className="text-emerald-400/70 text-xs">(~{matchInfo.diff}d)</span>
-                                  )}
-                                </li>
-                              );
-                            })}
+                            {Object.keys(amazonForecasts).sort().map(k => (
+                              <li key={k}>{k}</li>
+                            ))}
                           </ul>
                         ) : <p className="text-slate-500">None</p>}
                       </div>
@@ -8799,34 +8778,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <p className="text-blue-400 font-medium mb-2">Actual Weeks:</p>
                         {Object.keys(allWeeksData).length > 0 ? (
                           <ul className="text-slate-400 space-y-1">
-                            {Object.keys(allWeeksData).sort().reverse().slice(0, 6).map(k => {
-                              // Check if matched to a forecast
-                              let matchInfo = null;
-                              for (const fk of Object.keys(amazonForecasts)) {
-                                const diff = Math.abs((new Date(k + 'T00:00:00') - new Date(fk + 'T00:00:00')) / (1000*60*60*24));
-                                if (diff <= 3) {
-                                  matchInfo = { key: fk, diff: Math.round(diff) };
-                                  break;
-                                }
-                              }
-                              return (
-                                <li key={k} className="flex items-center gap-1">
-                                  {matchInfo ? (
-                                    <span className="text-emerald-400">✓</span>
-                                  ) : (
-                                    <span className="text-slate-600">○</span>
-                                  )}
-                                  <span>{k}</span>
-                                </li>
-                              );
-                            })}
+                            {Object.keys(allWeeksData).sort().reverse().slice(0, 6).map(k => (
+                              <li key={k}>{k}</li>
+                            ))}
                           </ul>
                         ) : <p className="text-slate-500">None</p>}
                       </div>
                     </div>
-                    <p className="text-slate-500 text-xs mt-3 pt-3 border-t border-slate-700">
-                      ✓ = Has match within 3 days • ○ = No match found
-                    </p>
                   </div>
                   
                   <div className="flex gap-3 justify-center">
