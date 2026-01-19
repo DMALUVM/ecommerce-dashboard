@@ -3420,6 +3420,12 @@ const savePeriods = async (d) => {
 
   const GoalsModal = () => {
     const [tempGoals, setTempGoals] = useState(goals);
+    
+    // Reset when goals change
+    useEffect(() => {
+      setTempGoals(goals);
+    }, [goals, showGoalsModal]);
+    
     if (!showGoalsModal) return null;
     return (
       <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -3973,12 +3979,21 @@ const savePeriods = async (d) => {
 
   // 3PL BULK UPLOAD MODAL
   const ThreePLBulkUploadModal = () => {
-    if (!show3PLBulkUpload) return null;
-    
     const [dragActive, setDragActive] = useState(false);
     const [selectedFiles, setSelectedFiles] = useState([]);
     const [processing, setProcessing] = useState(false);
     const [results, setResults] = useState(null);
+    
+    // Reset state when modal is closed
+    useEffect(() => {
+      if (!show3PLBulkUpload) {
+        setSelectedFiles([]);
+        setResults(null);
+        setProcessing(false);
+      }
+    }, [show3PLBulkUpload]);
+    
+    if (!show3PLBulkUpload) return null;
     
     const handleDrag = (e) => {
       e.preventDefault();
