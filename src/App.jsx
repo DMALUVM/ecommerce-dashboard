@@ -2117,17 +2117,39 @@ const savePeriods = async (d) => {
     if (!weeks.length) return null;
     const agg = { weeks: weeks.map(([w]) => w), 
       amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0 }, 
-      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0 }, 
+      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, threeplBreakdown: { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 }, threeplMetrics: { orderCount: 0, totalUnits: 0 } }, 
       total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 }};
-    weeks.forEach(([, d]) => {
+    weeks.forEach(([w, d]) => {
+      // Get ledger 3PL for this week
+      const ledger3PL = get3PLForWeek(threeplLedger, w);
+      const weekThreeplCost = ledger3PL?.metrics?.totalCost || d.shopify?.threeplCosts || 0;
+      const weekThreeplBreakdown = ledger3PL?.breakdown || d.shopify?.threeplBreakdown || {};
+      const weekThreeplMetrics = ledger3PL?.metrics || d.shopify?.threeplMetrics || {};
+      
       agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.returns += d.amazon?.returns || 0;
       agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += d.amazon?.netProfit || 0;
       agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0;
-      agg.shopify.threeplCosts += d.shopify?.threeplCosts || 0; agg.shopify.adSpend += d.shopify?.adSpend || 0; 
+      agg.shopify.threeplCosts += weekThreeplCost; agg.shopify.adSpend += d.shopify?.adSpend || 0; 
       agg.shopify.metaSpend += d.shopify?.metaSpend || 0; agg.shopify.googleSpend += d.shopify?.googleSpend || 0;
-      agg.shopify.discounts += d.shopify?.discounts || 0; agg.shopify.netProfit += d.shopify?.netProfit || 0;
-      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0; agg.total.netProfit += d.total?.netProfit || 0;
+      agg.shopify.discounts += d.shopify?.discounts || 0;
+      // Recalculate shopify profit with ledger 3PL
+      const shopProfit = (d.shopify?.revenue || 0) - (d.shopify?.cogs || 0) - weekThreeplCost - (d.shopify?.adSpend || 0);
+      agg.shopify.netProfit += shopProfit;
+      // Aggregate 3PL breakdown
+      agg.shopify.threeplBreakdown.storage += weekThreeplBreakdown.storage || 0;
+      agg.shopify.threeplBreakdown.shipping += weekThreeplBreakdown.shipping || 0;
+      agg.shopify.threeplBreakdown.pickFees += weekThreeplBreakdown.pickFees || 0;
+      agg.shopify.threeplBreakdown.boxCharges += weekThreeplBreakdown.boxCharges || 0;
+      agg.shopify.threeplBreakdown.receiving += weekThreeplBreakdown.receiving || 0;
+      agg.shopify.threeplBreakdown.other += weekThreeplBreakdown.other || 0;
+      agg.shopify.threeplMetrics.orderCount += weekThreeplMetrics.orderCount || 0;
+      agg.shopify.threeplMetrics.totalUnits += weekThreeplMetrics.totalUnits || 0;
+      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0; 
+      agg.total.netProfit += (d.amazon?.netProfit || 0) + shopProfit;
     });
+    // Calculate metrics
+    agg.shopify.threeplMetrics.avgCostPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? (agg.shopify.threeplCosts - agg.shopify.threeplBreakdown.storage) / agg.shopify.threeplMetrics.orderCount : 0;
+    agg.shopify.threeplMetrics.avgUnitsPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? agg.shopify.threeplMetrics.totalUnits / agg.shopify.threeplMetrics.orderCount : 0;
     agg.amazon.margin = agg.amazon.revenue > 0 ? (agg.amazon.netProfit/agg.amazon.revenue)*100 : 0;
     agg.amazon.aov = agg.amazon.units > 0 ? agg.amazon.revenue/agg.amazon.units : 0;
     agg.amazon.roas = agg.amazon.adSpend > 0 ? agg.amazon.revenue/agg.amazon.adSpend : 0;
@@ -2146,20 +2168,43 @@ const savePeriods = async (d) => {
     if (!weeks.length) return null;
     const agg = { weeks: weeks.map(([w]) => w), 
       amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0 }, 
-      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0 }, 
+      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, threeplBreakdown: { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 }, threeplMetrics: { orderCount: 0, totalUnits: 0 } }, 
       total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 }, monthlyBreakdown: {}};
     weeks.forEach(([w, d]) => {
       const dt = new Date(w+'T00:00:00'); const mk = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
       if (!agg.monthlyBreakdown[mk]) agg.monthlyBreakdown[mk] = { revenue: 0, netProfit: 0 };
-      agg.monthlyBreakdown[mk].revenue += d.total?.revenue || 0; agg.monthlyBreakdown[mk].netProfit += d.total?.netProfit || 0;
+      
+      // Get ledger 3PL for this week
+      const ledger3PL = get3PLForWeek(threeplLedger, w);
+      const weekThreeplCost = ledger3PL?.metrics?.totalCost || d.shopify?.threeplCosts || 0;
+      const weekThreeplBreakdown = ledger3PL?.breakdown || d.shopify?.threeplBreakdown || {};
+      const weekThreeplMetrics = ledger3PL?.metrics || d.shopify?.threeplMetrics || {};
+      
       agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.returns += d.amazon?.returns || 0;
       agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += d.amazon?.netProfit || 0;
       agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0;
-      agg.shopify.threeplCosts += d.shopify?.threeplCosts || 0; agg.shopify.adSpend += d.shopify?.adSpend || 0;
+      agg.shopify.threeplCosts += weekThreeplCost; agg.shopify.adSpend += d.shopify?.adSpend || 0;
       agg.shopify.metaSpend += d.shopify?.metaSpend || 0; agg.shopify.googleSpend += d.shopify?.googleSpend || 0;
-      agg.shopify.discounts += d.shopify?.discounts || 0; agg.shopify.netProfit += d.shopify?.netProfit || 0;
-      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0; agg.total.netProfit += d.total?.netProfit || 0;
+      agg.shopify.discounts += d.shopify?.discounts || 0;
+      // Recalculate shopify profit with ledger 3PL
+      const shopProfit = (d.shopify?.revenue || 0) - (d.shopify?.cogs || 0) - weekThreeplCost - (d.shopify?.adSpend || 0);
+      agg.shopify.netProfit += shopProfit;
+      // Aggregate 3PL breakdown
+      agg.shopify.threeplBreakdown.storage += weekThreeplBreakdown.storage || 0;
+      agg.shopify.threeplBreakdown.shipping += weekThreeplBreakdown.shipping || 0;
+      agg.shopify.threeplBreakdown.pickFees += weekThreeplBreakdown.pickFees || 0;
+      agg.shopify.threeplBreakdown.boxCharges += weekThreeplBreakdown.boxCharges || 0;
+      agg.shopify.threeplBreakdown.receiving += weekThreeplBreakdown.receiving || 0;
+      agg.shopify.threeplBreakdown.other += weekThreeplBreakdown.other || 0;
+      agg.shopify.threeplMetrics.orderCount += weekThreeplMetrics.orderCount || 0;
+      agg.shopify.threeplMetrics.totalUnits += weekThreeplMetrics.totalUnits || 0;
+      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0;
+      agg.total.netProfit += (d.amazon?.netProfit || 0) + shopProfit;
+      agg.monthlyBreakdown[mk].revenue += d.total?.revenue || 0; agg.monthlyBreakdown[mk].netProfit += (d.amazon?.netProfit || 0) + shopProfit;
     });
+    // Calculate metrics
+    agg.shopify.threeplMetrics.avgCostPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? (agg.shopify.threeplCosts - agg.shopify.threeplBreakdown.storage) / agg.shopify.threeplMetrics.orderCount : 0;
+    agg.shopify.threeplMetrics.avgUnitsPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? agg.shopify.threeplMetrics.totalUnits / agg.shopify.threeplMetrics.orderCount : 0;
     agg.amazon.margin = agg.amazon.revenue > 0 ? (agg.amazon.netProfit/agg.amazon.revenue)*100 : 0;
     agg.amazon.aov = agg.amazon.units > 0 ? agg.amazon.revenue/agg.amazon.units : 0;
     agg.amazon.roas = agg.amazon.adSpend > 0 ? agg.amazon.revenue/agg.amazon.adSpend : 0;
@@ -5021,6 +5066,60 @@ ${JSON.stringify(productionPipeline.map(p => ({
 })))}
 ` : 'No production orders in pipeline'}
 
+=== 3PL FULFILLMENT COSTS ===
+${(() => {
+  const ledgerOrders = Object.values(threeplLedger.orders || {});
+  if (ledgerOrders.length === 0) return 'No 3PL data uploaded yet';
+  
+  // Calculate totals from ledger
+  const allWeeks = [...new Set(ledgerOrders.map(o => o.weekKey))].sort();
+  const totalOrders = ledgerOrders.length;
+  let totalCost = 0;
+  let totalUnits = 0;
+  
+  ledgerOrders.forEach(o => {
+    const c = o.charges || {};
+    totalCost += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0) + (c.reBoxing || 0) + (c.fbaForwarding || 0);
+    totalUnits += (c.firstPickQty || 0) + (c.additionalPickQty || 0);
+  });
+  
+  // Get summary charges (storage, shipping, etc.)
+  Object.values(threeplLedger.summaryCharges || {}).forEach(c => {
+    totalCost += c.amount || 0;
+  });
+  
+  // Recent weeks data
+  const recentWeeks = allWeeks.slice(-8);
+  const weeklyTotals = recentWeeks.map(w => {
+    const weekOrders = ledgerOrders.filter(o => o.weekKey === w);
+    let weekCost = 0;
+    weekOrders.forEach(o => {
+      const c = o.charges || {};
+      weekCost += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0);
+    });
+    return { week: w, orders: weekOrders.length, cost: weekCost };
+  });
+  
+  // Calculate trend
+  const avgCostPerOrder = totalOrders > 0 ? totalCost / totalOrders : 0;
+  
+  return \`3PL Summary (from bulk uploads):
+- Total Orders Tracked: \${totalOrders}
+- Total 3PL Cost: $\${totalCost.toFixed(2)}
+- Avg Cost Per Order: $\${avgCostPerOrder.toFixed(2)}
+- Total Units Shipped: \${totalUnits}
+- Weeks with Data: \${allWeeks.length} (\${allWeeks[0] || 'N/A'} to \${allWeeks[allWeeks.length-1] || 'N/A'})
+
+Recent Weekly 3PL Costs:
+\${JSON.stringify(weeklyTotals)}
+
+LOOK FOR:
+- Rising avg cost per order (margin erosion)
+- Storage cost spikes
+- Shipping cost increases
+- Changes in units per order affecting fulfillment efficiency\`;
+})()}
+
 === WHAT YOU CAN HELP WITH ===
 - Analyze sales trends and patterns (weekly, monthly, quarterly, yearly)
 - Year-over-year comparisons (2024 vs 2025, Q1 vs Q1, etc.)
@@ -5040,6 +5139,9 @@ ${JSON.stringify(productionPipeline.map(p => ({
 - Seasonality analysis (which months/quarters perform best)
 - Channel mix analysis (Amazon vs Shopify trends)
 - Cost structure analysis (COGS, fees, ads as % of revenue over time)
+- 3PL cost analysis (avg cost per order, storage trends, shipping cost changes)
+- Identify rising fulfillment costs that may be eroding margins
+- Compare 3PL efficiency across time periods
 
 Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. When comparing periods, always show the actual numbers and % change. If the user asks about data you don't have, let them know what they need to upload.`;
 
@@ -6544,7 +6646,37 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
   }
 
   if (view === 'weekly' && selectedWeek && allWeeksData[selectedWeek]) {
-    const data = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
+    const rawData = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
+    
+    // Enhance Shopify data with 3PL from ledger if available
+    const ledger3PL = get3PLForWeek(threeplLedger, selectedWeek);
+    const enhancedShopify = { ...rawData.shopify };
+    
+    if (ledger3PL && ledger3PL.metrics.totalCost > 0) {
+      // Use ledger data for 3PL costs
+      enhancedShopify.threeplCosts = ledger3PL.metrics.totalCost;
+      enhancedShopify.threeplBreakdown = ledger3PL.breakdown;
+      enhancedShopify.threeplMetrics = ledger3PL.metrics;
+      
+      // Recalculate profit with new 3PL costs
+      const oldThreePL = rawData.shopify?.threeplCosts || 0;
+      const newThreePL = ledger3PL.metrics.totalCost;
+      const profitAdjustment = oldThreePL - newThreePL; // Add back old, subtract new
+      enhancedShopify.netProfit = (rawData.shopify?.netProfit || 0) + profitAdjustment;
+      enhancedShopify.netMargin = enhancedShopify.revenue > 0 ? (enhancedShopify.netProfit / enhancedShopify.revenue) * 100 : 0;
+    }
+    
+    // Create enhanced data object
+    const data = {
+      ...rawData,
+      shopify: enhancedShopify,
+      total: {
+        ...rawData.total,
+        netProfit: (rawData.amazon?.netProfit || rawData.amazon?.netProceeds || 0) + enhancedShopify.netProfit,
+      }
+    };
+    data.total.netMargin = data.total.revenue > 0 ? (data.total.netProfit / data.total.revenue) * 100 : 0;
+    
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
@@ -8275,8 +8407,55 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
   if (view === '3pl') {
     const sortedWeeks = Object.keys(allWeeksData).sort();
     
+    // Date range state for 3PL filtering
+    const [threeplDateRange, setThreeplDateRange] = useState('4weeks'); // 'week' | '4weeks' | 'month' | 'quarter' | 'year' | 'all' | 'custom'
+    const [threeplCustomStart, setThreeplCustomStart] = useState('');
+    const [threeplCustomEnd, setThreeplCustomEnd] = useState('');
+    
+    // Calculate date boundaries based on selected range
+    const getDateBoundaries = () => {
+      const today = new Date();
+      let startDate, endDate = today;
+      
+      switch (threeplDateRange) {
+        case 'week':
+          startDate = new Date(today);
+          startDate.setDate(today.getDate() - 7);
+          break;
+        case '4weeks':
+          startDate = new Date(today);
+          startDate.setDate(today.getDate() - 28);
+          break;
+        case 'month':
+          startDate = new Date(today.getFullYear(), today.getMonth(), 1);
+          break;
+        case 'quarter':
+          const quarter = Math.floor(today.getMonth() / 3);
+          startDate = new Date(today.getFullYear(), quarter * 3, 1);
+          break;
+        case 'year':
+          startDate = new Date(today.getFullYear(), 0, 1);
+          break;
+        case 'custom':
+          startDate = threeplCustomStart ? new Date(threeplCustomStart) : new Date(0);
+          endDate = threeplCustomEnd ? new Date(threeplCustomEnd) : today;
+          break;
+        case 'all':
+        default:
+          startDate = new Date(0);
+          break;
+      }
+      
+      return { 
+        start: startDate.toISOString().split('T')[0], 
+        end: endDate.toISOString().split('T')[0] 
+      };
+    };
+    
+    const dateBounds = getDateBoundaries();
+    
     // Aggregate 3PL data by week
-    const weeklyData = sortedWeeks.map(w => {
+    let weeklyData = sortedWeeks.map(w => {
       const week = allWeeksData[w];
       const metrics = week.shopify?.threeplMetrics || {};
       const breakdown = week.shopify?.threeplBreakdown || {};
@@ -8350,6 +8529,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     // Sort weeklyData by week
     weeklyData.sort((a, b) => a.week.localeCompare(b.week));
     
+    // Store all data before filtering for comparison
+    const allWeeklyData = [...weeklyData];
+    
+    // Filter by date range
+    weeklyData = weeklyData.filter(w => {
+      return w.week >= dateBounds.start && w.week <= dateBounds.end;
+    });
+    
     // Also get Period 3PL data
     const periodData = Object.entries(allPeriodsData).map(([key, period]) => {
       const metrics = period.shopify?.threeplMetrics || {};
@@ -8407,9 +8594,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     const months = Object.values(monthlyData).sort((a, b) => a.month.localeCompare(b.month));
     
-    // Recent 4 weeks totals
-    const recentWeeks = weeklyData.slice(-4);
-    const recentTotals = recentWeeks.reduce((acc, w) => ({
+    // Totals for selected date range (not just last 4 weeks)
+    const filteredTotals = weeklyData.reduce((acc, w) => ({
       totalCost: acc.totalCost + w.totalCost,
       orderCount: acc.orderCount + w.orderCount,
       totalUnits: acc.totalUnits + w.totalUnits,
@@ -8420,9 +8606,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       revenue: acc.revenue + w.revenue,
     }), { totalCost: 0, orderCount: 0, totalUnits: 0, storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, revenue: 0 });
     
-    recentTotals.avgCostPerOrder = recentTotals.orderCount > 0 ? (recentTotals.totalCost - recentTotals.storage) / recentTotals.orderCount : 0;
-    recentTotals.avgUnitsPerOrder = recentTotals.orderCount > 0 ? recentTotals.totalUnits / recentTotals.orderCount : 0;
-    recentTotals.costAsPercentOfRevenue = recentTotals.revenue > 0 ? (recentTotals.totalCost / recentTotals.revenue) * 100 : 0;
+    filteredTotals.avgCostPerOrder = filteredTotals.orderCount > 0 ? (filteredTotals.totalCost - filteredTotals.storage) / filteredTotals.orderCount : 0;
+    filteredTotals.avgUnitsPerOrder = filteredTotals.orderCount > 0 ? filteredTotals.totalUnits / filteredTotals.orderCount : 0;
+    filteredTotals.costAsPercentOfRevenue = filteredTotals.revenue > 0 ? (filteredTotals.totalCost / filteredTotals.revenue) * 100 : 0;
+    
+    // Date range labels
+    const rangeLabels = {
+      'week': 'Last 7 Days',
+      '4weeks': 'Last 4 Weeks',
+      'month': 'This Month',
+      'quarter': 'This Quarter',
+      'year': 'This Year',
+      'all': 'All Time',
+      'custom': 'Custom Range',
+    };
     
     // Find max for chart scaling
     const maxWeeklyCost = Math.max(...weeklyData.map(d => d.totalCost), 1);
@@ -8432,8 +8629,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const timeView = threeplTimeView;
     const setTimeView = setThreeplTimeView;
     
-    // Check if we have any 3PL data at all
-    const hasWeeklyData = weeklyData.length > 0;
+    // Check if we have any 3PL data at all (use unfiltered data)
+    const hasWeeklyData = allWeeklyData.length > 0;
     const hasPeriodData = periodData.length > 0;
     const hasLedgerData = Object.keys(threeplLedger.orders || {}).length > 0;
     
@@ -8556,32 +8753,86 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             <p className="text-slate-400">Track shipping costs, order metrics, and fulfillment efficiency over time</p>
           </div>
           
-          {/* Summary Cards - Last 4 Weeks */}
+          {/* Date Range Selector */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 mb-6">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-slate-400 text-sm">Date Range:</span>
+              <div className="flex flex-wrap gap-2">
+                {['week', '4weeks', 'month', 'quarter', 'year', 'all'].map(range => (
+                  <button
+                    key={range}
+                    onClick={() => setThreeplDateRange(range)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                      threeplDateRange === range 
+                        ? 'bg-blue-600 text-white' 
+                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                    }`}
+                  >
+                    {rangeLabels[range]}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setThreeplDateRange('custom')}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    threeplDateRange === 'custom' 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                  }`}
+                >
+                  Custom
+                </button>
+              </div>
+              {threeplDateRange === 'custom' && (
+                <div className="flex items-center gap-2 ml-auto">
+                  <input
+                    type="date"
+                    value={threeplCustomStart}
+                    onChange={(e) => setThreeplCustomStart(e.target.value)}
+                    className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm"
+                  />
+                  <span className="text-slate-500">to</span>
+                  <input
+                    type="date"
+                    value={threeplCustomEnd}
+                    onChange={(e) => setThreeplCustomEnd(e.target.value)}
+                    className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm"
+                  />
+                </div>
+              )}
+            </div>
+            {weeklyData.length === 0 && allWeeklyData.length > 0 && (
+              <div className="mt-3 p-3 bg-amber-900/20 border border-amber-500/30 rounded-lg">
+                <p className="text-amber-400 text-sm">⚠️ No 3PL data found for {rangeLabels[threeplDateRange]}. Try selecting a different date range.</p>
+              </div>
+            )}
+          </div>
+          
+          {/* Summary Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
             <div className="bg-gradient-to-br from-blue-900/30 to-slate-800/50 rounded-xl border border-blue-500/30 p-4">
-              <p className="text-slate-400 text-sm">Total 3PL (4wk)</p>
-              <p className="text-2xl font-bold text-white">{formatCurrency(recentTotals.totalCost)}</p>
-              <p className="text-blue-400 text-xs">{recentTotals.costAsPercentOfRevenue.toFixed(1)}% of revenue</p>
+              <p className="text-slate-400 text-sm">Total 3PL</p>
+              <p className="text-2xl font-bold text-white">{formatCurrency(filteredTotals.totalCost)}</p>
+              <p className="text-blue-400 text-xs">{filteredTotals.costAsPercentOfRevenue > 0 ? `${filteredTotals.costAsPercentOfRevenue.toFixed(1)}% of revenue` : `${weeklyData.length} weeks`}</p>
             </div>
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
               <p className="text-slate-400 text-sm">Orders</p>
-              <p className="text-2xl font-bold text-white">{formatNumber(recentTotals.orderCount)}</p>
+              <p className="text-2xl font-bold text-white">{formatNumber(filteredTotals.orderCount)}</p>
             </div>
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
               <p className="text-slate-400 text-sm">Units Shipped</p>
-              <p className="text-2xl font-bold text-white">{formatNumber(recentTotals.totalUnits)}</p>
+              <p className="text-2xl font-bold text-white">{formatNumber(filteredTotals.totalUnits)}</p>
             </div>
             <div className="bg-cyan-900/30 rounded-xl border border-cyan-500/30 p-4">
               <p className="text-cyan-400 text-sm">Avg Cost/Order</p>
-              <p className="text-2xl font-bold text-cyan-300">{formatCurrency(recentTotals.avgCostPerOrder)}</p>
+              <p className="text-2xl font-bold text-cyan-300">{formatCurrency(filteredTotals.avgCostPerOrder)}</p>
             </div>
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
               <p className="text-slate-400 text-sm">Avg Units/Order</p>
-              <p className="text-2xl font-bold text-white">{recentTotals.avgUnitsPerOrder.toFixed(1)}</p>
+              <p className="text-2xl font-bold text-white">{filteredTotals.avgUnitsPerOrder.toFixed(1)}</p>
             </div>
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
               <p className="text-slate-400 text-sm">Storage</p>
-              <p className="text-2xl font-bold text-white">{formatCurrency(recentTotals.storage)}</p>
+              <p className="text-2xl font-bold text-white">{formatCurrency(filteredTotals.storage)}</p>
             </div>
           </div>
           
