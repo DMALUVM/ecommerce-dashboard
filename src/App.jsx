@@ -204,34 +204,42 @@ const parse3PLExcel = async (file) => {
           dateRange: { start: null, end: null },
           orders: [],
           nonOrderCharges: [],
+          format: 'unknown',
         };
         
-        // Parse Summary sheet
-        if (workbook.SheetNames.includes('Summary')) {
-          const sheet = workbook.Sheets['Summary'];
-          result.summary = xlsx.utils.sheet_to_json(sheet);
-        }
+        // Detect format based on sheet names
+        const sheetNames = workbook.SheetNames;
+        const hasDetailSheet = sheetNames.includes('Detail');
+        const hasSummarySheet = sheetNames.includes('Summary');
+        const hasShipmentsSheet = sheetNames.some(s => s.toLowerCase().includes('shipment'));
+        const hasPackagingSheet = sheetNames.includes('Packaging');
         
-        // Parse Detail sheet (has per-order data with dates)
-        if (workbook.SheetNames.includes('Detail')) {
-          const sheet = workbook.Sheets['Detail'];
-          const rows = xlsx.utils.sheet_to_json(sheet);
-          result.detail = rows;
+        // FORMAT 1: Packiyo Invoice Format (Summary, Detail, Invoice Level sheets)
+        if (hasDetailSheet && hasSummarySheet) {
+          result.format = 'packiyo-invoice';
+          
+          // Parse Summary sheet
+          const summarySheet = workbook.Sheets['Summary'];
+          result.summary = xlsx.utils.sheet_to_json(summarySheet);
+          
+          // Parse Detail sheet
+          const detailSheet = workbook.Sheets['Detail'];
+          const detailRows = xlsx.utils.sheet_to_json(detailSheet);
+          result.detail = detailRows;
           
           // Extract orders with dates
-          rows.forEach(row => {
+          detailRows.forEach(row => {
             const shipDateStr = row['Ship Datetime'] || row['Order Datetime'];
             if (!shipDateStr) return;
             
-            // Parse date (format: "2025-10-19 04:58:32 PM")
-            const shipDate = new Date(shipDateStr.toString().split(' ')[0]);
+            // Parse date (format: "2025-10-19 04:58:32 PM" or "2025-09-16 08:53:45 AM")
+            const dateStr = shipDateStr.toString().split(' ')[0];
+            const shipDate = new Date(dateStr + 'T00:00:00');
             if (isNaN(shipDate)) return;
             
             const orderNumber = (row['Order Number'] || '').toString();
             const trackingNumber = (row['Tracking Number'] || '').toString();
             const uniqueKey = `${orderNumber}-${trackingNumber}`;
-            
-            // Get week ending (Sunday)
             const weekKey = getSunday(shipDate);
             
             // Update date range
@@ -267,35 +275,154 @@ const parse3PLExcel = async (file) => {
               },
             });
           });
-        }
-        
-        // Parse Invoice Level for non-order charges
-        if (workbook.SheetNames.includes('Invoice Level')) {
-          const sheet = workbook.Sheets['Invoice Level'];
-          result.invoiceLevel = xlsx.utils.sheet_to_json(sheet);
-        }
-        
-        // Extract non-order charges from Summary
-        result.summary.forEach(row => {
-          const charge = (row['Charge On Invoice'] || '').toString();
-          const chargeLower = charge.toLowerCase();
-          const amount = parseFloat(row['Amount Total ($)'] || 0);
-          const count = parseInt(row['Count Total'] || 0);
           
-          if (chargeLower.includes('storage') || chargeLower.includes('receiving') || 
-              chargeLower.includes('shipping') || chargeLower.includes('credit') ||
-              chargeLower.includes('special project')) {
-            result.nonOrderCharges.push({
-              chargeType: charge,
-              amount,
-              count,
-              average: parseFloat(row['Average ($)'] || 0),
+          // Parse Invoice Level for non-order charges
+          if (sheetNames.includes('Invoice Level')) {
+            const invoiceSheet = workbook.Sheets['Invoice Level'];
+            result.invoiceLevel = xlsx.utils.sheet_to_json(invoiceSheet);
+          }
+          
+          // Extract non-order charges from Summary
+          result.summary.forEach(row => {
+            const charge = (row['Charge On Invoice'] || '').toString();
+            const chargeLower = charge.toLowerCase();
+            const amount = parseFloat(row['Amount Total ($)'] || 0);
+            const count = parseInt(row['Count Total'] || 0);
+            
+            if (chargeLower.includes('storage') || chargeLower.includes('receiving') || 
+                chargeLower.includes('shipping') || chargeLower.includes('credit') ||
+                chargeLower.includes('special project')) {
+              result.nonOrderCharges.push({
+                chargeType: charge,
+                amount,
+                count,
+                average: parseFloat(row['Average ($)'] || 0),
+              });
+            }
+          });
+        }
+        
+        // FORMAT 2: Packiyo Shipments Export (Shipments sheet with order/shipment_date columns)
+        else if (hasShipmentsSheet) {
+          result.format = 'packiyo-shipments';
+          
+          // Find the shipments sheet
+          const shipmentsSheetName = sheetNames.find(s => s.toLowerCase().includes('shipment'));
+          const shipmentsSheet = workbook.Sheets[shipmentsSheetName];
+          const rows = xlsx.utils.sheet_to_json(shipmentsSheet);
+          
+          // Parse packaging costs if available
+          let packagingCosts = {};
+          if (hasPackagingSheet) {
+            const packagingSheet = workbook.Sheets['Packaging'];
+            const packagingRows = xlsx.utils.sheet_to_json(packagingSheet);
+            packagingRows.forEach(row => {
+              const type = (row['Type of Packaging'] || '').toString();
+              const cost = parseFloat(row['Packaging Cost'] || 0);
+              if (type && cost > 0) packagingCosts[type.toLowerCase()] = cost;
             });
           }
-        });
+          
+          rows.forEach(row => {
+            // Try different column name variations
+            const shipDateStr = row['shipment_date'] || row['Shipment Date'] || row['ship_date'] || row['order_date'] || row['Order Date'];
+            if (!shipDateStr) return;
+            
+            // Parse date (format: "2025-07-31 21:25:24")
+            const dateStr = shipDateStr.toString().split(' ')[0];
+            const shipDate = new Date(dateStr + 'T00:00:00');
+            if (isNaN(shipDate)) return;
+            
+            const orderNumber = (row['order'] || row['Order'] || row['order_number'] || row['Order Number'] || '').toString();
+            const trackingNumber = (row['tracking_number'] || row['Tracking Number'] || '').toString();
+            // Extract just the tracking number if it's a URL
+            const trackingClean = trackingNumber.includes('http') ? trackingNumber.split('/').pop() : trackingNumber;
+            const uniqueKey = `${orderNumber}-${trackingClean || shipDate.toISOString()}`;
+            const weekKey = getSunday(shipDate);
+            
+            // Update date range
+            if (!result.dateRange.start || shipDate < new Date(result.dateRange.start)) {
+              result.dateRange.start = shipDate.toISOString().split('T')[0];
+            }
+            if (!result.dateRange.end || shipDate > new Date(result.dateRange.end)) {
+              result.dateRange.end = shipDate.toISOString().split('T')[0];
+            }
+            
+            // Try to estimate costs from packaging info
+            let packagingCost = 0;
+            const packaging = (row['packaging'] || row['Packaging'] || row['package_type'] || '').toString().toLowerCase();
+            if (packaging && packagingCosts[packaging]) {
+              packagingCost = packagingCosts[packaging];
+            }
+            
+            result.orders.push({
+              uniqueKey,
+              orderNumber,
+              trackingNumber: trackingClean,
+              shipDate: shipDate.toISOString().split('T')[0],
+              weekKey,
+              carrier: (row['shipping_carrier'] || row['Shipping Carrier'] || row['user_defined_shipping_carrier'] || '').toString(),
+              serviceLevel: (row['shipping_method'] || row['Shipping Method'] || '').toString(),
+              state: (row['state'] || row['State'] || '').toString(),
+              postalCode: (row['zip'] || row['Zip'] || row['postal_code'] || '').toString(),
+              weight: parseFloat(row['weight'] || row['Weight'] || 0),
+              weightUnit: 'oz',
+              packageType: packaging,
+              charges: {
+                // This format doesn't have per-order charges, use packaging costs
+                additionalPick: 0,
+                additionalPickQty: 0,
+                firstPick: 2.50, // Default pick fee estimate
+                firstPickQty: 1,
+                box: packagingCost,
+                boxQty: packagingCost > 0 ? 1 : 0,
+                reBoxing: 0,
+                fbaForwarding: 0,
+              },
+            });
+          });
+        }
+        
+        // FORMAT 3: Simple summary sheet - try to extract what we can
+        else {
+          result.format = 'simple-summary';
+          
+          // Try first sheet
+          const firstSheet = workbook.Sheets[sheetNames[0]];
+          const rows = xlsx.utils.sheet_to_json(firstSheet, { header: 1 });
+          
+          // Look for any date info in filename
+          const fileNameMatch = file.name.match(/(\d{1,2})[_-](\d{1,2})[_-]?(\d{1,2})?[_-]?(\d{1,2})?/);
+          if (fileNameMatch) {
+            // Try to parse date range from filename like "8_1-8_31" or "9_1-9_30"
+            const month1 = parseInt(fileNameMatch[1]);
+            const day1 = parseInt(fileNameMatch[2]);
+            const month2 = fileNameMatch[3] ? parseInt(fileNameMatch[3]) : month1;
+            const day2 = fileNameMatch[4] ? parseInt(fileNameMatch[4]) : 28;
+            const year = 2025; // Default year
+            
+            result.dateRange.start = `${year}-${String(month1).padStart(2, '0')}-${String(day1).padStart(2, '0')}`;
+            result.dateRange.end = `${year}-${String(month2).padStart(2, '0')}-${String(day2).padStart(2, '0')}`;
+          }
+          
+          // Try to extract order count from content
+          rows.forEach(row => {
+            if (Array.isArray(row)) {
+              const text = row.join(' ').toLowerCase();
+              if (text.includes('order') && row[1]) {
+                const count = parseInt(row[1]) || 0;
+                if (count > 0 && count < 10000) {
+                  // Create placeholder orders based on count
+                  // This is imprecise but better than nothing
+                }
+              }
+            }
+          });
+        }
         
         resolve(result);
       } catch (err) {
+        console.error('Error parsing 3PL file:', err);
         reject(err);
       }
     };
@@ -397,7 +524,7 @@ export default function Dashboard() {
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [reprocessPeriod, setReprocessPeriod] = useState(null); // For period reprocessing
   const [threeplTimeView, setThreeplTimeView] = useState('weekly'); // For 3PL analytics view
-  const [threeplDateRange, setThreeplDateRange] = useState('4weeks'); // 'week' | '4weeks' | 'month' | 'quarter' | 'year' | 'all' | 'custom'
+  const [threeplDateRange, setThreeplDateRange] = useState('all'); // 'week' | '4weeks' | 'month' | 'quarter' | 'year' | 'all' | 'custom'
   const [threeplCustomStart, setThreeplCustomStart] = useState('');
   const [threeplCustomEnd, setThreeplCustomEnd] = useState('');
   const [uploadTab, setUploadTab] = useState('weekly'); // For upload view tabs
@@ -4090,8 +4217,10 @@ const savePeriods = async (d) => {
             ordersAdded: fileAdded,
             ordersSkipped: fileSkipped,
             dateRange: parsed.dateRange,
+            format: parsed.format,
           });
         } catch (err) {
+          console.error('Error processing file:', file.name, err);
           processResults.push({
             file: file.name,
             status: 'error',
@@ -4256,6 +4385,7 @@ const savePeriods = async (d) => {
                         <AlertCircle className="w-4 h-4 text-rose-400" />
                       )}
                       <span className="text-white text-sm">{r.file}</span>
+                      {r.format && <span className="text-xs text-slate-500">({r.format})</span>}
                     </div>
                     {r.status === 'success' ? (
                       <span className="text-slate-400 text-sm">
@@ -8421,6 +8551,29 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
   if (view === '3pl') {
     const sortedWeeks = Object.keys(allWeeksData).sort();
     
+    // DEBUG: Calculate totals directly from ledger
+    const ledgerOrders = Object.values(threeplLedger.orders || {});
+    const ledgerWeeksSet = new Set(ledgerOrders.map(o => o.weekKey));
+    const ledgerWeeksList = [...ledgerWeeksSet].sort();
+    let debugTotalCost = 0;
+    let debugTotalOrders = ledgerOrders.length;
+    ledgerOrders.forEach(o => {
+      const c = o.charges || {};
+      debugTotalCost += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0) + (c.reBoxing || 0) + (c.fbaForwarding || 0);
+    });
+    // Also add summary charges
+    Object.values(threeplLedger.summaryCharges || {}).forEach(c => {
+      debugTotalCost += c.amount || 0;
+    });
+    
+    console.log('3PL Debug:', { 
+      ledgerOrders: debugTotalOrders, 
+      ledgerWeeks: ledgerWeeksList,
+      totalCost: debugTotalCost,
+      sampleOrder: ledgerOrders[0],
+      salesWeeks: sortedWeeks
+    });
+    
     // Calculate date boundaries based on selected range
     const getDateBoundaries = () => {
       const today = new Date();
@@ -8760,6 +8913,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </button>
             </div>
             <p className="text-slate-400">Track shipping costs, order metrics, and fulfillment efficiency over time</p>
+          </div>
+          
+          {/* DEBUG INFO - REMOVE LATER */}
+          <div className="bg-rose-900/30 border border-rose-500/50 rounded-xl p-4 mb-6">
+            <p className="text-rose-400 font-bold mb-2">🔧 Debug Info (remove later)</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div><span className="text-slate-400">Ledger Orders:</span> <span className="text-white">{debugTotalOrders}</span></div>
+              <div><span className="text-slate-400">Ledger Weeks:</span> <span className="text-white">{ledgerWeeksList.length}</span></div>
+              <div><span className="text-slate-400">Ledger Total Cost:</span> <span className="text-white">${debugTotalCost.toFixed(2)}</span></div>
+              <div><span className="text-slate-400">Weekly Data Rows:</span> <span className="text-white">{weeklyData.length}</span></div>
+            </div>
+            <div className="mt-2 text-xs">
+              <p className="text-slate-400">Ledger Week Keys: {ledgerWeeksList.slice(0, 5).join(', ')}{ledgerWeeksList.length > 5 ? '...' : ''}</p>
+              <p className="text-slate-400">Sales Week Keys: {sortedWeeks.slice(0, 5).join(', ')}{sortedWeeks.length > 5 ? '...' : ''}</p>
+            </div>
           </div>
           
           {/* Date Range Selector */}
