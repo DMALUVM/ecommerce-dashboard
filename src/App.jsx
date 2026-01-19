@@ -8745,6 +8745,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       </button>
                     </div>
                   </div>
+                </div>
               )}
             </div>
           )}
