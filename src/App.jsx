@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus } from 'lucide-react';
+import ExcelJS from 'exceljs';
 
 const parseCSV = (text) => {
   const lines = text.split('\n').filter(line => line.trim());
@@ -53,6 +54,7 @@ const WIDGET_KEY = 'ecommerce_widgets_v1';
 const THEME_KEY = 'ecommerce_theme_v1';
 const INVOICES_KEY = 'ecommerce_invoices_v1';
 const AMAZON_FORECAST_KEY = 'ecommerce_amazon_forecast_v1';
+const THREEPL_LEDGER_KEY = 'ecommerce_3pl_ledger_v1';
 
 // Supabase (cloud auth + storage)
 // Create a .env.local file in your Vite project with:
@@ -163,6 +165,231 @@ const parse3PLData = (threeplFiles) => {
     const fulfillmentCost = metrics.totalCost - breakdown.storage;
     metrics.avgCostPerOrder = fulfillmentCost / metrics.orderCount;
     metrics.avgUnitsPerOrder = metrics.totalUnits / metrics.orderCount;
+  }
+  
+  return { breakdown, metrics };
+};
+
+// Parse Excel file for 3PL bulk upload - extracts Summary and Detail sheets
+const parse3PLExcel = async (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(e.target.result);
+        
+        const result = {
+          fileName: file.name,
+          summary: [],
+          detail: [],
+          invoiceLevel: [],
+          dateRange: { start: null, end: null },
+          orders: [],
+          nonOrderCharges: [],
+        };
+        
+        // Helper to convert worksheet to array of objects
+        const sheetToJson = (worksheet) => {
+          const rows = [];
+          const headers = [];
+          worksheet.eachRow((row, rowNumber) => {
+            if (rowNumber === 1) {
+              row.eachCell((cell, colNumber) => {
+                headers[colNumber] = cell.value?.toString() || '';
+              });
+            } else {
+              const rowData = {};
+              row.eachCell((cell, colNumber) => {
+                const header = headers[colNumber];
+                if (header) {
+                  rowData[header] = cell.value;
+                }
+              });
+              if (Object.keys(rowData).length > 0) rows.push(rowData);
+            }
+          });
+          return rows;
+        };
+        
+        // Parse Summary sheet
+        const summarySheet = workbook.getWorksheet('Summary');
+        if (summarySheet) {
+          result.summary = sheetToJson(summarySheet);
+        }
+        
+        // Parse Detail sheet (has per-order data with dates)
+        const detailSheet = workbook.getWorksheet('Detail');
+        if (detailSheet) {
+          const rows = sheetToJson(detailSheet);
+          result.detail = rows;
+          
+          // Extract orders with dates
+          rows.forEach(row => {
+            const shipDateStr = row['Ship Datetime'] || row['Order Datetime'];
+            if (!shipDateStr) return;
+            
+            // Parse date - handle both string and Date object
+            let shipDate;
+            if (shipDateStr instanceof Date) {
+              shipDate = shipDateStr;
+            } else {
+              const dateStr = shipDateStr.toString().split(' ')[0];
+              shipDate = new Date(dateStr);
+            }
+            if (isNaN(shipDate)) return;
+            
+            const orderNumber = (row['Order Number'] || '').toString();
+            const trackingNumber = (row['Tracking Number'] || '').toString();
+            const uniqueKey = `${orderNumber}-${trackingNumber}`;
+            
+            // Get week ending (Sunday)
+            const weekKey = getSunday(shipDate);
+            
+            // Update date range
+            if (!result.dateRange.start || shipDate < new Date(result.dateRange.start)) {
+              result.dateRange.start = shipDate.toISOString().split('T')[0];
+            }
+            if (!result.dateRange.end || shipDate > new Date(result.dateRange.end)) {
+              result.dateRange.end = shipDate.toISOString().split('T')[0];
+            }
+            
+            result.orders.push({
+              uniqueKey,
+              orderNumber,
+              trackingNumber,
+              shipDate: shipDate.toISOString().split('T')[0],
+              weekKey,
+              carrier: (row['Carrier Name'] || '').toString(),
+              serviceLevel: (row['Service Level Name'] || '').toString(),
+              state: (row['Ship Recipient Address State'] || '').toString(),
+              postalCode: (row['Ship Recipient Address Postal Code'] || '').toString(),
+              weight: parseFloat(row['Weight Value'] || 0),
+              weightUnit: (row['Weight Unit'] || 'oz').toString(),
+              packageType: (row['Package Type Name'] || '').toString(),
+              charges: {
+                additionalPick: parseFloat(row['Additional Pick Fee - Amount ($)'] || 0),
+                additionalPickQty: parseInt(row['Additional Pick Fee - Quantity'] || 0),
+                firstPick: parseFloat(row['First Pick Fee - Amount ($)'] || 0),
+                firstPickQty: parseInt(row['First Pick Fee - Quantity'] || 0),
+                box: parseFloat(row['Box Charge - Amount ($)'] || 0),
+                boxQty: parseInt(row['Box Charge - Quantity'] || 0),
+                reBoxing: parseFloat(row['Re-Boxing Fee - Amount ($)'] || 0),
+                fbaForwarding: parseFloat(row['Fba Forwarding - Amount ($)'] || 0),
+              },
+            });
+          });
+        }
+        
+        // Parse Invoice Level for non-order charges
+        const invoiceSheet = workbook.getWorksheet('Invoice Level');
+        if (invoiceSheet) {
+          result.invoiceLevel = sheetToJson(invoiceSheet);
+        }
+        
+        // Extract non-order charges from Summary
+        result.summary.forEach(row => {
+          const charge = (row['Charge On Invoice'] || '').toString();
+          const chargeLower = charge.toLowerCase();
+          const amount = parseFloat(row['Amount Total ($)'] || 0);
+          const count = parseInt(row['Count Total'] || 0);
+          
+          if (chargeLower.includes('storage') || chargeLower.includes('receiving') || 
+              chargeLower.includes('shipping') || chargeLower.includes('credit') ||
+              chargeLower.includes('special project')) {
+            result.nonOrderCharges.push({
+              chargeType: charge,
+              amount,
+              count,
+              average: parseFloat(row['Average ($)'] || 0),
+            });
+          }
+        });
+        
+        resolve(result);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+};
+
+// Helper to get 3PL data for a specific week from the ledger
+const get3PLForWeek = (ledger, weekKey) => {
+  if (!ledger || !ledger.orders) return null;
+  
+  const weekOrders = Object.values(ledger.orders).filter(o => o.weekKey === weekKey);
+  if (weekOrders.length === 0) return null;
+  
+  const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+  const metrics = {
+    totalCost: 0,
+    orderCount: weekOrders.length,
+    totalUnits: 0,
+    avgShippingCost: 0,
+    avgPickCost: 0,
+    avgPackagingCost: 0,
+    avgCostPerOrder: 0,
+    avgUnitsPerOrder: 0,
+    shippingCount: 0,
+    firstPickCount: 0,
+    additionalPickCount: 0,
+    carrierBreakdown: {},
+    stateBreakdown: {},
+  };
+  
+  let totalShipping = 0;
+  
+  weekOrders.forEach(order => {
+    const c = order.charges || {};
+    breakdown.pickFees += (c.firstPick || 0) + (c.additionalPick || 0);
+    breakdown.boxCharges += c.box || 0;
+    breakdown.other += (c.reBoxing || 0) + (c.fbaForwarding || 0);
+    
+    metrics.firstPickCount += c.firstPickQty || 0;
+    metrics.additionalPickCount += c.additionalPickQty || 0;
+    
+    // Track by carrier
+    if (order.carrier) {
+      if (!metrics.carrierBreakdown[order.carrier]) metrics.carrierBreakdown[order.carrier] = { orders: 0, cost: 0 };
+      metrics.carrierBreakdown[order.carrier].orders++;
+    }
+    
+    // Track by state
+    if (order.state) {
+      if (!metrics.stateBreakdown[order.state]) metrics.stateBreakdown[order.state] = 0;
+      metrics.stateBreakdown[order.state]++;
+    }
+  });
+  
+  // Add non-order charges allocated to this week (storage, shipping fees, etc.)
+  // These come from summary charges that span the week
+  Object.values(ledger.summaryCharges || {}).forEach(charge => {
+    if (charge.weekKey === weekKey) {
+      const chargeLower = (charge.chargeType || '').toLowerCase();
+      if (chargeLower.includes('storage')) breakdown.storage += charge.amount || 0;
+      else if (chargeLower.includes('shipping')) {
+        breakdown.shipping += charge.amount || 0;
+        totalShipping += charge.amount || 0;
+        metrics.shippingCount += charge.count || 0;
+      }
+      else if (chargeLower.includes('receiving')) breakdown.receiving += charge.amount || 0;
+      else breakdown.other += charge.amount || 0;
+    }
+  });
+  
+  metrics.totalUnits = metrics.firstPickCount + metrics.additionalPickCount;
+  metrics.totalCost = breakdown.storage + breakdown.shipping + breakdown.pickFees + breakdown.boxCharges + breakdown.receiving + breakdown.other;
+  
+  if (metrics.orderCount > 0) {
+    metrics.avgPickCost = breakdown.pickFees / metrics.orderCount;
+    metrics.avgPackagingCost = breakdown.boxCharges / metrics.orderCount;
+    const fulfillmentCost = metrics.totalCost - breakdown.storage;
+    metrics.avgCostPerOrder = fulfillmentCost / metrics.orderCount;
+    metrics.avgUnitsPerOrder = metrics.totalUnits / metrics.orderCount;
+    if (metrics.shippingCount > 0) metrics.avgShippingCost = totalShipping / metrics.shippingCount;
   }
   
   return { breakdown, metrics };
@@ -284,6 +511,15 @@ const handleLogout = async () => {
   const [allPeriodsData, setAllPeriodsData] = useState({});
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [periodAnalyticsView, setPeriodAnalyticsView] = useState(null); // 'skus' | 'profit' | 'ads' | '3pl' | null
+  
+  // 3PL Ledger - stores all 3PL orders with dates for deduplication
+  const [threeplLedger, setThreeplLedger] = useState({
+    orders: {}, // { uniqueKey: { orderNumber, trackingNumber, shipDate, weekKey, charges: {}, carrier, serviceLevel, state, weight, ... } }
+    summaryCharges: {}, // { uniqueKey: { date, chargeType, amount, count, ... } } - for non-order charges like storage, receiving
+    importedFiles: [], // Track which files have been imported
+  });
+  const [show3PLBulkUpload, setShow3PLBulkUpload] = useState(false);
+  const [threeplUploadStatus, setThreeplUploadStatus] = useState(null); // { processing: bool, results: [] }
   
   // Sales Tax Management
   const [salesTaxConfig, setSalesTaxConfig] = useState({
@@ -711,7 +947,8 @@ const combinedData = useMemo(() => ({
   productNames: savedProductNames,
   theme,
   productionPipeline,
-}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline]);
+  threeplLedger,
+}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, threeplLedger]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -768,6 +1005,11 @@ const loadFromLocal = useCallback(() => {
     const r = lsGet(SETTINGS_KEY);
     if (r) setAppSettings(prev => ({ ...prev, ...JSON.parse(r) }));
   } catch {}
+
+  try {
+    const r = lsGet(THREEPL_LEDGER_KEY);
+    if (r) setThreeplLedger(JSON.parse(r));
+  } catch {}
 }, []);
 
 const saveGoals = useCallback((newGoals) => {
@@ -785,6 +1027,12 @@ const saveSettings = useCallback((newSettings) => {
   setAppSettings(newSettings);
   lsSet(SETTINGS_KEY, JSON.stringify(newSettings));
 }, []);
+
+const save3PLLedger = useCallback((newLedger) => {
+  setThreeplLedger(newLedger);
+  lsSet(THREEPL_LEDGER_KEY, JSON.stringify(newLedger));
+  queueCloudSave({ ...combinedData, threeplLedger: newLedger });
+}, [combinedData, queueCloudSave]);
 
 const writeToLocal = useCallback((key, value) => {
   lsSet(key, value);
@@ -875,6 +1123,7 @@ const loadFromCloud = useCallback(async () => {
     if (cloud.productNames) setSavedProductNames(cloud.productNames);
     if (cloud.theme) setTheme(cloud.theme);
     if (cloud.productionPipeline) setProductionPipeline(cloud.productionPipeline);
+    if (cloud.threeplLedger) setThreeplLedger(cloud.threeplLedger);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -892,6 +1141,7 @@ const loadFromCloud = useCallback(async () => {
     if (cloud.productNames) writeToLocal(PRODUCT_NAMES_KEY, JSON.stringify(cloud.productNames));
     if (cloud.theme) writeToLocal(THEME_KEY, JSON.stringify(cloud.theme));
     if (cloud.productionPipeline) localStorage.setItem('ecommerce_production_v1', JSON.stringify(cloud.productionPipeline));
+    if (cloud.threeplLedger) writeToLocal(THREEPL_LEDGER_KEY, JSON.stringify(cloud.threeplLedger));
   } finally {
     isLoadingDataRef.current = false
   }
@@ -2145,9 +2395,10 @@ const savePeriods = async (d) => {
       };
     }
     
-    // Priority 2: If we have 1-3 weeks of weekly data + period data, blend them
-    if (sortedWeeks.length >= 1 && sortedPeriods.length >= 1) {
-      // Get weekly averages
+    // Priority 2: If we have 1-3 weeks of weekly data, USE THAT (with optional Amazon forecast)
+    // Period data should NOT inflate current projections - it's historical context only
+    if (sortedWeeks.length >= 1) {
+      // Use actual weekly data as the primary source
       const weeklyRevenues = sortedWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
       const weeklyProfits = sortedWeeks.map(w => allWeeksData[w]?.total?.netProfit || 0);
       const weeklyUnits = sortedWeeks.map(w => allWeeksData[w]?.total?.units || 0);
@@ -2155,101 +2406,47 @@ const savePeriods = async (d) => {
       const avgWeeklyProfit = weeklyProfits.reduce((s, v) => s + v, 0) / weeklyProfits.length;
       const avgWeeklyUnits = weeklyUnits.reduce((s, v) => s + v, 0) / weeklyUnits.length;
       
-      // Get period averages (converted to weekly)
-      let periodTotalRev = 0, periodTotalProfit = 0, periodTotalUnits = 0, periodWeeks = 0;
-      sortedPeriods.forEach(p => {
-        const period = allPeriodsData[p];
-        const rev = (period.amazon?.revenue || 0) + (period.shopify?.revenue || 0);
-        const profit = (period.amazon?.netProfit || 0) + (period.shopify?.netProfit || 0);
-        const units = (period.amazon?.units || 0) + (period.shopify?.units || 0);
-        const startDate = new Date(period.startDate || p);
-        const endDate = new Date(period.endDate || p);
-        const weeks = Math.max(1, Math.round((endDate - startDate) / (1000 * 60 * 60 * 24 * 7)));
-        periodTotalRev += rev;
-        periodTotalProfit += profit;
-        periodTotalUnits += units;
-        periodWeeks += weeks;
-      });
-      const periodWeeklyRev = periodWeeks > 0 ? periodTotalRev / periodWeeks : 0;
-      const periodWeeklyProfit = periodWeeks > 0 ? periodTotalProfit / periodWeeks : 0;
-      const periodWeeklyUnits = periodWeeks > 0 ? periodTotalUnits / periodWeeks : 0;
-      
-      // Blend: Weight recent weekly data more heavily (70%) vs period data (30%)
-      const blendedRev = avgWeeklyRev * 0.7 + periodWeeklyRev * 0.3;
-      const blendedProfit = avgWeeklyProfit * 0.7 + periodWeeklyProfit * 0.3;
-      const blendedUnits = avgWeeklyUnits * 0.7 + periodWeeklyUnits * 0.3;
-      
       const forecast = [];
       for (let i = 0; i < 4; i++) {
         const amazonForecast = upcomingForecasts[i]?.[1];
         if (amazonForecast) {
+          // When we have Amazon forecast, trust it heavily (70%) since it has real-time demand signals
+          // Blend with our weekly average (30%) for validation
           forecast.push({
             week: `Week +${i + 1}`,
-            revenue: amazonForecast.totals.sales * 0.5 + blendedRev * 0.5,
-            profit: amazonForecast.totals.proceeds * 0.5 + blendedProfit * 0.5,
-            units: Math.round(amazonForecast.totals.units * 0.5 + blendedUnits * 0.5),
+            revenue: amazonForecast.totals.sales * 0.7 + avgWeeklyRev * 0.3,
+            profit: amazonForecast.totals.proceeds * 0.7 + avgWeeklyProfit * 0.3,
+            units: Math.round(amazonForecast.totals.units * 0.7 + avgWeeklyUnits * 0.3),
             hasAmazonForecast: true,
           });
         } else {
+          // No Amazon forecast - use weekly average
           forecast.push({
             week: `Week +${i + 1}`,
-            revenue: blendedRev,
-            profit: blendedProfit,
-            units: Math.round(blendedUnits),
+            revenue: avgWeeklyRev,
+            profit: avgWeeklyProfit,
+            units: Math.round(avgWeeklyUnits),
           });
         }
       }
+      
+      const hasAmazon = upcomingForecasts.length > 0;
+      const hasPeriods = sortedPeriods.length > 0;
       
       return {
         weekly: forecast,
         monthly: { revenue: forecast.reduce((s, f) => s + f.revenue, 0), profit: forecast.reduce((s, f) => s + f.profit, 0), units: forecast.reduce((s, f) => s + f.units, 0) },
         trend: { revenue: 'flat', revenueChange: 0 },
-        confidence: Math.min(70, 40 + sortedWeeks.length * 10).toFixed(0),
+        confidence: Math.min(75, 40 + sortedWeeks.length * 10 + (hasAmazon ? 15 : 0)).toFixed(0),
         basedOn: sortedWeeks.length,
-        source: 'blended',
-        note: `Blending ${sortedWeeks.length} week(s) + ${sortedPeriods.length} period(s). Upload more weekly data for trend analysis.`,
-        amazonBlended: upcomingForecasts.length > 0,
+        source: hasAmazon ? 'weekly-amazon' : 'weekly-avg',
+        note: sortedWeeks.length < 4 ? `Based on ${sortedWeeks.length} week average${hasAmazon ? ' + Amazon forecast' : ''}. Need 4+ weeks for trend analysis.` : null,
+        amazonBlended: hasAmazon,
+        periodsAvailable: hasPeriods ? sortedPeriods.length : 0,
       };
     }
     
-    // Priority 3: Only weekly data (1-3 weeks) - use averages
-    if (sortedWeeks.length >= 1) {
-      const revenues = sortedWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
-      const profits = sortedWeeks.map(w => allWeeksData[w]?.total?.netProfit || 0);
-      const units = sortedWeeks.map(w => allWeeksData[w]?.total?.units || 0);
-      const avgRev = revenues.reduce((s, v) => s + v, 0) / revenues.length;
-      const avgProfit = profits.reduce((s, v) => s + v, 0) / profits.length;
-      const avgUnits = units.reduce((s, v) => s + v, 0) / units.length;
-      
-      const forecast = [];
-      for (let i = 0; i < 4; i++) {
-        const amazonForecast = upcomingForecasts[i]?.[1];
-        if (amazonForecast) {
-          forecast.push({
-            week: `Week +${i + 1}`,
-            revenue: amazonForecast.totals.sales * 0.6 + avgRev * 0.4,
-            profit: amazonForecast.totals.proceeds * 0.6 + avgProfit * 0.4,
-            units: Math.round(amazonForecast.totals.units * 0.6 + avgUnits * 0.4),
-            hasAmazonForecast: true,
-          });
-        } else {
-          forecast.push({ week: `Week +${i + 1}`, revenue: avgRev, profit: avgProfit, units: Math.round(avgUnits) });
-        }
-      }
-      
-      return {
-        weekly: forecast,
-        monthly: { revenue: forecast.reduce((s, f) => s + f.revenue, 0), profit: forecast.reduce((s, f) => s + f.profit, 0), units: forecast.reduce((s, f) => s + f.units, 0) },
-        trend: { revenue: 'flat', revenueChange: 0 },
-        confidence: Math.min(60, 30 + sortedWeeks.length * 10).toFixed(0),
-        basedOn: sortedWeeks.length,
-        source: 'weekly-avg',
-        note: `Based on ${sortedWeeks.length} week average. Need 4+ weeks for trend analysis.`,
-        amazonBlended: upcomingForecasts.length > 0,
-      };
-    }
-    
-    // Priority 4: Only period data - use averages (least accurate)
+    // Priority 3: Only period data - use averages (least accurate, only when no weekly data)
     if (sortedPeriods.length >= 1) {
       let totalRevenue = 0, totalProfit = 0, totalUnits = 0, totalMonths = 0;
       
@@ -3490,10 +3687,10 @@ const savePeriods = async (d) => {
     const f = generateForecast;
     
     const sourceLabels = {
-      'weekly': 'Weekly trend analysis',
-      'blended': 'Blended (weekly + period)',
+      'weekly': 'Weekly trend analysis (4+ weeks)',
+      'weekly-amazon': 'Weekly avg + Amazon forecast',
       'weekly-avg': 'Weekly averages',
-      'period': 'Period averages',
+      'period': 'Period averages (historical)',
     };
     
     return (
@@ -3733,6 +3930,302 @@ const savePeriods = async (d) => {
               </div>
             </button>
           </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 3PL BULK UPLOAD MODAL
+  const ThreePLBulkUploadModal = () => {
+    if (!show3PLBulkUpload) return null;
+    
+    const [dragActive, setDragActive] = useState(false);
+    const [selectedFiles, setSelectedFiles] = useState([]);
+    const [processing, setProcessing] = useState(false);
+    const [results, setResults] = useState(null);
+    
+    const handleDrag = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.type === 'dragenter' || e.type === 'dragover') setDragActive(true);
+      else if (e.type === 'dragleave') setDragActive(false);
+    };
+    
+    const handleDrop = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDragActive(false);
+      
+      const files = [...e.dataTransfer.files].filter(f => 
+        f.name.endsWith('.xlsx') || f.name.endsWith('.xls') || f.name.endsWith('.csv')
+      );
+      setSelectedFiles(prev => [...prev, ...files]);
+    };
+    
+    const handleFileSelect = (e) => {
+      const files = [...e.target.files].filter(f => 
+        f.name.endsWith('.xlsx') || f.name.endsWith('.xls') || f.name.endsWith('.csv')
+      );
+      setSelectedFiles(prev => [...prev, ...files]);
+    };
+    
+    const removeFile = (idx) => {
+      setSelectedFiles(prev => prev.filter((_, i) => i !== idx));
+    };
+    
+    const processFiles = async () => {
+      setProcessing(true);
+      const processResults = [];
+      let newOrders = { ...threeplLedger.orders };
+      let newSummaryCharges = { ...threeplLedger.summaryCharges };
+      let newImportedFiles = [...(threeplLedger.importedFiles || [])];
+      let totalAdded = 0;
+      let totalSkipped = 0;
+      let weeksAffected = new Set();
+      
+      for (const file of selectedFiles) {
+        try {
+          const parsed = await parse3PLExcel(file);
+          let fileAdded = 0;
+          let fileSkipped = 0;
+          
+          // Process orders
+          parsed.orders.forEach(order => {
+            if (newOrders[order.uniqueKey]) {
+              fileSkipped++;
+            } else {
+              newOrders[order.uniqueKey] = order;
+              fileAdded++;
+              weeksAffected.add(order.weekKey);
+            }
+          });
+          
+          // Process non-order charges (allocate to weeks based on file date range)
+          if (parsed.dateRange.start && parsed.dateRange.end) {
+            const startDate = new Date(parsed.dateRange.start);
+            const endDate = new Date(parsed.dateRange.end);
+            const numWeeks = Math.max(1, Math.ceil((endDate - startDate) / (7 * 24 * 60 * 60 * 1000)));
+            
+            parsed.nonOrderCharges.forEach((charge, idx) => {
+              // Allocate charges proportionally across weeks in the range
+              // For simplicity, assign to the end week
+              const weekKey = getSunday(endDate);
+              const chargeKey = `${file.name}-${charge.chargeType}-${idx}`;
+              
+              if (!newSummaryCharges[chargeKey]) {
+                newSummaryCharges[chargeKey] = {
+                  ...charge,
+                  weekKey,
+                  sourceFile: file.name,
+                  dateRange: { start: parsed.dateRange.start, end: parsed.dateRange.end },
+                };
+                weeksAffected.add(weekKey);
+              }
+            });
+          }
+          
+          newImportedFiles.push({
+            name: file.name,
+            importedAt: new Date().toISOString(),
+            ordersAdded: fileAdded,
+            dateRange: parsed.dateRange,
+          });
+          
+          totalAdded += fileAdded;
+          totalSkipped += fileSkipped;
+          
+          processResults.push({
+            file: file.name,
+            status: 'success',
+            ordersAdded: fileAdded,
+            ordersSkipped: fileSkipped,
+            dateRange: parsed.dateRange,
+          });
+        } catch (err) {
+          processResults.push({
+            file: file.name,
+            status: 'error',
+            error: err.message,
+          });
+        }
+      }
+      
+      // Save updated ledger
+      const newLedger = {
+        orders: newOrders,
+        summaryCharges: newSummaryCharges,
+        importedFiles: newImportedFiles,
+      };
+      save3PLLedger(newLedger);
+      
+      setResults({
+        files: processResults,
+        totalAdded,
+        totalSkipped,
+        weeksAffected: weeksAffected.size,
+      });
+      setProcessing(false);
+    };
+    
+    const ledgerStats = {
+      totalOrders: Object.keys(threeplLedger.orders || {}).length,
+      totalFiles: (threeplLedger.importedFiles || []).length,
+      weeks: new Set(Object.values(threeplLedger.orders || {}).map(o => o.weekKey)).size,
+    };
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <Truck className="w-6 h-6 text-blue-400" />
+              3PL Bulk Upload
+            </h2>
+            <button onClick={() => { setShow3PLBulkUpload(false); setSelectedFiles([]); setResults(null); }} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          {/* Current Stats */}
+          <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
+            <p className="text-slate-400 text-sm mb-2">Current 3PL Data</p>
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div>
+                <p className="text-2xl font-bold text-white">{formatNumber(ledgerStats.totalOrders)}</p>
+                <p className="text-slate-500 text-xs">Orders</p>
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-white">{ledgerStats.weeks}</p>
+                <p className="text-slate-500 text-xs">Weeks</p>
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-white">{ledgerStats.totalFiles}</p>
+                <p className="text-slate-500 text-xs">Files Imported</p>
+              </div>
+            </div>
+          </div>
+          
+          {!results ? (
+            <>
+              {/* Drop Zone */}
+              <div 
+                className={`border-2 border-dashed rounded-xl p-8 text-center transition-all ${dragActive ? 'border-blue-500 bg-blue-500/10' : 'border-slate-600 hover:border-slate-500'}`}
+                onDragEnter={handleDrag}
+                onDragLeave={handleDrag}
+                onDragOver={handleDrag}
+                onDrop={handleDrop}
+              >
+                <Upload className="w-12 h-12 text-slate-500 mx-auto mb-3" />
+                <p className="text-white font-medium mb-1">Drop 3PL Excel files here</p>
+                <p className="text-slate-400 text-sm mb-3">or click to browse</p>
+                <input
+                  type="file"
+                  multiple
+                  accept=".xlsx,.xls,.csv"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                  id="threepl-file-input"
+                />
+                <label htmlFor="threepl-file-input" className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white cursor-pointer inline-block">
+                  Select Files
+                </label>
+                <p className="text-slate-500 text-xs mt-3">Supports .xlsx, .xls, .csv • Multiple files OK • Duplicates auto-skipped</p>
+              </div>
+              
+              {/* Selected Files */}
+              {selectedFiles.length > 0 && (
+                <div className="mt-4">
+                  <p className="text-slate-400 text-sm mb-2">Selected Files ({selectedFiles.length})</p>
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {selectedFiles.map((file, idx) => (
+                      <div key={idx} className="flex items-center justify-between bg-slate-900/50 rounded-lg p-2">
+                        <div className="flex items-center gap-2">
+                          <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                          <span className="text-white text-sm">{file.name}</span>
+                          <span className="text-slate-500 text-xs">({(file.size / 1024).toFixed(1)} KB)</span>
+                        </div>
+                        <button onClick={() => removeFile(idx)} className="text-slate-400 hover:text-rose-400">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <button
+                    onClick={processFiles}
+                    disabled={processing}
+                    className="w-full mt-4 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
+                  >
+                    {processing ? (
+                      <>
+                        <RefreshCw className="w-5 h-5 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-5 h-5" />
+                        Import {selectedFiles.length} File{selectedFiles.length > 1 ? 's' : ''}
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            /* Results */
+            <div className="space-y-4">
+              <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <CheckCircle className="w-5 h-5 text-emerald-400" />
+                  <span className="text-emerald-400 font-semibold">Import Complete</span>
+                </div>
+                <div className="grid grid-cols-3 gap-4 text-center">
+                  <div>
+                    <p className="text-2xl font-bold text-emerald-400">{results.totalAdded}</p>
+                    <p className="text-slate-400 text-xs">Orders Added</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-amber-400">{results.totalSkipped}</p>
+                    <p className="text-slate-400 text-xs">Duplicates Skipped</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-blue-400">{results.weeksAffected}</p>
+                    <p className="text-slate-400 text-xs">Weeks Updated</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <p className="text-slate-400 text-sm">File Details</p>
+                {results.files.map((r, idx) => (
+                  <div key={idx} className={`flex items-center justify-between rounded-lg p-3 ${r.status === 'success' ? 'bg-slate-900/50' : 'bg-rose-900/20 border border-rose-500/30'}`}>
+                    <div className="flex items-center gap-2">
+                      {r.status === 'success' ? (
+                        <CheckCircle className="w-4 h-4 text-emerald-400" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 text-rose-400" />
+                      )}
+                      <span className="text-white text-sm">{r.file}</span>
+                    </div>
+                    {r.status === 'success' ? (
+                      <span className="text-slate-400 text-sm">
+                        +{r.ordersAdded} orders {r.dateRange?.start && `(${r.dateRange.start} to ${r.dateRange.end})`}
+                      </span>
+                    ) : (
+                      <span className="text-rose-400 text-sm">{r.error}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              
+              <button
+                onClick={() => { setSelectedFiles([]); setResults(null); }}
+                className="w-full py-3 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-semibold"
+              >
+                Import More Files
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -4952,7 +5445,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -5556,7 +6049,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -5640,7 +6133,16 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 <FileBox type="amazon" label="Amazon Report" desc="Business Reports > Detail Page" req />
                 <FileBox type="shopify" label="Shopify Sales" desc="Analytics > Sales by product" req />
-                <FileBox type="threepl" label="3PL Costs" desc="Fulfillment invoice CSV" multi />
+                <div className="relative">
+                  <FileBox type="threepl" label="3PL Costs" desc="Fulfillment invoice CSV" multi />
+                  <button 
+                    onClick={() => setShow3PLBulkUpload(true)} 
+                    className="absolute top-2 right-2 px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs text-white flex items-center gap-1"
+                    title="Bulk upload multiple 3PL files with deduplication"
+                  >
+                    <Upload className="w-3 h-3" />Bulk
+                  </button>
+                </div>
                 <FileBox type="cogs" label="COGS File" desc="SKU & Cost Per Unit columns" />
               </div>
               
@@ -5959,7 +6461,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -5977,7 +6479,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -6002,7 +6504,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -6037,7 +6539,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     const data = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -6244,7 +6746,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -6270,7 +6772,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -6307,7 +6809,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -6523,7 +7025,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -7220,7 +7722,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -7568,7 +8070,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -7880,15 +8382,22 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     if (!hasWeeklyData && !hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
               <h2 className="text-xl font-bold text-white mb-2">No 3PL Data Yet</h2>
               <p className="text-slate-400 mb-4">Upload data with 3PL files to see fulfillment analytics</p>
+              <button 
+                onClick={() => setShow3PLBulkUpload(true)}
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl text-white font-semibold flex items-center gap-2 mx-auto mb-4"
+              >
+                <Upload className="w-5 h-5" />
+                Bulk Upload 3PL Files
+              </button>
               <div className="text-slate-500 text-sm">
-                <p>When uploading weekly or period data, include your 3PL CSV files</p>
-                <p>to track shipping costs, order metrics, and fulfillment efficiency.</p>
+                <p>Upload multiple 3PL Excel files at once</p>
+                <p>Supports .xlsx format from Packiyo • Auto-deduplication</p>
               </div>
             </div>
           </div>
@@ -7900,7 +8409,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     if (!hasWeeklyData && hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -7962,7 +8471,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -8360,7 +8869,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -8765,7 +9274,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white">Analytics & Forecasting</h1>
@@ -9410,7 +9919,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -9742,7 +10251,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -10278,7 +10787,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -10652,7 +11161,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
