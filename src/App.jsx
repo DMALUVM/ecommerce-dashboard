@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone } from 'lucide-react';
 
 const parseCSV = (text) => {
   const lines = text.split('\n').filter(line => line.trim());
@@ -48,6 +48,9 @@ const PERIODS_KEY = 'ecommerce_periods_v1';
 const SALES_TAX_KEY = 'ecommerce_sales_tax_v1';
 const PRODUCT_NAMES_KEY = 'ecommerce_product_names_v1';
 const SETTINGS_KEY = 'ecommerce_settings_v1';
+const NOTES_KEY = 'ecommerce_notes_v1';
+const WIDGET_KEY = 'ecommerce_widgets_v1';
+const THEME_KEY = 'ecommerce_theme_v1';
 
 // Supabase (cloud auth + storage)
 // Create a .env.local file in your Vite project with:
@@ -307,6 +310,83 @@ const handleLogout = async () => {
   
   // Help modal
   const [showUploadHelp, setShowUploadHelp] = useState(false);
+  
+  // NEW FEATURES STATE
+  // 1. Dashboard Widget Customization
+  const [widgetConfig, setWidgetConfig] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(WIDGET_KEY)) || null; } catch { return null; }
+  });
+  const [editingWidgets, setEditingWidgets] = useState(false);
+  
+  // 4. Browser Notifications
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  
+  // 5. Forecasting
+  const [showForecast, setShowForecast] = useState(false);
+  
+  // 7. Break-Even Calculator
+  const [showBreakEven, setShowBreakEven] = useState(false);
+  const [breakEvenInputs, setBreakEvenInputs] = useState({ adSpend: '', cogs: '', price: '', conversionRate: 2 });
+  
+  // 8. Notes/Journal
+  const [weekNotes, setWeekNotes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(NOTES_KEY)) || {}; } catch { return {}; }
+  });
+  const [editingNote, setEditingNote] = useState(null); // week key being edited
+  const [noteText, setNoteText] = useState('');
+  
+  // 9. Theme Customization
+  const [theme, setTheme] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(THEME_KEY)) || { mode: 'dark', accent: 'violet' }; } catch { return { mode: 'dark', accent: 'violet' }; }
+  });
+  
+  // 10. CSV Export modal
+  const [showExportModal, setShowExportModal] = useState(false);
+  
+  // 12. Comparison Mode
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareItems, setCompareItems] = useState([]); // Array of week keys or SKUs to compare
+  
+  // 3. Mobile view detection
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  
+  // Save notes to localStorage
+  useEffect(() => {
+    localStorage.setItem(NOTES_KEY, JSON.stringify(weekNotes));
+  }, [weekNotes]);
+  
+  // Save widget config to localStorage
+  useEffect(() => {
+    if (widgetConfig) localStorage.setItem(WIDGET_KEY, JSON.stringify(widgetConfig));
+  }, [widgetConfig]);
+  
+  // Save theme to localStorage
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, JSON.stringify(theme));
+  }, [theme]);
+  
+  // Mobile detection
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+  
+  // Request notification permission
+  const requestNotifications = async () => {
+    if ('Notification' in window) {
+      const permission = await Notification.requestPermission();
+      setNotificationsEnabled(permission === 'granted');
+    }
+  };
+  
+  // Send browser notification
+  const sendNotification = (title, body) => {
+    if (notificationsEnabled && 'Notification' in window && Notification.permission === 'granted') {
+      new Notification(title, { body, icon: '/favicon.ico' });
+    }
+  };
   
   // App Settings
   const [appSettings, setAppSettings] = useState({
@@ -1459,6 +1539,151 @@ const savePeriods = async (d) => {
   const exportAll = () => { const blob = new Blob([JSON.stringify({ sales: allWeeksData, inventory: invHistory, cogs: savedCogs, periods: allPeriodsData, goals, storeName }, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${storeName || 'dashboard'}_backup_${new Date().toISOString().split('T')[0]}.json`; a.click(); };
   const importData = (file) => { const reader = new FileReader(); reader.onload = async (e) => { try { const d = JSON.parse(e.target.result); if (d.sales) { setAllWeeksData({...allWeeksData, ...d.sales}); await save({...allWeeksData, ...d.sales}); } if (d.inventory) { setInvHistory({...invHistory, ...d.inventory}); await saveInv({...invHistory, ...d.inventory}); } if (d.cogs) { setSavedCogs(d.cogs); await saveCogs(d.cogs); } if (d.periods) { setAllPeriodsData({...allPeriodsData, ...d.periods}); await savePeriods({...allPeriodsData, ...d.periods}); } if (d.goals) { setGoals(d.goals); lsSet(GOALS_KEY, JSON.stringify(d.goals)); } if (d.storeName) { setStoreName(d.storeName); lsSet(STORE_KEY, d.storeName); } alert('Imported!'); } catch { alert('Invalid file'); }}; reader.readAsText(file); };
 
+  // 5. FORECASTING - Simple linear regression based forecast
+  const generateForecast = useMemo(() => {
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    if (sortedWeeks.length < 4) return null;
+    
+    const recentWeeks = sortedWeeks.slice(-8); // Use last 8 weeks for trend
+    const revenues = recentWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
+    const profits = recentWeeks.map(w => allWeeksData[w]?.total?.netProfit || 0);
+    const units = recentWeeks.map(w => allWeeksData[w]?.total?.units || 0);
+    
+    // Simple linear regression
+    const calcTrend = (data) => {
+      const n = data.length;
+      const sumX = data.reduce((s, _, i) => s + i, 0);
+      const sumY = data.reduce((s, v) => s + v, 0);
+      const sumXY = data.reduce((s, v, i) => s + i * v, 0);
+      const sumX2 = data.reduce((s, _, i) => s + i * i, 0);
+      const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+      const intercept = (sumY - slope * sumX) / n;
+      return { slope, intercept, avg: sumY / n };
+    };
+    
+    const revTrend = calcTrend(revenues);
+    const profTrend = calcTrend(profits);
+    const unitTrend = calcTrend(units);
+    
+    // Project next 4 weeks
+    const n = revenues.length;
+    const forecast = [];
+    for (let i = 0; i < 4; i++) {
+      const weekNum = n + i;
+      forecast.push({
+        week: `Week +${i + 1}`,
+        revenue: Math.max(0, revTrend.intercept + revTrend.slope * weekNum),
+        profit: profTrend.intercept + profTrend.slope * weekNum,
+        units: Math.max(0, Math.round(unitTrend.intercept + unitTrend.slope * weekNum)),
+      });
+    }
+    
+    // Calculate monthly totals (4 weeks)
+    const monthlyRevenue = forecast.reduce((s, f) => s + f.revenue, 0);
+    const monthlyProfit = forecast.reduce((s, f) => s + f.profit, 0);
+    const monthlyUnits = forecast.reduce((s, f) => s + f.units, 0);
+    
+    // Confidence based on data consistency
+    const variance = revenues.reduce((s, v) => s + Math.pow(v - revTrend.avg, 2), 0) / revenues.length;
+    const stdDev = Math.sqrt(variance);
+    const confidence = revTrend.avg > 0 ? Math.max(0, Math.min(100, 100 - (stdDev / revTrend.avg * 100))) : 0;
+    
+    return {
+      weekly: forecast,
+      monthly: { revenue: monthlyRevenue, profit: monthlyProfit, units: monthlyUnits },
+      trend: { 
+        revenue: revTrend.slope > 0 ? 'up' : revTrend.slope < 0 ? 'down' : 'flat',
+        revenueChange: revTrend.avg > 0 ? (revTrend.slope / revTrend.avg * 100) : 0,
+      },
+      confidence: confidence.toFixed(0),
+      basedOn: recentWeeks.length,
+    };
+  }, [allWeeksData]);
+
+  // 7. BREAK-EVEN CALCULATOR
+  const calculateBreakEven = (adSpend, cogs, price, conversionRate) => {
+    if (!price || price <= cogs) return null;
+    const profitPerUnit = price - cogs;
+    const unitsToBreakEven = Math.ceil(adSpend / profitPerUnit);
+    const clicksNeeded = conversionRate > 0 ? Math.ceil(unitsToBreakEven / (conversionRate / 100)) : 0;
+    const revenueAtBreakEven = unitsToBreakEven * price;
+    const roasAtBreakEven = adSpend > 0 ? revenueAtBreakEven / adSpend : 0;
+    return { unitsToBreakEven, clicksNeeded, revenueAtBreakEven, roasAtBreakEven, profitPerUnit };
+  };
+
+  // 10. CSV EXPORT functions
+  const exportToCSV = (data, filename, headers) => {
+    const csvContent = [
+      headers.join(','),
+      ...data.map(row => headers.map(h => {
+        const val = row[h] ?? '';
+        return typeof val === 'string' && val.includes(',') ? `"${val}"` : val;
+      }).join(','))
+    ].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${filename}_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+  };
+
+  const exportWeeklyDataCSV = () => {
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    const data = sortedWeeks.map(w => {
+      const d = allWeeksData[w];
+      return {
+        'Week Ending': w,
+        'Total Revenue': d.total?.revenue?.toFixed(2) || 0,
+        'Total Profit': d.total?.netProfit?.toFixed(2) || 0,
+        'Total Units': d.total?.units || 0,
+        'Amazon Revenue': d.amazon?.revenue?.toFixed(2) || 0,
+        'Amazon Profit': d.amazon?.netProfit?.toFixed(2) || 0,
+        'Shopify Revenue': d.shopify?.revenue?.toFixed(2) || 0,
+        'Shopify Profit': d.shopify?.netProfit?.toFixed(2) || 0,
+        'Total Ad Spend': d.total?.adSpend?.toFixed(2) || 0,
+        'Notes': weekNotes[w] || '',
+      };
+    });
+    exportToCSV(data, 'weekly_sales', ['Week Ending', 'Total Revenue', 'Total Profit', 'Total Units', 'Amazon Revenue', 'Amazon Profit', 'Shopify Revenue', 'Shopify Profit', 'Total Ad Spend', 'Notes']);
+  };
+
+  const exportSKUDataCSV = () => {
+    const skuMap = {};
+    Object.entries(allWeeksData).forEach(([week, data]) => {
+      [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])].forEach(s => {
+        if (!skuMap[s.sku]) skuMap[s.sku] = { sku: s.sku, name: s.name || '', totalUnits: 0, totalRevenue: 0, totalProfit: 0, weeks: 0 };
+        skuMap[s.sku].totalUnits += s.unitsSold || 0;
+        skuMap[s.sku].totalRevenue += s.netSales || 0;
+        skuMap[s.sku].totalProfit += s.netProceeds || (s.netSales || 0) - (s.cogs || 0);
+        skuMap[s.sku].weeks += 1;
+      });
+    });
+    const data = Object.values(skuMap).map(s => ({
+      'SKU': s.sku,
+      'Product Name': s.name,
+      'Total Units': s.totalUnits,
+      'Total Revenue': s.totalRevenue.toFixed(2),
+      'Total Profit': s.totalProfit.toFixed(2),
+      'Weeks Active': s.weeks,
+      'Avg Units/Week': (s.totalUnits / s.weeks).toFixed(1),
+    }));
+    exportToCSV(data, 'sku_performance', ['SKU', 'Product Name', 'Total Units', 'Total Revenue', 'Total Profit', 'Weeks Active', 'Avg Units/Week']);
+  };
+
+  const exportInventoryCSV = () => {
+    const latestDate = Object.keys(invHistory).sort().pop();
+    if (!latestDate) return;
+    const inv = invHistory[latestDate];
+    const data = [...(inv.fba || []), ...(inv.threepl || [])].map(i => ({
+      'SKU': i.sku,
+      'Location': i.source || 'Unknown',
+      'Units': i.quantity || i.units || 0,
+      'COGS': savedCogs[i.sku] || 0,
+      'Value': ((i.quantity || i.units || 0) * (savedCogs[i.sku] || 0)).toFixed(2),
+    }));
+    exportToCSV(data, 'inventory', ['SKU', 'Location', 'Units', 'COGS', 'Value']);
+  };
+
 // If logged in but locked, require password to continue
 if (supabase && isAuthReady && session && isLocked) {
   return (
@@ -2322,6 +2547,390 @@ if (supabase && isAuthReady && session && isLocked) {
     );
   };
 
+  // FORECAST MODAL (Feature 5)
+  const ForecastModal = () => {
+    if (!showForecast || !generateForecast) return null;
+    const f = generateForecast;
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <TrendingUp className="w-6 h-6 text-emerald-400" />
+              Revenue Forecast
+            </h2>
+            <button onClick={() => setShowForecast(false)} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-slate-400">Based on</span>
+              <span className="text-white font-medium">{f.basedOn} weeks of data</span>
+            </div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-slate-400">Trend Direction</span>
+              <span className={`font-medium flex items-center gap-1 ${f.trend.revenue === 'up' ? 'text-emerald-400' : f.trend.revenue === 'down' ? 'text-rose-400' : 'text-slate-400'}`}>
+                {f.trend.revenue === 'up' ? <TrendingUp className="w-4 h-4" /> : f.trend.revenue === 'down' ? <TrendingDown className="w-4 h-4" /> : <Minus className="w-4 h-4" />}
+                {f.trend.revenueChange > 0 ? '+' : ''}{f.trend.revenueChange.toFixed(1)}% per week
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Confidence</span>
+              <span className={`font-medium ${parseFloat(f.confidence) > 70 ? 'text-emerald-400' : parseFloat(f.confidence) > 40 ? 'text-amber-400' : 'text-rose-400'}`}>{f.confidence}%</span>
+            </div>
+          </div>
+          
+          <h3 className="text-sm font-semibold text-slate-400 uppercase mb-3">Weekly Projections</h3>
+          <div className="grid grid-cols-4 gap-3 mb-4">
+            {f.weekly.map((w, i) => (
+              <div key={i} className="bg-slate-900/50 rounded-xl p-3 text-center">
+                <p className="text-slate-500 text-xs mb-1">{w.week}</p>
+                <p className="text-white font-bold">{formatCurrency(w.revenue)}</p>
+                <p className={`text-sm ${w.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(w.profit)}</p>
+                <p className="text-slate-500 text-xs">{w.units} units</p>
+              </div>
+            ))}
+          </div>
+          
+          <div className="bg-gradient-to-r from-emerald-900/30 to-violet-900/30 rounded-xl p-4 border border-emerald-500/30">
+            <h3 className="text-sm font-semibold text-emerald-400 uppercase mb-3">Next Month Projection</h3>
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div>
+                <p className="text-slate-400 text-sm">Revenue</p>
+                <p className="text-2xl font-bold text-white">{formatCurrency(f.monthly.revenue)}</p>
+              </div>
+              <div>
+                <p className="text-slate-400 text-sm">Profit</p>
+                <p className={`text-2xl font-bold ${f.monthly.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(f.monthly.profit)}</p>
+              </div>
+              <div>
+                <p className="text-slate-400 text-sm">Units</p>
+                <p className="text-2xl font-bold text-white">{formatNumber(f.monthly.units)}</p>
+              </div>
+            </div>
+            {goals.monthlyRevenue > 0 && (
+              <div className="mt-3 pt-3 border-t border-slate-700">
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400">vs Monthly Goal</span>
+                  <span className={f.monthly.revenue >= goals.monthlyRevenue ? 'text-emerald-400' : 'text-amber-400'}>
+                    {f.monthly.revenue >= goals.monthlyRevenue ? '✓ On track' : `${formatCurrency(goals.monthlyRevenue - f.monthly.revenue)} short`}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+          
+          <p className="text-slate-500 text-xs mt-4 text-center">
+            * Forecast based on linear trend analysis. Actual results may vary.
+          </p>
+        </div>
+      </div>
+    );
+  };
+
+  // BREAK-EVEN CALCULATOR (Feature 7)
+  const BreakEvenModal = () => {
+    if (!showBreakEven) return null;
+    const result = calculateBreakEven(
+      parseFloat(breakEvenInputs.adSpend) || 0,
+      parseFloat(breakEvenInputs.cogs) || 0,
+      parseFloat(breakEvenInputs.price) || 0,
+      parseFloat(breakEvenInputs.conversionRate) || 2
+    );
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <Calculator className="w-6 h-6 text-amber-400" />
+              Break-Even Calculator
+            </h2>
+            <button onClick={() => setShowBreakEven(false)} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          <div className="space-y-4 mb-6">
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Ad Spend ($)</label>
+              <input type="number" value={breakEvenInputs.adSpend} onChange={e => setBreakEvenInputs(p => ({...p, adSpend: e.target.value}))}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" placeholder="500" />
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">COGS per Unit ($)</label>
+              <input type="number" value={breakEvenInputs.cogs} onChange={e => setBreakEvenInputs(p => ({...p, cogs: e.target.value}))}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" placeholder="5" />
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Selling Price ($)</label>
+              <input type="number" value={breakEvenInputs.price} onChange={e => setBreakEvenInputs(p => ({...p, price: e.target.value}))}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" placeholder="25" />
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Conversion Rate (%)</label>
+              <input type="number" value={breakEvenInputs.conversionRate} onChange={e => setBreakEvenInputs(p => ({...p, conversionRate: e.target.value}))}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" placeholder="2" />
+            </div>
+          </div>
+          
+          {result && parseFloat(breakEvenInputs.price) > parseFloat(breakEvenInputs.cogs) ? (
+            <div className="bg-slate-900/50 rounded-xl p-4 space-y-3">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Profit per Unit</span>
+                <span className="text-emerald-400 font-bold">{formatCurrency(result.profitPerUnit)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Units to Break Even</span>
+                <span className="text-white font-bold">{result.unitsToBreakEven}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Clicks Needed (at {breakEvenInputs.conversionRate}% CVR)</span>
+                <span className="text-white font-bold">{formatNumber(result.clicksNeeded)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Revenue at Break-Even</span>
+                <span className="text-white font-bold">{formatCurrency(result.revenueAtBreakEven)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">ROAS at Break-Even</span>
+                <span className="text-amber-400 font-bold">{result.roasAtBreakEven.toFixed(2)}x</span>
+              </div>
+            </div>
+          ) : parseFloat(breakEvenInputs.price) <= parseFloat(breakEvenInputs.cogs) && breakEvenInputs.price ? (
+            <div className="bg-rose-900/30 border border-rose-500/50 rounded-xl p-4 text-center">
+              <p className="text-rose-400">Price must be greater than COGS to make profit</p>
+            </div>
+          ) : (
+            <div className="bg-slate-900/50 rounded-xl p-4 text-center text-slate-500">
+              Enter values above to calculate break-even point
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // CSV EXPORT MODAL (Feature 10)
+  const ExportModal = () => {
+    if (!showExportModal) return null;
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <FileDown className="w-6 h-6 text-emerald-400" />
+              Export Data
+            </h2>
+            <button onClick={() => setShowExportModal(false)} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          <div className="space-y-3">
+            <button onClick={() => { exportWeeklyDataCSV(); setShowExportModal(false); }}
+              className="w-full p-4 bg-slate-900/50 hover:bg-slate-700 border border-slate-600 rounded-xl text-left flex items-center gap-3">
+              <Calendar className="w-6 h-6 text-violet-400" />
+              <div>
+                <p className="text-white font-medium">Weekly Sales Data</p>
+                <p className="text-slate-400 text-sm">Revenue, profit, units by week</p>
+              </div>
+            </button>
+            
+            <button onClick={() => { exportSKUDataCSV(); setShowExportModal(false); }}
+              className="w-full p-4 bg-slate-900/50 hover:bg-slate-700 border border-slate-600 rounded-xl text-left flex items-center gap-3">
+              <Package className="w-6 h-6 text-pink-400" />
+              <div>
+                <p className="text-white font-medium">SKU Performance</p>
+                <p className="text-slate-400 text-sm">All SKUs with totals and averages</p>
+              </div>
+            </button>
+            
+            <button onClick={() => { exportInventoryCSV(); setShowExportModal(false); }}
+              disabled={Object.keys(invHistory).length === 0}
+              className="w-full p-4 bg-slate-900/50 hover:bg-slate-700 border border-slate-600 rounded-xl text-left flex items-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed">
+              <Boxes className="w-6 h-6 text-amber-400" />
+              <div>
+                <p className="text-white font-medium">Inventory Snapshot</p>
+                <p className="text-slate-400 text-sm">Current inventory with values</p>
+              </div>
+            </button>
+            
+            <button onClick={() => { exportAll(); setShowExportModal(false); }}
+              className="w-full p-4 bg-slate-900/50 hover:bg-slate-700 border border-slate-600 rounded-xl text-left flex items-center gap-3">
+              <Database className="w-6 h-6 text-emerald-400" />
+              <div>
+                <p className="text-white font-medium">Full Backup (JSON)</p>
+                <p className="text-slate-400 text-sm">Complete data backup for restore</p>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // COMPARISON MODAL (Feature 12)
+  const ComparisonView = () => {
+    if (!compareMode || compareItems.length < 2) return null;
+    
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    const items = compareItems.slice(0, 4).map(key => {
+      const data = allWeeksData[key];
+      if (!data) return null;
+      return {
+        key,
+        label: key,
+        revenue: data.total?.revenue || 0,
+        profit: data.total?.netProfit || 0,
+        units: data.total?.units || 0,
+        margin: data.total?.revenue ? ((data.total?.netProfit || 0) / data.total.revenue * 100) : 0,
+        amazonRev: data.amazon?.revenue || 0,
+        shopifyRev: data.shopify?.revenue || 0,
+        note: weekNotes[key] || '',
+      };
+    }).filter(Boolean);
+    
+    if (items.length < 2) return null;
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <GitCompareArrows className="w-6 h-6 text-violet-400" />
+              Compare Weeks
+            </h2>
+            <button onClick={() => { setCompareMode(false); setCompareItems([]); }} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-slate-700">
+                  <th className="text-left text-slate-400 py-2 px-3">Metric</th>
+                  {items.map(item => (
+                    <th key={item.key} className="text-right text-white py-2 px-3 font-semibold">{item.label}</th>
+                  ))}
+                  <th className="text-right text-slate-400 py-2 px-3">Difference</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700/50">
+                <tr>
+                  <td className="py-3 px-3 text-slate-400">Revenue</td>
+                  {items.map(item => <td key={item.key} className="text-right py-3 px-3 text-white font-medium">{formatCurrency(item.revenue)}</td>)}
+                  <td className={`text-right py-3 px-3 font-medium ${items[1].revenue >= items[0].revenue ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {items[1].revenue >= items[0].revenue ? '+' : ''}{formatCurrency(items[1].revenue - items[0].revenue)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-3 px-3 text-slate-400">Profit</td>
+                  {items.map(item => <td key={item.key} className={`text-right py-3 px-3 font-medium ${item.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(item.profit)}</td>)}
+                  <td className={`text-right py-3 px-3 font-medium ${items[1].profit >= items[0].profit ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {items[1].profit >= items[0].profit ? '+' : ''}{formatCurrency(items[1].profit - items[0].profit)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-3 px-3 text-slate-400">Units</td>
+                  {items.map(item => <td key={item.key} className="text-right py-3 px-3 text-white">{formatNumber(item.units)}</td>)}
+                  <td className={`text-right py-3 px-3 font-medium ${items[1].units >= items[0].units ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {items[1].units >= items[0].units ? '+' : ''}{formatNumber(items[1].units - items[0].units)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-3 px-3 text-slate-400">Margin</td>
+                  {items.map(item => <td key={item.key} className="text-right py-3 px-3 text-white">{item.margin.toFixed(1)}%</td>)}
+                  <td className={`text-right py-3 px-3 font-medium ${items[1].margin >= items[0].margin ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {items[1].margin >= items[0].margin ? '+' : ''}{(items[1].margin - items[0].margin).toFixed(1)}%
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-3 px-3 text-slate-400">Amazon</td>
+                  {items.map(item => <td key={item.key} className="text-right py-3 px-3 text-orange-400">{formatCurrency(item.amazonRev)}</td>)}
+                  <td className={`text-right py-3 px-3 font-medium ${items[1].amazonRev >= items[0].amazonRev ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {items[1].amazonRev >= items[0].amazonRev ? '+' : ''}{formatCurrency(items[1].amazonRev - items[0].amazonRev)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-3 px-3 text-slate-400">Shopify</td>
+                  {items.map(item => <td key={item.key} className="text-right py-3 px-3 text-blue-400">{formatCurrency(item.shopifyRev)}</td>)}
+                  <td className={`text-right py-3 px-3 font-medium ${items[1].shopifyRev >= items[0].shopifyRev ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {items[1].shopifyRev >= items[0].shopifyRev ? '+' : ''}{formatCurrency(items[1].shopifyRev - items[0].shopifyRev)}
+                  </td>
+                </tr>
+                {items.some(i => i.note) && (
+                  <tr>
+                    <td className="py-3 px-3 text-slate-400">Notes</td>
+                    {items.map(item => <td key={item.key} className="text-right py-3 px-3 text-slate-300 text-sm max-w-[150px] truncate">{item.note || '—'}</td>)}
+                    <td></td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          
+          <div className="mt-4 pt-4 border-t border-slate-700 flex justify-between items-center">
+            <p className="text-slate-500 text-sm">Select weeks from the dashboard to compare</p>
+            <button onClick={() => { setCompareMode(false); setCompareItems([]); }}
+              className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium">
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // NOTES COMPONENT (Feature 8)
+  const WeekNoteEditor = ({ weekKey, compact = false }) => {
+    const note = weekNotes[weekKey] || '';
+    const isEditing = editingNote === weekKey;
+    
+    if (compact) {
+      return note ? (
+        <div className="flex items-center gap-1 text-amber-400 text-xs cursor-pointer" onClick={() => { setEditingNote(weekKey); setNoteText(note); }}>
+          <StickyNote className="w-3 h-3" />
+          <span className="truncate max-w-[100px]">{note}</span>
+        </div>
+      ) : (
+        <button onClick={() => { setEditingNote(weekKey); setNoteText(''); }} className="text-slate-500 hover:text-slate-400 text-xs flex items-center gap-1">
+          <StickyNote className="w-3 h-3" />Add note
+        </button>
+      );
+    }
+    
+    if (isEditing) {
+      return (
+        <div className="flex gap-2 items-start">
+          <textarea value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="Add a note (e.g., 'Ran 20% off promo')"
+            className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm resize-none" rows={2} />
+          <div className="flex flex-col gap-1">
+            <button onClick={() => { setWeekNotes(p => ({...p, [weekKey]: noteText})); setEditingNote(null); }}
+              className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-lg">Save</button>
+            <button onClick={() => setEditingNote(null)} className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded-lg">Cancel</button>
+          </div>
+        </div>
+      );
+    }
+    
+    return note ? (
+      <div className="flex items-start gap-2 bg-amber-900/20 border border-amber-500/30 rounded-lg p-2 cursor-pointer" onClick={() => { setEditingNote(weekKey); setNoteText(note); }}>
+        <StickyNote className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+        <p className="text-amber-200 text-sm">{note}</p>
+      </div>
+    ) : (
+      <button onClick={() => { setEditingNote(weekKey); setNoteText(''); }} className="text-slate-500 hover:text-slate-400 text-sm flex items-center gap-1">
+        <StickyNote className="w-4 h-4" />Add note for this week
+      </button>
+    );
+  };
+
   const hasCogs = Object.keys(savedCogs).length > 0;
   
   // AI Chat - Prepare data context function
@@ -2499,39 +3108,80 @@ if (supabase && isAuthReady && session && isLocked) {
     
     try {
       const ctx = prepareDataContext();
-      const systemPrompt = `You are an expert e-commerce analyst. Answer questions about this business data concisely.
+      
+      // Build alerts summary for AI
+      const alertsSummary = [];
+      if (ctx.inventory?.lowStockItems?.length > 0) {
+        alertsSummary.push(`LOW STOCK ALERT: ${ctx.inventory.lowStockItems.length} products need reorder (${ctx.inventory.lowStockItems.map(i => i.sku).join(', ')})`);
+      }
+      if (ctx.salesTax?.nexusStates?.length > 0) {
+        alertsSummary.push(`Sales tax nexus in ${ctx.salesTax.nexusStates.length} states: ${ctx.salesTax.nexusStates.map(s => s.state).join(', ')}`);
+      }
+      
+      const systemPrompt = `You are an expert e-commerce analyst for "${ctx.storeName}". Answer questions about this business data concisely and accurately.
+
+IMPORTANT PROFIT CALCULATION NOTES:
+- Amazon "Net Proceeds" IS the profit - it already has COGS, fees, and ad spend deducted
+- Shopify profit = Net Sales - COGS (discounts already deducted from Net Sales)
+- Do NOT double-count COGS or ad spend when calculating Amazon profit
 
 STORE: ${ctx.storeName}
-DATA: ${ctx.dataRange.weeksTracked} weeks (${ctx.dataRange.oldestWeek || 'N/A'} to ${ctx.dataRange.newestWeek || 'N/A'})
+DATA RANGE: ${ctx.dataRange.weeksTracked} weeks tracked (${ctx.dataRange.oldestWeek || 'N/A'} to ${ctx.dataRange.newestWeek || 'N/A'})
 
-KEY METRICS:
+=== KEY METRICS (All Time) ===
 - Total Revenue: $${ctx.insights.allTimeRevenue.toFixed(2)}
 - Total Profit: $${ctx.insights.allTimeProfit.toFixed(2)}
+- Total Units Sold: ${ctx.insights.allTimeUnits}
 - Overall Margin: ${ctx.insights.overallMargin.toFixed(1)}%
 - Avg Profit/Unit: $${ctx.insights.overallProfitPerUnit.toFixed(2)}
+- Avg Weekly Revenue: $${ctx.insights.avgWeeklyRevenue.toFixed(2)}
+- Avg Weekly Profit: $${ctx.insights.avgWeeklyProfit.toFixed(2)}
 
-RECENT TREND (4wk vs prior):
-- Revenue: ${ctx.insights.recentVsPrior.revenueChange.toFixed(1)}% change
-- Profit: ${ctx.insights.recentVsPrior.profitChange.toFixed(1)}% change
+=== RECENT TREND (Last 4 weeks vs Prior 4 weeks) ===
+- Recent Revenue: $${ctx.insights.recentVsPrior.recentRevenue.toFixed(2)}
+- Prior Revenue: $${ctx.insights.recentVsPrior.priorRevenue.toFixed(2)}
+- Revenue Change: ${ctx.insights.recentVsPrior.revenueChange.toFixed(1)}%
+- Recent Profit: $${ctx.insights.recentVsPrior.recentProfit.toFixed(2)}
+- Prior Profit: $${ctx.insights.recentVsPrior.priorProfit.toFixed(2)}
+- Profit Change: ${ctx.insights.recentVsPrior.profitChange.toFixed(1)}%
+
+=== GOALS ===
+- Weekly Revenue Target: $${ctx.goals.weeklyRevenue || 0}
+- Weekly Profit Target: $${ctx.goals.weeklyProfit || 0}
+- Monthly Revenue Target: $${ctx.goals.monthlyRevenue || 0}
+- Monthly Profit Target: $${ctx.goals.monthlyProfit || 0}
+
+=== ALERTS ===
+${alertsSummary.length > 0 ? alertsSummary.join('\n') : 'No active alerts'}
 
 === PRODUCT CATALOG (SKU to Product Name mapping) ===
 ${JSON.stringify(ctx.productCatalog)}
 
-=== SKUs BY CATEGORY (use this to answer questions about product types) ===
+=== SKUs BY CATEGORY ===
 ${JSON.stringify(ctx.skusByCategory)}
-When user asks about a product type (e.g., "lip balm", "deodorant", "soap"), find the matching category and use those SKUs.
+When user asks about a product type (e.g., "lip balm", "deodorant", "soap"), find the matching category and aggregate data for those SKUs.
 
-WEEKLY DATA: ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
+=== WEEKLY DATA (most recent 12 weeks) ===
+${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
 
-TOP SKUS (with profit/unit data): ${JSON.stringify(ctx.skuAnalysis.slice(0, 15))}
+=== TOP SKUS BY REVENUE (with profit/unit trends) ===
+${JSON.stringify(ctx.skuAnalysis.slice(0, 15))}
 
-DECLINING SKUS: ${JSON.stringify(ctx.decliningSkus)}
+=== SKUS WITH DECLINING PROFITABILITY ===
+${JSON.stringify(ctx.decliningSkus)}
 
-INVENTORY: ${ctx.inventory ? JSON.stringify(ctx.inventory) : 'No data'}
+=== SKUS WITH IMPROVING PROFITABILITY ===
+${JSON.stringify(ctx.improvingSkus)}
 
-GOALS: Weekly Rev $${ctx.goals.weeklyRevenue || 0}, Weekly Profit $${ctx.goals.weeklyProfit || 0}
+=== INVENTORY STATUS ===
+${ctx.inventory ? `As of ${ctx.inventory.asOfDate}: ${ctx.inventory.totalUnits} total units, $${ctx.inventory.totalValue?.toFixed(2) || 0} value` : 'No inventory data'}
+${ctx.inventory?.lowStockItems?.length > 0 ? `Low stock items: ${JSON.stringify(ctx.inventory.lowStockItems)}` : ''}
 
-Format currency as $X,XXX.XX. Be concise but thorough.`;
+=== SALES TAX ===
+${ctx.salesTax?.nexusStates?.length > 0 ? `Nexus states: ${JSON.stringify(ctx.salesTax.nexusStates)}` : 'No nexus states configured'}
+Total sales tax paid all-time: $${ctx.salesTax?.totalPaidAllTime?.toFixed(2) || 0}
+
+Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trends, reference specific numbers.`;
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -2803,7 +3453,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -2811,13 +3461,16 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
               <h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'E-Commerce Dashboard'}</h1>
               <p className="text-slate-400">Business performance overview</p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <input value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="Store name"
                 className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white w-40" />
               <button onClick={() => setShowGoalsModal(true)} className="px-3 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-1"><Target className="w-4 h-4" />Goals</button>
               <button onClick={() => setShowCogsManager(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Settings className="w-4 h-4" />COGS</button>
               <button onClick={() => setShowProductCatalog(true)} className="px-3 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-1"><Package className="w-4 h-4" />Catalog{Object.keys(savedProductNames).length > 0 && <span className="ml-1">✓</span>}</button>
-              <button onClick={() => setShowUploadHelp(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><FileText className="w-4 h-4" />Help</button>
+              {generateForecast && <button onClick={() => setShowForecast(true)} className="px-3 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-sm text-emerald-300 flex items-center gap-1"><TrendingUp className="w-4 h-4" />Forecast</button>}
+              <button onClick={() => setShowBreakEven(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Calculator className="w-4 h-4" /></button>
+              <button onClick={() => setShowExportModal(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><FileDown className="w-4 h-4" /></button>
+              <button onClick={() => setShowUploadHelp(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><FileText className="w-4 h-4" /></button>
               <button onClick={() => setView('settings')} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Settings className="w-4 h-4" /></button>
             </div>
           </div>
@@ -2947,7 +3600,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
               </div>
               
               {/* Goals Progress */}
-              {(goals.weeklyRevenue > 0 || goals.monthlyRevenue > 0) && sortedWeeks.length > 0 && (
+              {(goals.weeklyRevenue > 0 || goals.weeklyProfit > 0 || goals.monthlyRevenue > 0 || goals.monthlyProfit > 0) && sortedWeeks.length > 0 ? (
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5 mb-6">
                   <h3 className="text-sm font-semibold text-amber-400 uppercase mb-4 flex items-center gap-2"><Target className="w-4 h-4" />Goals Progress</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -3001,6 +3654,19 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
                     )}
                   </div>
                 </div>
+              ) : (
+                <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-5 mb-6 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Target className="w-6 h-6 text-slate-500" />
+                    <div>
+                      <p className="text-slate-400 font-medium">No goals set</p>
+                      <p className="text-slate-500 text-sm">Set revenue and profit targets to track your progress</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setShowGoalsModal(true)} className="px-4 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-amber-300 text-sm font-medium">
+                    Set Goals
+                  </button>
+                </div>
               )}
               
               {/* Quick Actions & Recent Data */}
@@ -3009,31 +3675,58 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
                 <div className="lg:col-span-2 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-sm font-semibold text-slate-300 uppercase">Recent Weeks</h3>
-                    <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"><Upload className="w-3 h-3" />Add Week</button>
+                    <div className="flex items-center gap-2">
+                      {compareMode ? (
+                        <span className="text-xs text-violet-400">Select weeks to compare ({compareItems.length}/2)</span>
+                      ) : (
+                        <button onClick={() => setCompareMode(true)} className="text-xs text-slate-400 hover:text-violet-300 flex items-center gap-1"><GitCompareArrows className="w-3 h-3" />Compare</button>
+                      )}
+                      <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"><Upload className="w-3 h-3" />Add Week</button>
+                    </div>
                   </div>
                   {sortedWeeks.length > 0 ? (
                     <div className="space-y-2">
                       {sortedWeeks.slice(-5).reverse().map(w => {
                         const week = allWeeksData[w];
+                        const isSelected = compareItems.includes(w);
+                        const note = weekNotes[w];
                         return (
-                          <button key={w} onClick={() => { setSelectedWeek(w); setView('weekly'); }} className="w-full flex items-center justify-between p-3 bg-slate-900/50 hover:bg-slate-700/50 rounded-xl transition-colors">
-                            <div className="flex items-center gap-3">
-                              <Calendar className="w-5 h-5 text-violet-400" />
-                              <div className="text-left">
-                                <p className="text-white font-medium">{new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
-                                <p className="text-slate-500 text-xs">{formatNumber(week.total?.units || 0)} units</p>
+                          <div key={w} className={`flex items-center gap-2 ${compareMode ? '' : ''}`}>
+                            {compareMode && (
+                              <button onClick={() => {
+                                if (isSelected) setCompareItems(p => p.filter(x => x !== w));
+                                else if (compareItems.length < 2) setCompareItems(p => [...p, w]);
+                              }} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center flex-shrink-0 ${isSelected ? 'bg-violet-600 border-violet-500' : 'border-slate-600 hover:border-violet-500'}`}>
+                                {isSelected && <Check className="w-4 h-4 text-white" />}
+                              </button>
+                            )}
+                            <button onClick={() => { if (!compareMode) { setSelectedWeek(w); setView('weekly'); }}} className={`flex-1 flex items-center justify-between p-3 bg-slate-900/50 hover:bg-slate-700/50 rounded-xl transition-colors ${isSelected ? 'ring-2 ring-violet-500' : ''}`}>
+                              <div className="flex items-center gap-3">
+                                <Calendar className="w-5 h-5 text-violet-400" />
+                                <div className="text-left">
+                                  <p className="text-white font-medium">{new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                                  <div className="flex items-center gap-2">
+                                    <p className="text-slate-500 text-xs">{formatNumber(week.total?.units || 0)} units</p>
+                                    {note && <span className="text-amber-400 text-xs flex items-center gap-0.5"><StickyNote className="w-3 h-3" /></span>}
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-emerald-400 font-semibold">{formatCurrency(week.total?.revenue || 0)}</p>
-                              <p className={`text-xs ${(week.total?.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(week.total?.netProfit || 0)} profit</p>
-                            </div>
-                          </button>
+                              <div className="text-right">
+                                <p className="text-emerald-400 font-semibold">{formatCurrency(week.total?.revenue || 0)}</p>
+                                <p className={`text-xs ${(week.total?.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(week.total?.netProfit || 0)} profit</p>
+                              </div>
+                            </button>
+                          </div>
                         );
                       })}
                     </div>
                   ) : (
                     <p className="text-slate-500 text-center py-4">No weekly data yet</p>
+                  )}
+                  {compareMode && compareItems.length === 2 && (
+                    <button onClick={() => {}} className="w-full mt-3 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium text-sm">
+                      Compare Selected Weeks
+                    </button>
                   )}
                 </div>
                 
@@ -3114,7 +3807,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -3233,7 +3926,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -3251,7 +3944,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -3276,7 +3969,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -3311,7 +4004,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const data = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -3405,6 +4098,12 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
             <div className="flex justify-between text-sm"><div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-orange-500" /><span className="text-slate-300">Amazon</span><span className="text-white font-semibold">{formatPercent(data.total.amazonShare)}</span></div><div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-blue-500" /><span className="text-slate-300">Shopify</span><span className="text-white font-semibold">{formatPercent(data.total.shopifyShare)}</span></div></div>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz showSkuTable /><ChannelCard title="Shopify" color="blue" data={data.shopify} showSkuTable /></div>
+          
+          {/* Week Notes */}
+          <div className="mt-6 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+            <h3 className="text-sm font-semibold text-slate-400 uppercase mb-3 flex items-center gap-2"><StickyNote className="w-4 h-4" />Week Notes</h3>
+            <WeekNoteEditor weekKey={selectedWeek} />
+          </div>
         </div>
       </div>
     );
@@ -3415,7 +4114,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -3441,7 +4140,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -3478,7 +4177,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -3694,7 +4393,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -3877,7 +4576,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4225,7 +4924,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4537,7 +5236,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!hasWeeklyData && !hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -4557,7 +5256,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!hasWeeklyData && hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -4619,7 +5318,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5017,7 +5716,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5271,7 +5970,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5441,7 +6140,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5977,7 +6676,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -6351,7 +7050,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
@@ -6474,6 +7173,55 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
               <Toggle checked={currentLocalSettings.showMonthlyGoals !== false} onChange={(v) => updateSetting('showMonthlyGoals', v)} />
             </SettingRow>
           </SettingSection>
+          
+          {/* Theme & Display (Feature 9) */}
+          <SettingSection title="🎨 Theme & Display">
+            <SettingRow label="Color Theme" desc="Customize accent colors">
+              <div className="flex gap-2">
+                {['violet', 'emerald', 'blue', 'rose', 'amber'].map(color => (
+                  <button key={color} onClick={() => setTheme(p => ({...p, accent: color}))}
+                    className={`w-8 h-8 rounded-full bg-${color}-500 ${theme.accent === color ? 'ring-2 ring-white ring-offset-2 ring-offset-slate-800' : ''}`} />
+                ))}
+              </div>
+            </SettingRow>
+            <SettingRow label="Mobile-Optimized View" desc="Simplified layout for small screens">
+              <Toggle checked={isMobile} onChange={() => {}} disabled />
+              <span className="text-slate-500 text-xs ml-2">(Auto-detected)</span>
+            </SettingRow>
+          </SettingSection>
+          
+          {/* Notifications (Feature 4) */}
+          <SettingSection title="🔔 Notifications">
+            <SettingRow label="Browser Notifications" desc="Get alerts for low stock and tax deadlines">
+              {notificationsEnabled ? (
+                <div className="flex items-center gap-2">
+                  <Bell className="w-4 h-4 text-emerald-400" />
+                  <span className="text-emerald-400 text-sm">Enabled</span>
+                </div>
+              ) : (
+                <button onClick={requestNotifications} className="px-4 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2">
+                  <Bell className="w-4 h-4" />Enable Notifications
+                </button>
+              )}
+            </SettingRow>
+            <SettingRow label="Sales Tax Alert Days" desc="Days before due date to show alert">
+              <NumberInput value={currentLocalSettings.alertSalesTaxDays || 7} onChange={(v) => updateSetting('alertSalesTaxDays', v)} min={1} max={30} suffix="days" />
+            </SettingRow>
+          </SettingSection>
+          
+          {/* Account */}
+          {supabase && session && (
+            <SettingSection title="👤 Account">
+              <SettingRow label="Logged in as" desc={session.user?.email || 'Unknown'}>
+                <span className="text-emerald-400 text-sm flex items-center gap-1"><Check className="w-4 h-4" />Connected</span>
+              </SettingRow>
+              <SettingRow label="Sign Out" desc="Log out of your account">
+                <button onClick={handleLogout} className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300 flex items-center gap-2">
+                  Sign Out
+                </button>
+              </SettingRow>
+            </SettingSection>
+          )}
           
           {/* Data Management */}
           <SettingSection title="🗄️ Data Management">
