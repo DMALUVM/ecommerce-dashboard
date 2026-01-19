@@ -264,12 +264,260 @@ const handleLogout = async () => {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [periodAnalyticsView, setPeriodAnalyticsView] = useState(null); // 'skus' | 'profit' | 'ads' | '3pl' | null
   
+  // Sales Tax Management
+  const [salesTaxConfig, setSalesTaxConfig] = useState({
+    nexusStates: {}, // { stateCode: { hasNexus: true, frequency: 'monthly', registrationId: '', customFilings: [], notes: '' } }
+    filingHistory: {}, // { stateCode: { 'YYYY-MM' or 'YYYY-QN': { filed: true, paidDate: '', amount: 0, confirmationNum: '', reportData: {} } } }
+    hiddenStates: [], // states user wants to hide from view
+  });
+  const [selectedTaxState, setSelectedTaxState] = useState(null);
+  const [taxReportFile, setTaxReportFile] = useState(null);
+  const [taxReportFileName, setTaxReportFileName] = useState('');
+  const [parsedTaxReport, setParsedTaxReport] = useState(null);
+  const [showTaxStateConfig, setShowTaxStateConfig] = useState(false);
+  const [taxConfigState, setTaxConfigState] = useState(null); // state being configured
+  const [showHiddenStates, setShowHiddenStates] = useState(false);
+  const [taxFilterStatus, setTaxFilterStatus] = useState('all'); // 'all' | 'due' | 'upcoming'
+  
+  // Settings view state
+  const [localSettings, setLocalSettings] = useState(null);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  
+  // Sales tax modal state
+  const [newCustomFiling, setNewCustomFiling] = useState({ name: '', frequency: 'annual', dueMonth: 1, dueDay: 15, amount: '' });
+  const [taxFilingConfirmNum, setTaxFilingConfirmNum] = useState('');
+  const [taxFilingPaidAmount, setTaxFilingPaidAmount] = useState('');
+  const [taxFilingNotes, setTaxFilingNotes] = useState('');
+  
+  // App Settings
+  const [appSettings, setAppSettings] = useState({
+    // Inventory thresholds
+    inventoryDaysOptimal: 60, // Days of inventory considered optimal
+    inventoryDaysLow: 30, // Days of inventory considered low
+    inventoryDaysCritical: 14, // Days of inventory considered critical
+    
+    // Ad performance thresholds
+    tacosOptimal: 15, // TACOS % considered optimal
+    tacosWarning: 25, // TACOS % that triggers warning
+    tacosMax: 35, // TACOS % considered too high
+    roasTarget: 3.0, // Target ROAS
+    
+    // Profit thresholds
+    marginTarget: 25, // Target net margin %
+    marginWarning: 15, // Margin % that triggers warning
+    
+    // Module visibility
+    modulesEnabled: {
+      weeklyTracking: true,
+      periodTracking: true,
+      inventory: true,
+      trends: true,
+      yoy: true,
+      skus: true,
+      profitability: true,
+      ads: true,
+      threepl: true,
+      salesTax: true,
+    },
+    
+    // Dashboard preferences
+    dashboardDefaultRange: 'month', // Default time range for dashboard
+    showWeeklyGoals: true,
+    showMonthlyGoals: true,
+    
+    // Alerts preferences
+    alertSalesTaxDays: 7, // Days before due date to show alert
+    alertInventoryEnabled: true,
+    alertGoalsEnabled: true,
+    alertSalesTaxEnabled: true,
+    
+    // Display preferences
+    currencySymbol: '$',
+    dateFormat: 'US', // 'US' (MM/DD/YYYY) or 'EU' (DD/MM/YYYY)
+  });
+  const SETTINGS_KEY = 'ecommerce_settings_v1';
+  
   const clearPeriod3PLFiles = useCallback(() => {
     setPeriodFiles(p => ({ ...p, threepl: [] }));
     setPeriodFileNames(p => ({ ...p, threepl: [] }));
   }, []);
   
 const PERIODS_KEY = 'ecommerce_periods_v1';
+const SALES_TAX_KEY = 'ecommerce_sales_tax_v1';
+
+// US States with sales tax info - comprehensive list
+const US_STATES_TAX_INFO = {
+  AL: { name: 'Alabama', hasStateTax: true, stateRate: 0.04, filingTypes: ['state'], reportFormat: 'standard' },
+  AK: { name: 'Alaska', hasStateTax: false, stateRate: 0, filingTypes: ['local'], reportFormat: 'standard', note: 'No state tax, but local taxes may apply' },
+  AZ: { name: 'Arizona', hasStateTax: true, stateRate: 0.056, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction' },
+  AR: { name: 'Arkansas', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'local'], reportFormat: 'standard' },
+  CA: { name: 'California', hasStateTax: true, stateRate: 0.0725, filingTypes: ['state', 'district'], reportFormat: 'district' },
+  CO: { name: 'Colorado', hasStateTax: true, stateRate: 0.029, filingTypes: ['state', 'county', 'city', 'special'], reportFormat: 'jurisdiction', note: 'Home rule cities file separately' },
+  CT: { name: 'Connecticut', hasStateTax: true, stateRate: 0.0635, filingTypes: ['state'], reportFormat: 'standard' },
+  DE: { name: 'Delaware', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', note: 'No sales tax' },
+  FL: { name: 'Florida', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'county'], reportFormat: 'county' },
+  GA: { name: 'Georgia', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  HI: { name: 'Hawaii', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'county'], reportFormat: 'standard', note: 'GET tax, not traditional sales tax' },
+  ID: { name: 'Idaho', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
+  IL: { name: 'Illinois', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  IN: { name: 'Indiana', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard' },
+  IA: { name: 'Iowa', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard' },
+  KS: { name: 'Kansas', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction' },
+  KY: { name: 'Kentucky', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
+  LA: { name: 'Louisiana', hasStateTax: true, stateRate: 0.0445, filingTypes: ['state', 'parish'], reportFormat: 'jurisdiction', note: 'Parish taxes filed separately' },
+  ME: { name: 'Maine', hasStateTax: true, stateRate: 0.055, filingTypes: ['state'], reportFormat: 'standard' },
+  MD: { name: 'Maryland', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
+  MA: { name: 'Massachusetts', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state'], reportFormat: 'standard' },
+  MI: { name: 'Michigan', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
+  MN: { name: 'Minnesota', hasStateTax: true, stateRate: 0.06875, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  MS: { name: 'Mississippi', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard' },
+  MO: { name: 'Missouri', hasStateTax: true, stateRate: 0.04225, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  MT: { name: 'Montana', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', note: 'No sales tax' },
+  NE: { name: 'Nebraska', hasStateTax: true, stateRate: 0.055, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  NV: { name: 'Nevada', hasStateTax: true, stateRate: 0.0685, filingTypes: ['state', 'county'], reportFormat: 'county' },
+  NH: { name: 'New Hampshire', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', note: 'No sales tax' },
+  NJ: { name: 'New Jersey', hasStateTax: true, stateRate: 0.06625, filingTypes: ['state'], reportFormat: 'standard' },
+  NM: { name: 'New Mexico', hasStateTax: true, stateRate: 0.05125, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', note: 'Gross receipts tax' },
+  NY: { name: 'New York', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction' },
+  NC: { name: 'North Carolina', hasStateTax: true, stateRate: 0.0475, filingTypes: ['state', 'county'], reportFormat: 'county' },
+  ND: { name: 'North Dakota', hasStateTax: true, stateRate: 0.05, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  OH: { name: 'Ohio', hasStateTax: true, stateRate: 0.0575, filingTypes: ['state', 'county'], reportFormat: 'county' },
+  OK: { name: 'Oklahoma', hasStateTax: true, stateRate: 0.045, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction' },
+  OR: { name: 'Oregon', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', note: 'No sales tax' },
+  PA: { name: 'Pennsylvania', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard' },
+  RI: { name: 'Rhode Island', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard' },
+  SC: { name: 'South Carolina', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  SD: { name: 'South Dakota', hasStateTax: true, stateRate: 0.045, filingTypes: ['state', 'municipal'], reportFormat: 'jurisdiction' },
+  TN: { name: 'Tennessee', hasStateTax: true, stateRate: 0.07, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  TX: { name: 'Texas', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  UT: { name: 'Utah', hasStateTax: true, stateRate: 0.0485, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  VT: { name: 'Vermont', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard' },
+  VA: { name: 'Virginia', hasStateTax: true, stateRate: 0.043, filingTypes: ['state', 'local'], reportFormat: 'standard' },
+  WA: { name: 'Washington', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  WV: { name: 'West Virginia', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
+  WI: { name: 'Wisconsin', hasStateTax: true, stateRate: 0.05, filingTypes: ['state', 'county'], reportFormat: 'county' },
+  WY: { name: 'Wyoming', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
+  DC: { name: 'District of Columbia', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
+};
+
+// Filing frequency due date calculator
+const getNextDueDate = (frequency, stateCode) => {
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+  const currentDay = now.getDate();
+  
+  // Most states have 20th of month due dates, some vary
+  const dueDayOfMonth = 20;
+  
+  if (frequency === 'monthly') {
+    // Due 20th of following month
+    let dueMonth = currentMonth + 1;
+    let dueYear = currentYear;
+    if (dueMonth > 11) { dueMonth = 0; dueYear++; }
+    const dueDate = new Date(dueYear, dueMonth, dueDayOfMonth);
+    if (dueDate <= now) {
+      dueMonth++;
+      if (dueMonth > 11) { dueMonth = 0; dueYear++; }
+      return new Date(dueYear, dueMonth, dueDayOfMonth);
+    }
+    return dueDate;
+  } else if (frequency === 'quarterly') {
+    // Q1 (Jan-Mar) due Apr 20, Q2 (Apr-Jun) due Jul 20, Q3 (Jul-Sep) due Oct 20, Q4 (Oct-Dec) due Jan 20
+    const quarterEnds = [[3, 20], [6, 20], [9, 20], [0, 20]]; // [month, day]
+    const quarterYears = [0, 0, 0, 1]; // year offset
+    for (let i = 0; i < 4; i++) {
+      const [m, d] = quarterEnds[i];
+      const y = currentYear + quarterYears[i];
+      const dueDate = new Date(y, m, d);
+      if (dueDate > now) return dueDate;
+    }
+    return new Date(currentYear + 1, 3, 20);
+  } else if (frequency === 'semi-annual') {
+    // Jan-Jun due Jul 20, Jul-Dec due Jan 20
+    const h1Due = new Date(currentYear, 6, 20); // Jul 20
+    const h2Due = new Date(currentYear + 1, 0, 20); // Jan 20 next year
+    if (h1Due > now) return h1Due;
+    if (h2Due > now) return h2Due;
+    return new Date(currentYear + 1, 6, 20);
+  } else if (frequency === 'annual') {
+    // Due Jan 20 of following year
+    const dueDate = new Date(currentYear + 1, 0, 20);
+    if (dueDate <= now) return new Date(currentYear + 2, 0, 20);
+    return dueDate;
+  }
+  return new Date(currentYear, currentMonth + 1, 20);
+};
+
+// Parse Shopify tax report - handles jurisdiction-based reports
+const parseShopifyTaxReport = (csvData, stateCode) => {
+  const stateInfo = US_STATES_TAX_INFO[stateCode];
+  const result = {
+    state: stateCode,
+    stateName: stateInfo?.name || stateCode,
+    periodStart: null,
+    periodEnd: null,
+    totalSales: 0,
+    totalTaxableSales: 0,
+    totalExemptSales: 0,
+    totalTaxCollected: 0,
+    stateTax: 0,
+    countyTax: 0,
+    cityTax: 0,
+    specialTax: 0,
+    jurisdictions: [],
+    byType: { state: [], county: [], city: [], special: [] }
+  };
+  
+  csvData.forEach(row => {
+    const jurisdiction = row['Tax jurisdiction'] || '';
+    const type = (row['Tax jurisdiction type'] || '').toLowerCase();
+    const county = (row['Tax county'] || '').trim();
+    const code = row['Tax jurisdiction code'] || '';
+    const rate = parseFloat(row['Tax rate'] || 0);
+    const totalSales = parseFloat(row['Total net item sales'] || 0);
+    const taxableSales = parseFloat(row['Total taxable item sales'] || 0);
+    const exemptSales = parseFloat(row['Total exempt and non-taxable item sales'] || 0);
+    const itemTax = parseFloat(row['Total item tax amount'] || 0);
+    const shippingTax = parseFloat(row['Total shipping tax amount'] || 0);
+    const totalTax = itemTax + shippingTax;
+    
+    result.totalSales += totalSales;
+    result.totalTaxableSales += taxableSales;
+    result.totalExemptSales += exemptSales;
+    result.totalTaxCollected += totalTax;
+    
+    const jurisdictionData = {
+      name: jurisdiction,
+      type,
+      county: county.replace(' -', '').trim(),
+      code,
+      rate,
+      totalSales,
+      taxableSales,
+      exemptSales,
+      taxAmount: totalTax
+    };
+    
+    result.jurisdictions.push(jurisdictionData);
+    
+    if (type === 'state') {
+      result.stateTax += totalTax;
+      result.byType.state.push(jurisdictionData);
+    } else if (type === 'county') {
+      result.countyTax += totalTax;
+      result.byType.county.push(jurisdictionData);
+    } else if (type === 'city') {
+      result.cityTax += totalTax;
+      result.byType.city.push(jurisdictionData);
+    } else {
+      result.specialTax += totalTax;
+      result.byType.special.push(jurisdictionData);
+    }
+  });
+  
+  return result;
+};
 
 const combinedData = useMemo(() => ({
   sales: allWeeksData,
@@ -277,7 +525,9 @@ const combinedData = useMemo(() => ({
   cogs: { lookup: savedCogs, updatedAt: cogsLastUpdated },
   periods: allPeriodsData,
   storeName,
-}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName]);
+  salesTax: salesTaxConfig,
+  settings: appSettings,
+}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, salesTaxConfig, appSettings]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -318,12 +568,32 @@ const loadFromLocal = useCallback(() => {
     const r = lsGet(GOALS_KEY);
     if (r) setGoals(JSON.parse(r));
   } catch {}
+
+  try {
+    const r = lsGet(SALES_TAX_KEY);
+    if (r) setSalesTaxConfig(JSON.parse(r));
+  } catch {}
+
+  try {
+    const r = lsGet(SETTINGS_KEY);
+    if (r) setAppSettings(prev => ({ ...prev, ...JSON.parse(r) }));
+  } catch {}
 }, []);
 
 const saveGoals = useCallback((newGoals) => {
   setGoals(newGoals);
   lsSet(GOALS_KEY, JSON.stringify(newGoals));
   setShowGoalsModal(false);
+}, []);
+
+const saveSalesTax = useCallback((newConfig) => {
+  setSalesTaxConfig(newConfig);
+  lsSet(SALES_TAX_KEY, JSON.stringify(newConfig));
+}, []);
+
+const saveSettings = useCallback((newSettings) => {
+  setAppSettings(newSettings);
+  lsSet(SETTINGS_KEY, JSON.stringify(newSettings));
 }, []);
 
 const writeToLocal = useCallback((key, value) => {
@@ -396,6 +666,8 @@ const loadFromCloud = useCallback(async () => {
     setCogsLastUpdated(cloud.cogs?.updatedAt || null);
     setAllPeriodsData(cloud.periods || {});
     setStoreName(cloud.storeName || '');
+    setSalesTaxConfig(cloud.salesTax || { nexusStates: {}, filingHistory: {}, hiddenStates: [] });
+    if (cloud.settings) setAppSettings(prev => ({ ...prev, ...cloud.settings }));
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -403,6 +675,8 @@ const loadFromCloud = useCallback(async () => {
     writeToLocal(COGS_KEY, JSON.stringify({ lookup: cloud.cogs?.lookup || {}, updatedAt: cloud.cogs?.updatedAt || null }));
     writeToLocal(PERIODS_KEY, JSON.stringify(cloud.periods || {}));
     writeToLocal(STORE_KEY, cloud.storeName || '');
+    writeToLocal(SALES_TAX_KEY, JSON.stringify(cloud.salesTax || { nexusStates: {}, filingHistory: {}, hiddenStates: [] }));
+    if (cloud.settings) writeToLocal(SETTINGS_KEY, JSON.stringify(cloud.settings));
   } finally {
     isLoadingDataRef.current = false
   }
@@ -969,7 +1243,7 @@ const savePeriods = async (d) => {
     setPeriodFiles({ amazon: null, shopify: null, threepl: [] }); setPeriodFileNames({ amazon: '', shopify: '', threepl: [] }); setPeriodAdSpend({ meta: '', google: '' }); setPeriodLabel('');
   }, [periodFiles, periodAdSpend, periodLabel, allPeriodsData, savedCogs]);
 
-  const deletePeriod = (k) => { if (!confirm(`Delete ${k}?`)) return; const u = { ...allPeriodsData }; delete u[k]; setAllPeriodsData(u); savePeriods(u); const r = Object.keys(u).sort().reverse(); if (r.length) setSelectedPeriod(r[0]); else { setView('period-upload'); setSelectedPeriod(null); }};
+  const deletePeriod = (k) => { if (!confirm(`Delete ${k}?`)) return; const u = { ...allPeriodsData }; delete u[k]; setAllPeriodsData(u); savePeriods(u); const r = Object.keys(u).sort().reverse(); if (r.length) setSelectedPeriod(r[0]); else { setUploadTab('period'); setView('upload'); setSelectedPeriod(null); }};
 
   const processInventory = useCallback(() => {
     if (!invFiles.amazon || !invFiles.threepl || !invSnapshotDate) { alert('Upload files and select date'); return; }
@@ -1587,19 +1861,45 @@ if (supabase && isAuthReady && session && isLocked) {
       <div className="w-px bg-slate-600 mx-1" />
       
       {/* Data Views */}
-      <button onClick={() => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}} disabled={!Object.keys(allWeeksData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />Weeks</button>
-      <button onClick={() => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }}} disabled={!Object.keys(allPeriodsData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'period-view' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><CalendarRange className="w-4 h-4 inline mr-1" />Periods</button>
-      <button onClick={() => setView('inventory')} disabled={!Object.keys(invHistory).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Boxes className="w-4 h-4 inline mr-1" />Inventory</button>
+      {appSettings.modulesEnabled?.weeklyTracking !== false && (
+        <button onClick={() => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}} disabled={!Object.keys(allWeeksData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />Weeks</button>
+      )}
+      {appSettings.modulesEnabled?.periodTracking !== false && (
+        <button onClick={() => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }}} disabled={!Object.keys(allPeriodsData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'period-view' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><CalendarRange className="w-4 h-4 inline mr-1" />Periods</button>
+      )}
+      {appSettings.modulesEnabled?.inventory !== false && (
+        <button onClick={() => { if (Object.keys(invHistory).length) { const d = Object.keys(invHistory).sort().reverse()[0]; setSelectedInvDate(d); setView('inventory'); } else { setUploadTab('inventory'); setView('upload'); }}} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Boxes className="w-4 h-4 inline mr-1" />Inventory</button>
+      )}
       
       <div className="w-px bg-slate-600 mx-1" />
       
       {/* Analytics */}
-      <button onClick={() => setView('trends')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'trends' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><TrendingUp className="w-4 h-4 inline mr-1" />Trends</button>
-      <button onClick={() => setView('yoy')} disabled={Object.keys(allWeeksData).length < 2 && Object.keys(allPeriodsData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'yoy' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><GitCompare className="w-4 h-4 inline mr-1" />YoY</button>
-      <button onClick={() => setView('skus')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'skus' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Trophy className="w-4 h-4 inline mr-1" />SKUs</button>
-      <button onClick={() => setView('profitability')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'profitability' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><PieChart className="w-4 h-4 inline mr-1" />Profit</button>
-      <button onClick={() => setView('ads')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'ads' ? 'bg-purple-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Zap className="w-4 h-4 inline mr-1" />Ads</button>
-      <button onClick={() => setView('3pl')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === '3pl' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Truck className="w-4 h-4 inline mr-1" />3PL</button>
+      {appSettings.modulesEnabled?.trends !== false && (
+        <button onClick={() => setView('trends')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'trends' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><TrendingUp className="w-4 h-4 inline mr-1" />Trends</button>
+      )}
+      {appSettings.modulesEnabled?.yoy !== false && (
+        <button onClick={() => setView('yoy')} disabled={Object.keys(allWeeksData).length < 2 && Object.keys(allPeriodsData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'yoy' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><GitCompare className="w-4 h-4 inline mr-1" />YoY</button>
+      )}
+      {appSettings.modulesEnabled?.skus !== false && (
+        <button onClick={() => setView('skus')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'skus' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Trophy className="w-4 h-4 inline mr-1" />SKUs</button>
+      )}
+      {appSettings.modulesEnabled?.profitability !== false && (
+        <button onClick={() => setView('profitability')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'profitability' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><PieChart className="w-4 h-4 inline mr-1" />Profit</button>
+      )}
+      {appSettings.modulesEnabled?.ads !== false && (
+        <button onClick={() => setView('ads')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'ads' ? 'bg-purple-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Zap className="w-4 h-4 inline mr-1" />Ads</button>
+      )}
+      {appSettings.modulesEnabled?.threepl !== false && (
+        <button onClick={() => setView('3pl')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === '3pl' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Truck className="w-4 h-4 inline mr-1" />3PL</button>
+      )}
+      
+      <div className="w-px bg-slate-600 mx-1" />
+      
+      {/* Compliance & Settings */}
+      {appSettings.modulesEnabled?.salesTax !== false && (
+        <button onClick={() => setView('sales-tax')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'sales-tax' ? 'bg-rose-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><DollarSign className="w-4 h-4 inline mr-1" />Sales Tax</button>
+      )}
+      <button onClick={() => setView('settings')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'settings' ? 'bg-slate-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Settings className="w-4 h-4 inline mr-1" />Settings</button>
     </div>
   );
 
@@ -1809,7 +2109,7 @@ if (supabase && isAuthReady && session && isLocked) {
     // Get alerts
     const alerts = [];
     if (!hasCogs) alerts.push({ type: 'warning', text: 'Set up COGS to track profitability accurately' });
-    if (goals.weeklyRevenue > 0 && sortedWeeks.length > 0) {
+    if (appSettings.alertGoalsEnabled && goals.weeklyRevenue > 0 && sortedWeeks.length > 0) {
       const lastWeekRevenue = allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.revenue || 0;
       if (lastWeekRevenue < goals.weeklyRevenue) {
         alerts.push({ type: 'warning', text: `Below weekly revenue target of ${formatCurrency(goals.weeklyRevenue)}` });
@@ -1819,8 +2119,42 @@ if (supabase && isAuthReady && session && isLocked) {
     // Check inventory alerts
     const latestInv = Object.keys(invHistory).sort().reverse()[0];
     const invAlerts = latestInv ? (invHistory[latestInv]?.items || []).filter(i => i.health === 'critical' || i.health === 'low') : [];
-    if (invAlerts.length > 0) {
+    if (invAlerts.length > 0 && appSettings.alertInventoryEnabled) {
       alerts.push({ type: 'critical', text: `${invAlerts.length} products need reorder attention` });
+    }
+    
+    // Check sales tax deadlines
+    if (appSettings.alertSalesTaxEnabled) {
+      const now = new Date();
+      const alertDays = appSettings.alertSalesTaxDays || 7;
+      const alertThreshold = new Date(now.getTime() + alertDays * 24 * 60 * 60 * 1000);
+      
+      Object.entries(salesTaxConfig.nexusStates || {}).forEach(([stateCode, config]) => {
+        if (!config.hasNexus) return;
+        const nextDue = getNextDueDate(config.frequency || 'monthly', stateCode);
+        const stateName = US_STATES_TAX_INFO[stateCode]?.name || stateCode;
+        
+        if (nextDue < now) {
+          alerts.push({ type: 'critical', text: `${stateName} sales tax filing is OVERDUE!`, link: 'sales-tax' });
+        } else if (nextDue <= alertThreshold) {
+          const daysUntil = Math.ceil((nextDue - now) / (1000 * 60 * 60 * 24));
+          alerts.push({ type: 'warning', text: `${stateName} sales tax due in ${daysUntil} days`, link: 'sales-tax' });
+        }
+        
+        // Check custom filings too
+        (config.customFilings || []).forEach(filing => {
+          const filingDue = new Date(now.getFullYear(), filing.dueMonth - 1, filing.dueDay);
+          if (filingDue < now) filingDue.setFullYear(filingDue.getFullYear() + 1);
+          if (filingDue <= alertThreshold) {
+            const daysUntil = Math.ceil((filingDue - now) / (1000 * 60 * 60 * 24));
+            if (daysUntil <= 0) {
+              alerts.push({ type: 'critical', text: `${stateName} ${filing.name} is OVERDUE!`, link: 'sales-tax' });
+            } else {
+              alerts.push({ type: 'warning', text: `${stateName} ${filing.name} due in ${daysUntil} days`, link: 'sales-tax' });
+            }
+          }
+        });
+      });
     }
     
     return (
@@ -1838,6 +2172,7 @@ if (supabase && isAuthReady && session && isLocked) {
                 className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white w-40" />
               <button onClick={() => setShowGoalsModal(true)} className="px-3 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-1"><Target className="w-4 h-4" />Goals</button>
               <button onClick={() => setShowCogsManager(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Settings className="w-4 h-4" />COGS</button>
+              <button onClick={() => setView('settings')} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Settings className="w-4 h-4" /></button>
             </div>
           </div>
           
@@ -1852,10 +2187,10 @@ if (supabase && isAuthReady && session && isLocked) {
               <h2 className="text-2xl font-bold text-white mb-3">Welcome to Your Dashboard</h2>
               <p className="text-slate-400 mb-8 max-w-md mx-auto">Get started by uploading your sales data. We support Amazon and Shopify exports.</p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <button onClick={() => setView('upload')} className="px-6 py-3 bg-violet-600 hover:bg-violet-500 rounded-xl font-semibold flex items-center justify-center gap-2">
+                <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="px-6 py-3 bg-violet-600 hover:bg-violet-500 rounded-xl font-semibold flex items-center justify-center gap-2">
                   <Upload className="w-5 h-5" />Upload Weekly Data
                 </button>
-                <button onClick={() => setView('upload')} className="px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-semibold flex items-center justify-center gap-2">
+                <button onClick={() => { setUploadTab('period'); setView('upload'); }} className="px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-semibold flex items-center justify-center gap-2">
                   <CalendarRange className="w-5 h-5" />Upload Period Data
                 </button>
               </div>
@@ -1883,9 +2218,16 @@ if (supabase && isAuthReady && session && isLocked) {
               {alerts.length > 0 && (
                 <div className="mb-6 space-y-2">
                   {alerts.map((alert, i) => (
-                    <div key={i} className={`flex items-center gap-3 p-3 rounded-xl ${alert.type === 'critical' ? 'bg-rose-900/30 border border-rose-500/50' : 'bg-amber-900/30 border border-amber-500/50'}`}>
-                      <AlertTriangle className={`w-5 h-5 ${alert.type === 'critical' ? 'text-rose-400' : 'text-amber-400'}`} />
-                      <span className={alert.type === 'critical' ? 'text-rose-300' : 'text-amber-300'}>{alert.text}</span>
+                    <div 
+                      key={i} 
+                      onClick={() => alert.link && setView(alert.link)}
+                      className={`flex items-center justify-between p-3 rounded-xl ${alert.type === 'critical' ? 'bg-rose-900/30 border border-rose-500/50' : 'bg-amber-900/30 border border-amber-500/50'} ${alert.link ? 'cursor-pointer hover:opacity-80' : ''}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <AlertTriangle className={`w-5 h-5 ${alert.type === 'critical' ? 'text-rose-400' : 'text-amber-400'}`} />
+                        <span className={alert.type === 'critical' ? 'text-rose-300' : 'text-amber-300'}>{alert.text}</span>
+                      </div>
+                      {alert.link && <ChevronRight className="w-5 h-5 text-slate-400" />}
                     </div>
                   ))}
                 </div>
@@ -2018,7 +2360,7 @@ if (supabase && isAuthReady && session && isLocked) {
                 <div className="lg:col-span-2 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-sm font-semibold text-slate-300 uppercase">Recent Weeks</h3>
-                    <button onClick={() => setView('upload')} className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"><Upload className="w-3 h-3" />Add Week</button>
+                    <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"><Upload className="w-3 h-3" />Add Week</button>
                   </div>
                   {sortedWeeks.length > 0 ? (
                     <div className="space-y-2">
@@ -2063,9 +2405,9 @@ if (supabase && isAuthReady && session && isLocked) {
                   <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
                     <h3 className="text-sm font-semibold text-slate-300 uppercase mb-3">Quick Actions</h3>
                     <div className="space-y-2">
-                      <button onClick={() => setView('upload')} className="w-full p-2 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 rounded-lg text-violet-300 text-sm text-left flex items-center gap-2"><Upload className="w-4 h-4" />Upload Weekly Data</button>
-                      <button onClick={() => setView('upload')} className="w-full p-2 bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/30 rounded-lg text-teal-300 text-sm text-left flex items-center gap-2"><CalendarRange className="w-4 h-4" />Upload Period Data</button>
-                      <button onClick={() => setView('upload')} className="w-full p-2 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg text-emerald-300 text-sm text-left flex items-center gap-2"><Boxes className="w-4 h-4" />Upload Inventory</button>
+                      <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="w-full p-2 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 rounded-lg text-violet-300 text-sm text-left flex items-center gap-2"><Upload className="w-4 h-4" />Upload Weekly Data</button>
+                      <button onClick={() => { setUploadTab('period'); setView('upload'); }} className="w-full p-2 bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/30 rounded-lg text-teal-300 text-sm text-left flex items-center gap-2"><CalendarRange className="w-4 h-4" />Upload Period Data</button>
+                      <button onClick={() => { setUploadTab('inventory'); setView('upload'); }} className="w-full p-2 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg text-emerald-300 text-sm text-left flex items-center gap-2"><Boxes className="w-4 h-4" />Upload Inventory</button>
                       <button onClick={exportAll} className="w-full p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 text-sm text-left flex items-center gap-2"><Download className="w-4 h-4" />Export All Data</button>
                     </div>
                   </div>
@@ -2077,7 +2419,7 @@ if (supabase && isAuthReady && session && isLocked) {
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-sm font-semibold text-slate-300 uppercase">Saved Periods</h3>
-                    <button onClick={() => setView('upload')} className="text-xs text-teal-400 hover:text-teal-300 flex items-center gap-1"><Upload className="w-3 h-3" />Add Period</button>
+                    <button onClick={() => { setUploadTab('period'); setView('upload'); }} className="text-xs text-teal-400 hover:text-teal-300 flex items-center gap-1"><Upload className="w-3 h-3" />Add Period</button>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
                     {Object.keys(allPeriodsData).sort().reverse().map(p => {
@@ -2200,7 +2542,9 @@ if (supabase && isAuthReady && session && isLocked) {
                 <div><label className="block text-sm text-slate-400 mb-2">Google Ad Spend</label><input type="number" value={periodAdSpend.google} onChange={(e) => setPeriodAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
               </div>
               
-              <button onClick={processPeriod} disabled={isProcessing || !periodFiles.amazon || !periodFiles.shopify || !periodLabel.trim()} className="w-full bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Save Period Data'}</button>
+              {!hasCogs && <div className="bg-amber-900/30 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" /><div><p className="text-amber-300 font-medium">COGS not set up</p><p className="text-amber-200/70 text-sm">Upload a COGS file or configure in settings for profit tracking</p></div></div>}
+              
+              <button onClick={processPeriod} disabled={isProcessing || !periodFiles.amazon || !periodFiles.shopify || !periodLabel.trim() || !hasCogs} className="w-full bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Save Period Data'}</button>
             </div>
           )}
           
@@ -2477,78 +2821,6 @@ if (supabase && isAuthReady && session && isLocked) {
     );
   }
 
-  // Period Upload View (for monthly/yearly totals)
-  if (view === 'period-upload') {
-    const periods = Object.keys(allPeriodsData).sort().reverse();
-    const PeriodFileBoxLocal = ({ type, label, desc, req }) => {
-      const isMulti3PL = type === 'threepl';
-      const hasFile = isMulti3PL ? (periodFiles.threepl?.length > 0) : periodFiles[type];
-      const displayName = isMulti3PL ? (periodFileNames.threepl?.length > 0 ? `${periodFileNames.threepl.length} file(s)` : '') : periodFileNames[type];
-      
-      return (
-        <div className={`relative border-2 border-dashed rounded-xl p-4 ${hasFile ? 'border-emerald-400 bg-emerald-950/30' : 'border-slate-600 hover:border-slate-400 bg-slate-800/30'}`}>
-          <input type="file" accept=".csv" onChange={(e) => handlePeriodFile(type, e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${hasFile ? 'bg-emerald-500' : 'bg-slate-700'}`}>
-              {hasFile ? <Check className="w-5 h-5 text-white" /> : <FileSpreadsheet className="w-5 h-5 text-slate-300" />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2"><span className="font-medium text-white text-sm">{label}</span>{req && <span className="text-xs text-rose-400">*</span>}{isMulti3PL && <span className="text-xs text-cyan-400">(+add more)</span>}</div>
-              {hasFile ? (
-                <div className="flex items-center gap-2">
-                  <p className="text-xs text-emerald-400 truncate">{displayName}</p>
-                  {isMulti3PL && periodFileNames.threepl?.length > 0 && (
-                    <button onClick={(e) => { e.stopPropagation(); clearPeriod3PLFiles(); }} className="text-xs text-rose-400 hover:text-rose-300">Clear</button>
-                  )}
-                </div>
-              ) : <p className="text-xs text-slate-500">{desc}</p>}
-            </div>
-          </div>
-          {isMulti3PL && periodFileNames.threepl?.length > 0 && (
-            <div className="mt-2 text-xs text-slate-400">
-              {periodFileNames.threepl.map((name, i) => <div key={i} className="truncate">• {name}</div>)}
-            </div>
-          )}
-        </div>
-      );
-    };
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
-          <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Period Upload</h1><p className="text-slate-400">Upload monthly or yearly totals (no weekly breakdown)</p></div>
-          <NavTabs />{dataBar}
-          {periods.length > 0 && (
-            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4 mb-6">
-              <h3 className="text-sm font-semibold text-slate-300 mb-3">Existing Periods</h3>
-              <div className="flex flex-wrap gap-2">{periods.map(p => <button key={p} onClick={() => { setSelectedPeriod(p); setView('period-view'); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">{allPeriodsData[p]?.label || p}</button>)}</div>
-            </div>
-          )}
-          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
-            <label className="block text-sm font-medium text-slate-300 mb-2">Period Label <span className="text-rose-400">*</span></label>
-            <input type="text" value={periodLabel} onChange={(e) => setPeriodLabel(e.target.value)} placeholder="e.g., January 2025, Q4 2024, 2024" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
-          </div>
-          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
-            <h2 className="text-lg font-semibold text-white mb-4">Data Files</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <PeriodFileBoxLocal type="amazon" label="Amazon Report" desc="Full period CSV" req />
-              <PeriodFileBoxLocal type="shopify" label="Shopify Sales" desc="Full period CSV" req />
-              <PeriodFileBoxLocal type="threepl" label="3PL Costs" desc="Optional - click to add multiple" />
-            </div>
-          </div>
-          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
-            <h2 className="text-lg font-semibold text-white mb-4">Shopify Ad Spend</h2>
-            <div className="grid grid-cols-2 gap-4">
-              <div><label className="block text-sm text-slate-400 mb-2">Meta</label><input type="number" value={periodAdSpend.meta} onChange={(e) => setPeriodAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
-              <div><label className="block text-sm text-slate-400 mb-2">Google</label><input type="number" value={periodAdSpend.google} onChange={(e) => setPeriodAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
-            </div>
-          </div>
-          {!Object.keys(savedCogs).length && <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6"><p className="text-amber-400 font-semibold">COGS Required</p><p className="text-slate-300 text-sm">Click "COGS" button above first.</p></div>}
-          <button onClick={processPeriod} disabled={isProcessing || !periodFiles.amazon || !periodFiles.shopify || !Object.keys(savedCogs).length || !periodLabel.trim()} className="w-full bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Generate Period Report'}</button>
-        </div>
-      </div>
-    );
-  }
-
   // Period View
   if (view === 'period-view' && selectedPeriod && allPeriodsData[selectedPeriod]) {
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
@@ -2659,7 +2931,7 @@ if (supabase && isAuthReady && session && isLocked) {
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">{data.label}</h1><p className="text-slate-400">Period Performance</p></div>
             <div className="flex gap-2">
               <button onClick={() => setReprocessPeriod(selectedPeriod)} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-1"><RefreshCw className="w-4 h-4" />Update 3PL/Ads</button>
-              <button onClick={() => setView('period-upload')} className="bg-teal-700 hover:bg-teal-600 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-1"><Upload className="w-4 h-4" />New</button>
+              <button onClick={() => { setUploadTab('period'); setView('upload'); }} className="bg-teal-700 hover:bg-teal-600 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-1"><Upload className="w-4 h-4" />New</button>
               <button onClick={() => deletePeriod(selectedPeriod)} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-lg text-sm"><Trash2 className="w-4 h-4" /></button>
             </div>
           </div>
@@ -2763,38 +3035,6 @@ if (supabase && isAuthReady && session && isLocked) {
     );
   }
 
-  // Inventory Upload View
-  if (view === 'inv-upload') {
-    const dates = Object.keys(invHistory).sort().reverse();
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
-          <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 mb-4"><Boxes className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Inventory Tracker</h1></div>
-          <NavTabs />{dataBar}
-          {dates.length > 0 && (
-            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4 mb-6">
-              <h3 className="text-sm font-semibold text-slate-300 mb-3">Previous Snapshots</h3>
-              <div className="flex flex-wrap gap-2">{dates.slice(0, 8).map(d => <button key={d} onClick={() => { setSelectedInvDate(d); setView('inventory'); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">{new Date(d+'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</button>)}</div>
-            </div>
-          )}
-          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
-            <label className="block text-sm font-medium text-slate-300 mb-2">Snapshot Date <span className="text-rose-400">*</span></label>
-            <input type="date" value={invSnapshotDate} onChange={(e) => setInvSnapshotDate(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
-          </div>
-          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
-            <h2 className="text-lg font-semibold text-white mb-4">Inventory Files</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FileBox type="amazon" label="Amazon FBA Inventory" desc="Inventory health report" req isInv />
-              <FileBox type="threepl" label="3PL Inventory" desc="Products export" req isInv />
-            </div>
-          </div>
-          {Object.keys(allWeeksData).length > 0 && <div className="bg-cyan-900/20 border border-cyan-500/30 rounded-xl p-4 mb-6"><p className="text-cyan-400 text-sm"><span className="font-semibold">Velocity:</span> Will use Amazon + Shopify sales data</p></div>}
-          <button onClick={processInventory} disabled={isProcessing || !invFiles.amazon || !invFiles.threepl || !invSnapshotDate} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Generate Report'}</button>
-        </div>
-      </div>
-    );
-  }
-
   // Inventory Dashboard View
   if (view === 'inventory' && selectedInvDate && invHistory[selectedInvDate]) {
     const dates = Object.keys(invHistory).sort().reverse();
@@ -2806,7 +3046,7 @@ if (supabase && isAuthReady && session && isLocked) {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
-              <button onClick={() => setView('inv-upload')} className="bg-emerald-700 hover:bg-emerald-600 text-white px-3 py-2 rounded-lg text-sm"><RefreshCw className="w-4 h-4 inline mr-1" />New</button>
+              <button onClick={() => { setUploadTab('inventory'); setView('upload'); }} className="bg-emerald-700 hover:bg-emerald-600 text-white px-3 py-2 rounded-lg text-sm"><RefreshCw className="w-4 h-4 inline mr-1" />New</button>
               <button onClick={() => deleteInv(selectedInvDate)} className="bg-rose-900/50 hover:bg-rose-800/50 text-rose-300 px-3 py-2 rounded-lg text-sm"><Trash2 className="w-4 h-4" /></button>
             </div>
           </div>
@@ -4437,6 +4677,810 @@ if (supabase && isAuthReady && session && isLocked) {
               </table>
             </div>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==================== SALES TAX VIEW ====================
+  if (view === 'sales-tax') {
+    const { nexusStates, filingHistory, hiddenStates } = salesTaxConfig;
+    
+    // Get states with nexus sorted by next due date
+    const nexusStatesList = Object.entries(nexusStates || {})
+      .filter(([code, config]) => config.hasNexus)
+      .map(([code, config]) => ({
+        code,
+        ...US_STATES_TAX_INFO[code],
+        ...config,
+        nextDue: getNextDueDate(config.frequency || 'monthly', code)
+      }))
+      .sort((a, b) => a.nextDue - b.nextDue);
+    
+    // Calculate upcoming due items
+    const now = new Date();
+    const sevenDays = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    
+    const overdue = nexusStatesList.filter(s => s.nextDue < now);
+    const dueSoon = nexusStatesList.filter(s => s.nextDue >= now && s.nextDue <= sevenDays);
+    const upcoming = nexusStatesList.filter(s => s.nextDue > sevenDays && s.nextDue <= thirtyDays);
+    
+    // Handle tax report file upload
+    const handleTaxReportUpload = (file, stateCode) => {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const data = parseCSV(e.target.result);
+        const parsed = parseShopifyTaxReport(data, stateCode);
+        setParsedTaxReport(parsed);
+        setTaxReportFileName(file.name);
+      };
+      reader.readAsText(file);
+    };
+    
+    // Toggle nexus for a state
+    const toggleNexus = (stateCode) => {
+      const updated = { ...salesTaxConfig };
+      if (!updated.nexusStates) updated.nexusStates = {};
+      if (!updated.nexusStates[stateCode]) {
+        updated.nexusStates[stateCode] = { hasNexus: true, frequency: 'monthly', registrationId: '', customFilings: [], notes: '' };
+      } else {
+        updated.nexusStates[stateCode].hasNexus = !updated.nexusStates[stateCode].hasNexus;
+      }
+      saveSalesTax(updated);
+    };
+    
+    // Toggle hidden state
+    const toggleHideState = (stateCode) => {
+      const updated = { ...salesTaxConfig };
+      if (!updated.hiddenStates) updated.hiddenStates = [];
+      if (updated.hiddenStates.includes(stateCode)) {
+        updated.hiddenStates = updated.hiddenStates.filter(s => s !== stateCode);
+      } else {
+        updated.hiddenStates = [...updated.hiddenStates, stateCode];
+      }
+      saveSalesTax(updated);
+    };
+    
+    // Update state config
+    const updateStateConfig = (stateCode, field, value) => {
+      const updated = { ...salesTaxConfig };
+      if (!updated.nexusStates) updated.nexusStates = {};
+      if (!updated.nexusStates[stateCode]) {
+        updated.nexusStates[stateCode] = { hasNexus: false, frequency: 'monthly', registrationId: '', customFilings: [], notes: '' };
+      }
+      updated.nexusStates[stateCode][field] = value;
+      saveSalesTax(updated);
+    };
+    
+    // Add custom filing to a state
+    const addCustomFiling = (stateCode, filing) => {
+      const updated = { ...salesTaxConfig };
+      if (!updated.nexusStates[stateCode].customFilings) {
+        updated.nexusStates[stateCode].customFilings = [];
+      }
+      updated.nexusStates[stateCode].customFilings.push(filing);
+      saveSalesTax(updated);
+    };
+    
+    // Remove custom filing
+    const removeCustomFiling = (stateCode, index) => {
+      const updated = { ...salesTaxConfig };
+      updated.nexusStates[stateCode].customFilings.splice(index, 1);
+      saveSalesTax(updated);
+    };
+    
+    // Mark filing as complete
+    const markFilingComplete = (stateCode, periodKey, data) => {
+      const updated = { ...salesTaxConfig };
+      if (!updated.filingHistory[stateCode]) {
+        updated.filingHistory[stateCode] = {};
+      }
+      updated.filingHistory[stateCode][periodKey] = {
+        filed: true,
+        filedDate: new Date().toISOString(),
+        ...data
+      };
+      saveSalesTax(updated);
+      setParsedTaxReport(null);
+      setTaxReportFileName('');
+    };
+    
+    // State configuration modal
+    const StateConfigModal = () => {
+      if (!showTaxStateConfig || !taxConfigState) return null;
+      const stateInfo = US_STATES_TAX_INFO[taxConfigState];
+      const config = (nexusStates || {})[taxConfigState] || { hasNexus: false, frequency: 'monthly', registrationId: '', customFilings: [], notes: '' };
+      
+      return (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-2xl w-full my-8">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="text-xl font-bold text-white">{stateInfo?.name || taxConfigState}</h2>
+                <p className="text-slate-400 text-sm">Configure sales tax settings</p>
+              </div>
+              <button onClick={() => { setShowTaxStateConfig(false); setTaxConfigState(null); }} className="p-2 hover:bg-slate-700 rounded-lg"><Trash2 className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            
+            {/* Basic Info */}
+            <div className="space-y-4 mb-6">
+              <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-xl">
+                <span className="text-white">Nexus Established</span>
+                <button onClick={() => toggleNexus(taxConfigState)} className={`w-12 h-6 rounded-full transition-colors ${config.hasNexus ? 'bg-emerald-500' : 'bg-slate-600'}`}>
+                  <div className={`w-5 h-5 bg-white rounded-full transition-transform ${config.hasNexus ? 'translate-x-6' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
+              
+              <div>
+                <label className="block text-sm text-slate-400 mb-2">Filing Frequency</label>
+                <select value={config.frequency || 'monthly'} onChange={(e) => updateStateConfig(taxConfigState, 'frequency', e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white">
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
+                  <option value="semi-annual">Semi-Annual</option>
+                  <option value="annual">Annual</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm text-slate-400 mb-2">State Registration / Account ID</label>
+                <input type="text" value={config.registrationId || ''} onChange={(e) => updateStateConfig(taxConfigState, 'registrationId', e.target.value)} placeholder="e.g., 12-345678-9" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+              </div>
+              
+              <div>
+                <label className="block text-sm text-slate-400 mb-2">Notes</label>
+                <textarea value={config.notes || ''} onChange={(e) => updateStateConfig(taxConfigState, 'notes', e.target.value)} placeholder="Any notes about this state's requirements..." rows={2} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+              </div>
+            </div>
+            
+            {/* State Info */}
+            {stateInfo && (
+              <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
+                <h4 className="text-sm font-semibold text-slate-300 mb-2">State Information</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div><span className="text-slate-500">Base Rate:</span> <span className="text-white">{(stateInfo.stateRate * 100).toFixed(2)}%</span></div>
+                  <div><span className="text-slate-500">Filing Types:</span> <span className="text-white capitalize">{stateInfo.filingTypes?.join(', ') || 'N/A'}</span></div>
+                  {stateInfo.note && <div className="col-span-2 text-amber-400 text-xs mt-1">{stateInfo.note}</div>}
+                </div>
+              </div>
+            )}
+            
+            {/* Custom Filings */}
+            <div className="mb-6">
+              <h4 className="text-sm font-semibold text-slate-300 mb-3">Additional Filings (LLC Fees, Annual Reports, etc.)</h4>
+              
+              {config.customFilings?.length > 0 && (
+                <div className="space-y-2 mb-4">
+                  {config.customFilings.map((f, i) => (
+                    <div key={i} className="flex items-center justify-between p-3 bg-slate-900/50 rounded-lg">
+                      <div>
+                        <span className="text-white">{f.name}</span>
+                        <span className="text-slate-500 text-sm ml-2">({f.frequency}, due {f.dueMonth}/{f.dueDay})</span>
+                        {f.amount && <span className="text-emerald-400 text-sm ml-2">{formatCurrency(parseFloat(f.amount))}</span>}
+                      </div>
+                      <button onClick={() => removeCustomFiling(taxConfigState, i)} className="text-rose-400 hover:text-rose-300"><Trash2 className="w-4 h-4" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <input type="text" value={newCustomFiling.name} onChange={(e) => setNewCustomFiling(p => ({ ...p, name: e.target.value }))} placeholder="Filing name (e.g., LLC Annual Fee)" className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+                <select value={newCustomFiling.frequency} onChange={(e) => setNewCustomFiling(p => ({ ...p, frequency: e.target.value }))} className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm">
+                  <option value="annual">Annual</option>
+                  <option value="quarterly">Quarterly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+                <div className="flex gap-2">
+                  <input type="number" value={newCustomFiling.dueMonth} onChange={(e) => setNewCustomFiling(p => ({ ...p, dueMonth: e.target.value }))} placeholder="Month" min="1" max="12" className="w-1/2 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+                  <input type="number" value={newCustomFiling.dueDay} onChange={(e) => setNewCustomFiling(p => ({ ...p, dueDay: e.target.value }))} placeholder="Day" min="1" max="31" className="w-1/2 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+                </div>
+                <input type="number" value={newCustomFiling.amount} onChange={(e) => setNewCustomFiling(p => ({ ...p, amount: e.target.value }))} placeholder="Amount ($)" className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+              </div>
+              <button onClick={() => { if (newCustomFiling.name) { addCustomFiling(taxConfigState, newCustomFiling); setNewCustomFiling({ name: '', frequency: 'annual', dueMonth: 0, dueDay: 15, amount: '' }); }}} disabled={!newCustomFiling.name} className="w-full py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg text-sm text-white">Add Filing</button>
+            </div>
+            
+            <div className="flex gap-3">
+              <button onClick={() => toggleHideState(taxConfigState)} className="flex-1 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">{hiddenStates.includes(taxConfigState) ? 'Unhide State' : 'Hide State'}</button>
+              <button onClick={() => { setShowTaxStateConfig(false); setTaxConfigState(null); }} className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm text-white font-semibold">Done</button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+    
+    // Filing detail modal with report upload
+    const FilingDetailModal = () => {
+      if (!selectedTaxState) return null;
+      const stateInfo = US_STATES_TAX_INFO[selectedTaxState];
+      const config = (nexusStates || {})[selectedTaxState] || {};
+      const nextDue = getNextDueDate(config.frequency || 'monthly', selectedTaxState);
+      const periodKey = config.frequency === 'monthly' 
+        ? `${nextDue.getFullYear()}-${String(nextDue.getMonth()).padStart(2, '0')}`
+        : config.frequency === 'quarterly'
+        ? `${nextDue.getFullYear()}-Q${Math.ceil((nextDue.getMonth() + 1) / 3)}`
+        : `${nextDue.getFullYear()}`;
+      
+      return (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-4xl w-full my-8 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="text-xl font-bold text-white">{stateInfo?.name} - Sales Tax Filing</h2>
+                <p className="text-slate-400 text-sm">Due: {nextDue.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+              </div>
+              <button onClick={() => { setSelectedTaxState(null); setParsedTaxReport(null); setTaxReportFileName(''); }} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400">✕</button>
+            </div>
+            
+            {/* Upload Tax Report */}
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-slate-300 mb-3">Upload Shopify Tax Report</h3>
+              <div className={`relative border-2 border-dashed rounded-xl p-6 ${taxReportFileName ? 'border-emerald-500/50 bg-emerald-950/20' : 'border-slate-600 hover:border-slate-500 bg-slate-800/30'}`}>
+                <input type="file" accept=".csv" onChange={(e) => handleTaxReportUpload(e.target.files[0], selectedTaxState)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                <div className="text-center">
+                  {taxReportFileName ? (
+                    <><Check className="w-8 h-8 text-emerald-400 mx-auto mb-2" /><p className="text-emerald-400">{taxReportFileName}</p></>
+                  ) : (
+                    <><Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" /><p className="text-slate-400">Drop Shopify tax report CSV or click to upload</p><p className="text-slate-500 text-xs mt-1">Analytics → Reports → Taxes → Export by jurisdiction</p></>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            {/* Parsed Report */}
+            {parsedTaxReport && (
+              <div className="mb-6">
+                <h3 className="text-sm font-semibold text-slate-300 mb-3">Tax Report Summary</h3>
+                
+                {/* Summary Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                  <div className="bg-slate-900/50 rounded-xl p-4">
+                    <p className="text-slate-400 text-xs">Total Sales</p>
+                    <p className="text-xl font-bold text-white">{formatCurrency(parsedTaxReport.totalSales)}</p>
+                  </div>
+                  <div className="bg-slate-900/50 rounded-xl p-4">
+                    <p className="text-slate-400 text-xs">Taxable Sales</p>
+                    <p className="text-xl font-bold text-emerald-400">{formatCurrency(parsedTaxReport.totalTaxableSales)}</p>
+                  </div>
+                  <div className="bg-slate-900/50 rounded-xl p-4">
+                    <p className="text-slate-400 text-xs">Exempt Sales</p>
+                    <p className="text-xl font-bold text-slate-300">{formatCurrency(parsedTaxReport.totalExemptSales)}</p>
+                  </div>
+                  <div className="bg-rose-900/30 border border-rose-500/30 rounded-xl p-4">
+                    <p className="text-rose-400 text-xs">Tax Collected</p>
+                    <p className="text-xl font-bold text-white">{formatCurrency(parsedTaxReport.totalTaxCollected)}</p>
+                  </div>
+                </div>
+                
+                {/* Tax Breakdown by Type */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                  <div className="bg-violet-900/20 border border-violet-500/30 rounded-lg p-3">
+                    <p className="text-violet-400 text-xs">State Tax</p>
+                    <p className="text-lg font-semibold text-white">{formatCurrency(parsedTaxReport.stateTax)}</p>
+                  </div>
+                  <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-3">
+                    <p className="text-blue-400 text-xs">County Tax</p>
+                    <p className="text-lg font-semibold text-white">{formatCurrency(parsedTaxReport.countyTax)}</p>
+                  </div>
+                  <div className="bg-teal-900/20 border border-teal-500/30 rounded-lg p-3">
+                    <p className="text-teal-400 text-xs">City Tax</p>
+                    <p className="text-lg font-semibold text-white">{formatCurrency(parsedTaxReport.cityTax)}</p>
+                  </div>
+                  <div className="bg-amber-900/20 border border-amber-500/30 rounded-lg p-3">
+                    <p className="text-amber-400 text-xs">Special Tax</p>
+                    <p className="text-lg font-semibold text-white">{formatCurrency(parsedTaxReport.specialTax)}</p>
+                  </div>
+                </div>
+                
+                {/* Jurisdiction Details */}
+                <div className="bg-slate-900/50 rounded-xl overflow-hidden">
+                  <div className="p-3 border-b border-slate-700">
+                    <h4 className="text-sm font-semibold text-slate-300">Jurisdiction Breakdown</h4>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-800 sticky top-0">
+                        <tr>
+                          <th className="text-left p-2 text-slate-400">Jurisdiction</th>
+                          <th className="text-left p-2 text-slate-400">Type</th>
+                          <th className="text-right p-2 text-slate-400">Rate</th>
+                          <th className="text-right p-2 text-slate-400">Taxable</th>
+                          <th className="text-right p-2 text-slate-400">Tax Due</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {parsedTaxReport.jurisdictions.map((j, i) => (
+                          <tr key={i} className="border-b border-slate-700/50">
+                            <td className="p-2 text-white">{j.name}{j.county && <span className="text-slate-500 text-xs ml-1">({j.county})</span>}</td>
+                            <td className="p-2 capitalize text-slate-400">{j.type}</td>
+                            <td className="p-2 text-right text-slate-300">{(j.rate * 100).toFixed(3)}%</td>
+                            <td className="p-2 text-right text-slate-300">{formatCurrency(j.taxableSales)}</td>
+                            <td className="p-2 text-right font-semibold text-emerald-400">{formatCurrency(j.taxAmount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Filing Confirmation */}
+            <div className="border-t border-slate-700 pt-6">
+              <h3 className="text-sm font-semibold text-slate-300 mb-3">Mark as Filed</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Confirmation Number</label>
+                  <input type="text" value={taxFilingConfirmNum} onChange={(e) => setTaxFilingConfirmNum(e.target.value)} placeholder="State confirmation #" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Amount Paid</label>
+                  <input type="number" value={taxFilingPaidAmount} onChange={(e) => setTaxFilingPaidAmount(e.target.value)} placeholder={parsedTaxReport ? parsedTaxReport.totalTaxCollected.toFixed(2) : '0.00'} className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Notes</label>
+                  <input type="text" value={taxFilingNotes} onChange={(e) => setTaxFilingNotes(e.target.value)} placeholder="Any notes..." className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+                </div>
+              </div>
+              <button 
+                onClick={() => markFilingComplete(selectedTaxState, periodKey, { 
+                  confirmationNum: taxFilingConfirmNum, 
+                  amount: parseFloat(taxFilingPaidAmount) || parsedTaxReport?.totalTaxCollected || 0,
+                  notes: taxFilingNotes,
+                  reportData: parsedTaxReport 
+                })}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl font-semibold text-white"
+              >
+                <Check className="w-5 h-5 inline mr-2" />Mark as Filed & Paid
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+    
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal /><StateConfigModal /><FilingDetailModal />
+          
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+            <div>
+              <h1 className="text-2xl lg:text-3xl font-bold text-white">Sales Tax Management</h1>
+              <p className="text-slate-400">Track nexus, filings, and compliance across states</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-slate-400 text-sm">{Object.values(nexusStates).filter(s => s.hasNexus).length} states with nexus</span>
+            </div>
+          </div>
+          
+          <NavTabs />
+          
+          {/* Alerts */}
+          {(overdue.length > 0 || dueSoon.length > 0) && (
+            <div className="mb-6 space-y-2">
+              {overdue.map(s => (
+                <div key={s.code} className="flex items-center justify-between p-3 bg-rose-900/30 border border-rose-500/50 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <AlertTriangle className="w-5 h-5 text-rose-400" />
+                    <span className="text-rose-300"><strong>{s.name}</strong> filing is overdue! Was due {s.nextDue.toLocaleDateString()}</span>
+                  </div>
+                  <button onClick={() => setSelectedTaxState(s.code)} className="px-3 py-1 bg-rose-600 hover:bg-rose-500 rounded-lg text-sm text-white">File Now</button>
+                </div>
+              ))}
+              {dueSoon.map(s => (
+                <div key={s.code} className="flex items-center justify-between p-3 bg-amber-900/30 border border-amber-500/50 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <Clock className="w-5 h-5 text-amber-400" />
+                    <span className="text-amber-300"><strong>{s.name}</strong> due in {Math.ceil((s.nextDue - now) / (1000 * 60 * 60 * 24))} days ({s.nextDue.toLocaleDateString()})</span>
+                  </div>
+                  <button onClick={() => setSelectedTaxState(s.code)} className="px-3 py-1 bg-amber-600 hover:bg-amber-500 rounded-lg text-sm text-white">File</button>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {/* Summary Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+              <p className="text-slate-400 text-sm">States with Nexus</p>
+              <p className="text-3xl font-bold text-white">{nexusStatesList.length}</p>
+            </div>
+            <div className="bg-rose-900/20 border border-rose-500/30 rounded-2xl p-5">
+              <p className="text-rose-400 text-sm">Overdue</p>
+              <p className="text-3xl font-bold text-rose-400">{overdue.length}</p>
+            </div>
+            <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5">
+              <p className="text-amber-400 text-sm">Due Within 7 Days</p>
+              <p className="text-3xl font-bold text-amber-400">{dueSoon.length}</p>
+            </div>
+            <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-2xl p-5">
+              <p className="text-emerald-400 text-sm">Upcoming (30 days)</p>
+              <p className="text-3xl font-bold text-emerald-400">{upcoming.length}</p>
+            </div>
+          </div>
+          
+          {/* Main Content Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Nexus States List */}
+            <div className="lg:col-span-2 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">Your Nexus States</h3>
+                <select value={taxFilterStatus} onChange={(e) => setTaxFilterStatus(e.target.value)} className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white">
+                  <option value="all">All States</option>
+                  <option value="due">Overdue</option>
+                  <option value="upcoming">Due Soon</option>
+                </select>
+              </div>
+              
+              {nexusStatesList.length === 0 ? (
+                <div className="text-center py-8">
+                  <DollarSign className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                  <p className="text-slate-400">No nexus states configured</p>
+                  <p className="text-slate-500 text-sm">Add states from the list on the right</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {nexusStatesList
+                    .filter(s => taxFilterStatus === 'all' || (taxFilterStatus === 'due' && s.nextDue < now) || (taxFilterStatus === 'upcoming' && s.nextDue >= now && s.nextDue <= sevenDays))
+                    .map(state => {
+                      const isOverdue = state.nextDue < now;
+                      const isDueSoon = state.nextDue >= now && state.nextDue <= sevenDays;
+                      return (
+                        <div key={state.code} className={`flex items-center justify-between p-4 rounded-xl transition-colors ${isOverdue ? 'bg-rose-900/20 border border-rose-500/30' : isDueSoon ? 'bg-amber-900/20 border border-amber-500/30' : 'bg-slate-900/50 hover:bg-slate-700/50'}`}>
+                          <div className="flex items-center gap-4">
+                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-sm font-bold ${isOverdue ? 'bg-rose-600' : isDueSoon ? 'bg-amber-600' : 'bg-slate-700'}`}>{state.code}</div>
+                            <div>
+                              <p className="text-white font-medium">{state.name}</p>
+                              <p className="text-slate-400 text-sm capitalize">{state.frequency} filing • {state.registrationId || 'No ID set'}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <div className="text-right">
+                              <p className={`text-sm font-medium ${isOverdue ? 'text-rose-400' : isDueSoon ? 'text-amber-400' : 'text-slate-300'}`}>
+                                {isOverdue ? 'Overdue' : `Due ${state.nextDue.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
+                              </p>
+                              <p className="text-slate-500 text-xs">{Math.ceil((state.nextDue - now) / (1000 * 60 * 60 * 24))} days</p>
+                            </div>
+                            <button onClick={() => setSelectedTaxState(state.code)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg"><Upload className="w-4 h-4" /></button>
+                            <button onClick={() => { setTaxConfigState(state.code); setShowTaxStateConfig(true); }} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg"><Settings className="w-4 h-4" /></button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+            
+            {/* State Selector */}
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">Add States</h3>
+                <button onClick={() => setShowHiddenStates(!showHiddenStates)} className="text-xs text-slate-400 hover:text-slate-300">{showHiddenStates ? 'Hide' : 'Show'} Hidden ({(hiddenStates || []).length})</button>
+              </div>
+              
+              <div className="space-y-1 max-h-[500px] overflow-y-auto">
+                {Object.entries(US_STATES_TAX_INFO)
+                  .filter(([code]) => !(hiddenStates || []).includes(code) || showHiddenStates)
+                  .filter(([code]) => !nexusStates[code]?.hasNexus)
+                  .sort(([, a], [, b]) => a.name.localeCompare(b.name))
+                  .map(([code, info]) => (
+                    <div key={code} className={`flex items-center justify-between p-2 rounded-lg hover:bg-slate-700/50 ${hiddenStates.includes(code) ? 'opacity-50' : ''}`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono text-slate-500 w-6">{code}</span>
+                        <span className="text-white text-sm">{info.name}</span>
+                        {!info.hasStateTax && <span className="text-xs text-emerald-400">(No tax)</span>}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {info.hasStateTax && (
+                          <button onClick={() => toggleNexus(code)} className="px-2 py-1 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded text-xs text-emerald-300">+ Add</button>
+                        )}
+                        <button onClick={() => toggleHideState(code)} className="p-1 text-slate-500 hover:text-slate-300"><Eye className="w-3 h-3" /></button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+          
+          {/* Filing History */}
+          {Object.keys(filingHistory).length > 0 && (
+            <div className="mt-6 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+              <h3 className="text-lg font-semibold text-white mb-4">Recent Filing History</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700">
+                      <th className="text-left p-3 text-slate-400">State</th>
+                      <th className="text-left p-3 text-slate-400">Period</th>
+                      <th className="text-right p-3 text-slate-400">Amount</th>
+                      <th className="text-left p-3 text-slate-400">Confirmation</th>
+                      <th className="text-left p-3 text-slate-400">Filed Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(filingHistory).flatMap(([stateCode, periods]) => 
+                      Object.entries(periods).map(([period, data]) => (
+                        <tr key={`${stateCode}-${period}`} className="border-b border-slate-700/50">
+                          <td className="p-3 text-white">{US_STATES_TAX_INFO[stateCode]?.name || stateCode}</td>
+                          <td className="p-3 text-slate-300">{period}</td>
+                          <td className="p-3 text-right text-emerald-400">{formatCurrency(data.amount)}</td>
+                          <td className="p-3 text-slate-400 font-mono text-xs">{data.confirmationNum || '-'}</td>
+                          <td className="p-3 text-slate-400">{data.filedDate ? new Date(data.filedDate).toLocaleDateString() : '-'}</td>
+                        </tr>
+                      ))
+                    ).slice(0, 10)}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ==================== SETTINGS VIEW ====================
+  if (view === 'settings') {
+    // Default settings structure
+    const defaultSettings = {
+      inventoryDaysOptimal: 60,
+      inventoryDaysLow: 30,
+      inventoryDaysCritical: 14,
+      tacosOptimal: 15,
+      tacosWarning: 25,
+      tacosMax: 35,
+      roasTarget: 3.0,
+      marginTarget: 25,
+      marginWarning: 15,
+      modulesEnabled: {
+        weeklyTracking: true,
+        periodTracking: true,
+        inventory: true,
+        trends: true,
+        yoy: true,
+        skus: true,
+        profitability: true,
+        ads: true,
+        threepl: true,
+        salesTax: true,
+      },
+      dashboardDefaultRange: 'month',
+      showWeeklyGoals: true,
+      showMonthlyGoals: true,
+      alertSalesTaxDays: 7,
+      alertInventoryEnabled: true,
+      alertGoalsEnabled: true,
+      alertSalesTaxEnabled: true,
+      currencySymbol: '$',
+      dateFormat: 'US',
+    };
+    
+    // Merge defaults with saved settings
+    const currentLocalSettings = {
+      ...defaultSettings,
+      ...(localSettings || appSettings),
+      modulesEnabled: {
+        ...defaultSettings.modulesEnabled,
+        ...((localSettings || appSettings)?.modulesEnabled || {}),
+      }
+    };
+    
+    const updateSetting = (path, value) => {
+      setLocalSettings(prev => {
+        const base = prev || appSettings || defaultSettings;
+        const updated = JSON.parse(JSON.stringify({ ...defaultSettings, ...base })); // Deep clone with defaults
+        const keys = path.split('.');
+        let obj = updated;
+        for (let i = 0; i < keys.length - 1; i++) {
+          if (!obj[keys[i]]) obj[keys[i]] = {};
+          obj = obj[keys[i]];
+        }
+        obj[keys[keys.length - 1]] = value;
+        return updated;
+      });
+    };
+    
+    const handleSave = () => {
+      saveSettings(currentLocalSettings);
+      setShowSaveConfirm(true);
+      setTimeout(() => setShowSaveConfirm(false), 2000);
+    };
+    
+    const resetToDefaults = () => {
+      setLocalSettings(defaultSettings);
+      setShowResetConfirm(false);
+    };
+    
+    const SettingSection = ({ title, children }) => (
+      <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
+        <h3 className="text-lg font-semibold text-white mb-4">{title}</h3>
+        {children}
+      </div>
+    );
+    
+    const SettingRow = ({ label, desc, children }) => (
+      <div className="flex items-center justify-between py-3 border-b border-slate-700/50 last:border-0">
+        <div className="flex-1 pr-4">
+          <p className="text-white font-medium">{label}</p>
+          {desc && <p className="text-slate-400 text-sm">{desc}</p>}
+        </div>
+        <div className="flex-shrink-0">{children}</div>
+      </div>
+    );
+    
+    const Toggle = ({ checked, onChange }) => (
+      <button onClick={() => onChange(!checked)} className={`w-12 h-6 rounded-full transition-colors ${checked ? 'bg-emerald-500' : 'bg-slate-600'}`}>
+        <div className={`w-5 h-5 bg-white rounded-full transition-transform ${checked ? 'translate-x-6' : 'translate-x-0.5'}`} />
+      </button>
+    );
+    
+    const NumberInput = ({ value, onChange, min, max, step = 1, suffix = '' }) => (
+      <div className="flex items-center gap-2">
+        <input type="number" value={value} onChange={(e) => onChange(parseFloat(e.target.value) || 0)} min={min} max={max} step={step} className="w-20 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-right" />
+        {suffix && <span className="text-slate-400 text-sm">{suffix}</span>}
+      </div>
+    );
+    
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
+        <div className="max-w-4xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+          
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h1 className="text-2xl lg:text-3xl font-bold text-white">Settings</h1>
+              <p className="text-slate-400">Customize your dashboard experience</p>
+            </div>
+            <button onClick={handleSave} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl font-semibold text-white flex items-center gap-2"><Check className="w-5 h-5" />Save Changes</button>
+          </div>
+          
+          <NavTabs />
+          
+          {/* Inventory Thresholds */}
+          <SettingSection title="📦 Inventory Thresholds">
+            <p className="text-slate-400 text-sm mb-4">Define what stock levels trigger alerts</p>
+            <SettingRow label="Optimal Days of Inventory" desc="Stock level considered healthy">
+              <NumberInput value={currentLocalSettings.inventoryDaysOptimal} onChange={(v) => updateSetting('inventoryDaysOptimal', v)} min={1} max={365} suffix="days" />
+            </SettingRow>
+            <SettingRow label="Low Stock Threshold" desc="Triggers low stock warning">
+              <NumberInput value={currentLocalSettings.inventoryDaysLow} onChange={(v) => updateSetting('inventoryDaysLow', v)} min={1} max={180} suffix="days" />
+            </SettingRow>
+            <SettingRow label="Critical Stock Threshold" desc="Triggers urgent reorder alert">
+              <NumberInput value={currentLocalSettings.inventoryDaysCritical} onChange={(v) => updateSetting('inventoryDaysCritical', v)} min={1} max={60} suffix="days" />
+            </SettingRow>
+          </SettingSection>
+          
+          {/* Ad Performance */}
+          <SettingSection title="📊 Ad Performance (TACOS)">
+            <p className="text-slate-400 text-sm mb-4">Total Advertising Cost of Sale thresholds</p>
+            <SettingRow label="Optimal TACOS" desc="Ad spend % of revenue considered good">
+              <NumberInput value={currentLocalSettings.tacosOptimal} onChange={(v) => updateSetting('tacosOptimal', v)} min={1} max={50} suffix="%" />
+            </SettingRow>
+            <SettingRow label="Warning TACOS" desc="Triggers yellow warning indicator">
+              <NumberInput value={currentLocalSettings.tacosWarning} onChange={(v) => updateSetting('tacosWarning', v)} min={1} max={75} suffix="%" />
+            </SettingRow>
+            <SettingRow label="Maximum TACOS" desc="Triggers red alert indicator">
+              <NumberInput value={currentLocalSettings.tacosMax} onChange={(v) => updateSetting('tacosMax', v)} min={1} max={100} suffix="%" />
+            </SettingRow>
+            <SettingRow label="Target ROAS" desc="Return on ad spend target">
+              <NumberInput value={currentLocalSettings.roasTarget} onChange={(v) => updateSetting('roasTarget', v)} min={0.5} max={20} step={0.1} suffix="x" />
+            </SettingRow>
+          </SettingSection>
+          
+          {/* Profit Thresholds */}
+          <SettingSection title="💰 Profit Thresholds">
+            <SettingRow label="Target Net Margin" desc="Net profit margin goal">
+              <NumberInput value={currentLocalSettings.marginTarget} onChange={(v) => updateSetting('marginTarget', v)} min={1} max={100} suffix="%" />
+            </SettingRow>
+            <SettingRow label="Margin Warning" desc="Below this triggers warning">
+              <NumberInput value={currentLocalSettings.marginWarning} onChange={(v) => updateSetting('marginWarning', v)} min={1} max={50} suffix="%" />
+            </SettingRow>
+          </SettingSection>
+          
+          {/* Alert Preferences */}
+          <SettingSection title="🔔 Alert Preferences">
+            <SettingRow label="Inventory Alerts" desc="Show low stock warnings on dashboard">
+              <Toggle checked={currentLocalSettings.alertInventoryEnabled} onChange={(v) => updateSetting('alertInventoryEnabled', v)} />
+            </SettingRow>
+            <SettingRow label="Goals Alerts" desc="Show missed targets on dashboard">
+              <Toggle checked={currentLocalSettings.alertGoalsEnabled} onChange={(v) => updateSetting('alertGoalsEnabled', v)} />
+            </SettingRow>
+            <SettingRow label="Sales Tax Alerts" desc="Show upcoming filing deadlines">
+              <Toggle checked={currentLocalSettings.alertSalesTaxEnabled} onChange={(v) => updateSetting('alertSalesTaxEnabled', v)} />
+            </SettingRow>
+            <SettingRow label="Sales Tax Alert Days" desc="Days before deadline to show alert">
+              <NumberInput value={currentLocalSettings.alertSalesTaxDays} onChange={(v) => updateSetting('alertSalesTaxDays', v)} min={1} max={30} suffix="days" />
+            </SettingRow>
+          </SettingSection>
+          
+          {/* Module Visibility */}
+          <SettingSection title="📱 Module Visibility">
+            <p className="text-slate-400 text-sm mb-4">Show/hide sections to streamline your dashboard</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8">
+              <SettingRow label="Weekly Tracking">
+                <Toggle checked={currentLocalSettings.modulesEnabled?.weeklyTracking !== false} onChange={(v) => updateSetting('modulesEnabled.weeklyTracking', v)} />
+              </SettingRow>
+              <SettingRow label="Period Tracking">
+                <Toggle checked={currentLocalSettings.modulesEnabled?.periodTracking !== false} onChange={(v) => updateSetting('modulesEnabled.periodTracking', v)} />
+              </SettingRow>
+              <SettingRow label="Inventory">
+                <Toggle checked={currentLocalSettings.modulesEnabled?.inventory !== false} onChange={(v) => updateSetting('modulesEnabled.inventory', v)} />
+              </SettingRow>
+              <SettingRow label="Trends Analytics">
+                <Toggle checked={currentLocalSettings.modulesEnabled?.trends !== false} onChange={(v) => updateSetting('modulesEnabled.trends', v)} />
+              </SettingRow>
+              <SettingRow label="YoY Comparison">
+                <Toggle checked={currentLocalSettings.modulesEnabled?.yoy !== false} onChange={(v) => updateSetting('modulesEnabled.yoy', v)} />
+              </SettingRow>
+              <SettingRow label="SKU Rankings">
+                <Toggle checked={currentLocalSettings.modulesEnabled?.skus !== false} onChange={(v) => updateSetting('modulesEnabled.skus', v)} />
+              </SettingRow>
+              <SettingRow label="Profitability">
+                <Toggle checked={currentLocalSettings.modulesEnabled?.profitability !== false} onChange={(v) => updateSetting('modulesEnabled.profitability', v)} />
+              </SettingRow>
+              <SettingRow label="Ads Analytics">
+                <Toggle checked={currentLocalSettings.modulesEnabled?.ads !== false} onChange={(v) => updateSetting('modulesEnabled.ads', v)} />
+              </SettingRow>
+              <SettingRow label="3PL Analytics">
+                <Toggle checked={currentLocalSettings.modulesEnabled?.threepl !== false} onChange={(v) => updateSetting('modulesEnabled.threepl', v)} />
+              </SettingRow>
+              <SettingRow label="Sales Tax">
+                <Toggle checked={currentLocalSettings.modulesEnabled?.salesTax !== false} onChange={(v) => updateSetting('modulesEnabled.salesTax', v)} />
+              </SettingRow>
+            </div>
+          </SettingSection>
+          
+          {/* Dashboard Preferences */}
+          <SettingSection title="🏠 Dashboard Preferences">
+            <SettingRow label="Default Time Range" desc="Initial view when loading dashboard">
+              <select value={currentLocalSettings.dashboardDefaultRange || 'month'} onChange={(e) => updateSetting('dashboardDefaultRange', e.target.value)} className="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white">
+                <option value="week">Week</option>
+                <option value="month">Month</option>
+                <option value="quarter">Quarter</option>
+                <option value="year">Year</option>
+              </select>
+            </SettingRow>
+            <SettingRow label="Show Weekly Goals" desc="Display weekly targets on dashboard">
+              <Toggle checked={currentLocalSettings.showWeeklyGoals !== false} onChange={(v) => updateSetting('showWeeklyGoals', v)} />
+            </SettingRow>
+            <SettingRow label="Show Monthly Goals" desc="Display monthly targets on dashboard">
+              <Toggle checked={currentLocalSettings.showMonthlyGoals !== false} onChange={(v) => updateSetting('showMonthlyGoals', v)} />
+            </SettingRow>
+          </SettingSection>
+          
+          {/* Data Management */}
+          <SettingSection title="🗄️ Data Management">
+            <SettingRow label="Export All Data" desc="Download complete backup as JSON">
+              <button onClick={exportAll} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-2"><Download className="w-4 h-4" />Export</button>
+            </SettingRow>
+            <SettingRow label="Import Data" desc="Restore from JSON backup">
+              <label className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Import<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
+            </SettingRow>
+            <SettingRow label="Reset Settings" desc="Restore all settings to defaults">
+              {showResetConfirm ? (
+                <div className="flex gap-2">
+                  <button onClick={resetToDefaults} className="px-3 py-2 bg-rose-600 hover:bg-rose-500 rounded-lg text-sm text-white">Confirm Reset</button>
+                  <button onClick={() => setShowResetConfirm(false)} className="px-3 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm text-white">Cancel</button>
+                </div>
+              ) : (
+                <button onClick={() => setShowResetConfirm(true)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">Reset</button>
+              )}
+            </SettingRow>
+          </SettingSection>
+          
+          {/* About */}
+          <div className="bg-slate-800/30 rounded-2xl border border-slate-700/50 p-6 text-center">
+            <p className="text-slate-400 text-sm">E-Commerce Dashboard v5.0</p>
+            <p className="text-slate-500 text-xs mt-1">Built for tracking Amazon & Shopify performance</p>
+            <div className="flex justify-center gap-4 mt-4 text-xs text-slate-500">
+              <span>{Object.keys(allWeeksData).length} weeks tracked</span>
+              <span>•</span>
+              <span>{Object.keys(allPeriodsData).length} periods saved</span>
+              <span>•</span>
+              <span>{Object.keys(savedCogs).length} SKUs configured</span>
+            </div>
+          </div>
+          
         </div>
       </div>
     );
