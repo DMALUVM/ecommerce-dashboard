@@ -71,8 +71,8 @@ const lsSet = (key, value) => {
 export default function Dashboard() {
   const [view, setView] = useState('upload');
   const [weekEnding, setWeekEnding] = useState('');
-  const [files, setFiles] = useState({ amazon: null, shopify: null, cogs: null, threepl: null });
-  const [fileNames, setFileNames] = useState({ amazon: '', shopify: '', cogs: '', threepl: '' });
+  const [files, setFiles] = useState({ amazon: null, shopify: null, cogs: null, threepl: [] }); // threepl is now array
+  const [fileNames, setFileNames] = useState({ amazon: '', shopify: '', cogs: '', threepl: [] }); // threepl names array
   const [adSpend, setAdSpend] = useState({ meta: '', google: '' });
   const [allWeeksData, setAllWeeksData] = useState({});
   const [selectedWeek, setSelectedWeek] = useState(null);
@@ -80,6 +80,7 @@ export default function Dashboard() {
   const [selectedYear, setSelectedYear] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [reprocessPeriod, setReprocessPeriod] = useState(null); // For period reprocessing
 
   const [storeName, setStoreName] = useState('');
 
@@ -161,12 +162,17 @@ const handleLogout = async () => {
   const [reprocessAdSpend, setReprocessAdSpend] = useState({ meta: '', google: '' });
 
   // Period uploads (monthly/yearly totals without weekly breakdown)
-  const [periodFiles, setPeriodFiles] = useState({ amazon: null, shopify: null, threepl: null });
-  const [periodFileNames, setPeriodFileNames] = useState({ amazon: '', shopify: '', threepl: '' });
+  const [periodFiles, setPeriodFiles] = useState({ amazon: null, shopify: null, threepl: [] }); // threepl is array
+  const [periodFileNames, setPeriodFileNames] = useState({ amazon: '', shopify: '', threepl: [] }); // threepl names array
   const [periodAdSpend, setPeriodAdSpend] = useState({ meta: '', google: '' });
   const [periodLabel, setPeriodLabel] = useState('');
   const [allPeriodsData, setAllPeriodsData] = useState({});
   const [selectedPeriod, setSelectedPeriod] = useState(null);
+  
+  const clearPeriod3PLFiles = useCallback(() => {
+    setPeriodFiles(p => ({ ...p, threepl: [] }));
+    setPeriodFileNames(p => ({ ...p, threepl: [] }));
+  }, []);
   
 const PERIODS_KEY = 'ecommerce_periods_v1';
 
@@ -462,9 +468,19 @@ const savePeriods = async (d) => {
     reader.onload = (e) => {
       const data = parseCSV(e.target.result);
       if (isInv) { setInvFiles(p => ({ ...p, [type]: data })); setInvFileNames(p => ({ ...p, [type]: file.name })); }
+      else if (type === 'threepl') {
+        // 3PL supports multiple files - append to array
+        setFiles(p => ({ ...p, threepl: [...(p.threepl || []), data] }));
+        setFileNames(p => ({ ...p, threepl: [...(p.threepl || []), file.name] }));
+      }
       else { setFiles(p => ({ ...p, [type]: data })); setFileNames(p => ({ ...p, [type]: file.name })); }
     };
     reader.readAsText(file);
+  }, []);
+
+  const clear3PLFiles = useCallback(() => {
+    setFiles(p => ({ ...p, threepl: [] }));
+    setFileNames(p => ({ ...p, threepl: [] }));
   }, []);
 
   const handlePeriodFile = useCallback((type, file) => {
@@ -472,8 +488,14 @@ const savePeriods = async (d) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       const data = parseCSV(e.target.result);
-      setPeriodFiles(p => ({ ...p, [type]: data }));
-      setPeriodFileNames(p => ({ ...p, [type]: file.name }));
+      if (type === 'threepl') {
+        // 3PL supports multiple files for periods too
+        setPeriodFiles(p => ({ ...p, threepl: [...(p.threepl || []), data] }));
+        setPeriodFileNames(p => ({ ...p, threepl: [...(p.threepl || []), file.name] }));
+      } else {
+        setPeriodFiles(p => ({ ...p, [type]: data }));
+        setPeriodFileNames(p => ({ ...p, [type]: file.name }));
+      }
     };
     reader.readAsText(file);
   }, []);
@@ -838,17 +860,21 @@ const savePeriods = async (d) => {
 
     let threeplCost = 0;
     const threeplBreakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
-    if (periodFiles.threepl) periodFiles.threepl.forEach(r => { 
-      const charge = r['Charge On Invoice'] || '';
-      const amount = parseFloat(r['Amount Total ($)'] || 0);
-      threeplCost += amount;
-      const chargeLower = charge.toLowerCase();
-      if (chargeLower.includes('storage')) threeplBreakdown.storage += amount;
-      else if (chargeLower.includes('shipping')) threeplBreakdown.shipping += amount;
-      else if (chargeLower.includes('pick')) threeplBreakdown.pickFees += amount;
-      else if (chargeLower.includes('box') || chargeLower.includes('mailer')) threeplBreakdown.boxCharges += amount;
-      else if (chargeLower.includes('receiving')) threeplBreakdown.receiving += amount;
-      else threeplBreakdown.other += amount;
+    // Handle multiple 3PL files
+    const threeplFiles = Array.isArray(periodFiles.threepl) ? periodFiles.threepl : (periodFiles.threepl ? [periodFiles.threepl] : []);
+    threeplFiles.forEach(fileData => {
+      fileData.forEach(r => { 
+        const charge = r['Charge On Invoice'] || '';
+        const amount = parseFloat(r['Amount Total ($)'] || 0);
+        threeplCost += amount;
+        const chargeLower = charge.toLowerCase();
+        if (chargeLower.includes('storage')) threeplBreakdown.storage += amount;
+        else if (chargeLower.includes('shipping')) threeplBreakdown.shipping += amount;
+        else if (chargeLower.includes('pick')) threeplBreakdown.pickFees += amount;
+        else if (chargeLower.includes('box') || chargeLower.includes('mailer')) threeplBreakdown.boxCharges += amount;
+        else if (chargeLower.includes('receiving')) threeplBreakdown.receiving += amount;
+        else threeplBreakdown.other += amount;
+      });
     });
 
     const metaS = parseFloat(periodAdSpend.meta) || 0, googleS = parseFloat(periodAdSpend.google) || 0, shopAds = metaS + googleS;
@@ -871,7 +897,7 @@ const savePeriods = async (d) => {
     const periodKey = periodLabel.trim().toLowerCase().replace(/\s+/g, '-');
     const updated = { ...allPeriodsData, [periodKey]: periodData };
     setAllPeriodsData(updated); savePeriods(updated); setSelectedPeriod(periodKey); setView('period-view'); setIsProcessing(false);
-    setPeriodFiles({ amazon: null, shopify: null, threepl: null }); setPeriodFileNames({ amazon: '', shopify: '', threepl: '' }); setPeriodAdSpend({ meta: '', google: '' }); setPeriodLabel('');
+    setPeriodFiles({ amazon: null, shopify: null, threepl: [] }); setPeriodFileNames({ amazon: '', shopify: '', threepl: [] }); setPeriodAdSpend({ meta: '', google: '' }); setPeriodLabel('');
   }, [periodFiles, periodAdSpend, periodLabel, allPeriodsData, savedCogs]);
 
   const deletePeriod = (k) => { if (!confirm(`Delete ${k}?`)) return; const u = { ...allPeriodsData }; delete u[k]; setAllPeriodsData(u); savePeriods(u); const r = Object.keys(u).sort().reverse(); if (r.length) setSelectedPeriod(r[0]); else { setView('period-upload'); setSelectedPeriod(null); }};
@@ -1196,18 +1222,68 @@ if (supabase && isAuthReady && session && isLocked) {
   // UI Components
   const FileBox = ({ type, label, desc, req, isInv }) => {
     const fs = isInv ? invFiles : files, fn = isInv ? invFileNames : fileNames;
+    const isMulti3PL = type === 'threepl' && !isInv;
+    const hasFile = isMulti3PL ? (fs.threepl?.length > 0) : fs[type];
+    const displayName = isMulti3PL ? (fn.threepl?.length > 0 ? `${fn.threepl.length} file(s)` : '') : fn[type];
+    
     return (
-      <div className={`relative border-2 border-dashed rounded-xl p-4 ${fs[type] ? 'border-emerald-400 bg-emerald-950/30' : 'border-slate-600 hover:border-slate-400 bg-slate-800/30'}`}>
+      <div className={`relative border-2 border-dashed rounded-xl p-4 ${hasFile ? 'border-emerald-400 bg-emerald-950/30' : 'border-slate-600 hover:border-slate-400 bg-slate-800/30'}`}>
         <input type="file" accept=".csv" onChange={(e) => handleFile(type, e.target.files[0], isInv)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
         <div className="flex items-center gap-3">
-          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${fs[type] ? 'bg-emerald-500' : 'bg-slate-700'}`}>
-            {fs[type] ? <Check className="w-5 h-5 text-white" /> : <FileSpreadsheet className="w-5 h-5 text-slate-300" />}
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${hasFile ? 'bg-emerald-500' : 'bg-slate-700'}`}>
+            {hasFile ? <Check className="w-5 h-5 text-white" /> : <FileSpreadsheet className="w-5 h-5 text-slate-300" />}
           </div>
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2"><span className="font-medium text-white text-sm">{label}</span>{req && <span className="text-xs text-rose-400">*</span>}</div>
-            {fs[type] ? <p className="text-xs text-emerald-400 truncate">{fn[type]}</p> : <p className="text-xs text-slate-500">{desc}</p>}
+            <div className="flex items-center gap-2"><span className="font-medium text-white text-sm">{label}</span>{req && <span className="text-xs text-rose-400">*</span>}{isMulti3PL && <span className="text-xs text-cyan-400">(multi)</span>}</div>
+            {hasFile ? (
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-emerald-400 truncate">{displayName}</p>
+                {isMulti3PL && fn.threepl?.length > 0 && (
+                  <button onClick={(e) => { e.stopPropagation(); clear3PLFiles(); }} className="text-xs text-rose-400 hover:text-rose-300">Clear</button>
+                )}
+              </div>
+            ) : <p className="text-xs text-slate-500">{desc}</p>}
           </div>
         </div>
+        {isMulti3PL && fn.threepl?.length > 0 && (
+          <div className="mt-2 text-xs text-slate-400">
+            {fn.threepl.map((name, i) => <div key={i} className="truncate">• {name}</div>)}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Period FileBox with multi-3PL support
+  const PeriodFileBox = ({ type, label, desc, req }) => {
+    const isMulti3PL = type === 'threepl';
+    const hasFile = isMulti3PL ? (periodFiles.threepl?.length > 0) : periodFiles[type];
+    const displayName = isMulti3PL ? (periodFileNames.threepl?.length > 0 ? `${periodFileNames.threepl.length} file(s)` : '') : periodFileNames[type];
+    
+    return (
+      <div className={`relative border-2 border-dashed rounded-xl p-4 ${hasFile ? 'border-emerald-400 bg-emerald-950/30' : 'border-slate-600 hover:border-slate-400 bg-slate-800/30'}`}>
+        <input type="file" accept=".csv" onChange={(e) => handlePeriodFile(type, e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+        <div className="flex items-center gap-3">
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${hasFile ? 'bg-emerald-500' : 'bg-slate-700'}`}>
+            {hasFile ? <Check className="w-5 h-5 text-white" /> : <FileSpreadsheet className="w-5 h-5 text-slate-300" />}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2"><span className="font-medium text-white text-sm">{label}</span>{req && <span className="text-xs text-rose-400">*</span>}{isMulti3PL && <span className="text-xs text-cyan-400">(multi)</span>}</div>
+            {hasFile ? (
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-emerald-400 truncate">{displayName}</p>
+                {isMulti3PL && periodFileNames.threepl?.length > 0 && (
+                  <button onClick={(e) => { e.stopPropagation(); clearPeriod3PLFiles(); }} className="text-xs text-rose-400 hover:text-rose-300">Clear</button>
+                )}
+              </div>
+            ) : <p className="text-xs text-slate-500">{desc}</p>}
+          </div>
+        </div>
+        {isMulti3PL && periodFileNames.threepl?.length > 0 && (
+          <div className="mt-2 text-xs text-slate-400">
+            {periodFileNames.threepl.map((name, i) => <div key={i} className="truncate">• {name}</div>)}
+          </div>
+        )}
       </div>
     );
   };
@@ -1341,6 +1417,45 @@ if (supabase && isAuthReady && session && isLocked) {
     return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s[health] || s.unknown}`}>{health || '—'}</span>;
   };
 
+  // Reusable Goals Progress Card
+  const GoalsCard = ({ weekRevenue = 0, weekProfit = 0, monthRevenue = 0, monthProfit = 0, monthLabel = '' }) => {
+    const hasGoals = goals.weeklyRevenue > 0 || goals.weeklyProfit > 0 || goals.monthlyRevenue > 0 || goals.monthlyProfit > 0;
+    if (!hasGoals) return null;
+    
+    const ProgressBar = ({ current, target, label }) => {
+      if (!target || target <= 0) return null;
+      const pct = Math.min((current / target) * 100, 100);
+      const hit = current >= target;
+      return (
+        <div className="mb-3">
+          <div className="flex justify-between text-sm mb-1">
+            <span className="text-slate-400">{label}</span>
+            <span className="text-white">{formatCurrency(current)} / {formatCurrency(target)}</span>
+          </div>
+          <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+            <div className={`h-full transition-all ${hit ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }} />
+          </div>
+          <p className={`text-xs mt-0.5 ${hit ? 'text-emerald-400' : 'text-amber-400'}`}>{pct.toFixed(0)}% {hit && '🎉'}</p>
+        </div>
+      );
+    };
+    
+    return (
+      <div className="bg-gradient-to-br from-amber-900/20 to-slate-800/50 rounded-xl border border-amber-500/30 p-4 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-amber-400 font-semibold flex items-center gap-2"><Target className="w-4 h-4" />Goals Progress</h3>
+          <button onClick={() => setShowGoalsModal(true)} className="text-xs text-slate-400 hover:text-white">Edit</button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {goals.weeklyRevenue > 0 && <ProgressBar current={weekRevenue} target={goals.weeklyRevenue} label="Weekly Revenue" />}
+          {goals.weeklyProfit > 0 && <ProgressBar current={weekProfit} target={goals.weeklyProfit} label="Weekly Profit" />}
+          {goals.monthlyRevenue > 0 && <ProgressBar current={monthRevenue} target={goals.monthlyRevenue} label={monthLabel ? `${monthLabel} Revenue` : 'Monthly Revenue'} />}
+          {goals.monthlyProfit > 0 && <ProgressBar current={monthProfit} target={goals.monthlyProfit} label={monthLabel ? `${monthLabel} Profit` : 'Monthly Profit'} />}
+        </div>
+      </div>
+    );
+  };
+
   const NavTabs = () => (
     <div className="flex flex-wrap gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl">
       <button onClick={() => setView('upload')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'upload' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Upload className="w-4 h-4 inline mr-1" />Weekly</button>
@@ -1448,6 +1563,10 @@ if (supabase && isAuthReady && session && isLocked) {
         <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4"><BarChart3 className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">{storeName ? storeName + ' Weekly Upload' : 'Weekly Sales Upload'}</h1></div>
           <NavTabs />{dataBar}
+          <GoalsCard 
+            weekRevenue={Object.keys(allWeeksData).length > 0 ? allWeeksData[Object.keys(allWeeksData).sort().reverse()[0]]?.total?.revenue || 0 : 0}
+            weekProfit={Object.keys(allWeeksData).length > 0 ? allWeeksData[Object.keys(allWeeksData).sort().reverse()[0]]?.total?.netProfit || 0 : 0}
+          />
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
             <label className="block text-sm font-medium text-slate-300 mb-2">Week Ending (Sunday) <span className="text-rose-400">*</span></label>
             <input type="date" value={weekEnding} onChange={(e) => setWeekEnding(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
@@ -1720,20 +1839,38 @@ if (supabase && isAuthReady && session && isLocked) {
   // Period Upload View (for monthly/yearly totals)
   if (view === 'period-upload') {
     const periods = Object.keys(allPeriodsData).sort().reverse();
-    const PeriodFileBox = ({ type, label, desc, req }) => (
-      <div className={`relative border-2 border-dashed rounded-xl p-4 ${periodFiles[type] ? 'border-emerald-400 bg-emerald-950/30' : 'border-slate-600 hover:border-slate-400 bg-slate-800/30'}`}>
-        <input type="file" accept=".csv" onChange={(e) => handlePeriodFile(type, e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-        <div className="flex items-center gap-3">
-          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${periodFiles[type] ? 'bg-emerald-500' : 'bg-slate-700'}`}>
-            {periodFiles[type] ? <Check className="w-5 h-5 text-white" /> : <FileSpreadsheet className="w-5 h-5 text-slate-300" />}
+    const PeriodFileBoxLocal = ({ type, label, desc, req }) => {
+      const isMulti3PL = type === 'threepl';
+      const hasFile = isMulti3PL ? (periodFiles.threepl?.length > 0) : periodFiles[type];
+      const displayName = isMulti3PL ? (periodFileNames.threepl?.length > 0 ? `${periodFileNames.threepl.length} file(s)` : '') : periodFileNames[type];
+      
+      return (
+        <div className={`relative border-2 border-dashed rounded-xl p-4 ${hasFile ? 'border-emerald-400 bg-emerald-950/30' : 'border-slate-600 hover:border-slate-400 bg-slate-800/30'}`}>
+          <input type="file" accept=".csv" onChange={(e) => handlePeriodFile(type, e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${hasFile ? 'bg-emerald-500' : 'bg-slate-700'}`}>
+              {hasFile ? <Check className="w-5 h-5 text-white" /> : <FileSpreadsheet className="w-5 h-5 text-slate-300" />}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2"><span className="font-medium text-white text-sm">{label}</span>{req && <span className="text-xs text-rose-400">*</span>}{isMulti3PL && <span className="text-xs text-cyan-400">(+add more)</span>}</div>
+              {hasFile ? (
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-emerald-400 truncate">{displayName}</p>
+                  {isMulti3PL && periodFileNames.threepl?.length > 0 && (
+                    <button onClick={(e) => { e.stopPropagation(); clearPeriod3PLFiles(); }} className="text-xs text-rose-400 hover:text-rose-300">Clear</button>
+                  )}
+                </div>
+              ) : <p className="text-xs text-slate-500">{desc}</p>}
+            </div>
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2"><span className="font-medium text-white text-sm">{label}</span>{req && <span className="text-xs text-rose-400">*</span>}</div>
-            {periodFiles[type] ? <p className="text-xs text-emerald-400 truncate">{periodFileNames[type]}</p> : <p className="text-xs text-slate-500">{desc}</p>}
-          </div>
+          {isMulti3PL && periodFileNames.threepl?.length > 0 && (
+            <div className="mt-2 text-xs text-slate-400">
+              {periodFileNames.threepl.map((name, i) => <div key={i} className="truncate">• {name}</div>)}
+            </div>
+          )}
         </div>
-      </div>
-    );
+      );
+    };
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
         <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
@@ -1752,9 +1889,9 @@ if (supabase && isAuthReady && session && isLocked) {
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
             <h2 className="text-lg font-semibold text-white mb-4">Data Files</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <PeriodFileBox type="amazon" label="Amazon Report" desc="Full period CSV" req />
-              <PeriodFileBox type="shopify" label="Shopify Sales" desc="Full period CSV" req />
-              <PeriodFileBox type="threepl" label="3PL Costs" desc="Optional" />
+              <PeriodFileBoxLocal type="amazon" label="Amazon Report" desc="Full period CSV" req />
+              <PeriodFileBoxLocal type="shopify" label="Shopify Sales" desc="Full period CSV" req />
+              <PeriodFileBoxLocal type="threepl" label="3PL Costs" desc="Optional - click to add multiple" />
             </div>
           </div>
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -1777,9 +1914,120 @@ if (supabase && isAuthReady && session && isLocked) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+          {/* Period Reprocess Modal */}
+          {reprocessPeriod && (
+            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+              <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
+                <h2 className="text-xl font-bold text-white mb-2">Update Period: {allPeriodsData[reprocessPeriod]?.label}</h2>
+                <p className="text-slate-400 text-sm mb-4">Add or update 3PL costs and ad spend for this period</p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm text-slate-300 mb-2">3PL Cost Files (click multiple times to add)</label>
+                    <div className={`relative border-2 border-dashed rounded-xl p-4 ${periodFiles.threepl?.length > 0 ? 'border-emerald-400 bg-emerald-950/30' : 'border-slate-600 hover:border-slate-400 bg-slate-800/30'}`}>
+                      <input type="file" accept=".csv" onChange={(e) => handlePeriodFile('threepl', e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                      <div className="text-center">
+                        {periodFileNames.threepl?.length > 0 ? (
+                          <div>
+                            <p className="text-emerald-400 text-sm">{periodFileNames.threepl.length} file(s) selected</p>
+                            {periodFileNames.threepl.map((n, i) => <p key={i} className="text-xs text-slate-400 truncate">• {n}</p>)}
+                            <button onClick={(e) => { e.stopPropagation(); clearPeriod3PLFiles(); }} className="text-xs text-rose-400 mt-2">Clear all</button>
+                          </div>
+                        ) : (
+                          <p className="text-slate-500 text-sm">Click to add 3PL files</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-slate-300 mb-1">Meta Ad Spend</label>
+                      <input type="number" value={periodAdSpend.meta} onChange={(e) => setPeriodAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder={String(allPeriodsData[reprocessPeriod]?.shopify?.metaSpend || 0)} className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-300 mb-1">Google Ad Spend</label>
+                      <input type="number" value={periodAdSpend.google} onChange={(e) => setPeriodAdSpend(p => ({ ...p, google: e.target.value }))} placeholder={String(allPeriodsData[reprocessPeriod]?.shopify?.googleSpend || 0)} className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-3 mt-6">
+                  <button onClick={() => {
+                    const existing = allPeriodsData[reprocessPeriod];
+                    if (!existing) return;
+                    
+                    // Calculate new 3PL costs from uploaded files
+                    let newThreeplCost = existing.shopify?.threeplCosts || 0;
+                    const newBreakdown = { ...(existing.shopify?.threeplBreakdown || { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 }) };
+                    
+                    if (periodFiles.threepl?.length > 0) {
+                      newThreeplCost = 0;
+                      Object.keys(newBreakdown).forEach(k => newBreakdown[k] = 0);
+                      periodFiles.threepl.forEach(fileData => {
+                        fileData.forEach(r => {
+                          const charge = r['Charge On Invoice'] || '';
+                          const amount = parseFloat(r['Amount Total ($)'] || 0);
+                          newThreeplCost += amount;
+                          const chargeLower = charge.toLowerCase();
+                          if (chargeLower.includes('storage')) newBreakdown.storage += amount;
+                          else if (chargeLower.includes('shipping')) newBreakdown.shipping += amount;
+                          else if (chargeLower.includes('pick')) newBreakdown.pickFees += amount;
+                          else if (chargeLower.includes('box') || chargeLower.includes('mailer')) newBreakdown.boxCharges += amount;
+                          else if (chargeLower.includes('receiving')) newBreakdown.receiving += amount;
+                          else newBreakdown.other += amount;
+                        });
+                      });
+                    }
+                    
+                    // Update ad spend if provided
+                    const newMeta = periodAdSpend.meta ? parseFloat(periodAdSpend.meta) : (existing.shopify?.metaSpend || 0);
+                    const newGoogle = periodAdSpend.google ? parseFloat(periodAdSpend.google) : (existing.shopify?.googleSpend || 0);
+                    const newShopAds = newMeta + newGoogle;
+                    
+                    // Recalculate profit
+                    const shopRev = existing.shopify?.revenue || 0;
+                    const shopCogs = existing.shopify?.cogs || 0;
+                    const newShopProfit = shopRev - shopCogs - newThreeplCost - newShopAds;
+                    const amzProfit = existing.amazon?.netProfit || 0;
+                    const totalRev = existing.total?.revenue || 0;
+                    const newTotalProfit = amzProfit + newShopProfit;
+                    
+                    const updated = {
+                      ...allPeriodsData,
+                      [reprocessPeriod]: {
+                        ...existing,
+                        shopify: {
+                          ...existing.shopify,
+                          threeplCosts: newThreeplCost,
+                          threeplBreakdown: newBreakdown,
+                          metaSpend: newMeta,
+                          googleSpend: newGoogle,
+                          adSpend: newShopAds,
+                          netProfit: newShopProfit,
+                          netMargin: shopRev > 0 ? (newShopProfit / shopRev) * 100 : 0,
+                        },
+                        total: {
+                          ...existing.total,
+                          adSpend: (existing.amazon?.adSpend || 0) + newShopAds,
+                          netProfit: newTotalProfit,
+                          netMargin: totalRev > 0 ? (newTotalProfit / totalRev) * 100 : 0,
+                        }
+                      }
+                    };
+                    setAllPeriodsData(updated);
+                    savePeriods(updated);
+                    setReprocessPeriod(null);
+                    setPeriodFiles(p => ({ ...p, threepl: [] }));
+                    setPeriodFileNames(p => ({ ...p, threepl: [] }));
+                    setPeriodAdSpend({ meta: '', google: '' });
+                  }} className="flex-1 bg-teal-600 hover:bg-teal-500 text-white font-semibold py-2 rounded-xl">Update Period</button>
+                  <button onClick={() => { setReprocessPeriod(null); clearPeriod3PLFiles(); setPeriodAdSpend({ meta: '', google: '' }); }} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl">Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">{data.label}</h1><p className="text-slate-400">Period Performance</p></div>
             <div className="flex gap-2">
+              <button onClick={() => setReprocessPeriod(selectedPeriod)} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-1"><RefreshCw className="w-4 h-4" />Update 3PL/Ads</button>
               <button onClick={() => setView('period-upload')} className="bg-teal-700 hover:bg-teal-600 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-1"><Upload className="w-4 h-4" />New</button>
               <button onClick={() => deletePeriod(selectedPeriod)} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-lg text-sm"><Trash2 className="w-4 h-4" /></button>
             </div>
@@ -2289,14 +2537,38 @@ if (supabase && isAuthReady && session && isLocked) {
   // ==================== YEAR-OVER-YEAR VIEW ====================
   if (view === 'yoy') {
     const sortedWeeks = Object.keys(allWeeksData).sort();
-    const years = [...new Set(sortedWeeks.map(w => w.substring(0, 4)))].sort();
-    const currentYear = years[years.length - 1];
-    const previousYear = years.length > 1 ? years[years.length - 2] : null;
+    const weekYears = [...new Set(sortedWeeks.map(w => w.substring(0, 4)))].sort();
     
-    // Get year-to-date data for comparison
+    // Also check for annual periods (labeled as "2024", "2025", etc.)
+    const periodYears = Object.keys(allPeriodsData).filter(k => /^\d{4}$/.test(k)).sort();
+    const allYears = [...new Set([...weekYears, ...periodYears])].sort();
+    
+    const currentYear = allYears[allYears.length - 1];
+    const previousYear = allYears.length > 1 ? allYears[allYears.length - 2] : null;
+    
+    // Get year data - prioritize period data if available, otherwise use weekly
     const getYearData = (year) => {
+      // Check if we have a period for this year
+      if (allPeriodsData[year]) {
+        const p = allPeriodsData[year];
+        return {
+          source: 'period',
+          label: p.label,
+          weeks: 0,
+          revenue: p.total?.revenue || 0,
+          profit: p.total?.netProfit || 0,
+          units: p.total?.units || 0,
+          amazonRev: p.amazon?.revenue || 0,
+          shopifyRev: p.shopify?.revenue || 0,
+          adSpend: p.total?.adSpend || 0,
+          cogs: p.total?.cogs || 0,
+        };
+      }
+      // Fall back to weekly data
       const yearWeeks = sortedWeeks.filter(w => w.startsWith(year));
       return {
+        source: 'weekly',
+        label: `${year} (${yearWeeks.length} weeks)`,
         weeks: yearWeeks.length,
         revenue: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].total?.revenue || 0), 0),
         profit: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].total?.netProfit || 0), 0),
@@ -2308,10 +2580,10 @@ if (supabase && isAuthReady && session && isLocked) {
       };
     };
     
-    const currentYearData = getYearData(currentYear);
+    const currentYearData = currentYear ? getYearData(currentYear) : null;
     const previousYearData = previousYear ? getYearData(previousYear) : null;
     
-    // Month-over-month YoY comparison
+    // Month-over-month YoY comparison (only works with weekly data)
     const getMonthlyByYear = (year) => {
       const months = {};
       sortedWeeks.filter(w => w.startsWith(year)).forEach(w => {
@@ -2324,10 +2596,12 @@ if (supabase && isAuthReady && session && isLocked) {
       return months;
     };
     
-    const currentMonths = getMonthlyByYear(currentYear);
+    const currentMonths = currentYear ? getMonthlyByYear(currentYear) : {};
     const previousMonths = previousYear ? getMonthlyByYear(previousYear) : {};
     const allMonths = ['01','02','03','04','05','06','07','08','09','10','11','12'];
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    
+    const hasMonthlyData = Object.keys(currentMonths).length > 0 || Object.keys(previousMonths).length > 0;
     
     const calcYoYChange = (current, previous) => {
       if (!previous || previous === 0) return null;
@@ -2360,14 +2634,30 @@ if (supabase && isAuthReady && session && isLocked) {
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">📅 Year-over-Year Comparison</h1>
-            <p className="text-slate-400">{previousYear ? `Comparing ${currentYear} vs ${previousYear}` : `${currentYear} data (add previous year data to compare)`}</p>
+            <p className="text-slate-400">{previousYear && currentYear ? `Comparing ${currentYear} vs ${previousYear}` : (currentYear ? `${currentYear} data (add previous year data to compare)` : 'No data available - upload periods labeled as years (e.g., "2024", "2025")')}</p>
           </div>
           
+          {!currentYearData && (
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-8 text-center">
+              <p className="text-slate-400 mb-4">No year data found.</p>
+              <p className="text-slate-500 text-sm">To see YoY comparisons:</p>
+              <ul className="text-slate-500 text-sm mt-2 space-y-1">
+                <li>• Upload weekly data with dates, OR</li>
+                <li>• Create Periods labeled exactly as years (e.g., "2024", "2025")</li>
+              </ul>
+            </div>
+          )}
+          
+          {currentYearData && (
+          <>
           {/* Year Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             {/* Current Year */}
             <div className="bg-gradient-to-br from-violet-900/30 to-slate-800/50 rounded-xl border border-violet-500/30 p-5">
-              <h3 className="text-lg font-semibold text-violet-400 mb-4">{currentYear} Year-to-Date</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-violet-400">{currentYear}</h3>
+                <span className="text-xs px-2 py-1 bg-violet-500/20 text-violet-300 rounded">{currentYearData.source === 'period' ? 'Period Data' : 'Weekly Data'}</span>
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-slate-400 text-sm">Revenue</p>
@@ -2388,13 +2678,16 @@ if (supabase && isAuthReady && session && isLocked) {
                   </p>
                 </div>
               </div>
-              <p className="text-slate-500 text-sm mt-3">{currentYearData.weeks} weeks of data</p>
+              <p className="text-slate-500 text-sm mt-3">{currentYearData.source === 'period' ? currentYearData.label : `${currentYearData.weeks} weeks of data`}</p>
             </div>
             
             {/* Previous Year */}
             {previousYearData ? (
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-                <h3 className="text-lg font-semibold text-slate-400 mb-4">{previousYear} (Comparison)</h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-slate-400">{previousYear}</h3>
+                  <span className="text-xs px-2 py-1 bg-slate-600 text-slate-300 rounded">{previousYearData.source === 'period' ? 'Period Data' : 'Weekly Data'}</span>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-slate-400 text-sm">Revenue</p>
@@ -2427,8 +2720,8 @@ if (supabase && isAuthReady && session && isLocked) {
             )}
           </div>
           
-          {/* Monthly YoY Chart */}
-          {previousYear && (
+          {/* Monthly YoY Chart - only shows with weekly data */}
+          {previousYear && hasMonthlyData && (
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
               <h3 className="text-lg font-semibold text-white mb-4">Monthly Revenue: {currentYear} vs {previousYear}</h3>
               <div className="flex items-end gap-2 h-64">
@@ -2465,7 +2758,8 @@ if (supabase && isAuthReady && session && isLocked) {
             </div>
           )}
           
-          {/* Monthly Comparison Table */}
+          {/* Monthly Comparison Table - only shows with weekly data */}
+          {hasMonthlyData && (
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
             <h3 className="text-lg font-semibold text-white mb-4">Month-by-Month Breakdown</h3>
             <div className="overflow-x-auto">
@@ -2512,6 +2806,16 @@ if (supabase && isAuthReady && session && isLocked) {
               </table>
             </div>
           </div>
+          )}
+          
+          {!hasMonthlyData && (
+            <div className="bg-slate-800/30 rounded-xl border border-dashed border-slate-600 p-6 text-center">
+              <p className="text-slate-500">Monthly breakdown requires weekly data uploads.</p>
+              <p className="text-slate-600 text-sm mt-1">Period data shows annual totals only.</p>
+            </div>
+          )}
+          </>
+          )}
         </div>
       </div>
     );
