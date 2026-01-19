@@ -2237,13 +2237,38 @@ const savePeriods = async (d) => {
     };
   };
 
-  // Compare Amazon forecast vs actual results - comprehensive analysis
+  // Compare Amazon forecast vs actual results - comprehensive analysis with fuzzy matching
   const getAmazonForecastComparison = useMemo(() => {
     const comparisons = [];
     
+    // Helper to find best matching actual week (within 3 days)
+    const findMatchingActual = (forecastWeekKey) => {
+      // First try exact match
+      if (allWeeksData[forecastWeekKey]) {
+        return { weekKey: forecastWeekKey, actual: allWeeksData[forecastWeekKey], matchType: 'exact' };
+      }
+      
+      // Fuzzy match - look for weeks within 3 days
+      const forecastDate = new Date(forecastWeekKey + 'T00:00:00');
+      const weekKeys = Object.keys(allWeeksData);
+      
+      for (const weekKey of weekKeys) {
+        const actualDate = new Date(weekKey + 'T00:00:00');
+        const daysDiff = Math.abs((forecastDate - actualDate) / (1000 * 60 * 60 * 24));
+        
+        if (daysDiff <= 3) {
+          return { weekKey, actual: allWeeksData[weekKey], matchType: 'fuzzy', daysDiff };
+        }
+      }
+      
+      return null;
+    };
+    
     Object.entries(amazonForecasts).forEach(([weekKey, forecast]) => {
-      const actual = allWeeksData[weekKey];
-      if (actual && actual.amazon) {
+      const match = findMatchingActual(weekKey);
+      
+      if (match && match.actual && match.actual.amazon) {
+        const actual = match.actual;
         const forecastRev = forecast.totals.sales;
         const actualRev = actual.amazon.revenue || 0;
         const forecastUnits = forecast.totals.units;
@@ -2277,6 +2302,9 @@ const savePeriods = async (d) => {
         
         comparisons.push({
           weekEnding: weekKey,
+          actualWeekKey: match.weekKey,
+          matchType: match.matchType,
+          daysDiff: match.daysDiff || 0,
           uploadedAt: forecast.uploadedAt,
           forecast: {
             revenue: forecastRev,
@@ -2297,15 +2325,66 @@ const savePeriods = async (d) => {
             profit: actualProfit - forecastProfit,
             profitPercent: forecastProfit > 0 ? ((actualProfit - forecastProfit) / forecastProfit * 100) : 0,
           },
-          accuracy: forecastRev > 0 ? (100 - Math.abs((actualRev - forecastRev) / forecastRev * 100)) : 0,
+          accuracy: forecastRev > 0 ? Math.max(0, 100 - Math.abs((actualRev - forecastRev) / forecastRev * 100)) : 0,
           status: actualRev >= forecastRev ? 'beat' : 'missed',
           skuComparisons: skuComparisons.sort((a, b) => Math.abs(b.variance.salesPercent) - Math.abs(a.variance.salesPercent)),
+          // ML training data
+          mlFeatures: {
+            forecastWeek: weekKey,
+            forecastRevenue: forecastRev,
+            forecastUnits: forecastUnits,
+            actualRevenue: actualRev,
+            actualUnits: actualUnits,
+            error: actualRev - forecastRev,
+            errorPercent: forecastRev > 0 ? ((actualRev - forecastRev) / forecastRev * 100) : 0,
+            skuCount: forecast.skuCount || 0,
+            // Could add: day of week, month, season, etc.
+            month: new Date(weekKey).getMonth() + 1,
+            quarter: Math.ceil((new Date(weekKey).getMonth() + 1) / 3),
+          },
         });
       }
     });
     
     return comparisons.sort((a, b) => b.weekEnding.localeCompare(a.weekEnding));
   }, [amazonForecasts, allWeeksData]);
+  
+  // Get pending forecasts (uploaded but no matching actual yet)
+  const pendingForecasts = useMemo(() => {
+    const matched = new Set(getAmazonForecastComparison.map(c => c.weekEnding));
+    return Object.entries(amazonForecasts)
+      .filter(([weekKey]) => !matched.has(weekKey))
+      .map(([weekKey, forecast]) => ({
+        weekEnding: weekKey,
+        forecast,
+        isPast: new Date(weekKey) < new Date(),
+        daysUntil: Math.ceil((new Date(weekKey) - new Date()) / (1000 * 60 * 60 * 24)),
+      }))
+      .sort((a, b) => a.weekEnding.localeCompare(b.weekEnding));
+  }, [amazonForecasts, getAmazonForecastComparison]);
+  
+  // ML Training Data Export - accumulates all historical comparisons
+  const mlTrainingData = useMemo(() => {
+    if (getAmazonForecastComparison.length === 0) return null;
+    
+    return {
+      samples: getAmazonForecastComparison.map(c => c.mlFeatures),
+      summary: {
+        totalSamples: getAmazonForecastComparison.length,
+        avgError: getAmazonForecastComparison.reduce((s, c) => s + c.mlFeatures.errorPercent, 0) / getAmazonForecastComparison.length,
+        stdDev: Math.sqrt(
+          getAmazonForecastComparison.reduce((s, c) => {
+            const avg = getAmazonForecastComparison.reduce((s2, c2) => s2 + c2.mlFeatures.errorPercent, 0) / getAmazonForecastComparison.length;
+            return s + Math.pow(c.mlFeatures.errorPercent - avg, 2);
+          }, 0) / getAmazonForecastComparison.length
+        ),
+        // Bias: positive = Amazon under-forecasts, negative = Amazon over-forecasts
+        bias: getAmazonForecastComparison.reduce((s, c) => s + c.mlFeatures.errorPercent, 0) / getAmazonForecastComparison.length,
+        // Suggested correction factor
+        correctionFactor: 1 + (getAmazonForecastComparison.reduce((s, c) => s + c.mlFeatures.errorPercent, 0) / getAmazonForecastComparison.length / 100),
+      },
+    };
+  }, [getAmazonForecastComparison]);
   
   // Calculate rolling forecast accuracy metrics
   const forecastAccuracyMetrics = useMemo(() => {
@@ -3979,12 +4058,29 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       };
     });
     
-    const periodsSummary = Object.entries(allPeriodsData).map(([label, data]) => ({
-      period: label,
-      totalRevenue: data.total?.revenue || 0,
-      totalProfit: data.total?.netProfit || 0,
-      totalUnits: data.total?.units || 0,
-    }));
+    const periodsSummary = Object.entries(allPeriodsData).map(([label, data]) => {
+      const amz = data.amazon || {};
+      const shop = data.shopify || {};
+      return {
+        period: label,
+        label: data.label || label,
+        type: label.match(/^\d{4}$/) ? 'yearly' : label.match(/^q\d/i) ? 'quarterly' : 'monthly',
+        totalRevenue: data.total?.revenue || 0,
+        totalProfit: data.total?.netProfit || 0,
+        totalUnits: data.total?.units || 0,
+        totalCogs: data.total?.cogs || 0,
+        totalAdSpend: data.total?.adSpend || 0,
+        margin: data.total?.revenue > 0 ? ((data.total?.netProfit || 0) / data.total.revenue * 100) : 0,
+        amazonRevenue: amz.revenue || 0,
+        amazonProfit: amz.netProfit || 0,
+        amazonUnits: amz.units || 0,
+        shopifyRevenue: shop.revenue || 0,
+        shopifyProfit: shop.netProfit || 0,
+        shopifyUnits: shop.units || 0,
+        threeplCosts: shop.threeplCosts || 0,
+        skuCount: ((amz.skuData || []).length + (shop.skuData || []).length),
+      };
+    }).sort((a, b) => a.period.localeCompare(b.period));
     
     const skuWeeklyBreakdown = {};
     sortedWeeks.forEach(week => {
@@ -4208,6 +4304,67 @@ When user asks about a product type (e.g., "lip balm", "deodorant", "soap"), fin
 === WEEKLY DATA (most recent 12 weeks) ===
 ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
 
+=== PERIOD DATA (Quarterly/Monthly/Yearly Historical) ===
+${ctx.periodData.length > 0 ? `
+Historical periods tracked: ${ctx.periodData.length}
+${JSON.stringify(ctx.periodData)}
+
+PERIOD ANALYSIS:
+${(() => {
+  const yearly = ctx.periodData.filter(p => p.type === 'yearly');
+  const quarterly = ctx.periodData.filter(p => p.type === 'quarterly');
+  const monthly = ctx.periodData.filter(p => p.type === 'monthly');
+  
+  let analysis = '';
+  
+  if (yearly.length >= 2) {
+    const sorted = yearly.sort((a, b) => b.period.localeCompare(a.period));
+    const current = sorted[0];
+    const prior = sorted[1];
+    const yoyRevChange = prior.totalRevenue > 0 ? ((current.totalRevenue - prior.totalRevenue) / prior.totalRevenue * 100) : 0;
+    const yoyProfitChange = prior.totalProfit > 0 ? ((current.totalProfit - prior.totalProfit) / prior.totalProfit * 100) : 0;
+    analysis += \`
+YEAR-OVER-YEAR COMPARISON:
+- \${current.period}: Revenue $\${current.totalRevenue.toFixed(0)}, Profit $\${current.totalProfit.toFixed(0)}, Margin \${current.margin.toFixed(1)}%
+- \${prior.period}: Revenue $\${prior.totalRevenue.toFixed(0)}, Profit $\${prior.totalProfit.toFixed(0)}, Margin \${prior.margin.toFixed(1)}%
+- YoY Revenue Change: \${yoyRevChange >= 0 ? '+' : ''}\${yoyRevChange.toFixed(1)}%
+- YoY Profit Change: \${yoyProfitChange >= 0 ? '+' : ''}\${yoyProfitChange.toFixed(1)}%
+\`;
+  }
+  
+  if (quarterly.length >= 2) {
+    const sorted = quarterly.sort((a, b) => b.period.localeCompare(a.period));
+    analysis += \`
+QUARTERLY TREND (most recent):
+\${sorted.slice(0, 4).map(q => \`- \${q.label || q.period}: Revenue $\${q.totalRevenue.toFixed(0)}, Profit $\${q.totalProfit.toFixed(0)}, Margin \${q.margin.toFixed(1)}%\`).join('\\n')}
+\`;
+  }
+  
+  if (monthly.length >= 2) {
+    const sorted = monthly.sort((a, b) => b.period.localeCompare(a.period));
+    analysis += \`
+MONTHLY TREND (most recent):
+\${sorted.slice(0, 6).map(m => \`- \${m.label || m.period}: Revenue $\${m.totalRevenue.toFixed(0)}, Profit $\${m.totalProfit.toFixed(0)}, Margin \${m.margin.toFixed(1)}%\`).join('\\n')}
+\`;
+  }
+  
+  // Calculate averages
+  if (ctx.periodData.length > 0) {
+    const totalPeriodRevenue = ctx.periodData.reduce((s, p) => s + p.totalRevenue, 0);
+    const totalPeriodProfit = ctx.periodData.reduce((s, p) => s + p.totalProfit, 0);
+    const avgMargin = ctx.periodData.reduce((s, p) => s + p.margin, 0) / ctx.periodData.length;
+    analysis += \`
+PERIOD TOTALS:
+- Total Revenue (all periods): $\${totalPeriodRevenue.toFixed(0)}
+- Total Profit (all periods): $\${totalPeriodProfit.toFixed(0)}
+- Average Period Margin: \${avgMargin.toFixed(1)}%
+\`;
+  }
+  
+  return analysis;
+})()}
+` : 'No historical period data uploaded yet (quarterly/monthly/yearly)'}
+
 === WEEK NOTES (user annotations) ===
 ${notesData.length > 0 ? JSON.stringify(notesData) : 'No notes added'}
 
@@ -4264,6 +4421,19 @@ ${forecastAccuracyMetrics.bestWeek ? `- Best Predicted Week: ${forecastAccuracyM
 ${forecastAccuracyMetrics.worstWeek ? `- Worst Predicted Week: ${forecastAccuracyMetrics.worstWeek.weekEnding} (${forecastAccuracyMetrics.worstWeek.accuracy.toFixed(1)}% accurate)` : ''}
 ` : ''}
 
+${mlTrainingData ? `
+ML CORRECTION MODEL (based on ${mlTrainingData.summary.totalSamples} samples):
+- Amazon Bias: ${mlTrainingData.summary.bias > 0 ? 'Under-forecasts' : 'Over-forecasts'} by ${Math.abs(mlTrainingData.summary.bias).toFixed(1)}% on average
+- Correction Factor: ${mlTrainingData.summary.correctionFactor.toFixed(3)}x (multiply Amazon forecast by this)
+- Prediction Variance: ±${mlTrainingData.summary.stdDev.toFixed(1)}%
+- When user asks about expected revenue, apply correction: Amazon Forecast × ${mlTrainingData.summary.correctionFactor.toFixed(3)} = Adjusted Forecast
+` : ''}
+
+${pendingForecasts.length > 0 ? `
+PENDING FORECASTS (awaiting actual data):
+${pendingForecasts.map(pf => `- Week ${pf.weekEnding}: ${pf.forecast.totals.sales.toFixed(0)} forecasted (${pf.isPast ? 'PAST - needs actuals uploaded' : pf.daysUntil + ' days until week ends'})`).join('\n')}
+` : ''}
+
 === PRODUCTION PIPELINE (incoming inventory) ===
 ${productionPipeline.length > 0 ? `
 ${productionPipeline.length} production orders in pipeline (${formatNumber(productionPipeline.reduce((s, p) => s + (p.quantity || 0), 0))} total units):
@@ -4278,21 +4448,26 @@ ${JSON.stringify(productionPipeline.map(p => ({
 ` : 'No production orders in pipeline'}
 
 === WHAT YOU CAN HELP WITH ===
-- Analyze sales trends and patterns
-- Compare performance across weeks, months, products
-- Identify best/worst performing SKUs
+- Analyze sales trends and patterns (weekly, monthly, quarterly, yearly)
+- Year-over-year comparisons (2024 vs 2025, Q1 vs Q1, etc.)
+- Quarterly and monthly trend analysis
+- Compare performance across weeks, months, quarters, years, products
+- Identify best/worst performing SKUs and their trends over time
 - Track progress toward goals
 - Explain profit margins and calculations
-- Forecast future revenue (app forecast vs Amazon forecast)
+- Forecast future revenue based on historical trends
 - Compare Amazon's projections vs actual performance
 - Inventory planning recommendations
 - Answer questions about specific products by name or SKU
-- Provide insights on advertising effectiveness (TACOS, ROAS)
+- Provide insights on advertising effectiveness (TACOS, ROAS) and how it changes over time
 - Sales tax obligations by state
 - Upcoming bills and cash flow planning
 - Production pipeline tracking and timing
+- Seasonality analysis (which months/quarters perform best)
+- Channel mix analysis (Amazon vs Shopify trends)
+- Cost structure analysis (COGS, fees, ads as % of revenue over time)
 
-Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. If the user asks about data you don't have, let them know what they need to upload.`;
+Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. When comparing periods, always show the actual numbers and % change. If the user asks about data you don't have, let them know what they need to upload.`;
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -4959,6 +5134,57 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                       <button onClick={() => { setWeekEnding(lastWeekEnd); setUploadTab('weekly'); setView('upload'); }} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white flex items-center gap-2">
                         <Upload className="w-4 h-4" />Upload This Week
                       </button>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+              
+              {/* Check for weeks with missing 3PL or Ad data */}
+              {(() => {
+                const recentWeeks = Object.entries(allWeeksData)
+                  .sort((a, b) => b[0].localeCompare(a[0]))
+                  .slice(0, 4); // Check last 4 weeks
+                
+                const incompleteWeeks = recentWeeks.filter(([key, data]) => {
+                  const has3PL = data.shopify?.threeplCosts > 0;
+                  const hasAds = (data.shopify?.metaSpend > 0) || (data.shopify?.googleSpend > 0);
+                  return !has3PL || !hasAds;
+                });
+                
+                if (incompleteWeeks.length > 0) {
+                  return (
+                    <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="w-5 h-5 text-amber-400 mt-0.5" />
+                        <div className="flex-1">
+                          <p className="text-amber-300 font-medium mb-2">Some weeks have incomplete cost data</p>
+                          <div className="space-y-2">
+                            {incompleteWeeks.slice(0, 3).map(([key, data]) => {
+                              const missing = [];
+                              if (!data.shopify?.threeplCosts) missing.push('3PL');
+                              if (!data.shopify?.metaSpend && !data.shopify?.googleSpend) missing.push('Ads');
+                              return (
+                                <div key={key} className="flex items-center justify-between text-sm">
+                                  <span className="text-slate-400">
+                                    Week of {new Date(key + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                    <span className="text-amber-400/70 ml-2">— missing {missing.join(' & ')}</span>
+                                  </span>
+                                  <button 
+                                    onClick={() => { setSelectedWeek(key); setView('weekly'); }}
+                                    className="text-amber-400 hover:text-amber-300 text-xs underline"
+                                  >
+                                    Update
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {incompleteWeeks.length > 3 && (
+                            <p className="text-slate-500 text-xs mt-2">+ {incompleteWeeks.length - 3} more weeks</p>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   );
                 }
@@ -5723,12 +5949,40 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
               <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
-                <h2 className="text-xl font-bold text-white mb-4">Edit Shopify Ad Spend</h2>
+                <h2 className="text-xl font-bold text-white mb-2">Edit Ad Spend</h2>
                 <p className="text-slate-400 text-sm mb-4">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString()}</p>
-                <div className="space-y-4 mb-6">
-                  <div><label className="block text-sm text-slate-400 mb-2">Meta Ads</label><input type="number" value={editAdSpend.meta} onChange={(e) => setEditAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
-                  <div><label className="block text-sm text-slate-400 mb-2">Google Ads</label><input type="number" value={editAdSpend.google} onChange={(e) => setEditAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
+                
+                <div className="space-y-4 mb-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-blue-500"></span>Meta Ads (Facebook/Instagram)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">$</span>
+                      <input type="number" value={editAdSpend.meta} onChange={(e) => setEditAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl pl-8 pr-4 py-3 text-white" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-red-500"></span>Google Ads
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">$</span>
+                      <input type="number" value={editAdSpend.google} onChange={(e) => setEditAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl pl-8 pr-4 py-3 text-white" />
+                    </div>
+                  </div>
                 </div>
+                
+                {/* Total Summary */}
+                <div className="bg-slate-900/50 rounded-xl p-3 mb-6">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400">Total Ad Spend</span>
+                    <span className="text-white font-bold text-lg">{formatCurrency((parseFloat(editAdSpend.meta) || 0) + (parseFloat(editAdSpend.google) || 0))}</span>
+                  </div>
+                </div>
+                
+                <p className="text-slate-500 text-xs mb-4">💡 Tip: Amazon ad spend is included automatically from SKU Economics report</p>
+                
                 <div className="flex gap-3">
                   <button onClick={() => updateWeekAdSpend(selectedWeek, editAdSpend.meta, editAdSpend.google)} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-xl">Save</button>
                   <button onClick={() => setShowEditAdSpend(false)} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl">Cancel</button>
@@ -5742,14 +5996,59 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
               <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
                 <h2 className="text-xl font-bold text-white mb-4">Edit 3PL / Fulfillment Costs</h2>
                 <p className="text-slate-400 text-sm mb-4">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString()}</p>
-                <div className="mb-6">
-                  <label className="block text-sm text-slate-400 mb-2">3PL Total Cost</label>
-                  <input type="number" value={edit3PLCost} onChange={(e) => setEdit3PLCost(e.target.value)} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
-                  <p className="text-slate-500 text-xs mt-2">Enter total fulfillment costs for this week (shipping, pick & pack, storage, etc.)</p>
+                
+                {/* Option 1: Upload 3PL File */}
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Option 1: Upload 3PL Invoice</label>
+                  <div className={`relative border-2 border-dashed rounded-xl p-4 ${reprocessFiles.threepl ? 'border-teal-400 bg-teal-950/30' : 'border-slate-600 bg-slate-800/30'}`}>
+                    <input type="file" accept=".csv" onChange={(e) => {
+                      const file = e.target.files[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                          const parsed = parseCSV(ev.target.result);
+                          setReprocessFiles(p => ({ ...p, threepl: parsed }));
+                          setReprocessFileNames(p => ({ ...p, threepl: file.name }));
+                          // Auto-calculate cost from file
+                          const threeplData = parse3PLData(parsed);
+                          setEdit3PLCost(threeplData.metrics.totalCost.toString());
+                        };
+                        reader.readAsText(file);
+                      }
+                    }} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                    <div className="flex flex-col items-center gap-2">
+                      {reprocessFiles.threepl ? <Check className="w-6 h-6 text-teal-400" /> : <Upload className="w-6 h-6 text-slate-400" />}
+                      <span className={reprocessFiles.threepl ? 'text-teal-400 text-sm' : 'text-slate-400 text-sm'}>
+                        {reprocessFileNames.threepl || 'Click to upload 3PL CSV'}
+                      </span>
+                    </div>
+                  </div>
                 </div>
+                
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="flex-1 h-px bg-slate-700" />
+                  <span className="text-slate-500 text-sm">OR</span>
+                  <div className="flex-1 h-px bg-slate-700" />
+                </div>
+                
+                {/* Option 2: Enter Amount Manually */}
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Option 2: Enter Total Manually</label>
+                  <input type="number" value={edit3PLCost} onChange={(e) => setEdit3PLCost(e.target.value)} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+                  <p className="text-slate-500 text-xs mt-2">Total fulfillment costs (shipping, pick & pack, storage, etc.)</p>
+                </div>
+                
                 <div className="flex gap-3">
-                  <button onClick={() => updateWeek3PL(selectedWeek, edit3PLCost)} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-xl">Save</button>
-                  <button onClick={() => setShowEdit3PL(false)} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl">Cancel</button>
+                  <button onClick={() => {
+                    updateWeek3PL(selectedWeek, edit3PLCost);
+                    setReprocessFiles(p => ({ ...p, threepl: null }));
+                    setReprocessFileNames(p => ({ ...p, threepl: '' }));
+                  }} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-xl">Save</button>
+                  <button onClick={() => {
+                    setShowEdit3PL(false);
+                    setReprocessFiles(p => ({ ...p, threepl: null }));
+                    setReprocessFileNames(p => ({ ...p, threepl: '' }));
+                  }} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl">Cancel</button>
                 </div>
               </div>
             </div>
@@ -8358,7 +8657,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
                     <div className="p-4 border-b border-slate-700">
                       <h3 className="font-semibold text-white">Week-by-Week Comparison</h3>
-                      <p className="text-slate-400 text-sm">Forecast vs Actual for each week</p>
+                      <p className="text-slate-400 text-sm">Forecast vs Actual for each week {getAmazonForecastComparison.some(c => c.matchType === 'fuzzy') && '(includes fuzzy matches)'}</p>
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full">
@@ -8375,7 +8674,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <tbody>
                           {getAmazonForecastComparison.map(comp => (
                             <tr key={comp.weekEnding} className="border-t border-slate-700/50 hover:bg-slate-700/20">
-                              <td className="px-4 py-3 text-white">{new Date(comp.weekEnding + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                              <td className="px-4 py-3 text-white">
+                                {new Date(comp.weekEnding + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                {comp.matchType === 'fuzzy' && <span className="text-amber-400 text-xs ml-1">~</span>}
+                              </td>
                               <td className="px-4 py-3 text-right text-orange-400">{formatCurrency(comp.forecast.revenue)}</td>
                               <td className="px-4 py-3 text-right text-white font-medium">{formatCurrency(comp.actual.revenue)}</td>
                               <td className={`px-4 py-3 text-right font-medium ${comp.variance.revenuePercent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -8395,15 +8697,153 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       </table>
                     </div>
                   </div>
+                  
+                  {/* ML Insights Panel */}
+                  {mlTrainingData && (
+                    <div className="bg-gradient-to-r from-violet-900/30 to-indigo-900/30 rounded-2xl border border-violet-500/30 p-5">
+                      <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
+                        <Zap className="w-5 h-5 text-violet-400" />
+                        Machine Learning Insights
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+                        <div>
+                          <p className="text-slate-400">Training Samples</p>
+                          <p className="text-white font-semibold text-lg">{mlTrainingData.summary.totalSamples}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400">Amazon Bias</p>
+                          <p className={`font-semibold text-lg ${mlTrainingData.summary.bias > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {mlTrainingData.summary.bias > 0 ? 'Under-forecasts' : 'Over-forecasts'} by {Math.abs(mlTrainingData.summary.bias).toFixed(1)}%
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400">Suggested Multiplier</p>
+                          <p className="text-violet-400 font-semibold text-lg">{mlTrainingData.summary.correctionFactor.toFixed(3)}x</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400">Prediction Variance</p>
+                          <p className="text-white font-semibold text-lg">±{mlTrainingData.summary.stdDev.toFixed(1)}%</p>
+                        </div>
+                      </div>
+                      <p className="text-slate-500 text-xs mt-3">
+                        💡 Apply the multiplier to Amazon's forecast for a corrected prediction: Forecast × {mlTrainingData.summary.correctionFactor.toFixed(3)} = Adjusted Forecast
+                      </p>
+                    </div>
+                  )}
                 </>
               ) : (
-                <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-12 text-center">
-                  <Target className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-                  <h3 className="text-xl font-semibold text-white mb-2">No Forecast Data Yet</h3>
-                  <p className="text-slate-400 mb-4">Upload Amazon forecasts and actual sales data to see accuracy analysis</p>
-                  <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-white">
-                    Upload Amazon Forecast
-                  </button>
+                /* Show pending forecasts even when no matches yet */
+                <div className="space-y-6">
+                  {pendingForecasts.length > 0 && (
+                    <div className="bg-amber-900/20 rounded-2xl border border-amber-500/30 p-5">
+                      <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
+                        <Clock className="w-5 h-5 text-amber-400" />
+                        Pending Forecasts ({pendingForecasts.length})
+                      </h3>
+                      <p className="text-slate-400 text-sm mb-4">These forecasts are waiting for matching actual data</p>
+                      <div className="space-y-2">
+                        {pendingForecasts.map(pf => (
+                          <div key={pf.weekEnding} className="flex items-center justify-between bg-slate-800/50 rounded-lg p-3">
+                            <div>
+                              <p className="text-white font-medium">Week ending {new Date(pf.weekEnding + 'T00:00:00').toLocaleDateString()}</p>
+                              <p className="text-slate-400 text-sm">{formatCurrency(pf.forecast.totals.sales)} forecasted • {pf.forecast.skuCount} SKUs</p>
+                            </div>
+                            <div className="text-right">
+                              {pf.isPast ? (
+                                <span className="text-rose-400 text-sm">⏳ Awaiting actual data</span>
+                              ) : (
+                                <span className="text-amber-400 text-sm">{pf.daysUntil} days until week ends</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-8 text-center">
+                    <Target className="w-12 h-12 text-slate-600 mx-auto mb-4" />
+                    <h3 className="text-xl font-semibold text-white mb-2">No Matching Forecast & Actual Data Yet</h3>
+                    <p className="text-slate-400 mb-4">Upload actual weekly data for a forecasted week to see accuracy analysis</p>
+                    <p className="text-slate-500 text-sm mb-4">✨ Fuzzy matching enabled: weeks within 3 days will match automatically</p>
+                  
+                  {/* Debug info to help troubleshoot */}
+                  <div className="bg-slate-900/50 rounded-xl p-4 text-left max-w-lg mx-auto mb-4">
+                    <p className="text-slate-500 text-xs uppercase mb-3">Data Matching Status</p>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <p className="text-orange-400 font-medium mb-2">Forecast Weeks:</p>
+                        {Object.keys(amazonForecasts).length > 0 ? (
+                          <ul className="text-slate-400 space-y-1">
+                            {Object.keys(amazonForecasts).sort().map(k => {
+                              // Check fuzzy match
+                              let matchInfo = null;
+                              for (const ak of Object.keys(allWeeksData)) {
+                                const diff = Math.abs((new Date(k + 'T00:00:00') - new Date(ak + 'T00:00:00')) / (1000*60*60*24));
+                                if (diff <= 3) {
+                                  matchInfo = { key: ak, diff: Math.round(diff) };
+                                  break;
+                                }
+                              }
+                              return (
+                                <li key={k} className="flex items-center gap-1">
+                                  {matchInfo ? (
+                                    <span className="text-emerald-400">✓</span>
+                                  ) : (
+                                    <span className="text-slate-600">○</span>
+                                  )}
+                                  <span>{k}</span>
+                                  {matchInfo && matchInfo.diff > 0 && (
+                                    <span className="text-emerald-400/70 text-xs">(~{matchInfo.diff}d)</span>
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        ) : <p className="text-slate-500">None</p>}
+                      </div>
+                      <div>
+                        <p className="text-blue-400 font-medium mb-2">Actual Weeks:</p>
+                        {Object.keys(allWeeksData).length > 0 ? (
+                          <ul className="text-slate-400 space-y-1">
+                            {Object.keys(allWeeksData).sort().reverse().slice(0, 6).map(k => {
+                              // Check if matched to a forecast
+                              let matchInfo = null;
+                              for (const fk of Object.keys(amazonForecasts)) {
+                                const diff = Math.abs((new Date(k + 'T00:00:00') - new Date(fk + 'T00:00:00')) / (1000*60*60*24));
+                                if (diff <= 3) {
+                                  matchInfo = { key: fk, diff: Math.round(diff) };
+                                  break;
+                                }
+                              }
+                              return (
+                                <li key={k} className="flex items-center gap-1">
+                                  {matchInfo ? (
+                                    <span className="text-emerald-400">✓</span>
+                                  ) : (
+                                    <span className="text-slate-600">○</span>
+                                  )}
+                                  <span>{k}</span>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        ) : <p className="text-slate-500">None</p>}
+                      </div>
+                    </div>
+                    <p className="text-slate-500 text-xs mt-3 pt-3 border-t border-slate-700">
+                      ✓ = Has match within 3 days • ○ = No match found
+                    </p>
+                  </div>
+                  
+                  <div className="flex gap-3 justify-center">
+                    <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-white">
+                      Upload Forecast
+                    </button>
+                    <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white">
+                      Upload Weekly Data
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -8686,9 +9126,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
   if (view === 'profitability') {
     const sortedWeeks = Object.keys(allWeeksData).sort();
     const recentWeeks = sortedWeeks.slice(-4);
+    const olderWeeks = sortedWeeks.slice(-8, -4);
     
-    // Aggregate data
-    const totals = { revenue: 0, cogs: 0, amazonFees: 0, threeplCosts: 0, adSpend: 0, profit: 0 };
+    // Aggregate data for recent 4 weeks
+    const totals = { revenue: 0, cogs: 0, amazonFees: 0, threeplCosts: 0, adSpend: 0, profit: 0, units: 0, returns: 0 };
     const weeklyBreakdown = [];
     
     recentWeeks.forEach(w => {
@@ -8699,6 +9140,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       const threepl = week.shopify?.threeplCosts || 0;
       const ads = week.total?.adSpend || 0;
       const profit = week.total?.netProfit || 0;
+      const units = week.total?.units || 0;
+      const returns = week.amazon?.returns || 0;
       
       totals.revenue += rev;
       totals.cogs += cogs;
@@ -8706,8 +9149,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       totals.threeplCosts += threepl;
       totals.adSpend += ads;
       totals.profit += profit;
+      totals.units += units;
+      totals.returns += returns;
       
-      weeklyBreakdown.push({ week: w, revenue: rev, cogs, amazonFees: amzFees, threeplCosts: threepl, adSpend: ads, profit });
+      weeklyBreakdown.push({ week: w, revenue: rev, cogs, amazonFees: amzFees, threeplCosts: threepl, adSpend: ads, profit, units, returns, margin: rev > 0 ? (profit/rev)*100 : 0 });
+    });
+    
+    // Calculate prior period for comparison
+    const priorTotals = { revenue: 0, profit: 0, cogs: 0, adSpend: 0 };
+    olderWeeks.forEach(w => {
+      const week = allWeeksData[w];
+      priorTotals.revenue += week.total?.revenue || 0;
+      priorTotals.profit += week.total?.netProfit || 0;
+      priorTotals.cogs += week.total?.cogs || 0;
+      priorTotals.adSpend += week.total?.adSpend || 0;
     });
     
     // Calculate percentages
@@ -8718,6 +9173,57 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       adSpend: totals.revenue > 0 ? (totals.adSpend / totals.revenue) * 100 : 0,
       profit: totals.revenue > 0 ? (totals.profit / totals.revenue) * 100 : 0,
     };
+    
+    // Prior period percentages
+    const priorPcts = {
+      cogs: priorTotals.revenue > 0 ? (priorTotals.cogs / priorTotals.revenue) * 100 : 0,
+      profit: priorTotals.revenue > 0 ? (priorTotals.profit / priorTotals.revenue) * 100 : 0,
+      adSpend: priorTotals.revenue > 0 ? (priorTotals.adSpend / priorTotals.revenue) * 100 : 0,
+    };
+    
+    // Calculate key metrics
+    const avgOrderValue = totals.units > 0 ? totals.revenue / totals.units : 0;
+    const profitPerUnit = totals.units > 0 ? totals.profit / totals.units : 0;
+    const returnRate = (totals.units + totals.returns) > 0 ? (totals.returns / (totals.units + totals.returns)) * 100 : 0;
+    const grossMargin = totals.revenue > 0 ? ((totals.revenue - totals.cogs) / totals.revenue) * 100 : 0;
+    const operatingMargin = totals.revenue > 0 ? ((totals.revenue - totals.cogs - totals.amazonFees - totals.threeplCosts) / totals.revenue) * 100 : 0;
+    
+    // Identify biggest cost driver
+    const costDrivers = [
+      { name: 'COGS', value: totals.cogs, pct: pcts.cogs },
+      { name: 'Amazon Fees', value: totals.amazonFees, pct: pcts.amazonFees },
+      { name: '3PL Costs', value: totals.threeplCosts, pct: pcts.threeplCosts },
+      { name: 'Ad Spend', value: totals.adSpend, pct: pcts.adSpend },
+    ].sort((a, b) => b.value - a.value);
+    
+    // SKU-level profitability
+    const skuProfitability = [];
+    recentWeeks.forEach(w => {
+      const week = allWeeksData[w];
+      [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])].forEach(s => {
+        const existing = skuProfitability.find(x => x.sku === s.sku);
+        const profit = s.netProceeds !== undefined ? s.netProceeds : (s.netSales || 0) - (s.cogs || 0);
+        const revenue = s.netSales || 0;
+        if (existing) {
+          existing.revenue += revenue;
+          existing.profit += profit;
+          existing.units += s.unitsSold || 0;
+        } else {
+          skuProfitability.push({ sku: s.sku, name: s.name || '', revenue, profit, units: s.unitsSold || 0 });
+        }
+      });
+    });
+    
+    // Calculate margin and sort
+    const skuWithMargins = skuProfitability.map(s => ({
+      ...s,
+      margin: s.revenue > 0 ? (s.profit / s.revenue) * 100 : 0,
+      profitPerUnit: s.units > 0 ? s.profit / s.units : 0,
+    })).filter(s => s.revenue > 100); // Filter out tiny SKUs
+    
+    const topProfitSkus = [...skuWithMargins].sort((a, b) => b.profit - a.profit).slice(0, 5);
+    const worstMarginSkus = [...skuWithMargins].sort((a, b) => a.margin - b.margin).slice(0, 5);
+    const bestMarginSkus = [...skuWithMargins].sort((a, b) => b.margin - a.margin).slice(0, 5);
     
     // Waterfall segments
     const waterfall = [
@@ -8732,14 +9238,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const maxVal = Math.max(totals.revenue, Math.abs(totals.profit));
     
     // Cost trends over time
-    const costTrends = sortedWeeks.slice(-8).map(w => {
+    const costTrends = sortedWeeks.slice(-12).map(w => {
       const week = allWeeksData[w];
       const rev = week.total?.revenue || 1;
       return {
         week: w,
+        revenue: week.total?.revenue || 0,
         cogsPct: ((week.total?.cogs || 0) / rev) * 100,
         adsPct: ((week.total?.adSpend || 0) / rev) * 100,
         feesPct: (((week.amazon?.fees || 0) + (week.shopify?.threeplCosts || 0)) / rev) * 100,
+        margin: ((week.total?.netProfit || 0) / rev) * 100,
       };
     });
     
@@ -8751,7 +9259,29 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">💰 Profitability Deep Dive</h1>
-            <p className="text-slate-400">Understand where your money goes (Last 4 weeks)</p>
+            <p className="text-slate-400">Understand where your money goes (Last {recentWeeks.length} weeks: {recentWeeks.length > 0 ? new Date(recentWeeks[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''} - {recentWeeks.length > 0 ? new Date(recentWeeks[recentWeeks.length-1] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''})</p>
+          </div>
+          
+          {/* Key Insights Alert */}
+          <div className="bg-gradient-to-r from-indigo-900/40 to-violet-900/40 border border-indigo-500/30 rounded-xl p-4 mb-6">
+            <h3 className="text-indigo-300 font-semibold mb-2 flex items-center gap-2"><Zap className="w-4 h-4" />Key Insights</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+              <div>
+                <p className="text-slate-400">Biggest Cost Driver</p>
+                <p className="text-white font-semibold">{costDrivers[0]?.name}: {costDrivers[0]?.pct.toFixed(1)}% of revenue</p>
+              </div>
+              <div>
+                <p className="text-slate-400">Profit Per Unit</p>
+                <p className={`font-semibold ${profitPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(profitPerUnit)}</p>
+              </div>
+              <div>
+                <p className="text-slate-400">Margin Trend vs Prior 4 Weeks</p>
+                <p className={`font-semibold flex items-center gap-1 ${pcts.profit >= priorPcts.profit ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {pcts.profit >= priorPcts.profit ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                  {pcts.profit >= priorPcts.profit ? '+' : ''}{(pcts.profit - priorPcts.profit).toFixed(1)}%
+                </p>
+              </div>
+            </div>
           </div>
           
           {/* Profit Waterfall */}
@@ -8774,12 +9304,37 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             </div>
           </div>
           
+          {/* Margin Metrics Row */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm">Gross Margin</p>
+              <p className="text-2xl font-bold text-white">{grossMargin.toFixed(1)}%</p>
+              <p className="text-slate-500 text-xs">Revenue - COGS</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm">Operating Margin</p>
+              <p className="text-2xl font-bold text-white">{operatingMargin.toFixed(1)}%</p>
+              <p className="text-slate-500 text-xs">Before ad spend</p>
+            </div>
+            <div className="bg-gradient-to-br from-emerald-900/30 to-slate-800/50 rounded-xl border border-emerald-500/30 p-4">
+              <p className="text-slate-400 text-sm">Net Margin</p>
+              <p className={`text-2xl font-bold ${pcts.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{pcts.profit.toFixed(1)}%</p>
+              <p className="text-slate-500 text-xs">After all costs</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm">Return Rate</p>
+              <p className={`text-2xl font-bold ${returnRate < 5 ? 'text-emerald-400' : returnRate < 10 ? 'text-amber-400' : 'text-rose-400'}`}>{returnRate.toFixed(1)}%</p>
+              <p className="text-slate-500 text-xs">{totals.returns} returns</p>
+            </div>
+          </div>
+          
           {/* Cost Breakdown Cards */}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
               <p className="text-slate-400 text-sm">COGS</p>
               <p className="text-xl font-bold text-white">{formatCurrency(totals.cogs)}</p>
               <p className="text-rose-400 text-sm">{pcts.cogs.toFixed(1)}% of revenue</p>
+              {priorPcts.cogs > 0 && <p className={`text-xs ${pcts.cogs <= priorPcts.cogs ? 'text-emerald-400' : 'text-rose-400'}`}>{pcts.cogs <= priorPcts.cogs ? '↓' : '↑'} vs prior</p>}
             </div>
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
               <p className="text-slate-400 text-sm">Amazon Fees</p>
@@ -8792,9 +9347,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               <p className="text-blue-400 text-sm">{pcts.threeplCosts.toFixed(1)}% of revenue</p>
             </div>
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-              <p className="text-slate-400 text-sm">Ad Spend</p>
+              <p className="text-slate-400 text-sm">Ad Spend (TACOS)</p>
               <p className="text-xl font-bold text-white">{formatCurrency(totals.adSpend)}</p>
               <p className="text-purple-400 text-sm">{pcts.adSpend.toFixed(1)}% of revenue</p>
+              {priorPcts.adSpend > 0 && <p className={`text-xs ${pcts.adSpend <= priorPcts.adSpend ? 'text-emerald-400' : 'text-rose-400'}`}>{pcts.adSpend <= priorPcts.adSpend ? '↓' : '↑'} vs prior</p>}
             </div>
             <div className="bg-gradient-to-br from-emerald-900/30 to-slate-800/50 rounded-xl border border-emerald-500/30 p-4">
               <p className="text-slate-400 text-sm">Net Profit</p>
@@ -8803,32 +9359,137 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             </div>
           </div>
           
-          {/* Cost % Trends */}
+          {/* SKU Profitability Insights */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+            {/* Top Profit SKUs */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+              <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-amber-400" />Top Profit Generators
+              </h3>
+              <div className="space-y-2">
+                {topProfitSkus.map((s, i) => (
+                  <div key={s.sku} className="flex justify-between items-center text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="text-amber-400 font-bold">#{i+1}</span>
+                      <span className="text-white truncate max-w-[120px]">{s.name || s.sku}</span>
+                    </div>
+                    <span className="text-emerald-400 font-semibold">{formatCurrency(s.profit)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            {/* Best Margin SKUs */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+              <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-emerald-400" />Best Margins
+              </h3>
+              <div className="space-y-2">
+                {bestMarginSkus.map((s, i) => (
+                  <div key={s.sku} className="flex justify-between items-center text-sm">
+                    <span className="text-white truncate max-w-[150px]">{s.name || s.sku}</span>
+                    <span className="text-emerald-400 font-semibold">{s.margin.toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            {/* Worst Margin SKUs */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+              <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-rose-400" />Margin Opportunities
+              </h3>
+              <div className="space-y-2">
+                {worstMarginSkus.map((s, i) => (
+                  <div key={s.sku} className="flex justify-between items-center text-sm">
+                    <span className="text-white truncate max-w-[150px]">{s.name || s.sku}</span>
+                    <span className={`font-semibold ${s.margin < 0 ? 'text-rose-400' : 'text-amber-400'}`}>{s.margin.toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-slate-500 text-xs mt-2">Consider raising prices or cutting ad spend</p>
+            </div>
+          </div>
+          
+          {/* Weekly Breakdown Table */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">Cost % of Revenue Over Time</h3>
+            <h3 className="text-lg font-semibold text-white mb-4">Weekly Breakdown</h3>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-700">
                     <th className="text-left text-slate-400 py-2">Week</th>
-                    <th className="text-right text-slate-400 py-2">COGS %</th>
-                    <th className="text-right text-slate-400 py-2">Ads %</th>
-                    <th className="text-right text-slate-400 py-2">Fees %</th>
+                    <th className="text-right text-slate-400 py-2">Revenue</th>
+                    <th className="text-right text-slate-400 py-2">COGS</th>
+                    <th className="text-right text-slate-400 py-2">Fees</th>
+                    <th className="text-right text-slate-400 py-2">3PL</th>
+                    <th className="text-right text-slate-400 py-2">Ads</th>
+                    <th className="text-right text-slate-400 py-2">Profit</th>
+                    <th className="text-right text-slate-400 py-2">Margin</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {costTrends.map(t => (
-                    <tr key={t.week} className="border-b border-slate-700/50">
-                      <td className="py-2 text-white">{new Date(t.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
-                      <td className="py-2 text-right text-rose-400">{t.cogsPct.toFixed(1)}%</td>
-                      <td className="py-2 text-right text-purple-400">{t.adsPct.toFixed(1)}%</td>
-                      <td className="py-2 text-right text-orange-400">{t.feesPct.toFixed(1)}%</td>
+                  {weeklyBreakdown.map(w => (
+                    <tr key={w.week} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                      <td className="py-2 text-white">{new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                      <td className="py-2 text-right text-white">{formatCurrency(w.revenue)}</td>
+                      <td className="py-2 text-right text-rose-400">{formatCurrency(w.cogs)}</td>
+                      <td className="py-2 text-right text-orange-400">{formatCurrency(w.amazonFees)}</td>
+                      <td className="py-2 text-right text-blue-400">{formatCurrency(w.threeplCosts)}</td>
+                      <td className="py-2 text-right text-purple-400">{formatCurrency(w.adSpend)}</td>
+                      <td className={`py-2 text-right font-semibold ${w.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(w.profit)}</td>
+                      <td className={`py-2 text-right ${w.margin >= 20 ? 'text-emerald-400' : w.margin >= 10 ? 'text-amber-400' : 'text-rose-400'}`}>{w.margin.toFixed(1)}%</td>
                     </tr>
                   ))}
                 </tbody>
+                <tfoot className="border-t-2 border-slate-600">
+                  <tr className="font-semibold">
+                    <td className="py-2 text-white">Total</td>
+                    <td className="py-2 text-right text-white">{formatCurrency(totals.revenue)}</td>
+                    <td className="py-2 text-right text-rose-400">{formatCurrency(totals.cogs)}</td>
+                    <td className="py-2 text-right text-orange-400">{formatCurrency(totals.amazonFees)}</td>
+                    <td className="py-2 text-right text-blue-400">{formatCurrency(totals.threeplCosts)}</td>
+                    <td className="py-2 text-right text-purple-400">{formatCurrency(totals.adSpend)}</td>
+                    <td className={`py-2 text-right ${totals.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(totals.profit)}</td>
+                    <td className={`py-2 text-right ${pcts.profit >= 20 ? 'text-emerald-400' : pcts.profit >= 10 ? 'text-amber-400' : 'text-rose-400'}`}>{pcts.profit.toFixed(1)}%</td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           </div>
+          
+          {/* Cost % Trends Chart */}
+          {costTrends.length >= 4 && (
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+              <h3 className="text-lg font-semibold text-white mb-4">Margin Trend Over Time ({costTrends.length} weeks)</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700">
+                      <th className="text-left text-slate-400 py-2">Week</th>
+                      <th className="text-right text-slate-400 py-2">Revenue</th>
+                      <th className="text-right text-slate-400 py-2">COGS %</th>
+                      <th className="text-right text-slate-400 py-2">Ads %</th>
+                      <th className="text-right text-slate-400 py-2">Fees %</th>
+                      <th className="text-right text-slate-400 py-2">Net Margin</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {costTrends.map(t => (
+                      <tr key={t.week} className="border-b border-slate-700/50">
+                        <td className="py-2 text-white">{new Date(t.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                        <td className="py-2 text-right text-white">{formatCurrency(t.revenue)}</td>
+                        <td className="py-2 text-right text-rose-400">{t.cogsPct.toFixed(1)}%</td>
+                        <td className="py-2 text-right text-purple-400">{t.adsPct.toFixed(1)}%</td>
+                        <td className="py-2 text-right text-orange-400">{t.feesPct.toFixed(1)}%</td>
+                        <td className={`py-2 text-right font-semibold ${t.margin >= 20 ? 'text-emerald-400' : t.margin >= 10 ? 'text-amber-400' : t.margin >= 0 ? 'text-white' : 'text-rose-400'}`}>{t.margin.toFixed(1)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
           
           {/* Break-even Analysis */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
@@ -8836,24 +9497,33 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
                 <p className="text-slate-400 text-sm mb-2">Your average costs are <span className="text-white font-semibold">{(100 - pcts.profit).toFixed(1)}%</span> of revenue</p>
-                <p className="text-slate-400 text-sm mb-2">To break even, you need <span className="text-emerald-400 font-semibold">{formatCurrency(totals.cogs + totals.amazonFees + totals.threeplCosts + totals.adSpend)}</span> in revenue</p>
-                <p className="text-slate-400 text-sm">Every <span className="text-white font-semibold">$100</span> in revenue generates <span className={`font-semibold ${pcts.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(pcts.profit)}</span> profit</p>
+                <p className="text-slate-400 text-sm mb-2">For every <span className="text-white font-semibold">$1,000</span> in revenue, you keep <span className={`font-semibold ${pcts.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(pcts.profit * 10)}</span></p>
+                <p className="text-slate-400 text-sm mb-4">Average Order Value: <span className="text-white font-semibold">{formatCurrency(avgOrderValue)}</span></p>
+                
+                <div className="bg-slate-900/50 rounded-lg p-4">
+                  <p className="text-white font-semibold mb-2">🎯 To increase margin by 5%:</p>
+                  <ul className="text-slate-400 text-sm space-y-1">
+                    <li>• Reduce COGS by {formatCurrency(totals.revenue * 0.05)} (negotiate suppliers)</li>
+                    <li>• Cut ad spend by {((totals.adSpend * 0.05 / totals.revenue) * 100 / pcts.adSpend * 100).toFixed(0)}% (optimize targeting)</li>
+                    <li>• Increase prices by ~{(5 / (100 - pcts.profit) * 100).toFixed(1)}%</li>
+                  </ul>
+                </div>
               </div>
               <div className="bg-slate-900/50 rounded-lg p-4">
                 <p className="text-slate-500 text-xs uppercase mb-2">Revenue Breakdown</p>
-                <div className="h-4 bg-slate-700 rounded-full overflow-hidden flex">
+                <div className="h-6 bg-slate-700 rounded-full overflow-hidden flex mb-2">
                   <div className="bg-rose-500 h-full" style={{ width: `${pcts.cogs}%` }} title={`COGS: ${pcts.cogs.toFixed(1)}%`} />
                   <div className="bg-orange-500 h-full" style={{ width: `${pcts.amazonFees}%` }} title={`Fees: ${pcts.amazonFees.toFixed(1)}%`} />
                   <div className="bg-blue-500 h-full" style={{ width: `${pcts.threeplCosts}%` }} title={`3PL: ${pcts.threeplCosts.toFixed(1)}%`} />
                   <div className="bg-purple-500 h-full" style={{ width: `${pcts.adSpend}%` }} title={`Ads: ${pcts.adSpend.toFixed(1)}%`} />
                   <div className={`${pcts.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-600'} h-full`} style={{ width: `${Math.abs(pcts.profit)}%` }} />
                 </div>
-                <div className="flex flex-wrap gap-3 mt-3 text-xs">
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-rose-500 rounded" />COGS</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-orange-500 rounded" />Fees</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-500 rounded" />3PL</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-purple-500 rounded" />Ads</span>
-                  <span className="flex items-center gap-1"><span className={`w-2 h-2 ${pcts.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-600'} rounded`} />Profit</span>
+                <div className="flex flex-wrap gap-3 text-xs">
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-rose-500 rounded" />COGS {pcts.cogs.toFixed(0)}%</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-orange-500 rounded" />Fees {pcts.amazonFees.toFixed(0)}%</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-500 rounded" />3PL {pcts.threeplCosts.toFixed(0)}%</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-purple-500 rounded" />Ads {pcts.adSpend.toFixed(0)}%</span>
+                  <span className="flex items-center gap-1"><span className={`w-2 h-2 ${pcts.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-600'} rounded`} />Profit {pcts.profit.toFixed(0)}%</span>
                 </div>
               </div>
             </div>
