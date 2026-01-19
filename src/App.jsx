@@ -387,6 +387,11 @@ const handleLogout = async () => {
   const [invoiceForm, setInvoiceForm] = useState({ vendor: '', description: '', amount: '', dueDate: '', recurring: false, frequency: 'monthly', category: 'operations' });
   const [processingPdf, setProcessingPdf] = useState(false);
   
+  // Data Validation
+  const [dataValidationWarnings, setDataValidationWarnings] = useState([]);
+  const [showValidationModal, setShowValidationModal] = useState(false);
+  const [pendingProcessAction, setPendingProcessAction] = useState(null);
+  
   // Amazon Forecasts (from Amazon's SKU Economics forecast reports)
   const [amazonForecasts, setAmazonForecasts] = useState(() => {
     try { return JSON.parse(localStorage.getItem(AMAZON_FORECAST_KEY)) || {}; } catch { return {}; }
@@ -1195,10 +1200,247 @@ const savePeriods = async (d) => {
     setFiles(p => ({ ...p, cogs: null })); setFileNames(p => ({ ...p, cogs: '' })); setShowCogsManager(false);
   }, [files.cogs]);
 
+  // Data Validation Function
+  const validateUploadData = useCallback((type, data) => {
+    const warnings = [];
+    const errors = [];
+    
+    if (type === 'amazon' && data) {
+      // Check for required columns
+      const requiredCols = ['MSKU', 'Net sales', 'Units sold'];
+      const sampleRow = data[0] || {};
+      const missingCols = requiredCols.filter(col => !(col in sampleRow));
+      if (missingCols.length > 0) {
+        errors.push({ type: 'error', message: `Missing required columns: ${missingCols.join(', ')}`, detail: 'Make sure you downloaded the SKU Economics report' });
+      }
+      
+      // Check for data quality
+      let negativeRevenue = 0, zeroUnits = 0, missingSku = 0, totalRows = 0;
+      data.forEach(row => {
+        totalRows++;
+        const revenue = parseFloat(row['Net sales'] || 0);
+        const units = parseInt(row['Units sold'] || 0);
+        const sku = row['MSKU'] || '';
+        
+        if (revenue < 0) negativeRevenue++;
+        if (units === 0 && revenue > 0) zeroUnits++;
+        if (!sku && (units > 0 || revenue > 0)) missingSku++;
+      });
+      
+      if (negativeRevenue > 0) {
+        warnings.push({ type: 'warning', message: `${negativeRevenue} rows have negative revenue`, detail: 'This may be due to refunds - usually OK' });
+      }
+      if (zeroUnits > totalRows * 0.5 && totalRows > 5) {
+        warnings.push({ type: 'warning', message: `${zeroUnits} of ${totalRows} rows have 0 units`, detail: 'Check if this is the correct date range' });
+      }
+      if (missingSku > 0) {
+        warnings.push({ type: 'warning', message: `${missingSku} rows missing SKU`, detail: 'These rows will be skipped' });
+      }
+      if (totalRows === 0) {
+        errors.push({ type: 'error', message: 'No data rows found', detail: 'The file appears to be empty' });
+      }
+      if (totalRows < 3 && totalRows > 0) {
+        warnings.push({ type: 'info', message: `Only ${totalRows} SKUs found`, detail: 'This seems low - verify the date range' });
+      }
+    }
+    
+    if (type === 'shopify' && data) {
+      // Check for required columns
+      const requiredCols = ['Product variant SKU', 'Net sales', 'Net items sold'];
+      const sampleRow = data[0] || {};
+      const missingCols = requiredCols.filter(col => !(col in sampleRow));
+      if (missingCols.length > 0) {
+        errors.push({ type: 'error', message: `Missing required columns: ${missingCols.join(', ')}`, detail: 'Make sure you downloaded Sales by product variant SKU' });
+      }
+      
+      // Check data quality
+      let negativeRevenue = 0, missingSku = 0, totalRows = 0;
+      data.forEach(row => {
+        totalRows++;
+        const revenue = parseFloat(row['Net sales'] || 0);
+        const sku = row['Product variant SKU'] || '';
+        
+        if (revenue < 0) negativeRevenue++;
+        if (!sku && revenue !== 0) missingSku++;
+      });
+      
+      if (negativeRevenue > 0) {
+        warnings.push({ type: 'warning', message: `${negativeRevenue} rows have negative revenue`, detail: 'This may be due to refunds - usually OK' });
+      }
+      if (missingSku > 0) {
+        warnings.push({ type: 'warning', message: `${missingSku} rows missing SKU`, detail: 'These rows will be grouped as unknown' });
+      }
+      if (totalRows === 0) {
+        errors.push({ type: 'error', message: 'No data rows found', detail: 'The file appears to be empty' });
+      }
+    }
+    
+    if (type === 'cogs' && data) {
+      let missingCost = 0, negativeCost = 0, zeroCost = 0, totalRows = 0;
+      data.forEach(row => {
+        const sku = row['SKU'] || row['sku'] || row['MSKU'] || row['Product variant SKU'] || '';
+        const cost = parseFloat(row['Cost'] || row['cost'] || row['COGS'] || row['cogs'] || row['Cost Per Unit'] || row['Unit Cost'] || 0);
+        if (sku) {
+          totalRows++;
+          if (isNaN(cost) || cost === 0) zeroCost++;
+          if (cost < 0) negativeCost++;
+        }
+      });
+      
+      if (zeroCost > totalRows * 0.3 && totalRows > 0) {
+        warnings.push({ type: 'warning', message: `${zeroCost} of ${totalRows} SKUs have $0 cost`, detail: 'Make sure COGS column is correctly named' });
+      }
+      if (negativeCost > 0) {
+        errors.push({ type: 'error', message: `${negativeCost} SKUs have negative cost`, detail: 'COGS values should be positive' });
+      }
+    }
+    
+    if (type === 'inventory' && data) {
+      let negativeQty = 0, totalRows = 0;
+      data.forEach(row => {
+        const qty = parseInt(row['Quantity'] || row['quantity'] || row['Available'] || row['available'] || row['Total units'] || 0);
+        totalRows++;
+        if (qty < 0) negativeQty++;
+      });
+      
+      if (negativeQty > 0) {
+        warnings.push({ type: 'warning', message: `${negativeQty} items have negative quantity`, detail: 'This may indicate data issues' });
+      }
+    }
+    
+    // Check for date range issues
+    if ((type === 'amazon' || type === 'shopify') && data && data.length > 0) {
+      const firstRow = data[0];
+      const startDate = firstRow['Start date'] || firstRow['start_date'] || '';
+      const endDate = firstRow['End date'] || firstRow['end_date'] || '';
+      
+      if (startDate && endDate && weekEnding) {
+        const reportEnd = new Date(endDate);
+        const selectedEnd = new Date(weekEnding + 'T00:00:00');
+        const daysDiff = Math.abs((reportEnd - selectedEnd) / (1000 * 60 * 60 * 24));
+        
+        if (daysDiff > 3) {
+          warnings.push({ 
+            type: 'warning', 
+            message: `Report date (${endDate}) doesn't match selected week (${weekEnding})`, 
+            detail: `There's a ${Math.round(daysDiff)} day difference - verify you selected the correct date` 
+          });
+        }
+      }
+      
+      // Check for SKUs missing COGS
+      const cogsLookup = { ...savedCogs };
+      if (Object.keys(cogsLookup).length > 0) {
+        const skusWithoutCogs = [];
+        data.forEach(row => {
+          const sku = type === 'amazon' ? row['MSKU'] : row['Product variant SKU'];
+          const units = type === 'amazon' ? parseInt(row['Units sold'] || 0) : parseInt(row['Net items sold'] || 0);
+          if (sku && units > 0 && !cogsLookup[sku]) {
+            if (!skusWithoutCogs.includes(sku)) skusWithoutCogs.push(sku);
+          }
+        });
+        
+        if (skusWithoutCogs.length > 0) {
+          warnings.push({ 
+            type: 'warning', 
+            message: `${skusWithoutCogs.length} SKUs missing COGS`, 
+            detail: `These SKUs will show $0 cost: ${skusWithoutCogs.slice(0, 5).join(', ')}${skusWithoutCogs.length > 5 ? '...' : ''}` 
+          });
+        }
+      }
+    }
+    
+    return { warnings, errors, hasErrors: errors.length > 0 };
+  }, [weekEnding, savedCogs]);
+
+  // Validation Modal Component (defined inline for access to state)
+  const ValidationModal = () => {
+    if (!showValidationModal) return null;
+    const hasErrors = dataValidationWarnings.some(w => w.type === 'error');
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto">
+          <h2 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+            {hasErrors ? <AlertCircle className="w-6 h-6 text-rose-400" /> : <AlertTriangle className="w-6 h-6 text-amber-400" />}
+            Data Validation {hasErrors ? 'Errors' : 'Warnings'}
+          </h2>
+          <p className="text-slate-400 text-sm mb-4">
+            {hasErrors ? 'Please fix these issues before proceeding:' : 'Review these warnings before proceeding:'}
+          </p>
+          
+          <div className="space-y-3 mb-6">
+            {dataValidationWarnings.map((warning, idx) => (
+              <div key={idx} className={`rounded-lg p-3 ${
+                warning.type === 'error' ? 'bg-rose-900/30 border border-rose-500/50' :
+                warning.type === 'warning' ? 'bg-amber-900/30 border border-amber-500/50' :
+                'bg-blue-900/30 border border-blue-500/50'
+              }`}>
+                <p className={`font-medium ${
+                  warning.type === 'error' ? 'text-rose-300' :
+                  warning.type === 'warning' ? 'text-amber-300' :
+                  'text-blue-300'
+                }`}>
+                  {warning.type === 'error' ? '❌' : warning.type === 'warning' ? '⚠️' : 'ℹ️'} {warning.message}
+                </p>
+                {warning.detail && <p className="text-slate-400 text-sm mt-1">{warning.detail}</p>}
+              </div>
+            ))}
+          </div>
+          
+          <div className="flex gap-3">
+            {!hasErrors && (
+              <button 
+                onClick={() => {
+                  setShowValidationModal(false);
+                  if (pendingProcessAction) {
+                    pendingProcessAction();
+                    setPendingProcessAction(null);
+                  }
+                }} 
+                className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-semibold py-2 rounded-lg"
+              >
+                Continue Anyway
+              </button>
+            )}
+            <button 
+              onClick={() => { 
+                setShowValidationModal(false); 
+                setPendingProcessAction(null);
+                setDataValidationWarnings([]);
+              }} 
+              className={`${hasErrors ? 'flex-1' : ''} bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 px-4 rounded-lg`}
+            >
+              {hasErrors ? 'Go Back & Fix' : 'Cancel'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const processSales = useCallback(() => {
     const cogsLookup = getCogsLookup();
     if (!files.amazon || !files.shopify || !weekEnding) { alert('Upload Amazon & Shopify files and select date'); return; }
     if (Object.keys(cogsLookup).length === 0) { alert('Set up COGS first via the COGS button'); return; }
+    
+    // Validate data before processing
+    const amazonValidation = validateUploadData('amazon', files.amazon);
+    const shopifyValidation = validateUploadData('shopify', files.shopify);
+    const allWarnings = [...amazonValidation.warnings, ...amazonValidation.errors, ...shopifyValidation.warnings, ...shopifyValidation.errors];
+    
+    if (allWarnings.length > 0) {
+      setDataValidationWarnings(allWarnings);
+      setPendingProcessAction(() => processSalesCore);
+      setShowValidationModal(true);
+      return;
+    }
+    
+    processSalesCore();
+  }, [files, adSpend, weekEnding, allWeeksData, getCogsLookup, validateUploadData]);
+  
+  const processSalesCore = useCallback(() => {
+    const cogsLookup = getCogsLookup();
     setIsProcessing(true);
 
     let amzRev = 0, amzUnits = 0, amzRet = 0, amzProfit = 0, amzCogs = 0, amzFees = 0, amzAds = 0;
@@ -1266,7 +1508,8 @@ const savePeriods = async (d) => {
     const updated = { ...allWeeksData, [weekEnding]: weekData };
     setAllWeeksData(updated); save(updated); setSelectedWeek(weekEnding); setView('weekly'); setIsProcessing(false);
     setFiles({ amazon: null, shopify: null, cogs: null, threepl: [] }); setFileNames({ amazon: '', shopify: '', cogs: '', threepl: [] }); setAdSpend({ meta: '', google: '' }); setWeekEnding('');
-  }, [files, adSpend, weekEnding, allWeeksData, getCogsLookup]);
+    setToast({ message: 'Week data saved successfully!', type: 'success' });
+  }, [files, adSpend, weekEnding, allWeeksData, getCogsLookup, save]);
 
   const processBulkImport = useCallback(() => {
     const cogsLookup = getCogsLookup();
@@ -1396,6 +1639,24 @@ const savePeriods = async (d) => {
     const cogsLookup = { ...savedCogs };
     if (!periodFiles.amazon || !periodFiles.shopify || !periodLabel.trim()) { alert('Upload Amazon & Shopify files and enter a label (e.g., "January 2025")'); return; }
     if (Object.keys(cogsLookup).length === 0) { alert('Set up COGS first via the COGS button'); return; }
+    
+    // Validate data before processing
+    const amazonValidation = validateUploadData('amazon', periodFiles.amazon);
+    const shopifyValidation = validateUploadData('shopify', periodFiles.shopify);
+    const allWarnings = [...amazonValidation.warnings, ...amazonValidation.errors, ...shopifyValidation.warnings, ...shopifyValidation.errors];
+    
+    if (allWarnings.length > 0) {
+      setDataValidationWarnings(allWarnings);
+      setPendingProcessAction(() => processPeriodCore);
+      setShowValidationModal(true);
+      return;
+    }
+    
+    processPeriodCore();
+  }, [periodFiles, periodAdSpend, periodLabel, savedCogs, allPeriodsData, validateUploadData]);
+  
+  const processPeriodCore = useCallback(() => {
+    const cogsLookup = { ...savedCogs };
     setIsProcessing(true);
 
     let amzRev = 0, amzUnits = 0, amzRet = 0, amzProfit = 0, amzCogs = 0, amzFees = 0, amzAds = 0;
@@ -1463,7 +1724,8 @@ const savePeriods = async (d) => {
     const updated = { ...allPeriodsData, [periodKey]: periodData };
     setAllPeriodsData(updated); savePeriods(updated); setSelectedPeriod(periodKey); setView('period-view'); setIsProcessing(false);
     setPeriodFiles({ amazon: null, shopify: null, threepl: [] }); setPeriodFileNames({ amazon: '', shopify: '', threepl: [] }); setPeriodAdSpend({ meta: '', google: '' }); setPeriodLabel('');
-  }, [periodFiles, periodAdSpend, periodLabel, allPeriodsData, savedCogs]);
+    setToast({ message: 'Period data saved successfully!', type: 'success' });
+  }, [periodFiles, periodAdSpend, periodLabel, allPeriodsData, savedCogs, savePeriods]);
 
   const deletePeriod = (k) => { if (!confirm(`Delete ${k}?`)) return; const u = { ...allPeriodsData }; delete u[k]; setAllPeriodsData(u); savePeriods(u); const r = Object.keys(u).sort().reverse(); if (r.length) setSelectedPeriod(r[0]); else { setUploadTab('period'); setView('upload'); setSelectedPeriod(null); }};
 
@@ -1975,7 +2237,7 @@ const savePeriods = async (d) => {
     };
   };
 
-  // Compare Amazon forecast vs actual results
+  // Compare Amazon forecast vs actual results - comprehensive analysis
   const getAmazonForecastComparison = useMemo(() => {
     const comparisons = [];
     
@@ -1989,12 +2251,38 @@ const savePeriods = async (d) => {
         const forecastProfit = forecast.totals.proceeds;
         const actualProfit = actual.amazon.netProfit || 0;
         
+        // SKU-level comparison
+        const skuComparisons = [];
+        if (forecast.skus && actual.amazon.skuData) {
+          const actualSkuMap = {};
+          actual.amazon.skuData.forEach(s => { actualSkuMap[s.sku] = s; });
+          
+          Object.entries(forecast.skus).forEach(([sku, fcast]) => {
+            const actualSku = actualSkuMap[sku];
+            if (actualSku) {
+              skuComparisons.push({
+                sku,
+                forecast: { units: fcast.units, sales: fcast.sales },
+                actual: { units: actualSku.unitsSold, sales: actualSku.netSales },
+                variance: {
+                  units: actualSku.unitsSold - fcast.units,
+                  unitsPercent: fcast.units > 0 ? ((actualSku.unitsSold - fcast.units) / fcast.units * 100) : 0,
+                  sales: actualSku.netSales - fcast.sales,
+                  salesPercent: fcast.sales > 0 ? ((actualSku.netSales - fcast.sales) / fcast.sales * 100) : 0,
+                },
+              });
+            }
+          });
+        }
+        
         comparisons.push({
           weekEnding: weekKey,
+          uploadedAt: forecast.uploadedAt,
           forecast: {
             revenue: forecastRev,
             units: forecastUnits,
             profit: forecastProfit,
+            skuCount: forecast.skuCount || 0,
           },
           actual: {
             revenue: actualRev,
@@ -2009,13 +2297,60 @@ const savePeriods = async (d) => {
             profit: actualProfit - forecastProfit,
             profitPercent: forecastProfit > 0 ? ((actualProfit - forecastProfit) / forecastProfit * 100) : 0,
           },
+          accuracy: forecastRev > 0 ? (100 - Math.abs((actualRev - forecastRev) / forecastRev * 100)) : 0,
           status: actualRev >= forecastRev ? 'beat' : 'missed',
+          skuComparisons: skuComparisons.sort((a, b) => Math.abs(b.variance.salesPercent) - Math.abs(a.variance.salesPercent)),
         });
       }
     });
     
     return comparisons.sort((a, b) => b.weekEnding.localeCompare(a.weekEnding));
   }, [amazonForecasts, allWeeksData]);
+  
+  // Calculate rolling forecast accuracy metrics
+  const forecastAccuracyMetrics = useMemo(() => {
+    const comparisons = getAmazonForecastComparison;
+    if (comparisons.length === 0) return null;
+    
+    // Overall accuracy
+    const avgAccuracy = comparisons.reduce((s, c) => s + c.accuracy, 0) / comparisons.length;
+    const avgRevenueVariance = comparisons.reduce((s, c) => s + c.variance.revenuePercent, 0) / comparisons.length;
+    const avgUnitsVariance = comparisons.reduce((s, c) => s + c.variance.unitsPercent, 0) / comparisons.length;
+    
+    // Trend - is accuracy improving?
+    const recentComparisons = comparisons.slice(0, 4); // Last 4 weeks
+    const olderComparisons = comparisons.slice(4, 8); // 4 weeks before that
+    const recentAccuracy = recentComparisons.length > 0 ? recentComparisons.reduce((s, c) => s + c.accuracy, 0) / recentComparisons.length : 0;
+    const olderAccuracy = olderComparisons.length > 0 ? olderComparisons.reduce((s, c) => s + c.accuracy, 0) / olderComparisons.length : 0;
+    const accuracyTrend = olderComparisons.length > 0 ? recentAccuracy - olderAccuracy : 0;
+    
+    // Bias detection - does Amazon consistently over/under forecast?
+    const overForecasts = comparisons.filter(c => c.variance.revenuePercent < 0).length;
+    const underForecasts = comparisons.filter(c => c.variance.revenuePercent > 0).length;
+    const bias = overForecasts > underForecasts * 1.5 ? 'over' : underForecasts > overForecasts * 1.5 ? 'under' : 'neutral';
+    
+    // Best/worst predicted weeks
+    const sortedByAccuracy = [...comparisons].sort((a, b) => b.accuracy - a.accuracy);
+    const bestWeek = sortedByAccuracy[0];
+    const worstWeek = sortedByAccuracy[sortedByAccuracy.length - 1];
+    
+    return {
+      totalWeeks: comparisons.length,
+      avgAccuracy,
+      avgRevenueVariance,
+      avgUnitsVariance,
+      recentAccuracy,
+      accuracyTrend,
+      bias,
+      biasDescription: bias === 'over' ? 'Amazon tends to over-forecast (actuals lower than predicted)' :
+                       bias === 'under' ? 'Amazon tends to under-forecast (actuals higher than predicted)' :
+                       'Amazon forecasts are balanced',
+      beatCount: comparisons.filter(c => c.status === 'beat').length,
+      missedCount: comparisons.filter(c => c.status === 'missed').length,
+      bestWeek,
+      worstWeek,
+    };
+  }, [getAmazonForecastComparison]);
 
   // Get upcoming Amazon forecasts (weeks we haven't reached yet)
   const upcomingAmazonForecasts = useMemo(() => {
@@ -3906,15 +4241,27 @@ ${JSON.stringify(upcomingAmazonForecasts.map(f => ({ weekEnding: f.weekEnding, p
 ` : 'No upcoming Amazon forecasts uploaded'}
 
 ${getAmazonForecastComparison.length > 0 ? `
-Forecast vs Actual Accuracy (Amazon):
+Forecast vs Actual Accuracy (Amazon) - ${getAmazonForecastComparison.length} weeks tracked:
 ${JSON.stringify(getAmazonForecastComparison.slice(0, 8).map(c => ({ 
   week: c.weekEnding, 
   forecastRev: c.forecast.revenue, 
   actualRev: c.actual.revenue, 
   variance: c.variance.revenuePercent.toFixed(1) + '%',
+  accuracy: c.accuracy.toFixed(1) + '%',
   status: c.status 
 })))}
-Average accuracy: ${getAmazonForecastComparison.length > 0 ? (100 - Math.abs(getAmazonForecastComparison.reduce((s, c) => s + c.variance.revenuePercent, 0) / getAmazonForecastComparison.length)).toFixed(1) : 0}%
+` : ''}
+
+${forecastAccuracyMetrics ? `
+FORECAST ACCURACY INSIGHTS:
+- Overall Accuracy: ${forecastAccuracyMetrics.avgAccuracy.toFixed(1)}% (based on ${forecastAccuracyMetrics.totalWeeks} weeks)
+- Beat forecast ${forecastAccuracyMetrics.beatCount} times, Missed ${forecastAccuracyMetrics.missedCount} times
+- Average Revenue Variance: ${forecastAccuracyMetrics.avgRevenueVariance > 0 ? '+' : ''}${forecastAccuracyMetrics.avgRevenueVariance.toFixed(1)}%
+- Forecast Bias: ${forecastAccuracyMetrics.biasDescription}
+- Recent 4-week Accuracy: ${forecastAccuracyMetrics.recentAccuracy.toFixed(1)}%
+- Accuracy Trend: ${forecastAccuracyMetrics.accuracyTrend > 0 ? 'Improving' : forecastAccuracyMetrics.accuracyTrend < 0 ? 'Declining' : 'Stable'} (${forecastAccuracyMetrics.accuracyTrend > 0 ? '+' : ''}${forecastAccuracyMetrics.accuracyTrend.toFixed(1)}%)
+${forecastAccuracyMetrics.bestWeek ? `- Best Predicted Week: ${forecastAccuracyMetrics.bestWeek.weekEnding} (${forecastAccuracyMetrics.bestWeek.accuracy.toFixed(1)}% accurate)` : ''}
+${forecastAccuracyMetrics.worstWeek ? `- Worst Predicted Week: ${forecastAccuracyMetrics.worstWeek.weekEnding} (${forecastAccuracyMetrics.worstWeek.accuracy.toFixed(1)}% accurate)` : ''}
 ` : ''}
 
 === PRODUCTION PIPELINE (incoming inventory) ===
@@ -4337,7 +4684,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -4890,7 +5237,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -5293,7 +5640,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -5311,7 +5658,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -5336,7 +5683,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -5371,7 +5718,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     const data = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -5505,7 +5852,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -5531,7 +5878,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -5568,7 +5915,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -5784,7 +6131,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -6481,7 +6828,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -6829,7 +7176,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -7141,7 +7488,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     if (!hasWeeklyData && !hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -7161,7 +7508,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     if (!hasWeeklyData && hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -7223,7 +7570,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -7621,7 +7968,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -7921,7 +8268,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white">Analytics & Forecasting</h1>
@@ -7931,9 +8278,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           <NavTabs />
           
           {/* Analytics Sub-tabs */}
-          <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl w-fit">
+          <div className="flex flex-wrap gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl w-fit">
             <button onClick={() => setAnalyticsTab('forecast')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'forecast' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <TrendingUp className="w-4 h-4 inline mr-1" />Total Forecast
+            </button>
+            <button onClick={() => setAnalyticsTab('amazon-accuracy')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'amazon-accuracy' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Target className="w-4 h-4 inline mr-1" />Amazon Accuracy
             </button>
             <button onClick={() => setAnalyticsTab('sku-forecast')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'sku-forecast' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Package className="w-4 h-4 inline mr-1" />SKU Forecast
@@ -7945,6 +8295,119 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               <Trophy className="w-4 h-4 inline mr-1" />Compare SKUs
             </button>
           </div>
+          
+          {/* AMAZON FORECAST ACCURACY TAB */}
+          {analyticsTab === 'amazon-accuracy' && (
+            <div className="space-y-6">
+              {forecastAccuracyMetrics ? (
+                <>
+                  {/* Accuracy Summary Cards */}
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="bg-gradient-to-br from-orange-900/40 to-amber-900/20 rounded-2xl border border-orange-500/30 p-5">
+                      <p className="text-orange-400 text-sm font-medium mb-1">Overall Accuracy</p>
+                      <p className="text-3xl font-bold text-white">{forecastAccuracyMetrics.avgAccuracy.toFixed(1)}%</p>
+                      <p className="text-slate-400 text-xs mt-1">Based on {forecastAccuracyMetrics.totalWeeks} weeks</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+                      <p className="text-slate-400 text-sm font-medium mb-1">Beat / Missed</p>
+                      <p className="text-2xl font-bold">
+                        <span className="text-emerald-400">{forecastAccuracyMetrics.beatCount}</span>
+                        <span className="text-slate-500 mx-2">/</span>
+                        <span className="text-rose-400">{forecastAccuracyMetrics.missedCount}</span>
+                      </p>
+                      <p className="text-slate-400 text-xs mt-1">Win rate: {((forecastAccuracyMetrics.beatCount / forecastAccuracyMetrics.totalWeeks) * 100).toFixed(0)}%</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+                      <p className="text-slate-400 text-sm font-medium mb-1">Avg Revenue Variance</p>
+                      <p className={`text-2xl font-bold ${forecastAccuracyMetrics.avgRevenueVariance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {forecastAccuracyMetrics.avgRevenueVariance >= 0 ? '+' : ''}{forecastAccuracyMetrics.avgRevenueVariance.toFixed(1)}%
+                      </p>
+                      <p className="text-slate-400 text-xs mt-1">{forecastAccuracyMetrics.avgRevenueVariance >= 0 ? 'Above' : 'Below'} forecast on average</p>
+                    </div>
+                    <div className={`rounded-2xl border p-5 ${forecastAccuracyMetrics.accuracyTrend >= 0 ? 'bg-emerald-900/20 border-emerald-500/30' : 'bg-rose-900/20 border-rose-500/30'}`}>
+                      <p className={`text-sm font-medium mb-1 ${forecastAccuracyMetrics.accuracyTrend >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>Accuracy Trend</p>
+                      <p className="text-2xl font-bold text-white flex items-center gap-2">
+                        {forecastAccuracyMetrics.accuracyTrend >= 0 ? <TrendingUp className="w-6 h-6 text-emerald-400" /> : <TrendingDown className="w-6 h-6 text-rose-400" />}
+                        {forecastAccuracyMetrics.accuracyTrend >= 0 ? '+' : ''}{forecastAccuracyMetrics.accuracyTrend.toFixed(1)}%
+                      </p>
+                      <p className="text-slate-400 text-xs mt-1">{forecastAccuracyMetrics.accuracyTrend >= 0 ? 'Improving' : 'Declining'} vs prior period</p>
+                    </div>
+                  </div>
+                  
+                  {/* Bias Analysis */}
+                  <div className={`rounded-xl border p-4 ${
+                    forecastAccuracyMetrics.bias === 'over' ? 'bg-amber-900/20 border-amber-500/30' :
+                    forecastAccuracyMetrics.bias === 'under' ? 'bg-emerald-900/20 border-emerald-500/30' :
+                    'bg-slate-800/50 border-slate-700'
+                  }`}>
+                    <h3 className="font-semibold text-white mb-2 flex items-center gap-2">
+                      <AlertCircle className="w-5 h-5" />
+                      Forecast Bias Analysis
+                    </h3>
+                    <p className="text-slate-300">{forecastAccuracyMetrics.biasDescription}</p>
+                    {forecastAccuracyMetrics.bias !== 'neutral' && (
+                      <p className="text-slate-400 text-sm mt-2">
+                        💡 Tip: {forecastAccuracyMetrics.bias === 'over' 
+                          ? 'Consider multiplying Amazon forecasts by 0.9-0.95 for more realistic expectations.'
+                          : 'Amazon may be conservative - you can expect to beat forecasts more often than not.'}
+                      </p>
+                    )}
+                  </div>
+                  
+                  {/* Week-by-Week Comparison Table */}
+                  <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
+                    <div className="p-4 border-b border-slate-700">
+                      <h3 className="font-semibold text-white">Week-by-Week Comparison</h3>
+                      <p className="text-slate-400 text-sm">Forecast vs Actual for each week</p>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-slate-900/50">
+                          <tr>
+                            <th className="text-left px-4 py-3 text-slate-400 text-xs uppercase">Week</th>
+                            <th className="text-right px-4 py-3 text-slate-400 text-xs uppercase">Forecast</th>
+                            <th className="text-right px-4 py-3 text-slate-400 text-xs uppercase">Actual</th>
+                            <th className="text-right px-4 py-3 text-slate-400 text-xs uppercase">Variance</th>
+                            <th className="text-right px-4 py-3 text-slate-400 text-xs uppercase">Accuracy</th>
+                            <th className="text-center px-4 py-3 text-slate-400 text-xs uppercase">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {getAmazonForecastComparison.map(comp => (
+                            <tr key={comp.weekEnding} className="border-t border-slate-700/50 hover:bg-slate-700/20">
+                              <td className="px-4 py-3 text-white">{new Date(comp.weekEnding + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                              <td className="px-4 py-3 text-right text-orange-400">{formatCurrency(comp.forecast.revenue)}</td>
+                              <td className="px-4 py-3 text-right text-white font-medium">{formatCurrency(comp.actual.revenue)}</td>
+                              <td className={`px-4 py-3 text-right font-medium ${comp.variance.revenuePercent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {comp.variance.revenuePercent >= 0 ? '+' : ''}{comp.variance.revenuePercent.toFixed(1)}%
+                              </td>
+                              <td className={`px-4 py-3 text-right ${comp.accuracy >= 90 ? 'text-emerald-400' : comp.accuracy >= 80 ? 'text-amber-400' : 'text-rose-400'}`}>
+                                {comp.accuracy.toFixed(1)}%
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${comp.status === 'beat' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                                  {comp.status === 'beat' ? '✓ Beat' : '✗ Missed'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-12 text-center">
+                  <Target className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                  <h3 className="text-xl font-semibold text-white mb-2">No Forecast Data Yet</h3>
+                  <p className="text-slate-400 mb-4">Upload Amazon forecasts and actual sales data to see accuracy analysis</p>
+                  <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-white">
+                    Upload Amazon Forecast
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           
           {/* TOTAL FORECAST TAB */}
           {analyticsTab === 'forecast' && generateForecast && (
@@ -8282,7 +8745,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -8452,7 +8915,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -8988,7 +9451,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -9362,7 +9825,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
