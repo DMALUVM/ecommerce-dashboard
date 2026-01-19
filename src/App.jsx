@@ -51,6 +51,7 @@ const SETTINGS_KEY = 'ecommerce_settings_v1';
 const NOTES_KEY = 'ecommerce_notes_v1';
 const WIDGET_KEY = 'ecommerce_widgets_v1';
 const THEME_KEY = 'ecommerce_theme_v1';
+const INVOICES_KEY = 'ecommerce_invoices_v1';
 
 // Supabase (cloud auth + storage)
 // Create a .env.local file in your Vite project with:
@@ -347,9 +348,28 @@ const handleLogout = async () => {
   const [compareMode, setCompareMode] = useState(false);
   const [compareItems, setCompareItems] = useState([]); // Array of week keys or SKUs to compare
   
+  // Analytics view state
+  const [analyticsTab, setAnalyticsTab] = useState('forecast');
+  const [selectedSkusToCompare, setSelectedSkusToCompare] = useState([]);
+  const [selectedWeeksToCompare, setSelectedWeeksToCompare] = useState([]);
+  
   // 3. Mobile view detection
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  
+  // Upcoming Invoices/Bills
+  const [invoices, setInvoices] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(INVOICES_KEY)) || []; } catch { return []; }
+  });
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [editingInvoice, setEditingInvoice] = useState(null);
+  const [invoiceForm, setInvoiceForm] = useState({ vendor: '', description: '', amount: '', dueDate: '', recurring: false, frequency: 'monthly', category: 'operations' });
+  const [processingPdf, setProcessingPdf] = useState(false);
+  
+  // Save invoices to localStorage
+  useEffect(() => {
+    localStorage.setItem(INVOICES_KEY, JSON.stringify(invoices));
+  }, [invoices]);
   
   // Save notes to localStorage
   useEffect(() => {
@@ -2175,6 +2195,7 @@ if (supabase && isAuthReady && session && isLocked) {
       {appSettings.modulesEnabled?.trends !== false && (
         <button onClick={() => setView('trends')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'trends' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><TrendingUp className="w-4 h-4 inline mr-1" />Trends</button>
       )}
+      <button onClick={() => setView('analytics')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'analytics' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />Analytics</button>
       {appSettings.modulesEnabled?.yoy !== false && (
         <button onClick={() => setView('yoy')} disabled={Object.keys(allWeeksData).length < 2 && Object.keys(allPeriodsData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'yoy' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><GitCompare className="w-4 h-4 inline mr-1" />YoY</button>
       )}
@@ -2774,6 +2795,294 @@ if (supabase && isAuthReady && session && isLocked) {
     );
   };
 
+  // INVOICE/BILLS MODAL
+  const InvoiceModal = () => {
+    if (!showInvoiceModal) return null;
+    
+    const categories = [
+      { value: 'operations', label: '🏢 Operations', color: 'slate' },
+      { value: 'inventory', label: '📦 Inventory/COGS', color: 'amber' },
+      { value: 'marketing', label: '📣 Marketing/Ads', color: 'violet' },
+      { value: 'software', label: '💻 Software/SaaS', color: 'blue' },
+      { value: 'shipping', label: '🚚 Shipping/3PL', color: 'emerald' },
+      { value: 'taxes', label: '📋 Taxes/Fees', color: 'rose' },
+      { value: 'other', label: '📎 Other', color: 'slate' },
+    ];
+    
+    const resetForm = () => {
+      setInvoiceForm({ vendor: '', description: '', amount: '', dueDate: '', recurring: false, frequency: 'monthly', category: 'operations' });
+      setEditingInvoice(null);
+    };
+    
+    const handleSave = () => {
+      if (!invoiceForm.vendor || !invoiceForm.amount || !invoiceForm.dueDate) return;
+      
+      const invoice = {
+        id: editingInvoice?.id || Date.now().toString(),
+        ...invoiceForm,
+        amount: parseFloat(invoiceForm.amount),
+        createdAt: editingInvoice?.createdAt || new Date().toISOString(),
+        paid: editingInvoice?.paid || false,
+      };
+      
+      if (editingInvoice) {
+        setInvoices(prev => prev.map(i => i.id === editingInvoice.id ? invoice : i));
+      } else {
+        setInvoices(prev => [...prev, invoice]);
+      }
+      resetForm();
+    };
+    
+    const handleDelete = (id) => {
+      setInvoices(prev => prev.filter(i => i.id !== id));
+    };
+    
+    const handleMarkPaid = (id) => {
+      setInvoices(prev => prev.map(i => i.id === id ? { ...i, paid: true, paidDate: new Date().toISOString() } : i));
+    };
+    
+    // PDF Upload and AI extraction
+    const handlePdfUpload = async (file) => {
+      if (!file || !file.type.includes('pdf')) {
+        alert('Please upload a PDF file');
+        return;
+      }
+      
+      setProcessingPdf(true);
+      
+      try {
+        // Convert PDF to base64
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        
+        // Send to AI to extract invoice details
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system: `You are an invoice data extractor. Extract the following from the invoice and respond ONLY with valid JSON, no other text:
+{
+  "vendor": "company name",
+  "description": "brief description of what this invoice is for",
+  "amount": number (just the number, no currency symbol),
+  "dueDate": "YYYY-MM-DD format",
+  "category": one of: "operations", "inventory", "marketing", "software", "shipping", "taxes", "other"
+}
+If you cannot find a field, use null. For dueDate, if only month/year given, use the 1st of that month.`,
+            messages: [{ 
+              role: 'user', 
+              content: [
+                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 }},
+                { type: 'text', text: 'Extract the invoice details from this PDF.' }
+              ]
+            }]
+          }),
+        });
+        
+        if (!response.ok) throw new Error('API error');
+        const data = await response.json();
+        const text = data.content?.[0]?.text || '';
+        
+        // Parse the JSON response
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const extracted = JSON.parse(jsonMatch[0]);
+          setInvoiceForm(prev => ({
+            ...prev,
+            vendor: extracted.vendor || prev.vendor,
+            description: extracted.description || prev.description,
+            amount: extracted.amount?.toString() || prev.amount,
+            dueDate: extracted.dueDate || prev.dueDate,
+            category: extracted.category || prev.category,
+          }));
+        }
+      } catch (error) {
+        console.error('PDF extraction error:', error);
+        alert('Could not extract invoice details. Please enter manually.');
+      } finally {
+        setProcessingPdf(false);
+      }
+    };
+    
+    const upcomingInvoices = invoices.filter(i => !i.paid).sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+    const paidInvoices = invoices.filter(i => i.paid).sort((a, b) => new Date(b.paidDate) - new Date(a.paidDate)).slice(0, 10);
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <FileText className="w-6 h-6 text-amber-400" />
+              Upcoming Bills & Invoices
+            </h2>
+            <button onClick={() => { setShowInvoiceModal(false); resetForm(); }} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          {/* Add/Edit Form */}
+          <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
+            <h3 className="text-sm font-semibold text-slate-300 mb-3">{editingInvoice ? 'Edit Invoice' : 'Add New Invoice'}</h3>
+            
+            {/* PDF Upload */}
+            <div className="mb-4">
+              <label className={`flex items-center justify-center gap-2 p-3 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${processingPdf ? 'border-violet-500 bg-violet-950/30' : 'border-slate-600 hover:border-slate-500'}`}>
+                <input type="file" accept=".pdf" onChange={(e) => e.target.files[0] && handlePdfUpload(e.target.files[0])} className="hidden" disabled={processingPdf} />
+                {processingPdf ? (
+                  <>
+                    <RefreshCw className="w-5 h-5 text-violet-400 animate-spin" />
+                    <span className="text-violet-400">Extracting invoice details...</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-5 h-5 text-slate-400" />
+                    <span className="text-slate-400">Upload PDF to auto-fill</span>
+                  </>
+                )}
+              </label>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Vendor/Company *</label>
+                <input value={invoiceForm.vendor} onChange={e => setInvoiceForm(p => ({...p, vendor: e.target.value}))}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="Amazon, Shopify, etc." />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Amount *</label>
+                <input type="number" value={invoiceForm.amount} onChange={e => setInvoiceForm(p => ({...p, amount: e.target.value}))}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="0.00" />
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Due Date *</label>
+                <input type="date" value={invoiceForm.dueDate} onChange={e => setInvoiceForm(p => ({...p, dueDate: e.target.value}))}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Category</label>
+                <select value={invoiceForm.category} onChange={e => setInvoiceForm(p => ({...p, category: e.target.value}))}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm">
+                  {categories.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+              </div>
+            </div>
+            
+            <div className="mb-3">
+              <label className="block text-xs text-slate-400 mb-1">Description</label>
+              <input value={invoiceForm.description} onChange={e => setInvoiceForm(p => ({...p, description: e.target.value}))}
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="Monthly subscription, inventory purchase, etc." />
+            </div>
+            
+            <div className="flex items-center gap-4 mb-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={invoiceForm.recurring} onChange={e => setInvoiceForm(p => ({...p, recurring: e.target.checked}))}
+                  className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500" />
+                <span className="text-sm text-slate-300">Recurring bill</span>
+              </label>
+              {invoiceForm.recurring && (
+                <select value={invoiceForm.frequency} onChange={e => setInvoiceForm(p => ({...p, frequency: e.target.value}))}
+                  className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1 text-white text-sm">
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+              )}
+            </div>
+            
+            <div className="flex gap-2">
+              <button onClick={handleSave} disabled={!invoiceForm.vendor || !invoiceForm.amount || !invoiceForm.dueDate}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-2 rounded-lg text-sm">
+                {editingInvoice ? 'Update' : 'Add Invoice'}
+              </button>
+              {editingInvoice && (
+                <button onClick={resetForm} className="px-4 bg-slate-700 hover:bg-slate-600 text-white font-medium py-2 rounded-lg text-sm">
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+          
+          {/* Upcoming Invoices */}
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-amber-400 mb-2 flex items-center gap-2">
+              <Clock className="w-4 h-4" />
+              Upcoming ({upcomingInvoices.length})
+            </h3>
+            {upcomingInvoices.length > 0 ? (
+              <div className="space-y-2">
+                {upcomingInvoices.map(inv => {
+                  const daysUntil = Math.ceil((new Date(inv.dueDate) - new Date()) / (1000 * 60 * 60 * 24));
+                  const isOverdue = daysUntil < 0;
+                  const isDueSoon = daysUntil <= 7 && daysUntil >= 0;
+                  const cat = categories.find(c => c.value === inv.category);
+                  
+                  return (
+                    <div key={inv.id} className={`flex items-center justify-between p-3 rounded-xl border ${isOverdue ? 'bg-rose-900/20 border-rose-500/50' : isDueSoon ? 'bg-amber-900/20 border-amber-500/50' : 'bg-slate-900/50 border-slate-700'}`}>
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg">{cat?.label.split(' ')[0]}</span>
+                        <div>
+                          <p className="text-white font-medium">{inv.vendor}</p>
+                          <p className="text-slate-400 text-xs">{inv.description || 'No description'}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <p className="text-white font-bold">{formatCurrency(inv.amount)}</p>
+                          <p className={`text-xs ${isOverdue ? 'text-rose-400' : isDueSoon ? 'text-amber-400' : 'text-slate-400'}`}>
+                            {isOverdue ? `${Math.abs(daysUntil)} days overdue` : daysUntil === 0 ? 'Due today' : `Due in ${daysUntil} days`}
+                          </p>
+                        </div>
+                        <div className="flex gap-1">
+                          <button onClick={() => handleMarkPaid(inv.id)} className="p-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 rounded-lg text-emerald-400" title="Mark as paid">
+                            <Check className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => { setEditingInvoice(inv); setInvoiceForm({ vendor: inv.vendor, description: inv.description || '', amount: inv.amount.toString(), dueDate: inv.dueDate, recurring: inv.recurring || false, frequency: inv.frequency || 'monthly', category: inv.category || 'operations' }); }} className="p-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-400" title="Edit">
+                            <FileText className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => handleDelete(inv.id)} className="p-1.5 bg-rose-600/30 hover:bg-rose-600/50 rounded-lg text-rose-400" title="Delete">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-slate-500 text-sm text-center py-4">No upcoming invoices</p>
+            )}
+          </div>
+          
+          {/* Recently Paid */}
+          {paidInvoices.length > 0 && (
+            <div>
+              <h3 className="text-sm font-semibold text-emerald-400 mb-2 flex items-center gap-2">
+                <CheckCircle className="w-4 h-4" />
+                Recently Paid
+              </h3>
+              <div className="space-y-1">
+                {paidInvoices.map(inv => (
+                  <div key={inv.id} className="flex items-center justify-between p-2 bg-slate-900/30 rounded-lg opacity-60">
+                    <span className="text-slate-400 text-sm">{inv.vendor}</span>
+                    <span className="text-slate-400 text-sm">{formatCurrency(inv.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // COMPARISON MODAL (Feature 12)
   const ComparisonView = () => {
     if (!compareMode || compareItems.length < 2) return null;
@@ -3118,7 +3427,18 @@ if (supabase && isAuthReady && session && isLocked) {
         alertsSummary.push(`Sales tax nexus in ${ctx.salesTax.nexusStates.length} states: ${ctx.salesTax.nexusStates.map(s => s.state).join(', ')}`);
       }
       
-      const systemPrompt = `You are an expert e-commerce analyst for "${ctx.storeName}". Answer questions about this business data concisely and accurately.
+      // Include forecast data if available
+      const forecastData = generateForecast ? {
+        nextMonth: generateForecast.monthly,
+        trend: generateForecast.trend,
+        confidence: generateForecast.confidence,
+        weekly: generateForecast.weekly
+      } : null;
+      
+      // Include week notes
+      const notesData = Object.entries(weekNotes).filter(([k, v]) => v).map(([week, note]) => ({ week, note }));
+      
+      const systemPrompt = `You are an expert e-commerce analyst and business advisor for "${ctx.storeName}". You have access to ALL uploaded sales data and can answer questions about any aspect of the business.
 
 IMPORTANT PROFIT CALCULATION NOTES:
 - Amazon "Net Proceeds" IS the profit - it already has COGS, fees, and ad spend deducted
@@ -3145,11 +3465,22 @@ DATA RANGE: ${ctx.dataRange.weeksTracked} weeks tracked (${ctx.dataRange.oldestW
 - Prior Profit: $${ctx.insights.recentVsPrior.priorProfit.toFixed(2)}
 - Profit Change: ${ctx.insights.recentVsPrior.profitChange.toFixed(1)}%
 
+=== FORECAST (Next 4 Weeks Projection) ===
+${forecastData ? `
+- Projected Monthly Revenue: $${forecastData.nextMonth.revenue.toFixed(2)}
+- Projected Monthly Profit: $${forecastData.nextMonth.profit.toFixed(2)}
+- Projected Monthly Units: ${forecastData.nextMonth.units}
+- Trend Direction: ${forecastData.trend.revenue} (${forecastData.trend.revenueChange.toFixed(1)}% per week)
+- Forecast Confidence: ${forecastData.confidence}%
+- Weekly Projections: ${JSON.stringify(forecastData.weekly)}
+` : 'Not enough data for forecast (need 4+ weeks)'}
+
 === GOALS ===
 - Weekly Revenue Target: $${ctx.goals.weeklyRevenue || 0}
 - Weekly Profit Target: $${ctx.goals.weeklyProfit || 0}
 - Monthly Revenue Target: $${ctx.goals.monthlyRevenue || 0}
 - Monthly Profit Target: $${ctx.goals.monthlyProfit || 0}
+${ctx.goals.weeklyRevenue > 0 && ctx.weeklyData.length > 0 ? `- Last Week vs Goal: ${ctx.weeklyData[ctx.weeklyData.length-1]?.totalRevenue >= ctx.goals.weeklyRevenue ? 'MET' : 'MISSED'}` : ''}
 
 === ALERTS ===
 ${alertsSummary.length > 0 ? alertsSummary.join('\n') : 'No active alerts'}
@@ -3163,6 +3494,9 @@ When user asks about a product type (e.g., "lip balm", "deodorant", "soap"), fin
 
 === WEEKLY DATA (most recent 12 weeks) ===
 ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
+
+=== WEEK NOTES (user annotations) ===
+${notesData.length > 0 ? JSON.stringify(notesData) : 'No notes added'}
 
 === TOP SKUS BY REVENUE (with profit/unit trends) ===
 ${JSON.stringify(ctx.skuAnalysis.slice(0, 15))}
@@ -3181,7 +3515,26 @@ ${ctx.inventory?.lowStockItems?.length > 0 ? `Low stock items: ${JSON.stringify(
 ${ctx.salesTax?.nexusStates?.length > 0 ? `Nexus states: ${JSON.stringify(ctx.salesTax.nexusStates)}` : 'No nexus states configured'}
 Total sales tax paid all-time: $${ctx.salesTax?.totalPaidAllTime?.toFixed(2) || 0}
 
-Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trends, reference specific numbers.`;
+=== UPCOMING BILLS & INVOICES ===
+${invoices.filter(i => !i.paid).length > 0 ? `
+Upcoming bills (${invoices.filter(i => !i.paid).length} total, $${invoices.filter(i => !i.paid).reduce((s, i) => s + i.amount, 0).toFixed(2)}):
+${JSON.stringify(invoices.filter(i => !i.paid).map(i => ({ vendor: i.vendor, amount: i.amount, dueDate: i.dueDate, category: i.category, daysUntilDue: Math.ceil((new Date(i.dueDate) - new Date()) / (1000 * 60 * 60 * 24)) })))}
+` : 'No upcoming bills'}
+
+=== WHAT YOU CAN HELP WITH ===
+- Analyze sales trends and patterns
+- Compare performance across weeks, months, products
+- Identify best/worst performing SKUs
+- Track progress toward goals
+- Explain profit margins and calculations
+- Forecast future revenue
+- Inventory planning recommendations
+- Answer questions about specific products by name or SKU
+- Provide insights on advertising effectiveness (TACOS, ROAS)
+- Sales tax obligations by state
+- Upcoming bills and cash flow planning
+
+Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. If the user asks about data you don't have, let them know what they need to upload.`;
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -3417,6 +3770,21 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
       alerts.push({ type: 'critical', text: `${invAlerts.length} products need reorder attention` });
     }
     
+    // Check upcoming invoices/bills
+    const upcomingBills = invoices.filter(i => !i.paid);
+    const overdueBills = upcomingBills.filter(i => new Date(i.dueDate) < new Date());
+    const dueSoonBills = upcomingBills.filter(i => {
+      const daysUntil = Math.ceil((new Date(i.dueDate) - new Date()) / (1000 * 60 * 60 * 24));
+      return daysUntil >= 0 && daysUntil <= 7;
+    });
+    if (overdueBills.length > 0) {
+      const total = overdueBills.reduce((s, i) => s + i.amount, 0);
+      alerts.push({ type: 'critical', text: `${overdueBills.length} overdue bills totaling ${formatCurrency(total)}`, link: 'invoices' });
+    } else if (dueSoonBills.length > 0) {
+      const total = dueSoonBills.reduce((s, i) => s + i.amount, 0);
+      alerts.push({ type: 'warning', text: `${dueSoonBills.length} bills due within 7 days (${formatCurrency(total)})`, link: 'invoices' });
+    }
+    
     // Check sales tax deadlines
     if (appSettings.alertSalesTaxEnabled) {
       const now = new Date();
@@ -3451,9 +3819,12 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
       });
     }
     
+    // Calculate total upcoming bills for display
+    const totalUpcomingBills = upcomingBills.reduce((s, i) => s + i.amount, 0);
+    
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -3467,6 +3838,9 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
               <button onClick={() => setShowGoalsModal(true)} className="px-3 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-1"><Target className="w-4 h-4" />Goals</button>
               <button onClick={() => setShowCogsManager(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Settings className="w-4 h-4" />COGS</button>
               <button onClick={() => setShowProductCatalog(true)} className="px-3 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-1"><Package className="w-4 h-4" />Catalog{Object.keys(savedProductNames).length > 0 && <span className="ml-1">✓</span>}</button>
+              <button onClick={() => setShowInvoiceModal(true)} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-1 ${upcomingBills.length > 0 ? 'bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 text-amber-300' : 'bg-slate-700 hover:bg-slate-600 text-white'}`}>
+                <FileText className="w-4 h-4" />Bills{upcomingBills.length > 0 && <span className="ml-1 px-1.5 py-0.5 bg-amber-500/30 rounded text-xs">{upcomingBills.length}</span>}
+              </button>
               {generateForecast && <button onClick={() => setShowForecast(true)} className="px-3 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-sm text-emerald-300 flex items-center gap-1"><TrendingUp className="w-4 h-4" />Forecast</button>}
               <button onClick={() => setShowBreakEven(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Calculator className="w-4 h-4" /></button>
               <button onClick={() => setShowExportModal(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><FileDown className="w-4 h-4" /></button>
@@ -3522,7 +3896,10 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
                   {alerts.map((alert, i) => (
                     <div 
                       key={i} 
-                      onClick={() => alert.link && setView(alert.link)}
+                      onClick={() => {
+                        if (alert.link === 'invoices') setShowInvoiceModal(true);
+                        else if (alert.link) setView(alert.link);
+                      }}
                       className={`flex items-center justify-between p-3 rounded-xl ${alert.type === 'critical' ? 'bg-rose-900/30 border border-rose-500/50' : 'bg-amber-900/30 border border-amber-500/50'} ${alert.link ? 'cursor-pointer hover:opacity-80' : ''}`}
                     >
                       <div className="flex items-center gap-3">
@@ -3807,7 +4184,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -3926,7 +4303,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -3944,7 +4321,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -3969,7 +4346,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -4004,7 +4381,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     const data = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -4114,7 +4491,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -4140,7 +4517,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -4177,7 +4554,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -4393,7 +4770,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -4576,7 +4953,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4924,7 +5301,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5236,7 +5613,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     if (!hasWeeklyData && !hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -5256,7 +5633,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     if (!hasWeeklyData && hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -5318,7 +5695,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5716,7 +6093,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5907,6 +6284,413 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     );
   }
 
+  // ==================== ANALYTICS VIEW (Forecast & Compare) ====================
+  if (view === 'analytics') {
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    
+    // Build SKU data for forecasting
+    const skuWeeklyTotals = {};
+    sortedWeeks.forEach(w => {
+      const week = allWeeksData[w];
+      [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])].forEach(s => {
+        const key = s.sku;
+        if (!skuWeeklyTotals[key]) skuWeeklyTotals[key] = { sku: s.sku, name: s.name || '', weeks: {} };
+        if (!skuWeeklyTotals[key].weeks[w]) skuWeeklyTotals[key].weeks[w] = { units: 0, revenue: 0, profit: 0 };
+        skuWeeklyTotals[key].weeks[w].units += s.unitsSold || 0;
+        skuWeeklyTotals[key].weeks[w].revenue += s.netSales || 0;
+        // Amazon: netProceeds IS profit; Shopify: netSales - cogs
+        const profit = s.netProceeds !== undefined ? s.netProceeds : (s.netSales || 0) - (s.cogs || 0);
+        skuWeeklyTotals[key].weeks[w].profit += profit;
+      });
+    });
+    
+    // Generate SKU-level forecasts
+    const skuForecasts = Object.values(skuWeeklyTotals).map(sku => {
+      const weekDates = Object.keys(sku.weeks).sort();
+      if (weekDates.length < 4) return { ...sku, forecast: null };
+      
+      const recentWeeks = weekDates.slice(-8);
+      const revenues = recentWeeks.map(w => sku.weeks[w]?.revenue || 0);
+      const units = recentWeeks.map(w => sku.weeks[w]?.units || 0);
+      const profits = recentWeeks.map(w => sku.weeks[w]?.profit || 0);
+      
+      // Simple linear regression
+      const calcTrend = (data) => {
+        const n = data.length;
+        if (n === 0) return { slope: 0, intercept: 0, avg: 0 };
+        const sumX = data.reduce((s, _, i) => s + i, 0);
+        const sumY = data.reduce((s, v) => s + v, 0);
+        const sumXY = data.reduce((s, v, i) => s + i * v, 0);
+        const sumX2 = data.reduce((s, _, i) => s + i * i, 0);
+        const denom = n * sumX2 - sumX * sumX;
+        const slope = denom !== 0 ? (n * sumXY - sumX * sumY) / denom : 0;
+        const intercept = (sumY - slope * sumX) / n;
+        return { slope, intercept, avg: sumY / n };
+      };
+      
+      const revTrend = calcTrend(revenues);
+      const unitTrend = calcTrend(units);
+      const profTrend = calcTrend(profits);
+      
+      const n = revenues.length;
+      const nextMonthRev = [0, 1, 2, 3].reduce((sum, i) => sum + Math.max(0, revTrend.intercept + revTrend.slope * (n + i)), 0);
+      const nextMonthUnits = [0, 1, 2, 3].reduce((sum, i) => sum + Math.max(0, unitTrend.intercept + unitTrend.slope * (n + i)), 0);
+      const nextMonthProfit = [0, 1, 2, 3].reduce((sum, i) => sum + profTrend.intercept + profTrend.slope * (n + i), 0);
+      
+      const totalRevenue = Object.values(sku.weeks).reduce((s, w) => s + w.revenue, 0);
+      const totalUnits = Object.values(sku.weeks).reduce((s, w) => s + w.units, 0);
+      
+      return {
+        ...sku,
+        totalRevenue,
+        totalUnits,
+        weeksActive: weekDates.length,
+        forecast: {
+          nextMonthRevenue: nextMonthRev,
+          nextMonthUnits: Math.round(nextMonthUnits),
+          nextMonthProfit: nextMonthProfit,
+          trend: revTrend.slope > 0 ? 'up' : revTrend.slope < 0 ? 'down' : 'flat',
+          avgWeeklyRevenue: revTrend.avg,
+        }
+      };
+    }).filter(s => s.totalRevenue > 0).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    
+    // Week comparison data
+    const weekCompareData = selectedWeeksToCompare.map(w => {
+      const data = allWeeksData[w];
+      if (!data) return null;
+      return {
+        week: w,
+        revenue: data.total?.revenue || 0,
+        profit: data.total?.netProfit || 0,
+        units: data.total?.units || 0,
+        adSpend: data.total?.adSpend || 0,
+        cogs: data.total?.cogs || 0,
+        amazonRev: data.amazon?.revenue || 0,
+        shopifyRev: data.shopify?.revenue || 0,
+        margin: data.total?.revenue ? (data.total.netProfit / data.total.revenue * 100) : 0,
+      };
+    }).filter(Boolean);
+    
+    // SKU comparison data  
+    const skuCompareData = selectedSkusToCompare.map(sku => {
+      const data = skuWeeklyTotals[sku];
+      if (!data) return null;
+      const totals = Object.values(data.weeks).reduce((acc, w) => ({
+        units: acc.units + w.units,
+        revenue: acc.revenue + w.revenue,
+        profit: acc.profit + w.profit,
+      }), { units: 0, revenue: 0, profit: 0 });
+      return {
+        sku: data.sku,
+        name: data.name,
+        ...totals,
+        profitPerUnit: totals.units > 0 ? totals.profit / totals.units : 0,
+        margin: totals.revenue > 0 ? (totals.profit / totals.revenue * 100) : 0,
+        weeksActive: Object.keys(data.weeks).length,
+      };
+    }).filter(Boolean);
+    
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
+          
+          <div className="mb-6">
+            <h1 className="text-2xl lg:text-3xl font-bold text-white">Analytics & Forecasting</h1>
+            <p className="text-slate-400">Predict future performance and compare metrics</p>
+          </div>
+          
+          <NavTabs />
+          
+          {/* Analytics Sub-tabs */}
+          <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl w-fit">
+            <button onClick={() => setAnalyticsTab('forecast')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'forecast' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <TrendingUp className="w-4 h-4 inline mr-1" />Total Forecast
+            </button>
+            <button onClick={() => setAnalyticsTab('sku-forecast')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'sku-forecast' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Package className="w-4 h-4 inline mr-1" />SKU Forecast
+            </button>
+            <button onClick={() => setAnalyticsTab('compare-weeks')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'compare-weeks' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <GitCompare className="w-4 h-4 inline mr-1" />Compare Weeks
+            </button>
+            <button onClick={() => setAnalyticsTab('compare-skus')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'compare-skus' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Trophy className="w-4 h-4 inline mr-1" />Compare SKUs
+            </button>
+          </div>
+          
+          {/* TOTAL FORECAST TAB */}
+          {analyticsTab === 'forecast' && generateForecast && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 rounded-2xl border border-emerald-500/30 p-6">
+                  <p className="text-emerald-400 text-sm font-medium mb-1">Projected Monthly Revenue</p>
+                  <p className="text-3xl font-bold text-white">{formatCurrency(generateForecast.monthly.revenue)}</p>
+                  <p className={`text-sm mt-1 flex items-center gap-1 ${generateForecast.trend.revenue === 'up' ? 'text-emerald-400' : generateForecast.trend.revenue === 'down' ? 'text-rose-400' : 'text-slate-400'}`}>
+                    {generateForecast.trend.revenue === 'up' ? <TrendingUp className="w-4 h-4" /> : generateForecast.trend.revenue === 'down' ? <TrendingDown className="w-4 h-4" /> : <Minus className="w-4 h-4" />}
+                    {generateForecast.trend.revenueChange > 0 ? '+' : ''}{generateForecast.trend.revenueChange.toFixed(1)}% weekly trend
+                  </p>
+                </div>
+                <div className={`rounded-2xl border p-6 ${generateForecast.monthly.profit >= 0 ? 'bg-gradient-to-br from-blue-900/40 to-blue-800/20 border-blue-500/30' : 'bg-gradient-to-br from-rose-900/40 to-rose-800/20 border-rose-500/30'}`}>
+                  <p className={`text-sm font-medium mb-1 ${generateForecast.monthly.profit >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>Projected Monthly Profit</p>
+                  <p className="text-3xl font-bold text-white">{formatCurrency(generateForecast.monthly.profit)}</p>
+                  {goals.monthlyProfit > 0 && (
+                    <p className={`text-sm mt-1 ${generateForecast.monthly.profit >= goals.monthlyProfit ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {generateForecast.monthly.profit >= goals.monthlyProfit ? '✓ On track for goal' : `${formatCurrency(goals.monthlyProfit - generateForecast.monthly.profit)} below goal`}
+                    </p>
+                  )}
+                </div>
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+                  <p className="text-slate-400 text-sm font-medium mb-1">Projected Monthly Units</p>
+                  <p className="text-3xl font-bold text-white">{formatNumber(generateForecast.monthly.units)}</p>
+                  <p className="text-slate-500 text-sm mt-1">Confidence: {generateForecast.confidence}%</p>
+                </div>
+              </div>
+              
+              <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+                <h3 className="text-lg font-semibold text-white mb-4">Weekly Projections</h3>
+                <div className="grid grid-cols-4 gap-4">
+                  {generateForecast.weekly.map((w, i) => (
+                    <div key={i} className="bg-slate-900/50 rounded-xl p-4 text-center">
+                      <p className="text-slate-500 text-sm mb-2">{w.week}</p>
+                      <p className="text-xl font-bold text-white">{formatCurrency(w.revenue)}</p>
+                      <p className={`text-sm ${w.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(w.profit)} profit</p>
+                      <p className="text-slate-500 text-xs mt-1">{w.units} units</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              <p className="text-slate-500 text-sm text-center">Based on {generateForecast.basedOn} weeks of historical data using linear trend analysis</p>
+            </div>
+          )}
+          
+          {analyticsTab === 'forecast' && !generateForecast && (
+            <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-12 text-center">
+              <TrendingUp className="w-12 h-12 text-slate-600 mx-auto mb-4" />
+              <p className="text-slate-400 text-lg">Need at least 4 weeks of data for forecasting</p>
+              <p className="text-slate-500 text-sm mt-2">Currently have {sortedWeeks.length} week(s)</p>
+            </div>
+          )}
+          
+          {/* SKU FORECAST TAB */}
+          {analyticsTab === 'sku-forecast' && (
+            <div className="space-y-6">
+              <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <TrendingUp className="w-5 h-5 text-emerald-400" />
+                  SKU-Level Forecast (Next Month)
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700">
+                        <th className="text-left text-slate-400 font-medium py-2">SKU</th>
+                        <th className="text-left text-slate-400 font-medium py-2">Product</th>
+                        <th className="text-right text-slate-400 font-medium py-2">Avg/Week</th>
+                        <th className="text-right text-slate-400 font-medium py-2">Trend</th>
+                        <th className="text-right text-slate-400 font-medium py-2">Proj. Revenue</th>
+                        <th className="text-right text-slate-400 font-medium py-2">Proj. Units</th>
+                        <th className="text-right text-slate-400 font-medium py-2">Proj. Profit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {skuForecasts.slice(0, 20).map((s, i) => (
+                        <tr key={s.sku} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                          <td className="py-3 text-white font-mono text-xs">{s.sku}</td>
+                          <td className="py-3 text-slate-300 max-w-[200px] truncate">{s.name || '—'}</td>
+                          <td className="py-3 text-right text-white">{s.forecast ? formatCurrency(s.forecast.avgWeeklyRevenue) : '—'}</td>
+                          <td className="py-3 text-right">
+                            {s.forecast ? (
+                              <span className={`flex items-center justify-end gap-1 ${s.forecast.trend === 'up' ? 'text-emerald-400' : s.forecast.trend === 'down' ? 'text-rose-400' : 'text-slate-400'}`}>
+                                {s.forecast.trend === 'up' ? <TrendingUp className="w-4 h-4" /> : s.forecast.trend === 'down' ? <TrendingDown className="w-4 h-4" /> : <Minus className="w-4 h-4" />}
+                                {s.forecast.trend}
+                              </span>
+                            ) : '—'}
+                          </td>
+                          <td className="py-3 text-right text-emerald-400 font-medium">{s.forecast ? formatCurrency(s.forecast.nextMonthRevenue) : '—'}</td>
+                          <td className="py-3 text-right text-white">{s.forecast ? formatNumber(s.forecast.nextMonthUnits) : '—'}</td>
+                          <td className={`py-3 text-right font-medium ${s.forecast?.nextMonthProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {s.forecast ? formatCurrency(s.forecast.nextMonthProfit) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="border-t-2 border-slate-600">
+                      <tr className="font-semibold">
+                        <td colSpan="4" className="py-3 text-white">Total (Top 20 SKUs)</td>
+                        <td className="py-3 text-right text-emerald-400">{formatCurrency(skuForecasts.slice(0, 20).reduce((s, x) => s + (x.forecast?.nextMonthRevenue || 0), 0))}</td>
+                        <td className="py-3 text-right text-white">{formatNumber(skuForecasts.slice(0, 20).reduce((s, x) => s + (x.forecast?.nextMonthUnits || 0), 0))}</td>
+                        <td className="py-3 text-right text-emerald-400">{formatCurrency(skuForecasts.slice(0, 20).reduce((s, x) => s + (x.forecast?.nextMonthProfit || 0), 0))}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* COMPARE WEEKS TAB */}
+          {analyticsTab === 'compare-weeks' && (
+            <div className="space-y-6">
+              <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+                <h3 className="text-lg font-semibold text-white mb-4">Select Weeks to Compare (up to 4)</h3>
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {sortedWeeks.slice().reverse().slice(0, 12).map(w => {
+                    const isSelected = selectedWeeksToCompare.includes(w);
+                    return (
+                      <button key={w} onClick={() => {
+                        if (isSelected) setSelectedWeeksToCompare(prev => prev.filter(x => x !== w));
+                        else if (selectedWeeksToCompare.length < 4) setSelectedWeeksToCompare(prev => [...prev, w]);
+                      }} className={`px-3 py-2 rounded-lg text-sm ${isSelected ? 'bg-violet-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>
+                        {new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        {isSelected && <Check className="w-4 h-4 inline ml-1" />}
+                      </button>
+                    );
+                  })}
+                </div>
+                {selectedWeeksToCompare.length > 0 && (
+                  <button onClick={() => setSelectedWeeksToCompare([])} className="text-sm text-slate-400 hover:text-white">Clear selection</button>
+                )}
+              </div>
+              
+              {weekCompareData.length >= 2 && (
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700">
+                        <th className="text-left text-slate-400 font-medium py-2">Metric</th>
+                        {weekCompareData.map(w => (
+                          <th key={w.week} className="text-right text-white font-medium py-2">
+                            {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                          </th>
+                        ))}
+                        {weekCompareData.length === 2 && <th className="text-right text-slate-400 font-medium py-2">Difference</th>}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700/50">
+                      {[
+                        { key: 'revenue', label: 'Revenue', format: formatCurrency, color: 'text-white' },
+                        { key: 'profit', label: 'Profit', format: formatCurrency, color: 'profit' },
+                        { key: 'units', label: 'Units', format: formatNumber, color: 'text-white' },
+                        { key: 'margin', label: 'Margin', format: v => v.toFixed(1) + '%', color: 'text-white' },
+                        { key: 'adSpend', label: 'Ad Spend', format: formatCurrency, color: 'text-violet-400' },
+                        { key: 'amazonRev', label: 'Amazon', format: formatCurrency, color: 'text-orange-400' },
+                        { key: 'shopifyRev', label: 'Shopify', format: formatCurrency, color: 'text-blue-400' },
+                      ].map(metric => (
+                        <tr key={metric.key}>
+                          <td className="py-3 text-slate-400">{metric.label}</td>
+                          {weekCompareData.map(w => (
+                            <td key={w.week} className={`py-3 text-right font-medium ${metric.color === 'profit' ? (w[metric.key] >= 0 ? 'text-emerald-400' : 'text-rose-400') : metric.color}`}>
+                              {metric.format(w[metric.key])}
+                            </td>
+                          ))}
+                          {weekCompareData.length === 2 && (
+                            <td className={`py-3 text-right font-medium ${weekCompareData[1][metric.key] >= weekCompareData[0][metric.key] ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {weekCompareData[1][metric.key] >= weekCompareData[0][metric.key] ? '+' : ''}
+                              {metric.key === 'margin' 
+                                ? (weekCompareData[1][metric.key] - weekCompareData[0][metric.key]).toFixed(1) + '%'
+                                : metric.format(weekCompareData[1][metric.key] - weekCompareData[0][metric.key])}
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              
+              {weekCompareData.length < 2 && (
+                <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-12 text-center">
+                  <GitCompare className="w-12 h-12 text-slate-600 mx-auto mb-4" />
+                  <p className="text-slate-400 text-lg">Select at least 2 weeks to compare</p>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* COMPARE SKUS TAB */}
+          {analyticsTab === 'compare-skus' && (
+            <div className="space-y-6">
+              <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+                <h3 className="text-lg font-semibold text-white mb-4">Select SKUs to Compare (up to 5)</h3>
+                <div className="max-h-64 overflow-y-auto space-y-1">
+                  {skuForecasts.slice(0, 50).map(s => {
+                    const isSelected = selectedSkusToCompare.includes(s.sku);
+                    return (
+                      <button key={s.sku} onClick={() => {
+                        if (isSelected) setSelectedSkusToCompare(prev => prev.filter(x => x !== s.sku));
+                        else if (selectedSkusToCompare.length < 5) setSelectedSkusToCompare(prev => [...prev, s.sku]);
+                      }} className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm ${isSelected ? 'bg-amber-600/30 border border-amber-500/50' : 'bg-slate-700/50 hover:bg-slate-600/50'}`}>
+                        <span className="flex items-center gap-2">
+                          {isSelected && <Check className="w-4 h-4 text-amber-400" />}
+                          <span className="font-mono text-xs text-slate-400">{s.sku}</span>
+                          <span className="text-white truncate max-w-[200px]">{s.name || 'Unknown'}</span>
+                        </span>
+                        <span className="text-emerald-400">{formatCurrency(s.totalRevenue)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {selectedSkusToCompare.length > 0 && (
+                  <button onClick={() => setSelectedSkusToCompare([])} className="mt-2 text-sm text-slate-400 hover:text-white">Clear selection</button>
+                )}
+              </div>
+              
+              {skuCompareData.length >= 2 && (
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700">
+                        <th className="text-left text-slate-400 font-medium py-2">Metric</th>
+                        {skuCompareData.map(s => (
+                          <th key={s.sku} className="text-right text-white font-medium py-2 max-w-[120px]">
+                            <span className="block font-mono text-xs text-slate-400">{s.sku}</span>
+                            <span className="block truncate text-sm">{s.name || 'Unknown'}</span>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700/50">
+                      {[
+                        { key: 'revenue', label: 'Total Revenue', format: formatCurrency },
+                        { key: 'profit', label: 'Total Profit', format: formatCurrency, isProfit: true },
+                        { key: 'units', label: 'Total Units', format: formatNumber },
+                        { key: 'profitPerUnit', label: 'Profit/Unit', format: formatCurrency, isProfit: true },
+                        { key: 'margin', label: 'Margin %', format: v => v.toFixed(1) + '%' },
+                        { key: 'weeksActive', label: 'Weeks Active', format: v => v },
+                      ].map(metric => (
+                        <tr key={metric.key}>
+                          <td className="py-3 text-slate-400">{metric.label}</td>
+                          {skuCompareData.map(s => {
+                            const maxVal = Math.max(...skuCompareData.map(x => x[metric.key]));
+                            const isMax = s[metric.key] === maxVal && maxVal > 0;
+                            return (
+                              <td key={s.sku} className={`py-3 text-right font-medium ${metric.isProfit ? (s[metric.key] >= 0 ? 'text-emerald-400' : 'text-rose-400') : 'text-white'} ${isMax ? 'bg-emerald-900/20' : ''}`}>
+                                {metric.format(s[metric.key])}
+                                {isMax && <Trophy className="w-3 h-3 inline ml-1 text-amber-400" />}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              
+              {skuCompareData.length < 2 && (
+                <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-12 text-center">
+                  <Trophy className="w-12 h-12 text-slate-600 mx-auto mb-4" />
+                  <p className="text-slate-400 text-lg">Select at least 2 SKUs to compare</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // ==================== PROFITABILITY VIEW ====================
   if (view === 'profitability') {
     const sortedWeeks = Object.keys(allWeeksData).sort();
@@ -5970,7 +6754,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -6140,7 +6924,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -6676,7 +7460,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -7050,7 +7834,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. When discussing trend
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><GoalsModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
