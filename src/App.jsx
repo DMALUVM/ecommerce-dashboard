@@ -8709,42 +8709,42 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     <p className="text-slate-400 mb-4">Upload actual weekly data for a forecasted week to see accuracy analysis</p>
                     <p className="text-slate-500 text-sm mb-4">Fuzzy matching enabled: weeks within 3 days will match automatically</p>
                   
-                  {/* Debug info */}
-                  <div className="bg-slate-900/50 rounded-xl p-4 text-left max-w-lg mx-auto mb-4">
-                    <p className="text-slate-500 text-xs uppercase mb-3">Data Matching Status</p>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <p className="text-orange-400 font-medium mb-2">Forecast Weeks:</p>
-                        {Object.keys(amazonForecasts).length > 0 ? (
-                          <ul className="text-slate-400 space-y-1">
-                            {Object.keys(amazonForecasts).sort().map(k => (
-                              <li key={k}>{k}</li>
-                            ))}
-                          </ul>
-                        ) : <p className="text-slate-500">None</p>}
-                      </div>
-                      <div>
-                        <p className="text-blue-400 font-medium mb-2">Actual Weeks:</p>
-                        {Object.keys(allWeeksData).length > 0 ? (
-                          <ul className="text-slate-400 space-y-1">
-                            {Object.keys(allWeeksData).sort().reverse().slice(0, 6).map(k => (
-                              <li key={k}>{k}</li>
-                            ))}
-                          </ul>
-                        ) : <p className="text-slate-500">None</p>}
+                    {/* Debug info */}
+                    <div className="bg-slate-900/50 rounded-xl p-4 text-left max-w-lg mx-auto mb-4">
+                      <p className="text-slate-500 text-xs uppercase mb-3">Data Matching Status</p>
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                          <p className="text-orange-400 font-medium mb-2">Forecast Weeks:</p>
+                          {Object.keys(amazonForecasts).length > 0 ? (
+                            <ul className="text-slate-400 space-y-1">
+                              {Object.keys(amazonForecasts).sort().map(k => (
+                                <li key={k}>{k}</li>
+                              ))}
+                            </ul>
+                          ) : <p className="text-slate-500">None</p>}
+                        </div>
+                        <div>
+                          <p className="text-blue-400 font-medium mb-2">Actual Weeks:</p>
+                          {Object.keys(allWeeksData).length > 0 ? (
+                            <ul className="text-slate-400 space-y-1">
+                              {Object.keys(allWeeksData).sort().reverse().slice(0, 6).map(k => (
+                                <li key={k}>{k}</li>
+                              ))}
+                            </ul>
+                          ) : <p className="text-slate-500">None</p>}
+                        </div>
                       </div>
                     </div>
-                  </div>
                   
-                  <div className="flex gap-3 justify-center">
-                    <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-white">
-                      Upload Forecast
-                    </button>
-                    <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white">
-                      Upload Weekly Data
-                    </button>
+                    <div className="flex gap-3 justify-center">
+                      <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-white">
+                        Upload Forecast
+                      </button>
+                      <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white">
+                        Upload Weekly Data
+                      </button>
+                    </div>
                   </div>
-                </div>
               )}
             </div>
           )}
