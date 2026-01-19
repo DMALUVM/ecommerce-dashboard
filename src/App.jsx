@@ -1016,12 +1016,6 @@ const saveSettings = useCallback((newSettings) => {
   lsSet(SETTINGS_KEY, JSON.stringify(newSettings));
 }, []);
 
-const save3PLLedger = useCallback((newLedger) => {
-  setThreeplLedger(newLedger);
-  lsSet(THREEPL_LEDGER_KEY, JSON.stringify(newLedger));
-  queueCloudSave({ ...combinedData, threeplLedger: newLedger });
-}, [combinedData, queueCloudSave]);
-
 const writeToLocal = useCallback((key, value) => {
   lsSet(key, value);
 }, []);
@@ -1054,6 +1048,12 @@ const queueCloudSave = useCallback((nextDataObj) => {
     pushToCloudNow(nextDataObj);
   }, 800);
 }, [session, pushToCloudNow]);
+
+const save3PLLedger = useCallback((newLedger) => {
+  setThreeplLedger(newLedger);
+  lsSet(THREEPL_LEDGER_KEY, JSON.stringify(newLedger));
+  queueCloudSave({ ...combinedData, threeplLedger: newLedger });
+}, [combinedData, queueCloudSave]);
 
 // Store name persistence
 useEffect(() => {
