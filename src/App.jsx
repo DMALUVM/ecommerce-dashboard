@@ -5103,21 +5103,18 @@ ${(() => {
   // Calculate trend
   const avgCostPerOrder = totalOrders > 0 ? totalCost / totalOrders : 0;
   
-  return \`3PL Summary (from bulk uploads):
-- Total Orders Tracked: \${totalOrders}
-- Total 3PL Cost: $\${totalCost.toFixed(2)}
-- Avg Cost Per Order: $\${avgCostPerOrder.toFixed(2)}
-- Total Units Shipped: \${totalUnits}
-- Weeks with Data: \${allWeeks.length} (\${allWeeks[0] || 'N/A'} to \${allWeeks[allWeeks.length-1] || 'N/A'})
-
-Recent Weekly 3PL Costs:
-\${JSON.stringify(weeklyTotals)}
-
-LOOK FOR:
-- Rising avg cost per order (margin erosion)
-- Storage cost spikes
-- Shipping cost increases
-- Changes in units per order affecting fulfillment efficiency\`;
+  return '3PL Summary (from bulk uploads):\n' +
+    '- Total Orders Tracked: ' + totalOrders + '\n' +
+    '- Total 3PL Cost: $' + totalCost.toFixed(2) + '\n' +
+    '- Avg Cost Per Order: $' + avgCostPerOrder.toFixed(2) + '\n' +
+    '- Total Units Shipped: ' + totalUnits + '\n' +
+    '- Weeks with Data: ' + allWeeks.length + ' (' + (allWeeks[0] || 'N/A') + ' to ' + (allWeeks[allWeeks.length-1] || 'N/A') + ')\n\n' +
+    'Recent Weekly 3PL Costs:\n' + JSON.stringify(weeklyTotals) + '\n\n' +
+    'LOOK FOR:\n' +
+    '- Rising avg cost per order (margin erosion)\n' +
+    '- Storage cost spikes\n' +
+    '- Shipping cost increases\n' +
+    '- Changes in units per order affecting fulfillment efficiency';
 })()}
 
 === WHAT YOU CAN HELP WITH ===
