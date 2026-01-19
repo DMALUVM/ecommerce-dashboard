@@ -44,6 +44,10 @@ const INVENTORY_KEY = 'ecommerce_inventory_v5';
 const COGS_KEY = 'ecommerce_cogs_v1';
 const STORE_KEY = 'ecommerce_store_name_v1';
 const GOALS_KEY = 'ecommerce_goals_v1';
+const PERIODS_KEY = 'ecommerce_periods_v1';
+const SALES_TAX_KEY = 'ecommerce_sales_tax_v1';
+const PRODUCT_NAMES_KEY = 'ecommerce_product_names_v1';
+const SETTINGS_KEY = 'ecommerce_settings_v1';
 
 // Supabase (cloud auth + storage)
 // Create a .env.local file in your Vite project with:
@@ -347,15 +351,11 @@ const handleLogout = async () => {
     currencySymbol: '$',
     dateFormat: 'US', // 'US' (MM/DD/YYYY) or 'EU' (DD/MM/YYYY)
   });
-  const SETTINGS_KEY = 'ecommerce_settings_v1';
   
   const clearPeriod3PLFiles = useCallback(() => {
     setPeriodFiles(p => ({ ...p, threepl: [] }));
     setPeriodFileNames(p => ({ ...p, threepl: [] }));
   }, []);
-  
-const PERIODS_KEY = 'ecommerce_periods_v1';
-const SALES_TAX_KEY = 'ecommerce_sales_tax_v1';
 
 // US States with sales tax info - comprehensive list with economic nexus thresholds
 const US_STATES_TAX_INFO = {
@@ -568,7 +568,7 @@ const loadFromLocal = useCallback(() => {
 
   // Load product names
   try {
-    const names = lsGet('ecommerce_product_names_v1');
+    const names = lsGet(PRODUCT_NAMES_KEY);
     if (names) setSavedProductNames(JSON.parse(names));
   } catch {}
 
@@ -999,7 +999,7 @@ const savePeriods = async (d) => {
     saveCogs(lookup);
     setSavedProductNames(names);
     // Save product names to localStorage
-    try { localStorage.setItem('ecommerce_product_names_v1', JSON.stringify(names)); } catch(e) {}
+    try { localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(names)); } catch(e) {}
     setFiles(p => ({ ...p, cogs: null })); setFileNames(p => ({ ...p, cogs: '' })); setShowCogsManager(false);
   }, [files.cogs]);
 
@@ -1806,10 +1806,17 @@ if (supabase && isAuthReady && session && isLocked) {
                           {isAmz && <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">Returns</th>}
                           {!isAmz && <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">Discounts</th>}
                           <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">COGS</th>
+                          <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">Profit</th>
+                          <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">$/Unit</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-700/50">
-                        {skuData.map((item, i) => (
+                        {skuData.map((item, i) => {
+                          const profit = isAmz 
+                            ? (item.netProceeds || 0) - (item.cogs || 0) - (item.adSpend || 0)
+                            : (item.netSales || 0) - (item.cogs || 0) - (item.discounts || 0);
+                          const profitPerUnit = item.unitsSold > 0 ? profit / item.unitsSold : 0;
+                          return (
                           <tr key={item.sku + i} className="hover:bg-slate-700/30">
                             <td className="px-2 py-2"><div className="max-w-[200px] truncate text-white" title={item.name}>{item.sku}</div></td>
                             <td className="text-right px-2 py-2 text-white">{formatNumber(item.unitsSold)}</td>
@@ -1819,8 +1826,11 @@ if (supabase && isAuthReady && session && isLocked) {
                             {isAmz && <td className="text-right px-2 py-2 text-rose-400">{formatNumber(item.returns)}</td>}
                             {!isAmz && <td className="text-right px-2 py-2 text-amber-400">{formatCurrency(item.discounts)}</td>}
                             <td className="text-right px-2 py-2 text-slate-400">{formatCurrency(item.cogs)}</td>
+                            <td className={`text-right px-2 py-2 font-medium ${profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(profit)}</td>
+                            <td className={`text-right px-2 py-2 font-medium ${profitPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(profitPerUnit)}</td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -2050,7 +2060,7 @@ if (supabase && isAuthReady && session && isLocked) {
     const saveCatalog = () => {
       if (!productCatalogFile) return;
       setSavedProductNames(productCatalogFile);
-      try { localStorage.setItem('ecommerce_product_names_v1', JSON.stringify(productCatalogFile)); } catch(e) {}
+      try { localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(productCatalogFile)); } catch(e) {}
       setShowProductCatalog(false);
       setProductCatalogFile(null);
       setProductCatalogFileName('');
