@@ -160,7 +160,7 @@ const parse3PLData = (threeplFiles) => {
 };
 
 export default function Dashboard() {
-  const [view, setView] = useState('upload');
+  const [view, setView] = useState('dashboard'); // Start with dashboard
   const [weekEnding, setWeekEnding] = useState('');
   const [files, setFiles] = useState({ amazon: null, shopify: null, cogs: null, threepl: [] }); // threepl is now array
   const [fileNames, setFileNames] = useState({ amazon: '', shopify: '', cogs: '', threepl: [] }); // threepl names array
@@ -173,6 +173,8 @@ export default function Dashboard() {
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [reprocessPeriod, setReprocessPeriod] = useState(null); // For period reprocessing
   const [threeplTimeView, setThreeplTimeView] = useState('weekly'); // For 3PL analytics view
+  const [uploadTab, setUploadTab] = useState('weekly'); // For upload view tabs
+  const [dashboardRange, setDashboardRange] = useState('month'); // 'week' | 'month' | 'quarter' | 'year'
 
   const [storeName, setStoreName] = useState('');
 
@@ -260,6 +262,7 @@ const handleLogout = async () => {
   const [periodLabel, setPeriodLabel] = useState('');
   const [allPeriodsData, setAllPeriodsData] = useState({});
   const [selectedPeriod, setSelectedPeriod] = useState(null);
+  const [periodAnalyticsView, setPeriodAnalyticsView] = useState(null); // 'skus' | 'profit' | 'ads' | '3pl' | null
   
   const clearPeriod3PLFiles = useCallback(() => {
     setPeriodFiles(p => ({ ...p, threepl: [] }));
@@ -1576,20 +1579,27 @@ if (supabase && isAuthReady && session && isLocked) {
   };
 
   const NavTabs = () => (
-    <div className="flex flex-wrap gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl">
-      <button onClick={() => setView('upload')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'upload' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Upload className="w-4 h-4 inline mr-1" />Weekly</button>
-      <button onClick={() => setView('period-upload')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'period-upload' || view === 'period-view' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><CalendarRange className="w-4 h-4 inline mr-1" />Period</button>
-      <button onClick={() => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}} disabled={!Object.keys(allWeeksData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />View Weeks</button>
-      <button onClick={() => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }}} disabled={!Object.keys(allPeriodsData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'period-view' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />View Periods</button>
+    <div className="flex flex-wrap gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl">
+      {/* Main Navigation */}
+      <button onClick={() => setView('dashboard')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'dashboard' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />Dashboard</button>
+      <button onClick={() => setView('upload')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Upload className="w-4 h-4 inline mr-1" />Upload</button>
+      
       <div className="w-px bg-slate-600 mx-1" />
+      
+      {/* Data Views */}
+      <button onClick={() => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}} disabled={!Object.keys(allWeeksData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />Weeks</button>
+      <button onClick={() => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }}} disabled={!Object.keys(allPeriodsData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'period-view' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><CalendarRange className="w-4 h-4 inline mr-1" />Periods</button>
+      <button onClick={() => setView('inventory')} disabled={!Object.keys(invHistory).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Boxes className="w-4 h-4 inline mr-1" />Inventory</button>
+      
+      <div className="w-px bg-slate-600 mx-1" />
+      
+      {/* Analytics */}
       <button onClick={() => setView('trends')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'trends' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><TrendingUp className="w-4 h-4 inline mr-1" />Trends</button>
-      <button onClick={() => setView('yoy')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'yoy' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><GitCompare className="w-4 h-4 inline mr-1" />YoY</button>
-      <button onClick={() => setView('skus')} disabled={Object.keys(allWeeksData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'skus' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Trophy className="w-4 h-4 inline mr-1" />SKUs</button>
-      <button onClick={() => setView('profitability')} disabled={Object.keys(allWeeksData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'profitability' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><PieChart className="w-4 h-4 inline mr-1" />Profit</button>
-      <button onClick={() => setView('ads')} disabled={Object.keys(allWeeksData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'ads' ? 'bg-purple-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Zap className="w-4 h-4 inline mr-1" />Ads</button>
+      <button onClick={() => setView('yoy')} disabled={Object.keys(allWeeksData).length < 2 && Object.keys(allPeriodsData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'yoy' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><GitCompare className="w-4 h-4 inline mr-1" />YoY</button>
+      <button onClick={() => setView('skus')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'skus' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Trophy className="w-4 h-4 inline mr-1" />SKUs</button>
+      <button onClick={() => setView('profitability')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'profitability' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><PieChart className="w-4 h-4 inline mr-1" />Profit</button>
+      <button onClick={() => setView('ads')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'ads' ? 'bg-purple-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Zap className="w-4 h-4 inline mr-1" />Ads</button>
       <button onClick={() => setView('3pl')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === '3pl' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Truck className="w-4 h-4 inline mr-1" />3PL</button>
-      <div className="w-px bg-slate-600 mx-1" />
-      <button onClick={() => setView('inv-upload')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'inventory' || view === 'inv-upload' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Boxes className="w-4 h-4 inline mr-1" />Inventory</button>
     </div>
   );
 
@@ -1675,39 +1685,550 @@ if (supabase && isAuthReady && session && isLocked) {
   };
 
   const hasCogs = Object.keys(savedCogs).length > 0;
+  
+  // Calculate dashboard metrics based on selected range
+  const dashboardMetrics = useMemo(() => {
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    const sortedPeriods = Object.keys(allPeriodsData).sort();
+    const now = new Date();
+    const currentYear = now.getFullYear().toString();
+    const lastYear = (now.getFullYear() - 1).toString();
+    
+    // Helper to filter weeks by time range
+    const getWeeksInRange = (range) => {
+      if (range === 'week') {
+        return sortedWeeks.slice(-1);
+      } else if (range === 'month') {
+        // Last 30 days worth of weeks (~4-5 weeks)
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        return sortedWeeks.filter(w => new Date(w) >= thirtyDaysAgo);
+      } else if (range === 'quarter') {
+        // Last 90 days
+        const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+        return sortedWeeks.filter(w => new Date(w) >= ninetyDaysAgo);
+      } else if (range === 'year') {
+        // Current year
+        return sortedWeeks.filter(w => w.startsWith(currentYear));
+      }
+      return sortedWeeks.slice(-4);
+    };
+    
+    const rangeWeeks = getWeeksInRange(dashboardRange);
+    
+    // For "year" view, prefer period data if available
+    let current = { revenue: 0, profit: 0, units: 0, adSpend: 0, cogs: 0, orders: 0 };
+    let previous = { revenue: 0, profit: 0 };
+    let usingPeriodData = false;
+    
+    if (dashboardRange === 'year' && allPeriodsData[currentYear]) {
+      // Use period data for current year
+      const period = allPeriodsData[currentYear];
+      current = {
+        revenue: period.total?.revenue || 0,
+        profit: period.total?.netProfit || 0,
+        units: period.total?.units || 0,
+        adSpend: period.total?.adSpend || 0,
+        cogs: period.total?.cogs || 0,
+        orders: (period.shopify?.threeplMetrics?.orderCount || 0) + (period.amazon?.units || 0),
+      };
+      usingPeriodData = true;
+      
+      // Compare to last year's period if available
+      if (allPeriodsData[lastYear]) {
+        const lastPeriod = allPeriodsData[lastYear];
+        previous = {
+          revenue: lastPeriod.total?.revenue || 0,
+          profit: lastPeriod.total?.netProfit || 0,
+        };
+      }
+    } else {
+      // Use weekly data
+      current = rangeWeeks.reduce((acc, w) => {
+        const week = allWeeksData[w];
+        return {
+          revenue: acc.revenue + (week.total?.revenue || 0),
+          profit: acc.profit + (week.total?.netProfit || 0),
+          units: acc.units + (week.total?.units || 0),
+          adSpend: acc.adSpend + (week.total?.adSpend || 0),
+          cogs: acc.cogs + (week.total?.cogs || 0),
+          orders: acc.orders + (week.shopify?.threeplMetrics?.orderCount || 0) + (week.amazon?.units || 0),
+        };
+      }, { revenue: 0, profit: 0, units: 0, adSpend: 0, cogs: 0, orders: 0 });
+      
+      // Previous range for comparison
+      const previousRangeWeeks = dashboardRange === 'week' 
+        ? sortedWeeks.slice(-2, -1)
+        : dashboardRange === 'month'
+        ? sortedWeeks.slice(-8, -4)
+        : dashboardRange === 'quarter'
+        ? sortedWeeks.slice(-26, -13)
+        : sortedWeeks.filter(w => w.startsWith(lastYear));
+        
+      previous = previousRangeWeeks.reduce((acc, w) => {
+        const week = allWeeksData[w];
+        return {
+          revenue: acc.revenue + (week.total?.revenue || 0),
+          profit: acc.profit + (week.total?.netProfit || 0),
+        };
+      }, { revenue: 0, profit: 0 });
+    }
+    
+    // Changes
+    const revenueChange = previous.revenue > 0 ? ((current.revenue - previous.revenue) / previous.revenue) * 100 : 0;
+    const profitChange = previous.profit !== 0 ? ((current.profit - previous.profit) / Math.abs(previous.profit)) * 100 : 0;
+    
+    // Range label
+    const rangeLabels = {
+      'week': 'This Week',
+      'month': 'Last 30 Days',
+      'quarter': 'Last 90 Days',
+      'year': currentYear,
+    };
+    
+    return { 
+      current, 
+      previous, 
+      revenueChange, 
+      profitChange, 
+      rangeWeeks, 
+      sortedWeeks,
+      sortedPeriods,
+      usingPeriodData,
+      rangeLabel: rangeLabels[dashboardRange] || 'Last 30 Days',
+      comparisonLabel: dashboardRange === 'year' ? `vs ${lastYear}` : 'vs Prior Period'
+    };
+  }, [allWeeksData, allPeriodsData, dashboardRange]);
 
   // VIEWS
-  if (view === 'upload') {
+  
+  // ==================== DASHBOARD VIEW ====================
+  if (view === 'dashboard') {
+    const hasData = Object.keys(allWeeksData).length > 0 || Object.keys(allPeriodsData).length > 0;
+    const { current, revenueChange, profitChange, rangeWeeks, sortedWeeks, sortedPeriods, usingPeriodData, rangeLabel, comparisonLabel } = dashboardMetrics;
+    
+    // Get alerts
+    const alerts = [];
+    if (!hasCogs) alerts.push({ type: 'warning', text: 'Set up COGS to track profitability accurately' });
+    if (goals.weeklyRevenue > 0 && sortedWeeks.length > 0) {
+      const lastWeekRevenue = allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.revenue || 0;
+      if (lastWeekRevenue < goals.weeklyRevenue) {
+        alerts.push({ type: 'warning', text: `Below weekly revenue target of ${formatCurrency(goals.weeklyRevenue)}` });
+      }
+    }
+    
+    // Check inventory alerts
+    const latestInv = Object.keys(invHistory).sort().reverse()[0];
+    const invAlerts = latestInv ? (invHistory[latestInv]?.items || []).filter(i => i.health === 'critical' || i.health === 'low') : [];
+    if (invAlerts.length > 0) {
+      alerts.push({ type: 'critical', text: `${invAlerts.length} products need reorder attention` });
+    }
+    
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
-          <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4"><BarChart3 className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">{storeName ? storeName + ' Weekly Upload' : 'Weekly Sales Upload'}</h1></div>
-          <NavTabs />{dataBar}
-          <GoalsCard 
-            weekRevenue={Object.keys(allWeeksData).length > 0 ? allWeeksData[Object.keys(allWeeksData).sort().reverse()[0]]?.total?.revenue || 0 : 0}
-            weekProfit={Object.keys(allWeeksData).length > 0 ? allWeeksData[Object.keys(allWeeksData).sort().reverse()[0]]?.total?.netProfit || 0 : 0}
-          />
-          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
-            <label className="block text-sm font-medium text-slate-300 mb-2">Week Ending (Sunday) <span className="text-rose-400">*</span></label>
-            <input type="date" value={weekEnding} onChange={(e) => setWeekEnding(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
-          </div>
-          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
-            <h2 className="text-lg font-semibold text-white mb-4">Data Files</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FileBox type="amazon" label="Amazon Report" desc="Tortuga CSV" req />
-              <FileBox type="shopify" label="Shopify Sales" desc="Sales by variant" req />
-              <FileBox type="threepl" label="3PL Costs" desc="Optional" />
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+          
+          {/* Header */}
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+            <div>
+              <h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'E-Commerce Dashboard'}</h1>
+              <p className="text-slate-400">Business performance overview</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <input value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="Store name"
+                className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white w-40" />
+              <button onClick={() => setShowGoalsModal(true)} className="px-3 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-1"><Target className="w-4 h-4" />Goals</button>
+              <button onClick={() => setShowCogsManager(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Settings className="w-4 h-4" />COGS</button>
             </div>
           </div>
-          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
-            <h2 className="text-lg font-semibold text-white mb-4">Shopify Ad Spend</h2>
-            <div className="grid grid-cols-2 gap-4">
-              <div><label className="block text-sm text-slate-400 mb-2">Meta</label><input type="number" value={adSpend.meta} onChange={(e) => setAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
-              <div><label className="block text-sm text-slate-400 mb-2">Google</label><input type="number" value={adSpend.google} onChange={(e) => setAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
+          
+          <NavTabs />
+          
+          {/* No Data State */}
+          {!hasData ? (
+            <div className="text-center py-16">
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-6">
+                <BarChart3 className="w-10 h-10 text-white" />
+              </div>
+              <h2 className="text-2xl font-bold text-white mb-3">Welcome to Your Dashboard</h2>
+              <p className="text-slate-400 mb-8 max-w-md mx-auto">Get started by uploading your sales data. We support Amazon and Shopify exports.</p>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                <button onClick={() => setView('upload')} className="px-6 py-3 bg-violet-600 hover:bg-violet-500 rounded-xl font-semibold flex items-center justify-center gap-2">
+                  <Upload className="w-5 h-5" />Upload Weekly Data
+                </button>
+                <button onClick={() => setView('upload')} className="px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-semibold flex items-center justify-center gap-2">
+                  <CalendarRange className="w-5 h-5" />Upload Period Data
+                </button>
+              </div>
+              <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 max-w-2xl mx-auto text-left">
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+                  <Calendar className="w-6 h-6 text-violet-400 mb-2" />
+                  <h3 className="font-semibold text-white mb-1">Weekly Tracking</h3>
+                  <p className="text-slate-400 text-sm">Upload weekly reports for detailed trends and analysis</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+                  <CalendarRange className="w-6 h-6 text-teal-400 mb-2" />
+                  <h3 className="font-semibold text-white mb-1">Period Reports</h3>
+                  <p className="text-slate-400 text-sm">Upload monthly or yearly totals for YoY comparisons</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+                  <Boxes className="w-6 h-6 text-emerald-400 mb-2" />
+                  <h3 className="font-semibold text-white mb-1">Inventory Alerts</h3>
+                  <p className="text-slate-400 text-sm">Track stock levels and get reorder notifications</p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Alerts */}
+              {alerts.length > 0 && (
+                <div className="mb-6 space-y-2">
+                  {alerts.map((alert, i) => (
+                    <div key={i} className={`flex items-center gap-3 p-3 rounded-xl ${alert.type === 'critical' ? 'bg-rose-900/30 border border-rose-500/50' : 'bg-amber-900/30 border border-amber-500/50'}`}>
+                      <AlertTriangle className={`w-5 h-5 ${alert.type === 'critical' ? 'text-rose-400' : 'text-amber-400'}`} />
+                      <span className={alert.type === 'critical' ? 'text-rose-300' : 'text-amber-300'}>{alert.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              {/* Time Range Toggle & Key Metrics */}
+              <div className="flex flex-wrap items-center gap-2 mb-4">
+                <span className="text-slate-400 text-sm mr-2">View:</span>
+                {[
+                  { key: 'week', label: 'Week' },
+                  { key: 'month', label: 'Month' },
+                  { key: 'quarter', label: 'Quarter' },
+                  { key: 'year', label: 'Year' },
+                ].map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setDashboardRange(key)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                      dashboardRange === key
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+                {usingPeriodData && (
+                  <span className="text-xs text-teal-400 ml-2">(from period data)</span>
+                )}
+              </div>
+              
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+                <div className="bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 rounded-2xl border border-emerald-500/30 p-5">
+                  <p className="text-emerald-400 text-sm font-medium mb-1">Revenue</p>
+                  <p className="text-2xl lg:text-3xl font-bold text-white">{formatCurrency(current.revenue)}</p>
+                  {revenueChange !== 0 && (
+                    <p className={`text-sm flex items-center gap-1 mt-1 ${revenueChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {revenueChange >= 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
+                      {Math.abs(revenueChange).toFixed(1)}% {comparisonLabel}
+                    </p>
+                  )}
+                </div>
+                <div className={`rounded-2xl border p-5 ${current.profit >= 0 ? 'bg-gradient-to-br from-blue-900/40 to-blue-800/20 border-blue-500/30' : 'bg-gradient-to-br from-rose-900/40 to-rose-800/20 border-rose-500/30'}`}>
+                  <p className={`text-sm font-medium mb-1 ${current.profit >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>Net Profit</p>
+                  <p className="text-2xl lg:text-3xl font-bold text-white">{formatCurrency(current.profit)}</p>
+                  {profitChange !== 0 && (
+                    <p className={`text-sm flex items-center gap-1 mt-1 ${profitChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {profitChange >= 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
+                      {Math.abs(profitChange).toFixed(1)}% {comparisonLabel}
+                    </p>
+                  )}
+                </div>
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+                  <p className="text-slate-400 text-sm font-medium mb-1">Units Sold</p>
+                  <p className="text-2xl lg:text-3xl font-bold text-white">{formatNumber(current.units)}</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+                  <p className="text-slate-400 text-sm font-medium mb-1">Ad Spend</p>
+                  <p className="text-2xl lg:text-3xl font-bold text-white">{formatCurrency(current.adSpend)}</p>
+                  <p className="text-slate-500 text-sm mt-1">{current.revenue > 0 ? ((current.adSpend / current.revenue) * 100).toFixed(1) : 0}% TACOS</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+                  <p className="text-slate-400 text-sm font-medium mb-1">Net Margin</p>
+                  <p className={`text-2xl lg:text-3xl font-bold ${current.revenue > 0 && (current.profit / current.revenue) * 100 >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {current.revenue > 0 ? ((current.profit / current.revenue) * 100).toFixed(1) : 0}%
+                  </p>
+                </div>
+              </div>
+              
+              {/* Goals Progress */}
+              {(goals.weeklyRevenue > 0 || goals.monthlyRevenue > 0) && sortedWeeks.length > 0 && (
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5 mb-6">
+                  <h3 className="text-sm font-semibold text-amber-400 uppercase mb-4 flex items-center gap-2"><Target className="w-4 h-4" />Goals Progress</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {goals.weeklyRevenue > 0 && sortedWeeks.length > 0 && (
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="text-slate-400">Weekly Revenue</span>
+                          <span className="text-white">{formatCurrency(allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.revenue || 0)} / {formatCurrency(goals.weeklyRevenue)}</span>
+                        </div>
+                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                          <div className={`h-full ${(allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.revenue || 0) >= goals.weeklyRevenue ? 'bg-emerald-500' : 'bg-amber-500'}`} 
+                            style={{ width: `${Math.min(100, ((allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.revenue || 0) / goals.weeklyRevenue) * 100)}%` }} />
+                        </div>
+                      </div>
+                    )}
+                    {goals.weeklyProfit > 0 && sortedWeeks.length > 0 && (
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="text-slate-400">Weekly Profit</span>
+                          <span className="text-white">{formatCurrency(allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.netProfit || 0)} / {formatCurrency(goals.weeklyProfit)}</span>
+                        </div>
+                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                          <div className={`h-full ${(allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.netProfit || 0) >= goals.weeklyProfit ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                            style={{ width: `${Math.min(100, Math.max(0, ((allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.netProfit || 0) / goals.weeklyProfit) * 100))}%` }} />
+                        </div>
+                      </div>
+                    )}
+                    {goals.monthlyRevenue > 0 && (
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="text-slate-400">Monthly Revenue</span>
+                          <span className="text-white">{formatCurrency(current.revenue)} / {formatCurrency(goals.monthlyRevenue)}</span>
+                        </div>
+                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                          <div className={`h-full ${current.revenue >= goals.monthlyRevenue ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                            style={{ width: `${Math.min(100, (current.revenue / goals.monthlyRevenue) * 100)}%` }} />
+                        </div>
+                      </div>
+                    )}
+                    {goals.monthlyProfit > 0 && (
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="text-slate-400">Monthly Profit</span>
+                          <span className="text-white">{formatCurrency(current.profit)} / {formatCurrency(goals.monthlyProfit)}</span>
+                        </div>
+                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                          <div className={`h-full ${current.profit >= goals.monthlyProfit ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                            style={{ width: `${Math.min(100, Math.max(0, (current.profit / goals.monthlyProfit) * 100))}%` }} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {/* Quick Actions & Recent Data */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                {/* Recent Weeks */}
+                <div className="lg:col-span-2 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-semibold text-slate-300 uppercase">Recent Weeks</h3>
+                    <button onClick={() => setView('upload')} className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"><Upload className="w-3 h-3" />Add Week</button>
+                  </div>
+                  {sortedWeeks.length > 0 ? (
+                    <div className="space-y-2">
+                      {sortedWeeks.slice(-5).reverse().map(w => {
+                        const week = allWeeksData[w];
+                        return (
+                          <button key={w} onClick={() => { setSelectedWeek(w); setView('weekly'); }} className="w-full flex items-center justify-between p-3 bg-slate-900/50 hover:bg-slate-700/50 rounded-xl transition-colors">
+                            <div className="flex items-center gap-3">
+                              <Calendar className="w-5 h-5 text-violet-400" />
+                              <div className="text-left">
+                                <p className="text-white font-medium">{new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                                <p className="text-slate-500 text-xs">{formatNumber(week.total?.units || 0)} units</p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-emerald-400 font-semibold">{formatCurrency(week.total?.revenue || 0)}</p>
+                              <p className={`text-xs ${(week.total?.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(week.total?.netProfit || 0)} profit</p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-slate-500 text-center py-4">No weekly data yet</p>
+                  )}
+                </div>
+                
+                {/* Quick Stats & Actions */}
+                <div className="space-y-4">
+                  {/* Data Summary */}
+                  <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+                    <h3 className="text-sm font-semibold text-slate-300 uppercase mb-3">Data Summary</h3>
+                    <div className="space-y-2">
+                      <div className="flex justify-between"><span className="text-slate-400">Weeks tracked</span><span className="text-white font-medium">{Object.keys(allWeeksData).length}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-400">Periods saved</span><span className="text-white font-medium">{Object.keys(allPeriodsData).length}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-400">COGS entries</span><span className="text-white font-medium">{Object.keys(savedCogs).length}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-400">Inventory snapshots</span><span className="text-white font-medium">{Object.keys(invHistory).length}</span></div>
+                    </div>
+                  </div>
+                  
+                  {/* Quick Actions */}
+                  <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+                    <h3 className="text-sm font-semibold text-slate-300 uppercase mb-3">Quick Actions</h3>
+                    <div className="space-y-2">
+                      <button onClick={() => setView('upload')} className="w-full p-2 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 rounded-lg text-violet-300 text-sm text-left flex items-center gap-2"><Upload className="w-4 h-4" />Upload Weekly Data</button>
+                      <button onClick={() => setView('upload')} className="w-full p-2 bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/30 rounded-lg text-teal-300 text-sm text-left flex items-center gap-2"><CalendarRange className="w-4 h-4" />Upload Period Data</button>
+                      <button onClick={() => setView('upload')} className="w-full p-2 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg text-emerald-300 text-sm text-left flex items-center gap-2"><Boxes className="w-4 h-4" />Upload Inventory</button>
+                      <button onClick={exportAll} className="w-full p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 text-sm text-left flex items-center gap-2"><Download className="w-4 h-4" />Export All Data</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Periods */}
+              {Object.keys(allPeriodsData).length > 0 && (
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-semibold text-slate-300 uppercase">Saved Periods</h3>
+                    <button onClick={() => setView('upload')} className="text-xs text-teal-400 hover:text-teal-300 flex items-center gap-1"><Upload className="w-3 h-3" />Add Period</button>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                    {Object.keys(allPeriodsData).sort().reverse().map(p => {
+                      const period = allPeriodsData[p];
+                      return (
+                        <button key={p} onClick={() => { setSelectedPeriod(p); setView('period-view'); }} className="p-3 bg-slate-900/50 hover:bg-slate-700/50 rounded-xl text-left transition-colors">
+                          <p className="text-white font-medium text-sm">{period.label}</p>
+                          <p className="text-emerald-400 font-semibold">{formatCurrency(period.total?.revenue || 0)}</p>
+                          <p className={`text-xs ${(period.total?.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(period.total?.netProfit || 0)}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ==================== UPLOAD VIEW (Combined) ====================
+  if (view === 'upload' || view === 'period-upload' || view === 'inv-upload') {
+    
+    // Local FileBox for period uploads
+    const PeriodFileBox = ({ type, label, desc, req, multi }) => {
+      const hasFile = multi ? (periodFiles[type]?.length > 0) : periodFiles[type];
+      const fileName = multi ? (periodFileNames[type]?.join(', ') || '') : periodFileNames[type];
+      return (
+        <div className={`relative border-2 border-dashed rounded-xl p-4 transition-all ${hasFile ? 'border-emerald-500/50 bg-emerald-950/20' : 'border-slate-600 hover:border-slate-500 bg-slate-800/30'}`}>
+          <input type="file" accept=".csv" onChange={(e) => handlePeriodFile(type, e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+          <div className="flex items-start gap-3">
+            {hasFile ? <Check className="w-5 h-5 text-emerald-400 mt-0.5" /> : <FileSpreadsheet className="w-5 h-5 text-slate-400 mt-0.5" />}
+            <div className="flex-1 min-w-0">
+              <p className={`font-medium ${hasFile ? 'text-emerald-400' : 'text-white'}`}>{label}{req && <span className="text-rose-400 ml-1">*</span>}</p>
+              <p className="text-slate-500 text-sm truncate">{hasFile ? fileName : desc}</p>
             </div>
           </div>
-          {!hasCogs && <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6"><p className="text-amber-400 font-semibold">COGS Required</p><p className="text-slate-300 text-sm">Click "COGS" button above first.</p></div>}
-          <button onClick={processSales} disabled={isProcessing || !files.amazon || !files.shopify || !hasCogs || !weekEnding} className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Generate Dashboard'}</button>
+        </div>
+      );
+    };
+    
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
+        <div className="max-w-4xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+          
+          <div className="text-center mb-6">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
+              <Upload className="w-8 h-8 text-white" />
+            </div>
+            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">Upload Data</h1>
+            <p className="text-slate-400">Import your sales reports and track performance</p>
+          </div>
+          
+          <NavTabs />
+          
+          {/* Upload Type Tabs */}
+          <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl">
+            <button onClick={() => setUploadTab('weekly')} className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Calendar className="w-5 h-5" />Weekly
+            </button>
+            <button onClick={() => setUploadTab('period')} className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'period' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <CalendarRange className="w-5 h-5" />Period
+            </button>
+            <button onClick={() => setUploadTab('inventory')} className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Boxes className="w-5 h-5" />Inventory
+            </button>
+          </div>
+          
+          {/* Weekly Upload */}
+          {uploadTab === 'weekly' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-white mb-1">Weekly Sales Upload</h2>
+              <p className="text-slate-400 text-sm mb-6">Upload your Amazon and Shopify weekly reports</p>
+              
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-slate-300 mb-2">Week Ending Date <span className="text-rose-400">*</span></label>
+                <input type="date" value={weekEnding} onChange={(e) => setWeekEnding(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <FileBox type="amazon" label="Amazon Report" desc="Business Reports > Detail Page" req />
+                <FileBox type="shopify" label="Shopify Sales" desc="Analytics > Sales by product" req />
+                <FileBox type="threepl" label="3PL Costs" desc="Fulfillment invoice CSV" multi />
+                <FileBox type="cogs" label="COGS File" desc="SKU & Cost Per Unit columns" />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div><label className="block text-sm text-slate-400 mb-2">Meta Ad Spend</label><input type="number" value={adSpend.meta} onChange={(e) => setAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
+                <div><label className="block text-sm text-slate-400 mb-2">Google Ad Spend</label><input type="number" value={adSpend.google} onChange={(e) => setAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
+              </div>
+              
+              {!hasCogs && <div className="bg-amber-900/30 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" /><div><p className="text-amber-300 font-medium">COGS not set up</p><p className="text-amber-200/70 text-sm">Upload a COGS file or configure in settings for profit tracking</p></div></div>}
+              
+              <button onClick={processSales} disabled={isProcessing || !files.amazon || !files.shopify || !weekEnding || !hasCogs} className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Process Weekly Data'}</button>
+            </div>
+          )}
+          
+          {/* Period Upload */}
+          {uploadTab === 'period' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-white mb-1">Period Upload</h2>
+              <p className="text-slate-400 text-sm mb-6">Upload monthly or yearly totals for historical tracking</p>
+              
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-slate-300 mb-2">Period Label <span className="text-rose-400">*</span></label>
+                <input type="text" value={periodLabel} onChange={(e) => setPeriodLabel(e.target.value)} placeholder="e.g., 2024, Q1 2025, January 2025" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+                <p className="text-slate-500 text-xs mt-1">Tip: Use "2024" or "2025" for YoY comparisons</p>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <PeriodFileBox type="amazon" label="Amazon Report" desc="Business Reports" req />
+                <PeriodFileBox type="shopify" label="Shopify Sales" desc="Sales by product" req />
+                <PeriodFileBox type="threepl" label="3PL Costs" desc="Fulfillment CSV" multi />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div><label className="block text-sm text-slate-400 mb-2">Meta Ad Spend</label><input type="number" value={periodAdSpend.meta} onChange={(e) => setPeriodAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
+                <div><label className="block text-sm text-slate-400 mb-2">Google Ad Spend</label><input type="number" value={periodAdSpend.google} onChange={(e) => setPeriodAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
+              </div>
+              
+              <button onClick={processPeriod} disabled={isProcessing || !periodFiles.amazon || !periodFiles.shopify || !periodLabel.trim()} className="w-full bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Save Period Data'}</button>
+            </div>
+          )}
+          
+          {/* Inventory Upload */}
+          {uploadTab === 'inventory' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-white mb-1">Inventory Upload</h2>
+              <p className="text-slate-400 text-sm mb-6">Track stock levels and get reorder alerts</p>
+              
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-slate-300 mb-2">Snapshot Date <span className="text-rose-400">*</span></label>
+                <input type="date" value={invSnapshotDate} onChange={(e) => setInvSnapshotDate(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <FileBox type="amazon" label="Amazon FBA Inventory" desc="Inventory health report" req isInv />
+                <FileBox type="threepl" label="3PL Inventory" desc="Products export" req isInv />
+              </div>
+              
+              <button onClick={processInventory} disabled={isProcessing || !invFiles.amazon || !invFiles.threepl || !invSnapshotDate} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Process Inventory'}</button>
+            </div>
+          )}
+          
+          {/* Import/Export */}
+          <div className="mt-6 flex gap-3 justify-center">
+            <button onClick={exportAll} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-2"><Download className="w-4 h-4" />Export All Data</button>
+            <label className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Import Data<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
+          </div>
         </div>
       </div>
     );
@@ -2157,11 +2678,85 @@ if (supabase && isAuthReady && session && isLocked) {
             <MetricCard label="Ad Spend" value={formatCurrency(data.total.adSpend)} sub={`${(data.total.roas || 0).toFixed(2)}x TACOS`} icon={BarChart3} color="violet" />
             <MetricCard label="COGS" value={formatCurrency(data.total.cogs)} icon={ShoppingCart} color="amber" />
           </div>
-          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5 mb-8">
+          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5 mb-6">
             <h3 className="text-sm font-semibold text-slate-400 uppercase mb-4">Revenue by Channel</h3>
             <div className="h-4 bg-slate-700 rounded-full overflow-hidden flex mb-3"><div className="bg-orange-500 h-full" style={{ width: `${data.total.amazonShare}%` }} /><div className="bg-blue-500 h-full" style={{ width: `${data.total.shopifyShare}%` }} /></div>
             <div className="flex justify-between text-sm"><div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-orange-500" /><span className="text-slate-300">Amazon</span><span className="text-white font-semibold">{formatPercent(data.total.amazonShare)}</span></div><div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-blue-500" /><span className="text-slate-300">Shopify</span><span className="text-white font-semibold">{formatPercent(data.total.shopifyShare)}</span></div></div>
           </div>
+          
+          {/* Period Analytics Quick Access Buttons */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+            <button onClick={() => setPeriodAnalyticsView(periodAnalyticsView === 'skus' ? null : 'skus')} className={`p-3 rounded-xl border text-left transition-all ${periodAnalyticsView === 'skus' ? 'bg-pink-600/20 border-pink-500/50' : 'bg-slate-800/50 border-slate-700 hover:border-slate-500'}`}>
+              <Trophy className={`w-5 h-5 mb-1 ${periodAnalyticsView === 'skus' ? 'text-pink-400' : 'text-slate-400'}`} />
+              <p className={`text-sm font-medium ${periodAnalyticsView === 'skus' ? 'text-pink-300' : 'text-white'}`}>SKU Rankings</p>
+              <p className="text-xs text-slate-500">{(data.amazon?.skuData?.length || 0) + (data.shopify?.skuData?.length || 0)} products</p>
+            </button>
+            <button onClick={() => setPeriodAnalyticsView(periodAnalyticsView === 'profit' ? null : 'profit')} className={`p-3 rounded-xl border text-left transition-all ${periodAnalyticsView === 'profit' ? 'bg-emerald-600/20 border-emerald-500/50' : 'bg-slate-800/50 border-slate-700 hover:border-slate-500'}`}>
+              <PieChart className={`w-5 h-5 mb-1 ${periodAnalyticsView === 'profit' ? 'text-emerald-400' : 'text-slate-400'}`} />
+              <p className={`text-sm font-medium ${periodAnalyticsView === 'profit' ? 'text-emerald-300' : 'text-white'}`}>Profitability</p>
+              <p className="text-xs text-slate-500">{formatPercent(data.total.netMargin)} margin</p>
+            </button>
+            <button onClick={() => setPeriodAnalyticsView(periodAnalyticsView === 'ads' ? null : 'ads')} className={`p-3 rounded-xl border text-left transition-all ${periodAnalyticsView === 'ads' ? 'bg-purple-600/20 border-purple-500/50' : 'bg-slate-800/50 border-slate-700 hover:border-slate-500'}`}>
+              <Zap className={`w-5 h-5 mb-1 ${periodAnalyticsView === 'ads' ? 'text-purple-400' : 'text-slate-400'}`} />
+              <p className={`text-sm font-medium ${periodAnalyticsView === 'ads' ? 'text-purple-300' : 'text-white'}`}>Ad Performance</p>
+              <p className="text-xs text-slate-500">{formatCurrency(data.total.adSpend)} spent</p>
+            </button>
+            <button onClick={() => setPeriodAnalyticsView(periodAnalyticsView === '3pl' ? null : '3pl')} className={`p-3 rounded-xl border text-left transition-all ${periodAnalyticsView === '3pl' ? 'bg-blue-600/20 border-blue-500/50' : 'bg-slate-800/50 border-slate-700 hover:border-slate-500'}`}>
+              <Truck className={`w-5 h-5 mb-1 ${periodAnalyticsView === '3pl' ? 'text-blue-400' : 'text-slate-400'}`} />
+              <p className={`text-sm font-medium ${periodAnalyticsView === '3pl' ? 'text-blue-300' : 'text-white'}`}>3PL Costs</p>
+              <p className="text-xs text-slate-500">{formatCurrency(data.shopify?.threeplCosts || 0)}</p>
+            </button>
+          </div>
+          
+          {/* SKU Rankings Panel */}
+          {periodAnalyticsView === 'skus' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-pink-500/30 p-5 mb-6">
+              <h3 className="text-lg font-semibold text-pink-400 mb-4 flex items-center gap-2"><Trophy className="w-5 h-5" />SKU Rankings - {data.label}</h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div>
+                  <h4 className="text-sm font-semibold text-orange-400 mb-3">Amazon Top SKUs</h4>
+                  {data.amazon?.skuData?.length > 0 ? (
+                    <div className="space-y-2 max-h-64 overflow-y-auto">{data.amazon.skuData.slice(0, 10).map((sku, i) => (<div key={sku.sku} className="flex items-center gap-3 p-2 bg-slate-900/50 rounded-lg"><span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i === 0 ? 'bg-amber-500 text-black' : i === 1 ? 'bg-slate-400 text-black' : i === 2 ? 'bg-amber-700 text-white' : 'bg-slate-700 text-white'}`}>{i + 1}</span><div className="flex-1 min-w-0"><p className="text-white text-sm truncate">{sku.sku}</p><p className="text-slate-500 text-xs">{formatNumber(sku.unitsSold)} units</p></div><p className="text-emerald-400 font-semibold">{formatCurrency(sku.netSales)}</p></div>))}</div>
+                  ) : <p className="text-slate-500 text-sm">No SKU data</p>}
+                </div>
+                <div>
+                  <h4 className="text-sm font-semibold text-blue-400 mb-3">Shopify Top SKUs</h4>
+                  {data.shopify?.skuData?.length > 0 ? (
+                    <div className="space-y-2 max-h-64 overflow-y-auto">{data.shopify.skuData.slice(0, 10).map((sku, i) => (<div key={sku.sku} className="flex items-center gap-3 p-2 bg-slate-900/50 rounded-lg"><span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i === 0 ? 'bg-amber-500 text-black' : i === 1 ? 'bg-slate-400 text-black' : i === 2 ? 'bg-amber-700 text-white' : 'bg-slate-700 text-white'}`}>{i + 1}</span><div className="flex-1 min-w-0"><p className="text-white text-sm truncate">{sku.sku}</p><p className="text-slate-500 text-xs">{formatNumber(sku.unitsSold)} units</p></div><p className="text-emerald-400 font-semibold">{formatCurrency(sku.netSales)}</p></div>))}</div>
+                  ) : <p className="text-slate-500 text-sm">No SKU data</p>}
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Profitability Panel */}
+          {periodAnalyticsView === 'profit' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-emerald-500/30 p-5 mb-6">
+              <h3 className="text-lg font-semibold text-emerald-400 mb-4 flex items-center gap-2"><PieChart className="w-5 h-5" />Profitability - {data.label}</h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div><h4 className="text-sm font-semibold text-slate-300 mb-3">Profit Waterfall</h4><div className="space-y-2"><div className="flex justify-between items-center p-2 bg-emerald-900/30 rounded-lg"><span className="text-slate-300">Revenue</span><span className="text-emerald-400 font-semibold">{formatCurrency(data.total.revenue)}</span></div><div className="flex justify-between items-center p-2 bg-rose-900/30 rounded-lg"><span className="text-slate-300">− COGS</span><span className="text-rose-400">({formatCurrency(data.total.cogs)})</span></div><div className="flex justify-between items-center p-2 bg-rose-900/30 rounded-lg"><span className="text-slate-300">− Amazon Fees</span><span className="text-rose-400">({formatCurrency(data.amazon?.fees || 0)})</span></div><div className="flex justify-between items-center p-2 bg-rose-900/30 rounded-lg"><span className="text-slate-300">− 3PL Costs</span><span className="text-rose-400">({formatCurrency(data.shopify?.threeplCosts || 0)})</span></div><div className="flex justify-between items-center p-2 bg-rose-900/30 rounded-lg"><span className="text-slate-300">− Ad Spend</span><span className="text-rose-400">({formatCurrency(data.total.adSpend)})</span></div><div className="flex justify-between items-center p-2 bg-slate-700 rounded-lg border-2 border-emerald-500/50"><span className="text-white font-semibold">Net Profit</span><span className={`font-bold ${data.total.netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(data.total.netProfit)}</span></div></div></div>
+                <div><h4 className="text-sm font-semibold text-slate-300 mb-3">Cost Breakdown</h4><div className="space-y-3"><div><div className="flex justify-between text-sm mb-1"><span className="text-slate-400">COGS</span><span className="text-white">{formatPercent(data.total.revenue > 0 ? (data.total.cogs / data.total.revenue) * 100 : 0)}</span></div><div className="h-2 bg-slate-700 rounded-full overflow-hidden"><div className="h-full bg-amber-500" style={{ width: `${Math.min(100, data.total.revenue > 0 ? (data.total.cogs / data.total.revenue) * 100 : 0)}%` }} /></div></div><div><div className="flex justify-between text-sm mb-1"><span className="text-slate-400">Fees & Fulfillment</span><span className="text-white">{formatPercent(data.total.revenue > 0 ? (((data.amazon?.fees || 0) + (data.shopify?.threeplCosts || 0)) / data.total.revenue) * 100 : 0)}</span></div><div className="h-2 bg-slate-700 rounded-full overflow-hidden"><div className="h-full bg-blue-500" style={{ width: `${Math.min(100, data.total.revenue > 0 ? (((data.amazon?.fees || 0) + (data.shopify?.threeplCosts || 0)) / data.total.revenue) * 100 : 0)}%` }} /></div></div><div><div className="flex justify-between text-sm mb-1"><span className="text-slate-400">Advertising</span><span className="text-white">{formatPercent(data.total.revenue > 0 ? (data.total.adSpend / data.total.revenue) * 100 : 0)}</span></div><div className="h-2 bg-slate-700 rounded-full overflow-hidden"><div className="h-full bg-purple-500" style={{ width: `${Math.min(100, data.total.revenue > 0 ? (data.total.adSpend / data.total.revenue) * 100 : 0)}%` }} /></div></div><div><div className="flex justify-between text-sm mb-1"><span className="text-slate-400">Net Margin</span><span className={data.total.netMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{formatPercent(data.total.netMargin)}</span></div><div className="h-2 bg-slate-700 rounded-full overflow-hidden"><div className={`h-full ${data.total.netMargin >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} style={{ width: `${Math.min(100, Math.abs(data.total.netMargin))}%` }} /></div></div></div></div>
+              </div>
+            </div>
+          )}
+          
+          {/* Ads Panel */}
+          {periodAnalyticsView === 'ads' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-purple-500/30 p-5 mb-6">
+              <h3 className="text-lg font-semibold text-purple-400 mb-4 flex items-center gap-2"><Zap className="w-5 h-5" />Ad Performance - {data.label}</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4"><div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">Total Ad Spend</p><p className="text-white text-xl font-bold">{formatCurrency(data.total.adSpend)}</p></div><div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">TACOS</p><p className={`text-xl font-bold ${data.total.revenue > 0 && (data.total.adSpend / data.total.revenue) * 100 <= 15 ? 'text-emerald-400' : 'text-amber-400'}`}>{data.total.revenue > 0 ? ((data.total.adSpend / data.total.revenue) * 100).toFixed(1) : 0}%</p></div><div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">Amazon Ads</p><p className="text-orange-400 text-xl font-bold">{formatCurrency(data.amazon?.adSpend || 0)}</p></div><div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">Shopify Ads</p><p className="text-blue-400 text-xl font-bold">{formatCurrency(data.shopify?.adSpend || 0)}</p></div></div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div className="bg-orange-900/20 rounded-lg p-4 border border-orange-500/30"><h4 className="text-orange-400 font-semibold mb-2">Amazon</h4><div className="space-y-1 text-sm"><div className="flex justify-between"><span className="text-slate-400">Sponsored Products</span><span className="text-white">{formatCurrency(data.amazon?.adSpend || 0)}</span></div><div className="flex justify-between"><span className="text-slate-400">TACOS</span><span className="text-white">{data.amazon?.revenue > 0 ? ((data.amazon.adSpend / data.amazon.revenue) * 100).toFixed(1) : 0}%</span></div></div></div><div className="bg-blue-900/20 rounded-lg p-4 border border-blue-500/30"><h4 className="text-blue-400 font-semibold mb-2">Shopify</h4><div className="space-y-1 text-sm"><div className="flex justify-between"><span className="text-slate-400">Meta Ads</span><span className="text-white">{formatCurrency(data.shopify?.metaSpend || 0)}</span></div><div className="flex justify-between"><span className="text-slate-400">Google Ads</span><span className="text-white">{formatCurrency(data.shopify?.googleSpend || 0)}</span></div><div className="flex justify-between"><span className="text-slate-400">TACOS</span><span className="text-white">{data.shopify?.revenue > 0 ? ((data.shopify.adSpend / data.shopify.revenue) * 100).toFixed(1) : 0}%</span></div></div></div></div>
+            </div>
+          )}
+          
+          {/* 3PL Panel */}
+          {periodAnalyticsView === '3pl' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-blue-500/30 p-5 mb-6">
+              <h3 className="text-lg font-semibold text-blue-400 mb-4 flex items-center gap-2"><Truck className="w-5 h-5" />3PL Fulfillment - {data.label}</h3>
+              {data.shopify?.threeplCosts > 0 ? (<><div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4"><div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">Total 3PL</p><p className="text-white text-xl font-bold">{formatCurrency(data.shopify.threeplCosts)}</p></div><div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">% of Revenue</p><p className="text-white text-xl font-bold">{data.shopify.revenue > 0 ? ((data.shopify.threeplCosts / data.shopify.revenue) * 100).toFixed(1) : 0}%</p></div>{data.shopify.threeplMetrics?.orderCount > 0 && (<><div className="bg-cyan-900/30 rounded-lg p-3 border border-cyan-500/30"><p className="text-cyan-400 text-xs">Orders</p><p className="text-cyan-300 text-xl font-bold">{formatNumber(data.shopify.threeplMetrics.orderCount)}</p></div><div className="bg-cyan-900/30 rounded-lg p-3 border border-cyan-500/30"><p className="text-cyan-400 text-xs">Avg Cost/Order</p><p className="text-cyan-300 text-xl font-bold">{formatCurrency(data.shopify.threeplMetrics.avgCostPerOrder)}</p></div></>)}</div>{data.shopify.threeplBreakdown && (<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">{data.shopify.threeplBreakdown.shipping > 0 && <div className="bg-slate-900/50 rounded-lg p-2"><p className="text-slate-500 text-xs">Shipping</p><p className="text-blue-400 font-semibold">{formatCurrency(data.shopify.threeplBreakdown.shipping)}</p></div>}{data.shopify.threeplBreakdown.pickFees > 0 && <div className="bg-slate-900/50 rounded-lg p-2"><p className="text-slate-500 text-xs">Pick Fees</p><p className="text-emerald-400 font-semibold">{formatCurrency(data.shopify.threeplBreakdown.pickFees)}</p></div>}{data.shopify.threeplBreakdown.storage > 0 && <div className="bg-slate-900/50 rounded-lg p-2"><p className="text-slate-500 text-xs">Storage</p><p className="text-violet-400 font-semibold">{formatCurrency(data.shopify.threeplBreakdown.storage)}</p></div>}{data.shopify.threeplBreakdown.boxCharges > 0 && <div className="bg-slate-900/50 rounded-lg p-2"><p className="text-slate-500 text-xs">Packaging</p><p className="text-amber-400 font-semibold">{formatCurrency(data.shopify.threeplBreakdown.boxCharges)}</p></div>}{data.shopify.threeplBreakdown.receiving > 0 && <div className="bg-slate-900/50 rounded-lg p-2"><p className="text-slate-500 text-xs">Receiving</p><p className="text-slate-300 font-semibold">{formatCurrency(data.shopify.threeplBreakdown.receiving)}</p></div>}{data.shopify.threeplBreakdown.other > 0 && <div className="bg-slate-900/50 rounded-lg p-2"><p className="text-slate-500 text-xs">Other</p><p className="text-slate-300 font-semibold">{formatCurrency(data.shopify.threeplBreakdown.other)}</p></div>}</div>)}{data.shopify.threeplMetrics?.orderCount > 0 && (<div className="border-t border-slate-700 pt-4"><h4 className="text-sm font-semibold text-cyan-400 mb-3">📦 Order Metrics</h4><div className="grid grid-cols-2 md:grid-cols-4 gap-3"><div className="bg-slate-900/50 rounded-lg p-2"><p className="text-slate-500 text-xs">Units Picked</p><p className="text-white font-semibold">{formatNumber(data.shopify.threeplMetrics.totalUnits)}</p></div><div className="bg-slate-900/50 rounded-lg p-2"><p className="text-slate-500 text-xs">Avg Units/Order</p><p className="text-white font-semibold">{data.shopify.threeplMetrics.avgUnitsPerOrder?.toFixed(1) || '—'}</p></div><div className="bg-slate-900/50 rounded-lg p-2"><p className="text-slate-500 text-xs">Avg Ship Cost</p><p className="text-white font-semibold">{formatCurrency(data.shopify.threeplMetrics.avgShippingCost)}</p></div><div className="bg-slate-900/50 rounded-lg p-2"><p className="text-slate-500 text-xs">Avg Pick Cost</p><p className="text-white font-semibold">{formatCurrency(data.shopify.threeplMetrics.avgPickCost)}</p></div></div></div>)}</>) : (<div className="text-center py-6"><Truck className="w-12 h-12 text-slate-600 mx-auto mb-3" /><p className="text-slate-400">No 3PL data for this period</p><p className="text-slate-500 text-sm mt-1">Click "Update 3PL/Ads" to add 3PL cost files</p></div>)}
+            </div>
+          )}
+          
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz showSkuTable /><ChannelCard title="Shopify" color="blue" data={data.shopify} showSkuTable /></div>
         </div>
       </div>
