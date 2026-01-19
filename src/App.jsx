@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X } from 'lucide-react';
 
 const parseCSV = (text) => {
   const lines = text.split('\n').filter(line => line.trim());
@@ -288,6 +288,14 @@ const handleLogout = async () => {
   const [taxFilingConfirmNum, setTaxFilingConfirmNum] = useState('');
   const [taxFilingPaidAmount, setTaxFilingPaidAmount] = useState('');
   const [taxFilingNotes, setTaxFilingNotes] = useState('');
+  const [viewingStateHistory, setViewingStateHistory] = useState(null); // state code to view history for
+  const [taxViewTab, setTaxViewTab] = useState('states'); // 'states' | 'history' | 'nexus-info'
+  
+  // AI Chatbot state
+  const [showAIChat, setShowAIChat] = useState(false);
+  const [aiMessages, setAiMessages] = useState([]);
+  const [aiInput, setAiInput] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
   
   // App Settings
   const [appSettings, setAppSettings] = useState({
@@ -345,59 +353,59 @@ const handleLogout = async () => {
 const PERIODS_KEY = 'ecommerce_periods_v1';
 const SALES_TAX_KEY = 'ecommerce_sales_tax_v1';
 
-// US States with sales tax info - comprehensive list
+// US States with sales tax info - comprehensive list with economic nexus thresholds
 const US_STATES_TAX_INFO = {
-  AL: { name: 'Alabama', hasStateTax: true, stateRate: 0.04, filingTypes: ['state'], reportFormat: 'standard' },
-  AK: { name: 'Alaska', hasStateTax: false, stateRate: 0, filingTypes: ['local'], reportFormat: 'standard', note: 'No state tax, but local taxes may apply' },
-  AZ: { name: 'Arizona', hasStateTax: true, stateRate: 0.056, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction' },
-  AR: { name: 'Arkansas', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'local'], reportFormat: 'standard' },
-  CA: { name: 'California', hasStateTax: true, stateRate: 0.0725, filingTypes: ['state', 'district'], reportFormat: 'district' },
-  CO: { name: 'Colorado', hasStateTax: true, stateRate: 0.029, filingTypes: ['state', 'county', 'city', 'special'], reportFormat: 'jurisdiction', note: 'Home rule cities file separately' },
-  CT: { name: 'Connecticut', hasStateTax: true, stateRate: 0.0635, filingTypes: ['state'], reportFormat: 'standard' },
-  DE: { name: 'Delaware', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', note: 'No sales tax' },
-  FL: { name: 'Florida', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'county'], reportFormat: 'county' },
-  GA: { name: 'Georgia', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  HI: { name: 'Hawaii', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'county'], reportFormat: 'standard', note: 'GET tax, not traditional sales tax' },
-  ID: { name: 'Idaho', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
-  IL: { name: 'Illinois', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  IN: { name: 'Indiana', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard' },
-  IA: { name: 'Iowa', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard' },
-  KS: { name: 'Kansas', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction' },
-  KY: { name: 'Kentucky', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
-  LA: { name: 'Louisiana', hasStateTax: true, stateRate: 0.0445, filingTypes: ['state', 'parish'], reportFormat: 'jurisdiction', note: 'Parish taxes filed separately' },
-  ME: { name: 'Maine', hasStateTax: true, stateRate: 0.055, filingTypes: ['state'], reportFormat: 'standard' },
-  MD: { name: 'Maryland', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
-  MA: { name: 'Massachusetts', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state'], reportFormat: 'standard' },
-  MI: { name: 'Michigan', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
-  MN: { name: 'Minnesota', hasStateTax: true, stateRate: 0.06875, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  MS: { name: 'Mississippi', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard' },
-  MO: { name: 'Missouri', hasStateTax: true, stateRate: 0.04225, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  MT: { name: 'Montana', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', note: 'No sales tax' },
-  NE: { name: 'Nebraska', hasStateTax: true, stateRate: 0.055, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  NV: { name: 'Nevada', hasStateTax: true, stateRate: 0.0685, filingTypes: ['state', 'county'], reportFormat: 'county' },
-  NH: { name: 'New Hampshire', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', note: 'No sales tax' },
-  NJ: { name: 'New Jersey', hasStateTax: true, stateRate: 0.06625, filingTypes: ['state'], reportFormat: 'standard' },
-  NM: { name: 'New Mexico', hasStateTax: true, stateRate: 0.05125, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', note: 'Gross receipts tax' },
-  NY: { name: 'New York', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction' },
-  NC: { name: 'North Carolina', hasStateTax: true, stateRate: 0.0475, filingTypes: ['state', 'county'], reportFormat: 'county' },
-  ND: { name: 'North Dakota', hasStateTax: true, stateRate: 0.05, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  OH: { name: 'Ohio', hasStateTax: true, stateRate: 0.0575, filingTypes: ['state', 'county'], reportFormat: 'county' },
-  OK: { name: 'Oklahoma', hasStateTax: true, stateRate: 0.045, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction' },
-  OR: { name: 'Oregon', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', note: 'No sales tax' },
-  PA: { name: 'Pennsylvania', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard' },
-  RI: { name: 'Rhode Island', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard' },
-  SC: { name: 'South Carolina', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  SD: { name: 'South Dakota', hasStateTax: true, stateRate: 0.045, filingTypes: ['state', 'municipal'], reportFormat: 'jurisdiction' },
-  TN: { name: 'Tennessee', hasStateTax: true, stateRate: 0.07, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  TX: { name: 'Texas', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  UT: { name: 'Utah', hasStateTax: true, stateRate: 0.0485, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  VT: { name: 'Vermont', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard' },
-  VA: { name: 'Virginia', hasStateTax: true, stateRate: 0.043, filingTypes: ['state', 'local'], reportFormat: 'standard' },
-  WA: { name: 'Washington', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  WV: { name: 'West Virginia', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
-  WI: { name: 'Wisconsin', hasStateTax: true, stateRate: 0.05, filingTypes: ['state', 'county'], reportFormat: 'county' },
-  WY: { name: 'Wyoming', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction' },
-  DC: { name: 'District of Columbia', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard' },
+  AL: { name: 'Alabama', hasStateTax: true, stateRate: 0.04, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 250000, transactions: null }, marketplaceFacilitator: true, sst: true, note: 'Simplified Seller Use Tax (SSUT) program available' },
+  AK: { name: 'Alaska', hasStateTax: false, stateRate: 0, filingTypes: ['local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'No state tax, but must collect for ARSSTC member localities' },
+  AZ: { name: 'Arizona', hasStateTax: true, stateRate: 0.056, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'TPT license required' },
+  AR: { name: 'Arkansas', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  CA: { name: 'California', hasStateTax: true, stateRate: 0.0725, filingTypes: ['state', 'district'], reportFormat: 'district', nexusThreshold: { sales: 500000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Highest threshold - $500K sales required' },
+  CO: { name: 'Colorado', hasStateTax: true, stateRate: 0.029, filingTypes: ['state', 'county', 'city', 'special'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Home rule cities (Denver, Aurora, etc.) require separate registration' },
+  CT: { name: 'Connecticut', hasStateTax: true, stateRate: 0.0635, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
+  DE: { name: 'Delaware', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
+  FL: { name: 'Florida', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false },
+  GA: { name: 'Georgia', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  HI: { name: 'Hawaii', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'county'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'GET (Gross Excise Tax) not traditional sales tax - applies to seller' },
+  ID: { name: 'Idaho', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  IL: { name: 'Illinois', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'ROT (Retailers Occupation Tax) - multiple local taxes' },
+  IN: { name: 'Indiana', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  IA: { name: 'Iowa', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  KS: { name: 'Kansas', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  KY: { name: 'Kentucky', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  LA: { name: 'Louisiana', hasStateTax: true, stateRate: 0.0445, filingTypes: ['state', 'parish'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'Parish taxes filed through Louisiana Sales Tax Commission' },
+  ME: { name: 'Maine', hasStateTax: true, stateRate: 0.055, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
+  MD: { name: 'Maryland', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'Annual report & LLC fees required separately' },
+  MA: { name: 'Massachusetts', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false },
+  MI: { name: 'Michigan', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  MN: { name: 'Minnesota', hasStateTax: true, stateRate: 0.06875, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  MS: { name: 'Mississippi', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 250000, transactions: null }, marketplaceFacilitator: true, sst: false },
+  MO: { name: 'Missouri', hasStateTax: true, stateRate: 0.04225, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false },
+  MT: { name: 'Montana', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
+  NE: { name: 'Nebraska', hasStateTax: true, stateRate: 0.055, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  NV: { name: 'Nevada', hasStateTax: true, stateRate: 0.0685, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  NH: { name: 'New Hampshire', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
+  NJ: { name: 'New Jersey', hasStateTax: true, stateRate: 0.06625, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  NM: { name: 'New Mexico', hasStateTax: true, stateRate: 0.05125, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Gross Receipts Tax (GRT) - not traditional sales tax' },
+  NY: { name: 'New York', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 500000, transactions: 100 }, marketplaceFacilitator: true, sst: false, note: 'High threshold - $500K AND 100+ transactions required' },
+  NC: { name: 'North Carolina', hasStateTax: true, stateRate: 0.0475, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  ND: { name: 'North Dakota', hasStateTax: true, stateRate: 0.05, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  OH: { name: 'Ohio', hasStateTax: true, stateRate: 0.0575, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  OK: { name: 'Oklahoma', hasStateTax: true, stateRate: 0.045, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  OR: { name: 'Oregon', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
+  PA: { name: 'Pennsylvania', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Philadelphia & Allegheny County have additional local taxes' },
+  RI: { name: 'Rhode Island', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  SC: { name: 'South Carolina', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  SD: { name: 'South Dakota', hasStateTax: true, stateRate: 0.045, filingTypes: ['state', 'municipal'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true, note: 'Origin of Wayfair decision' },
+  TN: { name: 'Tennessee', hasStateTax: true, stateRate: 0.07, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  TX: { name: 'Texas', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 500000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'High threshold - $500K sales required' },
+  UT: { name: 'Utah', hasStateTax: true, stateRate: 0.0485, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  VT: { name: 'Vermont', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  VA: { name: 'Virginia', hasStateTax: true, stateRate: 0.043, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
+  WA: { name: 'Washington', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true, note: 'B&O tax also applies to some sellers' },
+  WV: { name: 'West Virginia', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  WI: { name: 'Wisconsin', hasStateTax: true, stateRate: 0.05, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  WY: { name: 'Wyoming', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  DC: { name: 'District of Columbia', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
 };
 
 // Filing frequency due date calculator
@@ -1986,6 +1994,266 @@ if (supabase && isAuthReady && session && isLocked) {
 
   const hasCogs = Object.keys(savedCogs).length > 0;
   
+  // AI Chat Component
+  const AIChat = () => {
+    if (!showAIChat) return null;
+    
+    // Prepare data summary for AI context
+    const prepareDataContext = () => {
+      const weeksCount = Object.keys(allWeeksData).length;
+      const periodsCount = Object.keys(allPeriodsData).length;
+      
+      // Summarize weekly data
+      const weeksSummary = Object.entries(allWeeksData).map(([week, data]) => ({
+        weekEnding: week,
+        revenue: data.total?.revenue || 0,
+        profit: data.total?.netProfit || 0,
+        units: data.total?.units || 0,
+        adSpend: data.total?.adSpend || 0,
+        cogs: data.total?.cogs || 0,
+        amazonRevenue: data.amazon?.revenue || 0,
+        shopifyRevenue: data.shopify?.revenue || 0,
+        margin: data.total?.revenue ? ((data.total?.netProfit || 0) / data.total.revenue * 100).toFixed(1) + '%' : '0%',
+      }));
+      
+      // Summarize period data
+      const periodsSummary = Object.entries(allPeriodsData).map(([label, data]) => ({
+        period: label,
+        revenue: data.total?.revenue || 0,
+        profit: data.total?.netProfit || 0,
+        units: data.total?.units || 0,
+        adSpend: data.total?.adSpend || 0,
+        cogs: data.total?.cogs || 0,
+        amazonRevenue: data.amazon?.revenue || 0,
+        shopifyRevenue: data.shopify?.revenue || 0,
+      }));
+      
+      // Inventory summary
+      const latestInv = Object.keys(invHistory).sort().reverse()[0];
+      const invSummary = latestInv ? {
+        date: latestInv,
+        totalUnits: invHistory[latestInv]?.totalUnits || 0,
+        totalValue: invHistory[latestInv]?.totalValue || 0,
+        itemCount: invHistory[latestInv]?.items?.length || 0,
+        lowStockItems: (invHistory[latestInv]?.items || []).filter(i => i.health === 'low' || i.health === 'critical').map(i => ({ sku: i.sku, units: i.totalUnits, daysOfStock: i.daysOfStock })),
+      } : null;
+      
+      // Sales tax summary
+      const taxSummary = {
+        nexusStates: Object.entries(salesTaxConfig.nexusStates || {}).filter(([,v]) => v.hasNexus).map(([code, config]) => ({
+          state: US_STATES_TAX_INFO[code]?.name || code,
+          code,
+          frequency: config.frequency,
+        })),
+        filingHistory: Object.entries(salesTaxConfig.filingHistory || {}).flatMap(([state, periods]) => 
+          Object.entries(periods).map(([period, data]) => ({
+            state: US_STATES_TAX_INFO[state]?.name || state,
+            period,
+            amount: data.amount,
+            filedDate: data.filedDate,
+          }))
+        ),
+      };
+      
+      // Top SKUs
+      const allSkuData = {};
+      Object.values(allWeeksData).forEach(week => {
+        [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])].forEach(sku => {
+          if (!allSkuData[sku.sku]) allSkuData[sku.sku] = { sku: sku.sku, title: sku.title, revenue: 0, units: 0, profit: 0 };
+          allSkuData[sku.sku].revenue += sku.revenue || 0;
+          allSkuData[sku.sku].units += sku.units || 0;
+          allSkuData[sku.sku].profit += sku.profit || 0;
+        });
+      });
+      const topSkus = Object.values(allSkuData).sort((a, b) => b.revenue - a.revenue).slice(0, 20);
+      
+      return {
+        storeName: storeName || 'E-Commerce Store',
+        dataRange: {
+          weeksTracked: weeksCount,
+          periodsTracked: periodsCount,
+          oldestWeek: Object.keys(allWeeksData).sort()[0],
+          newestWeek: Object.keys(allWeeksData).sort().reverse()[0],
+        },
+        weeklyData: weeksSummary,
+        periodData: periodsSummary,
+        inventory: invSummary,
+        salesTax: taxSummary,
+        topSkus,
+        goals,
+      };
+    };
+    
+    const sendMessage = async () => {
+      if (!aiInput.trim() || aiLoading) return;
+      
+      const userMessage = aiInput.trim();
+      setAiInput('');
+      setAiMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+      setAiLoading(true);
+      
+      try {
+        const dataContext = prepareDataContext();
+        
+        const systemPrompt = `You are a helpful AI assistant for an e-commerce business dashboard. You have access to the business's data and can answer questions about their performance, sales, inventory, and finances.
+
+Here is the current business data you have access to:
+
+STORE: ${dataContext.storeName}
+DATA RANGE: ${dataContext.dataRange.weeksTracked} weeks tracked, ${dataContext.dataRange.periodsTracked} periods tracked
+${dataContext.dataRange.oldestWeek ? `From ${dataContext.dataRange.oldestWeek} to ${dataContext.dataRange.newestWeek}` : 'No weekly data yet'}
+
+WEEKLY DATA (most recent first):
+${JSON.stringify(dataContext.weeklyData.slice().reverse().slice(0, 12), null, 2)}
+
+PERIOD DATA (yearly/monthly totals):
+${JSON.stringify(dataContext.periodData, null, 2)}
+
+TOP SELLING SKUS:
+${JSON.stringify(dataContext.topSkus.slice(0, 10), null, 2)}
+
+INVENTORY SNAPSHOT:
+${dataContext.inventory ? JSON.stringify(dataContext.inventory, null, 2) : 'No inventory data'}
+
+SALES TAX:
+Nexus States: ${dataContext.salesTax.nexusStates.map(s => s.state).join(', ') || 'None configured'}
+Recent Filings: ${JSON.stringify(dataContext.salesTax.filingHistory.slice(0, 5), null, 2)}
+
+GOALS:
+Weekly Revenue Target: $${dataContext.goals.weeklyRevenue || 0}
+Weekly Profit Target: $${dataContext.goals.weeklyProfit || 0}
+Monthly Revenue Target: $${dataContext.goals.monthlyRevenue || 0}
+Monthly Profit Target: $${dataContext.goals.monthlyProfit || 0}
+
+When answering:
+- Be concise and helpful
+- Format currency values properly (e.g., $1,234.56)
+- If asked about specific dates/periods not in the data, say so
+- Provide insights and suggestions when relevant
+- For calculations, show your work briefly`;
+
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system: systemPrompt,
+            messages: [
+              ...aiMessages.map(m => ({ role: m.role, content: m.content })),
+              { role: 'user', content: userMessage }
+            ],
+          }),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`API error: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        const assistantMessage = data.content?.[0]?.text || data.message || 'Sorry, I could not process that request.';
+        
+        setAiMessages(prev => [...prev, { role: 'assistant', content: assistantMessage }]);
+      } catch (error) {
+        console.error('AI Chat error:', error);
+        const errorMessage = 'Sorry, there was an error processing your request. Please make sure the /api/chat endpoint is configured correctly.';
+        setAiMessages(prev => [...prev, { role: 'assistant', content: errorMessage }]);
+      } finally {
+        setAiLoading(false);
+      }
+    };
+    
+    return (
+      <div className="fixed bottom-4 right-4 z-50 w-96 max-w-[calc(100vw-2rem)]">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-violet-600 to-indigo-600 p-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                <MessageSquare className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="text-white font-semibold">AI Assistant</h3>
+                <p className="text-white/70 text-xs">Ask about your business data</p>
+              </div>
+            </div>
+            <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          {/* Messages */}
+          <div className="h-80 overflow-y-auto p-4 space-y-4">
+            {aiMessages.length === 0 && (
+              <div className="text-center text-slate-400 py-8">
+                <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                <p className="text-sm">Ask me anything about your business!</p>
+                <div className="mt-4 space-y-2">
+                  <button onClick={() => setAiInput("What was my total revenue last month?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "What was my total revenue last month?"</button>
+                  <button onClick={() => setAiInput("Which SKU is my best seller?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which SKU is my best seller?"</button>
+                  <button onClick={() => setAiInput("How is my profit margin trending?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "How is my profit margin trending?"</button>
+                  <button onClick={() => setAiInput("Do I have any low stock items?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Do I have any low stock items?"</button>
+                </div>
+              </div>
+            )}
+            {aiMessages.map((msg, i) => (
+              <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] rounded-2xl px-4 py-2 ${msg.role === 'user' ? 'bg-violet-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
+                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                </div>
+              </div>
+            ))}
+            {aiLoading && (
+              <div className="flex justify-start">
+                <div className="bg-slate-700 rounded-2xl px-4 py-3">
+                  <div className="flex gap-1">
+                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          
+          {/* Input */}
+          <div className="p-4 border-t border-slate-700">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={aiInput}
+                onChange={(e) => setAiInput(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                placeholder="Ask about your data..."
+                className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-2 text-white text-sm focus:outline-none focus:border-violet-500"
+              />
+              <button
+                onClick={sendMessage}
+                disabled={!aiInput.trim() || aiLoading}
+                className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl text-white"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  
+  // Floating AI Chat Button
+  const AIChatButton = () => (
+    !showAIChat && (
+      <button
+        onClick={() => setShowAIChat(true)}
+        className="fixed bottom-4 right-4 z-50 w-14 h-14 bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group"
+      >
+        <MessageSquare className="w-6 h-6 text-white" />
+        <span className="absolute right-full mr-3 px-3 py-1 bg-slate-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+          Ask AI Assistant
+        </span>
+      </button>
+    )
+  );
+  
   // Calculate dashboard metrics based on selected range
   const dashboardMetrics = useMemo(() => {
     const sortedWeeks = Object.keys(allWeeksData).sort();
@@ -2159,7 +2427,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -2465,7 +2733,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -2581,7 +2849,7 @@ if (supabase && isAuthReady && session && isLocked) {
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -2599,7 +2867,7 @@ if (supabase && isAuthReady && session && isLocked) {
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -2624,7 +2892,7 @@ if (supabase && isAuthReady && session && isLocked) {
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -2659,7 +2927,7 @@ if (supabase && isAuthReady && session && isLocked) {
     const data = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -2763,7 +3031,7 @@ if (supabase && isAuthReady && session && isLocked) {
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -2789,7 +3057,7 @@ if (supabase && isAuthReady && session && isLocked) {
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -2826,7 +3094,7 @@ if (supabase && isAuthReady && session && isLocked) {
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -3042,7 +3310,7 @@ if (supabase && isAuthReady && session && isLocked) {
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -3225,7 +3493,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -3573,7 +3841,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -3885,7 +4153,7 @@ if (supabase && isAuthReady && session && isLocked) {
     if (!hasWeeklyData && !hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -3905,7 +4173,7 @@ if (supabase && isAuthReady && session && isLocked) {
     if (!hasWeeklyData && hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -3967,7 +4235,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4253,7 +4521,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4379,7 +4647,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4549,7 +4817,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4837,12 +5105,55 @@ if (supabase && isAuthReady && session && isLocked) {
             {/* State Info */}
             {stateInfo && (
               <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
-                <h4 className="text-sm font-semibold text-slate-300 mb-2">State Information</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div><span className="text-slate-500">Base Rate:</span> <span className="text-white">{(stateInfo.stateRate * 100).toFixed(2)}%</span></div>
-                  <div><span className="text-slate-500">Filing Types:</span> <span className="text-white capitalize">{stateInfo.filingTypes?.join(', ') || 'N/A'}</span></div>
-                  {stateInfo.note && <div className="col-span-2 text-amber-400 text-xs mt-1">{stateInfo.note}</div>}
+                <h4 className="text-sm font-semibold text-slate-300 mb-3">State Tax Information</h4>
+                <div className="grid grid-cols-2 gap-3 text-sm mb-3">
+                  <div className="bg-slate-800/50 rounded-lg p-2">
+                    <span className="text-slate-500 text-xs">Base State Rate</span>
+                    <p className="text-white font-semibold">{(stateInfo.stateRate * 100).toFixed(2)}%</p>
+                  </div>
+                  <div className="bg-slate-800/50 rounded-lg p-2">
+                    <span className="text-slate-500 text-xs">Filing Types</span>
+                    <p className="text-white font-semibold capitalize">{stateInfo.filingTypes?.join(', ') || 'N/A'}</p>
+                  </div>
                 </div>
+                
+                {/* Economic Nexus Thresholds */}
+                {stateInfo.nexusThreshold && (
+                  <div className="bg-violet-900/20 border border-violet-500/30 rounded-lg p-3 mb-3">
+                    <h5 className="text-violet-400 text-xs font-semibold mb-2">Economic Nexus Threshold</h5>
+                    <div className="flex gap-4 text-sm">
+                      {stateInfo.nexusThreshold.sales && (
+                        <div>
+                          <span className="text-slate-400">Sales:</span>
+                          <span className="text-white ml-1 font-semibold">{formatCurrency(stateInfo.nexusThreshold.sales)}</span>
+                        </div>
+                      )}
+                      {stateInfo.nexusThreshold.transactions && (
+                        <div>
+                          <span className="text-slate-400">Transactions:</span>
+                          <span className="text-white ml-1 font-semibold">{stateInfo.nexusThreshold.transactions}+</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Features */}
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {stateInfo.marketplaceFacilitator && (
+                    <span className="px-2 py-1 bg-emerald-900/30 border border-emerald-500/30 rounded text-xs text-emerald-400">Marketplace Facilitator Law</span>
+                  )}
+                  {stateInfo.sst && (
+                    <span className="px-2 py-1 bg-blue-900/30 border border-blue-500/30 rounded text-xs text-blue-400">SST Member</span>
+                  )}
+                </div>
+                
+                {stateInfo.note && (
+                  <div className="flex items-start gap-2 text-amber-400 text-xs mt-2">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <span>{stateInfo.note}</span>
+                  </div>
+                )}
               </div>
             )}
             
@@ -5042,7 +5353,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -5142,8 +5453,9 @@ if (supabase && isAuthReady && session && isLocked) {
                               </p>
                               <p className="text-slate-500 text-xs">{Math.ceil((state.nextDue - now) / (1000 * 60 * 60 * 24))} days</p>
                             </div>
-                            <button onClick={() => setSelectedTaxState(state.code)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg"><Upload className="w-4 h-4" /></button>
-                            <button onClick={() => { setTaxConfigState(state.code); setShowTaxStateConfig(true); }} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg"><Settings className="w-4 h-4" /></button>
+                            <button onClick={() => setSelectedTaxState(state.code)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg" title="File/Upload Report"><Upload className="w-4 h-4" /></button>
+                            <button onClick={() => setViewingStateHistory(state.code)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg" title="View History"><FileText className="w-4 h-4" /></button>
+                            <button onClick={() => { setTaxConfigState(state.code); setShowTaxStateConfig(true); }} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg" title="Settings"><Settings className="w-4 h-4" /></button>
                           </div>
                         </div>
                       );
@@ -5184,37 +5496,128 @@ if (supabase && isAuthReady && session && isLocked) {
           </div>
           
           {/* Filing History */}
-          {Object.keys(filingHistory).length > 0 && (
+          {Object.keys(filingHistory || {}).length > 0 && (
             <div className="mt-6 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
-              <h3 className="text-lg font-semibold text-white mb-4">Recent Filing History</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">Filing History</h3>
+                <div className="flex items-center gap-2">
+                  <select 
+                    value={viewingStateHistory || 'all'} 
+                    onChange={(e) => setViewingStateHistory(e.target.value === 'all' ? null : e.target.value)} 
+                    className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white"
+                  >
+                    <option value="all">All States</option>
+                    {Object.keys(filingHistory || {}).sort().map(code => (
+                      <option key={code} value={code}>{US_STATES_TAX_INFO[code]?.name || code}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-slate-700">
                       <th className="text-left p-3 text-slate-400">State</th>
                       <th className="text-left p-3 text-slate-400">Period</th>
-                      <th className="text-right p-3 text-slate-400">Amount</th>
-                      <th className="text-left p-3 text-slate-400">Confirmation</th>
+                      <th className="text-right p-3 text-slate-400">Amount Paid</th>
+                      <th className="text-left p-3 text-slate-400">Confirmation #</th>
                       <th className="text-left p-3 text-slate-400">Filed Date</th>
+                      <th className="text-left p-3 text-slate-400">Notes</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(filingHistory).flatMap(([stateCode, periods]) => 
-                      Object.entries(periods).map(([period, data]) => (
-                        <tr key={`${stateCode}-${period}`} className="border-b border-slate-700/50">
-                          <td className="p-3 text-white">{US_STATES_TAX_INFO[stateCode]?.name || stateCode}</td>
-                          <td className="p-3 text-slate-300">{period}</td>
-                          <td className="p-3 text-right text-emerald-400">{formatCurrency(data.amount)}</td>
-                          <td className="p-3 text-slate-400 font-mono text-xs">{data.confirmationNum || '-'}</td>
-                          <td className="p-3 text-slate-400">{data.filedDate ? new Date(data.filedDate).toLocaleDateString() : '-'}</td>
-                        </tr>
-                      ))
-                    ).slice(0, 10)}
+                    {Object.entries(filingHistory || {})
+                      .filter(([stateCode]) => !viewingStateHistory || stateCode === viewingStateHistory)
+                      .flatMap(([stateCode, periods]) => 
+                        Object.entries(periods || {})
+                          .sort(([a], [b]) => b.localeCompare(a))
+                          .map(([period, data]) => (
+                            <tr key={`${stateCode}-${period}`} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                              <td className="p-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-8 h-8 bg-slate-700 rounded flex items-center justify-center text-xs font-bold text-white">{stateCode}</span>
+                                  <span className="text-white">{US_STATES_TAX_INFO[stateCode]?.name || stateCode}</span>
+                                </div>
+                              </td>
+                              <td className="p-3 text-slate-300">{period}</td>
+                              <td className="p-3 text-right text-emerald-400 font-semibold">{formatCurrency(data.amount || 0)}</td>
+                              <td className="p-3 text-slate-400 font-mono text-xs">{data.taxFilingConfirmNumationNum || data.confirmationNum || '-'}</td>
+                              <td className="p-3 text-slate-400">{data.filedDate ? new Date(data.filedDate).toLocaleDateString() : '-'}</td>
+                              <td className="p-3 text-slate-500 text-xs max-w-[200px] truncate">{data.notes || '-'}</td>
+                            </tr>
+                          ))
+                      )}
                   </tbody>
                 </table>
               </div>
+              {/* Totals by State */}
+              <div className="mt-4 pt-4 border-t border-slate-700">
+                <h4 className="text-sm font-semibold text-slate-300 mb-3">Total Paid by State</h4>
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                  {Object.entries(filingHistory || {}).map(([stateCode, periods]) => {
+                    const total = Object.values(periods || {}).reduce((sum, p) => sum + (p.amount || 0), 0);
+                    const count = Object.keys(periods || {}).length;
+                    return (
+                      <div key={stateCode} className="bg-slate-900/50 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-bold text-slate-400">{stateCode}</span>
+                          <span className="text-xs text-slate-500">{count} filings</span>
+                        </div>
+                        <p className="text-lg font-bold text-emerald-400">{formatCurrency(total)}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
+          
+          {/* Economic Nexus Reference Guide */}
+          <div className="mt-6 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+            <h3 className="text-lg font-semibold text-white mb-2">Economic Nexus Quick Reference</h3>
+            <p className="text-slate-400 text-sm mb-4">Remote seller thresholds that trigger sales tax collection requirements (post-Wayfair)</p>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+              {/* High Threshold States */}
+              <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-xl p-4">
+                <h4 className="text-emerald-400 font-semibold mb-2 flex items-center gap-2"><Check className="w-4 h-4" />High Threshold ($500K+)</h4>
+                <div className="text-sm text-slate-300 space-y-1">
+                  <p><span className="text-white font-medium">California:</span> $500K sales</p>
+                  <p><span className="text-white font-medium">New York:</span> $500K + 100 transactions</p>
+                  <p><span className="text-white font-medium">Texas:</span> $500K sales</p>
+                </div>
+              </div>
+              
+              {/* Standard Threshold States */}
+              <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4">
+                <h4 className="text-blue-400 font-semibold mb-2 flex items-center gap-2"><AlertTriangle className="w-4 h-4" />Standard Threshold ($100K)</h4>
+                <p className="text-slate-400 text-sm">Most states: $100K sales OR 200 transactions (some states removed transaction threshold)</p>
+              </div>
+              
+              {/* Special Cases */}
+              <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4">
+                <h4 className="text-amber-400 font-semibold mb-2 flex items-center gap-2"><AlertTriangle className="w-4 h-4" />Special Requirements</h4>
+                <div className="text-sm text-slate-300 space-y-1">
+                  <p><span className="text-white font-medium">Colorado:</span> Home-rule cities separate</p>
+                  <p><span className="text-white font-medium">Louisiana:</span> Parish filing required</p>
+                  <p><span className="text-white font-medium">Alaska:</span> Local only (ARSSTC)</p>
+                </div>
+              </div>
+            </div>
+            
+            {/* SST Member States */}
+            <div className="bg-slate-900/50 rounded-xl p-4">
+              <h4 className="text-slate-300 font-semibold mb-2">Streamlined Sales Tax (SST) Member States</h4>
+              <p className="text-slate-500 text-xs mb-2">These states offer simplified registration and filing through the SST system</p>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(US_STATES_TAX_INFO)
+                  .filter(([, info]) => info.sst)
+                  .map(([code]) => (
+                    <span key={code} className="px-2 py-1 bg-slate-700 rounded text-xs text-slate-300">{code}</span>
+                  ))}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -5324,7 +5727,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
