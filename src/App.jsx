@@ -6259,6 +6259,8 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                       key={i} 
                       onClick={() => {
                         if (alert.link === 'invoices') setShowInvoiceModal(true);
+                        else if (alert.link === 'forecast') { setUploadTab('forecast'); setView('upload'); }
+                        else if (alert.link === 'sales-tax') setView('sales-tax');
                         else if (alert.link) setView(alert.link);
                       }}
                       className={`flex items-center justify-between p-3 rounded-xl ${alert.type === 'critical' ? 'bg-rose-900/30 border border-rose-500/50' : 'bg-amber-900/30 border border-amber-500/50'} ${alert.link ? 'cursor-pointer hover:opacity-80' : ''}`}
