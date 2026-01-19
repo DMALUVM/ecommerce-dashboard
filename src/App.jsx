@@ -1815,7 +1815,9 @@ if (supabase && isAuthReady && session && isLocked) {
                           const profit = isAmz 
                             ? (item.netProceeds || 0) - (item.cogs || 0) - (item.adSpend || 0)
                             : (item.netSales || 0) - (item.cogs || 0) - (item.discounts || 0);
-                          const profitPerUnit = item.unitsSold > 0 ? profit / item.unitsSold : 0;
+                          const proceedsPerUnit = item.unitsSold > 0 
+                            ? (isAmz ? item.netProceeds : item.netSales) / item.unitsSold 
+                            : 0;
                           return (
                           <tr key={item.sku + i} className="hover:bg-slate-700/30">
                             <td className="px-2 py-2"><div className="max-w-[200px] truncate text-white" title={item.name}>{item.sku}</div></td>
@@ -1827,7 +1829,7 @@ if (supabase && isAuthReady && session && isLocked) {
                             {!isAmz && <td className="text-right px-2 py-2 text-amber-400">{formatCurrency(item.discounts)}</td>}
                             <td className="text-right px-2 py-2 text-slate-400">{formatCurrency(item.cogs)}</td>
                             <td className={`text-right px-2 py-2 font-medium ${profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(profit)}</td>
-                            <td className={`text-right px-2 py-2 font-medium ${profitPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(profitPerUnit)}</td>
+                            <td className="text-right px-2 py-2 font-medium text-emerald-400">{formatCurrency(proceedsPerUnit)}</td>
                           </tr>
                           );
                         })}
