@@ -5094,31 +5094,64 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
               <h2 className="text-lg font-semibold text-white mb-1">Amazon Forecast Upload</h2>
               <p className="text-slate-400 text-sm mb-4">Upload Amazon's projected sales to compare against actual results</p>
               
-              {/* Next Week Date Range */}
+              {/* Upcoming Week Date Range */}
               {(() => {
                 const today = new Date();
-                const nextSunday = new Date(today);
-                nextSunday.setDate(today.getDate() + (7 - today.getDay()));
-                const nextMonday = new Date(nextSunday);
-                nextMonday.setDate(nextSunday.getDate() + 1);
-                const followingSunday = new Date(nextMonday);
-                followingSunday.setDate(nextMonday.getDate() + 6);
+                const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+                
+                // For forecasts, we want FUTURE dates starting TOMORROW
+                // Calculate the upcoming Sunday (end of this forecast period)
+                const tomorrow = new Date(today);
+                tomorrow.setDate(today.getDate() + 1);
+                const tomorrowDay = tomorrow.getDay();
+                
+                // Find the Sunday that ends the week containing tomorrow
+                const upcomingSunday = new Date(tomorrow);
+                if (tomorrowDay === 0) {
+                  // Tomorrow is Sunday - that's the end of this week
+                  // Keep it as is
+                } else {
+                  // Find the Sunday after tomorrow
+                  upcomingSunday.setDate(tomorrow.getDate() + (7 - tomorrowDay));
+                }
+                
+                // The start of the forecast period is tomorrow
+                const forecastStart = new Date(tomorrow);
+                
                 const formatDate = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                 const formatShort = (d) => d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+                
+                // Also show next full week for users who want to plan ahead
+                const nextWeekMonday = new Date(upcomingSunday);
+                nextWeekMonday.setDate(upcomingSunday.getDate() + 1);
+                const nextWeekSunday = new Date(nextWeekMonday);
+                nextWeekSunday.setDate(nextWeekMonday.getDate() + 6);
+                
                 return (
                   <div className="bg-orange-900/20 border border-orange-500/30 rounded-xl p-4 mb-6">
-                    <h3 className="text-orange-300 font-semibold mb-2 flex items-center gap-2">
+                    <h3 className="text-orange-300 font-semibold mb-3 flex items-center gap-2">
                       <TrendingUp className="w-4 h-4" />
-                      Upload Forecast for Next Week
+                      Amazon Forecast Date Ranges
                     </h3>
+                    <p className="text-slate-400 text-sm mb-3">Forecasts are for <span className="text-orange-300">future dates</span> — today ({formatDate(today)}) is excluded</p>
+                    
+                    {/* Rest of This Week (starting tomorrow) */}
                     <div className="bg-slate-800/50 rounded-lg p-3 mb-3">
-                      <p className="text-orange-400 font-medium mb-1">📦 Amazon SKU Economics (FUTURE dates)</p>
-                      <p className="text-white font-mono text-lg">{formatShort(nextMonday)} → {formatShort(followingSunday)}</p>
-                      <p className="text-slate-400 text-xs mt-1">Week of {formatDate(nextMonday)} – {formatDate(followingSunday)}</p>
+                      <p className="text-orange-400 font-medium mb-1">📦 This Week's Forecast (ending {formatDate(upcomingSunday)})</p>
+                      <p className="text-white font-mono text-lg">{formatShort(forecastStart)} → {formatShort(upcomingSunday)}</p>
+                      <p className="text-slate-400 text-xs mt-1">{formatDate(forecastStart)} through {formatDate(upcomingSunday)}</p>
                     </div>
+                    
+                    {/* Next Full Week */}
+                    <div className="bg-slate-800/30 rounded-lg p-3 mb-3">
+                      <p className="text-amber-400/70 font-medium mb-1">📅 Next Week's Forecast (full week)</p>
+                      <p className="text-white/70 font-mono">{formatShort(nextWeekMonday)} → {formatShort(nextWeekSunday)}</p>
+                      <p className="text-slate-500 text-xs mt-1">{formatDate(nextWeekMonday)} through {formatDate(nextWeekSunday)}</p>
+                    </div>
+                    
                     <ol className="text-slate-300 text-sm space-y-1 list-decimal list-inside">
                       <li>Seller Central → Reports → Business Reports → <span className="text-orange-300">SKU Economics</span></li>
-                      <li>Set date range: <span className="text-orange-300 font-mono">{formatShort(nextMonday)}</span> to <span className="text-orange-300 font-mono">{formatShort(followingSunday)}</span></li>
+                      <li>Set date range to a <span className="text-orange-300 font-medium">future week</span> (dates shown above)</li>
                       <li>Amazon shows <span className="text-orange-300 font-medium">projected</span> sales for future dates</li>
                       <li>Export as CSV and upload below</li>
                     </ol>
