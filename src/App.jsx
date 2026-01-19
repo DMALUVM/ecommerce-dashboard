@@ -851,6 +851,57 @@ const handleLogout = async () => {
     try { return JSON.parse(localStorage.getItem(AMAZON_FORECAST_KEY)) || {}; } catch { return {}; }
   });
   
+  // Forecast upload tracking - tracks when each type was last uploaded
+  const [forecastMeta, setForecastMeta] = useState(() => {
+    try { 
+      return JSON.parse(localStorage.getItem('ecommerce_forecast_meta')) || {
+        lastUploads: {
+          '7day': null,   // Date string of last 7-day forecast upload
+          '30day': null,  // Date string of last 30-day forecast upload
+          '60day': null,  // Date string of last 60-day forecast upload
+        },
+        history: [], // Array of { type, uploadedAt, periodStart, periodEnd, totalSales, totalProceeds, accuracy: null }
+      }; 
+    } catch { 
+      return { lastUploads: { '7day': null, '30day': null, '60day': null }, history: [] }; 
+    }
+  });
+  
+  // Save forecast meta to localStorage
+  useEffect(() => {
+    localStorage.setItem('ecommerce_forecast_meta', JSON.stringify(forecastMeta));
+  }, [forecastMeta]);
+  
+  // Calculate forecast alerts
+  const forecastAlerts = useMemo(() => {
+    const alerts = [];
+    const now = new Date();
+    
+    const checkForecastAge = (type, days, label) => {
+      const lastUpload = forecastMeta.lastUploads?.[type];
+      if (!lastUpload) {
+        alerts.push({ type, severity: 'warning', message: `No ${label} Amazon forecast uploaded yet`, action: 'upload' });
+      } else {
+        const uploadDate = new Date(lastUpload);
+        const daysSince = Math.floor((now - uploadDate) / (1000 * 60 * 60 * 24));
+        if (daysSince >= days) {
+          alerts.push({ type, severity: 'warning', message: `${label} forecast is ${daysSince} days old (refresh every ${days} days)`, action: 'refresh' });
+        } else {
+          const daysUntil = days - daysSince;
+          if (daysUntil <= 2) {
+            alerts.push({ type, severity: 'info', message: `${label} forecast due for refresh in ${daysUntil} day(s)`, action: 'upcoming' });
+          }
+        }
+      }
+    };
+    
+    checkForecastAge('7day', 7, '7-day');
+    checkForecastAge('30day', 30, '30-day');
+    checkForecastAge('60day', 60, '60-day');
+    
+    return alerts;
+  }, [forecastMeta]);
+  
   // Save Amazon forecasts to localStorage and cloud
   useEffect(() => {
     localStorage.setItem(AMAZON_FORECAST_KEY, JSON.stringify(amazonForecasts));
@@ -1160,6 +1211,7 @@ const combinedData = useMemo(() => ({
   // New features
   invoices,
   amazonForecasts,
+  forecastMeta,
   weekNotes,
   goals,
   productNames: savedProductNames,
@@ -1167,7 +1219,7 @@ const combinedData = useMemo(() => ({
   widgetConfig,
   productionPipeline,
   threeplLedger,
-}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger]);
+}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -2452,7 +2504,7 @@ const savePeriods = async (d) => {
   // COMPLETE BACKUP - includes ALL dashboard data
   const exportAll = () => { 
     const fullBackup = {
-      version: '2.3',
+      version: '2.4',
       exportedAt: new Date().toISOString(),
       storeName,
       storeLogo,
@@ -2471,6 +2523,7 @@ const savePeriods = async (d) => {
       // New features
       invoices,
       amazonForecasts,
+      forecastMeta,
       weekNotes,
       productionPipeline,
       threeplLedger,
@@ -2555,6 +2608,11 @@ const savePeriods = async (d) => {
         if (d.amazonForecasts && Object.keys(d.amazonForecasts).length > 0) {
           setAmazonForecasts(d.amazonForecasts);
           restored.push(`${Object.keys(d.amazonForecasts).length} forecasts`);
+        }
+        if (d.forecastMeta) {
+          setForecastMeta(d.forecastMeta);
+          localStorage.setItem('ecommerce_forecast_meta', JSON.stringify(d.forecastMeta));
+          restored.push('forecast tracking');
         }
         if (d.weekNotes && Object.keys(d.weekNotes).length > 0) {
           setWeekNotes(prev => ({...prev, ...d.weekNotes}));
@@ -2682,6 +2740,34 @@ const savePeriods = async (d) => {
       const avgWeeklyProfit = weeklyProfits.reduce((s, v) => s + v, 0) / weeklyProfits.length;
       const avgWeeklyUnits = weeklyUnits.reduce((s, v) => s + v, 0) / weeklyUnits.length;
       
+      // Get seasonality adjustment from period data (if we have same month last year)
+      let seasonalityFactor = 1.0;
+      const currentMonth = new Date().toLocaleString('en-US', { month: 'long' });
+      const lastYearSameMonth = `${currentMonth} ${new Date().getFullYear() - 1}`;
+      const thisYearData = allPeriodsData[`${currentMonth} ${new Date().getFullYear()}`];
+      const lastYearData = allPeriodsData[lastYearSameMonth];
+      
+      if (lastYearData && lastYearData.total?.revenue > 0) {
+        // We have same month last year - calculate YoY growth
+        if (thisYearData && thisYearData.total?.revenue > 0) {
+          // We have both years - use actual YoY growth
+          const yoyGrowth = (thisYearData.total.revenue - lastYearData.total.revenue) / lastYearData.total.revenue;
+          seasonalityFactor = 1 + (yoyGrowth * 0.3); // Apply 30% of YoY growth
+        }
+      }
+      
+      // Also check quarter-level seasonality
+      const currentQuarter = Math.ceil((new Date().getMonth() + 1) / 3);
+      const lastYearQ = `Q${currentQuarter} ${new Date().getFullYear() - 1}`;
+      const thisYearQ = `Q${currentQuarter} ${new Date().getFullYear()}`;
+      if (allPeriodsData[lastYearQ] && allPeriodsData[lastYearQ].total?.revenue > 0) {
+        if (allPeriodsData[thisYearQ] && allPeriodsData[thisYearQ].total?.revenue > 0) {
+          const qYoY = (allPeriodsData[thisYearQ].total.revenue - allPeriodsData[lastYearQ].total.revenue) / allPeriodsData[lastYearQ].total.revenue;
+          // Blend quarter YoY with existing factor
+          seasonalityFactor = (seasonalityFactor + (1 + qYoY * 0.2)) / 2;
+        }
+      }
+      
       const forecast = [];
       for (let i = 0; i < 4; i++) {
         const amazonForecast = upcomingForecasts[i]?.[1];
@@ -2690,18 +2776,18 @@ const savePeriods = async (d) => {
           // Blend with our weekly average (30%) for validation
           forecast.push({
             week: `Week +${i + 1}`,
-            revenue: amazonForecast.totals.sales * 0.7 + avgWeeklyRev * 0.3,
-            profit: amazonForecast.totals.proceeds * 0.7 + avgWeeklyProfit * 0.3,
-            units: Math.round(amazonForecast.totals.units * 0.7 + avgWeeklyUnits * 0.3),
+            revenue: amazonForecast.totals.sales * 0.7 + avgWeeklyRev * seasonalityFactor * 0.3,
+            profit: amazonForecast.totals.proceeds * 0.7 + avgWeeklyProfit * seasonalityFactor * 0.3,
+            units: Math.round(amazonForecast.totals.units * 0.7 + avgWeeklyUnits * seasonalityFactor * 0.3),
             hasAmazonForecast: true,
           });
         } else {
-          // No Amazon forecast - use weekly average
+          // No Amazon forecast - use weekly average with seasonality adjustment
           forecast.push({
             week: `Week +${i + 1}`,
-            revenue: avgWeeklyRev,
-            profit: avgWeeklyProfit,
-            units: Math.round(avgWeeklyUnits),
+            revenue: avgWeeklyRev * seasonalityFactor,
+            profit: avgWeeklyProfit * seasonalityFactor,
+            units: Math.round(avgWeeklyUnits * seasonalityFactor),
           });
         }
       }
@@ -2712,13 +2798,14 @@ const savePeriods = async (d) => {
       return {
         weekly: forecast,
         monthly: { revenue: forecast.reduce((s, f) => s + f.revenue, 0), profit: forecast.reduce((s, f) => s + f.profit, 0), units: forecast.reduce((s, f) => s + f.units, 0) },
-        trend: { revenue: 'flat', revenueChange: 0 },
-        confidence: Math.min(75, 40 + sortedWeeks.length * 10 + (hasAmazon ? 15 : 0)).toFixed(0),
+        trend: { revenue: seasonalityFactor > 1.05 ? 'up' : seasonalityFactor < 0.95 ? 'down' : 'flat', revenueChange: (seasonalityFactor - 1) * 100 },
+        confidence: Math.min(85, 40 + sortedWeeks.length * 10 + (hasAmazon ? 15 : 0) + (hasPeriods ? 10 : 0)).toFixed(0),
         basedOn: sortedWeeks.length,
         source: hasAmazon ? 'weekly-amazon' : 'weekly-avg',
-        note: sortedWeeks.length < 4 ? `Based on ${sortedWeeks.length} week average${hasAmazon ? ' + Amazon forecast' : ''}. Need 4+ weeks for trend analysis.` : null,
+        note: sortedWeeks.length < 4 ? `Based on ${sortedWeeks.length} week average${hasAmazon ? ' + Amazon forecast' : ''}${hasPeriods ? ' + YoY seasonality' : ''}. Need 4+ weeks for trend analysis.` : null,
         amazonBlended: hasAmazon,
         periodsAvailable: hasPeriods ? sortedPeriods.length : 0,
+        seasonalityApplied: seasonalityFactor !== 1.0 ? seasonalityFactor : null,
       };
     }
     
@@ -2784,11 +2871,14 @@ const savePeriods = async (d) => {
     if (!csvData || csvData.length === 0) return null;
     
     // Get date range from first row
-    const startDate = csvData[0]['Start date'];
-    const endDate = csvData[0]['End date'];
-    const weekKey = endDate ? getSunday(new Date(endDate)) : null;
+    const startDateStr = csvData[0]['Start date'];
+    const endDateStr = csvData[0]['End date'];
     
-    if (!weekKey) return null;
+    if (!startDateStr || !endDateStr) return null;
+    
+    const startDate = new Date(startDateStr);
+    const endDate = new Date(endDateStr);
+    const daysDiff = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24));
     
     // Aggregate forecast data
     let totalUnits = 0, totalSales = 0, totalProceeds = 0, totalAds = 0;
@@ -2822,20 +2912,85 @@ const savePeriods = async (d) => {
       }
     });
     
+    // If this is a 30-day forecast (28-31 days), break it into weekly forecasts
+    const isMontlyForecast = daysDiff >= 25 && daysDiff <= 35;
+    const weeksInForecast = Math.ceil(daysDiff / 7);
+    
+    if (isMontlyForecast) {
+      // Return multiple weekly forecasts
+      const weeklyForecasts = {};
+      const weeklyUnits = Math.round(totalUnits / weeksInForecast);
+      const weeklySales = totalSales / weeksInForecast;
+      const weeklyProceeds = totalProceeds / weeksInForecast;
+      const weeklyAds = totalAds / weeksInForecast;
+      
+      // Generate a forecast for each week in the period
+      for (let i = 0; i < weeksInForecast; i++) {
+        const weekStart = new Date(startDate);
+        weekStart.setDate(weekStart.getDate() + (i * 7));
+        const weekKey = getSunday(weekStart);
+        
+        weeklyForecasts[weekKey] = {
+          weekEnding: weekKey,
+          startDate: startDateStr,
+          endDate: endDateStr,
+          uploadedAt: new Date().toISOString(),
+          sourceType: '30-day-split',
+          weekNumber: i + 1,
+          totalWeeks: weeksInForecast,
+          totals: {
+            units: weeklyUnits,
+            sales: weeklySales,
+            proceeds: weeklyProceeds,
+            ads: weeklyAds,
+            profitPerUnit: weeklyUnits > 0 ? weeklyProceeds / weeklyUnits : 0,
+          },
+          skus: Object.fromEntries(Object.entries(skuForecasts).map(([sku, data]) => [sku, {
+            ...data,
+            units: Math.round(data.units / weeksInForecast),
+            sales: data.sales / weeksInForecast,
+            proceeds: data.proceeds / weeksInForecast,
+            ads: data.ads / weeksInForecast,
+          }])),
+          skuCount: Object.keys(skuForecasts).length,
+          // Also store the monthly total for reference
+          monthlyTotal: {
+            units: totalUnits,
+            sales: totalSales,
+            proceeds: totalProceeds,
+            ads: totalAds,
+          },
+        };
+      }
+      
+      return {
+        type: 'monthly',
+        forecasts: weeklyForecasts,
+        period: { startDate: startDateStr, endDate: endDateStr, days: daysDiff },
+        monthlyTotal: { units: totalUnits, sales: totalSales, proceeds: totalProceeds, ads: totalAds },
+      };
+    }
+    
+    // Standard weekly forecast
+    const weekKey = getSunday(endDate);
     return {
-      weekEnding: weekKey,
-      startDate,
-      endDate,
-      uploadedAt: new Date().toISOString(),
-      totals: {
-        units: totalUnits,
-        sales: totalSales,
-        proceeds: totalProceeds,
-        ads: totalAds,
-        profitPerUnit: totalUnits > 0 ? totalProceeds / totalUnits : 0,
+      type: 'weekly',
+      forecast: {
+        weekEnding: weekKey,
+        startDate: startDateStr,
+        endDate: endDateStr,
+        uploadedAt: new Date().toISOString(),
+        sourceType: 'weekly',
+        totals: {
+          units: totalUnits,
+          sales: totalSales,
+          proceeds: totalProceeds,
+          ads: totalAds,
+          profitPerUnit: totalUnits > 0 ? totalProceeds / totalUnits : 0,
+        },
+        skus: skuForecasts,
+        skuCount: Object.keys(skuForecasts).length,
       },
-      skus: skuForecasts,
-      skuCount: Object.keys(skuForecasts).length,
     };
   };
 
@@ -5510,6 +5665,61 @@ ${(() => {
     '- Changes in units per order affecting fulfillment efficiency';
 })()}
 
+=== FORECAST DIVERGENCE ANALYSIS ===
+${(() => {
+  // Compare our projection vs Amazon's forecast
+  const upcomingAmazon = Object.entries(amazonForecasts)
+    .filter(([weekKey]) => new Date(weekKey) > new Date())
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  
+  if (upcomingAmazon.length === 0) return 'No upcoming Amazon forecasts to compare';
+  
+  const sortedWeeks = Object.keys(allWeeksData).sort();
+  if (sortedWeeks.length === 0) return 'No historical data for our projection';
+  
+  const weeklyRevenues = sortedWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
+  const ourAvg = weeklyRevenues.reduce((s, v) => s + v, 0) / weeklyRevenues.length;
+  
+  let analysis = 'FORECAST COMPARISON:\n';
+  upcomingAmazon.slice(0, 4).forEach(([weekKey, forecast]) => {
+    const amazonProjected = forecast.totals?.sales || 0;
+    const divergence = ourAvg > 0 ? ((amazonProjected - ourAvg) / ourAvg * 100) : 0;
+    const direction = divergence > 10 ? '📈 ABOVE' : divergence < -10 ? '📉 BELOW' : '≈ ALIGNED';
+    analysis += `Week ${weekKey}: Amazon=$${amazonProjected.toFixed(0)} vs Our Avg=$${ourAvg.toFixed(0)} → ${direction} (${divergence > 0 ? '+' : ''}${divergence.toFixed(0)}%)\n`;
+  });
+  
+  // Add recommendation
+  const firstAmazon = upcomingAmazon[0]?.[1]?.totals?.sales || 0;
+  const divergence = ourAvg > 0 ? ((firstAmazon - ourAvg) / ourAvg * 100) : 0;
+  if (divergence > 20) {
+    analysis += '\n⚠️ SIGNIFICANT DIVERGENCE: Amazon forecasts much higher than historical average. Could indicate upcoming demand surge OR Amazon being optimistic.';
+  } else if (divergence < -20) {
+    analysis += '\n⚠️ SIGNIFICANT DIVERGENCE: Amazon forecasts lower than historical average. Could indicate demand slowdown OR seasonality adjustment.';
+  } else {
+    analysis += '\nForecasts are reasonably aligned.';
+  }
+  
+  return analysis;
+})()}
+
+=== FORECAST UPLOAD STATUS ===
+${(() => {
+  const uploads = forecastMeta?.lastUploads || {};
+  const status = [];
+  ['7day', '30day', '60day'].forEach(type => {
+    const last = uploads[type];
+    if (last) {
+      const days = Math.floor((new Date() - new Date(last)) / (1000 * 60 * 60 * 24));
+      const threshold = type === '7day' ? 7 : type === '30day' ? 30 : 60;
+      const isStale = days >= threshold;
+      status.push(`${type}: ${days} days ago ${isStale ? '(NEEDS REFRESH)' : ''}`);
+    } else {
+      status.push(`${type}: Never uploaded`);
+    }
+  });
+  return status.join('\n');
+})()}
+
 === WHAT YOU CAN HELP WITH ===
 - Analyze sales trends and patterns (weekly, monthly, quarterly, yearly)
 - Year-over-year comparisons (2024 vs 2025, Q1 vs Q1, etc.)
@@ -5919,6 +6129,11 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
         });
       });
     }
+    
+    // Forecast alerts
+    forecastAlerts.filter(a => a.severity === 'warning').forEach(a => {
+      alerts.push({ type: 'warning', text: a.message, link: 'forecast' });
+    });
     
     // Calculate total upcoming bills for display
     const totalUpcomingBills = upcomingBills.reduce((s, i) => s + i.amount, 0);
@@ -6855,20 +7070,110 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                 </div>
               </div>
               
+              {/* Forecast Type Selection */}
+              {files.amazonForecast && (
+                <div className="mb-4">
+                  <label className="text-slate-400 text-sm block mb-2">Forecast Type:</label>
+                  <div className="flex gap-2">
+                    {['7day', '30day', '60day'].map(type => (
+                      <button
+                        key={type}
+                        onClick={() => setFiles(p => ({ ...p, forecastType: type }))}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                          files.forecastType === type
+                            ? 'bg-amber-600 text-white'
+                            : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                        }`}
+                      >
+                        {type === '7day' ? '7-Day' : type === '30day' ? '30-Day' : '60-Day'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Forecast Alerts */}
+              {forecastAlerts.length > 0 && (
+                <div className="mb-4 space-y-2">
+                  {forecastAlerts.map((alert, i) => (
+                    <div key={i} className={`flex items-center gap-2 p-3 rounded-lg text-sm ${
+                      alert.severity === 'warning' ? 'bg-amber-900/30 border border-amber-500/50 text-amber-300' : 'bg-blue-900/30 border border-blue-500/50 text-blue-300'
+                    }`}>
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      <span>{alert.message}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
               <button onClick={() => {
                 if (!files.amazonForecast) return;
-                const forecast = processAmazonForecast(files.amazonForecast);
-                if (forecast) {
-                  setAmazonForecasts(prev => ({ ...prev, [forecast.weekEnding]: forecast }));
-                  setFiles(p => ({ ...p, amazonForecast: null }));
+                const result = processAmazonForecast(files.amazonForecast);
+                if (result) {
+                  const forecastType = files.forecastType || (result.type === 'monthly' ? '30day' : '7day');
+                  const now = new Date().toISOString();
+                  
+                  // Track this upload
+                  const historyEntry = {
+                    type: forecastType,
+                    uploadedAt: now,
+                    periodStart: result.type === 'monthly' ? result.period.startDate : result.forecast?.startDate,
+                    periodEnd: result.type === 'monthly' ? result.period.endDate : result.forecast?.endDate,
+                    totalSales: result.type === 'monthly' ? result.monthlyTotal.sales : result.forecast?.totals?.sales,
+                    totalProceeds: result.type === 'monthly' ? result.monthlyTotal.proceeds : result.forecast?.totals?.proceeds,
+                    accuracy: null, // Will be calculated when actuals come in
+                  };
+                  
+                  setForecastMeta(prev => ({
+                    lastUploads: { ...prev.lastUploads, [forecastType]: now },
+                    history: [historyEntry, ...(prev.history || []).slice(0, 49)], // Keep last 50
+                  }));
+                  
+                  if (result.type === 'monthly') {
+                    // Monthly forecast - save each week separately
+                    setAmazonForecasts(prev => ({ ...prev, ...result.forecasts }));
+                    const weekCount = Object.keys(result.forecasts).length;
+                    setToast({ message: `${forecastType} forecast split into ${weekCount} weekly forecasts (${formatCurrency(result.monthlyTotal.sales)} total)`, type: 'success' });
+                  } else {
+                    // Weekly forecast
+                    setAmazonForecasts(prev => ({ ...prev, [result.forecast.weekEnding]: result.forecast }));
+                    setToast({ message: `${forecastType} forecast saved for week ending ${result.forecast.weekEnding}`, type: 'success' });
+                  }
+                  setFiles(p => ({ ...p, amazonForecast: null, forecastType: null }));
                   setFileNames(p => ({ ...p, amazonForecast: '' }));
-                  setToast({ message: `Forecast saved for week ending ${forecast.weekEnding}`, type: 'success' });
                 } else {
                   setToast({ message: 'Could not parse forecast data', type: 'error' });
                 }
               }} disabled={!files.amazonForecast} className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl mb-6">
                 Save Forecast
               </button>
+              
+              {/* Forecast Upload History */}
+              {forecastMeta.lastUploads && (Object.values(forecastMeta.lastUploads).some(v => v)) && (
+                <div className="bg-slate-800/50 rounded-xl p-4 mb-6">
+                  <h3 className="text-sm font-semibold text-slate-300 uppercase mb-3">Last Uploads</h3>
+                  <div className="grid grid-cols-3 gap-4 text-sm">
+                    {['7day', '30day', '60day'].map(type => {
+                      const lastUpload = forecastMeta.lastUploads?.[type];
+                      const daysSince = lastUpload ? Math.floor((new Date() - new Date(lastUpload)) / (1000 * 60 * 60 * 24)) : null;
+                      const isStale = (type === '7day' && daysSince >= 7) || (type === '30day' && daysSince >= 30) || (type === '60day' && daysSince >= 60);
+                      return (
+                        <div key={type} className={`p-3 rounded-lg ${isStale ? 'bg-amber-900/30 border border-amber-500/30' : 'bg-slate-700/50'}`}>
+                          <p className="text-slate-400 text-xs uppercase">{type === '7day' ? '7-Day' : type === '30day' ? '30-Day' : '60-Day'}</p>
+                          {lastUpload ? (
+                            <>
+                              <p className={`font-medium ${isStale ? 'text-amber-400' : 'text-white'}`}>{daysSince} days ago</p>
+                              <p className="text-slate-500 text-xs">{new Date(lastUpload).toLocaleDateString()}</p>
+                            </>
+                          ) : (
+                            <p className="text-slate-500">Never</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               
               {/* Existing Forecasts */}
               {Object.keys(amazonForecasts).length > 0 && (
@@ -6878,12 +7183,17 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                     {Object.entries(amazonForecasts).sort((a, b) => b[0].localeCompare(a[0])).map(([weekKey, forecast]) => {
                       const hasActual = allWeeksData[weekKey];
                       const isPast = new Date(weekKey) < new Date();
+                      const isFromMonthly = forecast.sourceType === '30-day-split';
                       return (
                         <div key={weekKey} className={`flex items-center justify-between p-3 rounded-xl ${hasActual ? 'bg-emerald-900/20 border border-emerald-500/30' : isPast ? 'bg-slate-700/30 border border-slate-600' : 'bg-amber-900/20 border border-amber-500/30'}`}>
                           <div>
-                            <p className="text-white font-medium">Week ending {new Date(weekKey + 'T00:00:00').toLocaleDateString()}</p>
+                            <p className="text-white font-medium flex items-center gap-2">
+                              Week ending {new Date(weekKey + 'T00:00:00').toLocaleDateString()}
+                              {isFromMonthly && <span className="text-xs bg-violet-500/30 text-violet-300 px-2 py-0.5 rounded">from 30-day</span>}
+                            </p>
                             <p className="text-slate-400 text-sm">
-                              {formatCurrency(forecast.totals.sales)} projected • {forecast.skuCount} SKUs
+                              {formatCurrency(forecast.totals?.sales || 0)} projected • {forecast.skuCount || 0} SKUs
+                              {isFromMonthly && forecast.monthlyTotal && ` • Part of ${formatCurrency(forecast.monthlyTotal.sales)} monthly`}
                             </p>
                           </div>
                           <div className="flex items-center gap-2">
@@ -8225,13 +8535,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       );
     };
     
-    // Rolling 4-week averages
+    // Rolling averages - use available weeks (min 1)
     const calcRolling = (weeks, field, subfield) => {
-      if (weeks.length < 4) return null;
-      const last4 = weeks.slice(-4);
-      const sum = last4.reduce((acc, w) => acc + (subfield ? w[field]?.[subfield] : w[field]) || 0, 0);
-      return sum / 4;
+      const available = Math.min(weeks.length, 4);
+      if (available === 0) return 0;
+      const lastN = weeks.slice(-available);
+      const sum = lastN.reduce((acc, w) => acc + (subfield ? w[field]?.[subfield] : w[field]) || 0, 0);
+      return sum / available;
     };
+    
+    // Debug: Check if weeklyData has values
+    console.log('Trends weeklyData:', weeklyData.length, 'weeks, maxRevenue:', Math.max(...weeklyData.map(w => w.total?.revenue || 0)));
     
     // Monthly aggregation
     const monthlyData = {};
@@ -10274,7 +10588,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 </div>
               </div>
               
-              <p className="text-slate-500 text-sm text-center">Based on {generateForecast.basedOn} weeks of historical data using linear trend analysis</p>
+              <p className="text-slate-500 text-sm text-center">
+                Based on {generateForecast.basedOn} weeks of historical data
+                {generateForecast.amazonBlended && ' + Amazon forecast data'}
+                {generateForecast.periodsAvailable > 0 && ` + ${generateForecast.periodsAvailable} historical periods for seasonality`}
+                {generateForecast.seasonalityApplied && ` (${((generateForecast.seasonalityApplied - 1) * 100).toFixed(0)}% YoY adjustment)`}
+              </p>
             </div>
           )}
           
