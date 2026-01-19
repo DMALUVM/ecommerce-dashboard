@@ -435,7 +435,24 @@ const parse3PLExcel = async (file) => {
 const get3PLForWeek = (ledger, weekKey) => {
   if (!ledger || !ledger.orders) return null;
   
-  const weekOrders = Object.values(ledger.orders).filter(o => o.weekKey === weekKey);
+  // Convert weekKey to date for fuzzy matching
+  const targetDate = new Date(weekKey + 'T00:00:00');
+  const targetStart = new Date(targetDate);
+  targetStart.setDate(targetDate.getDate() - 6); // Start of week (7 days before)
+  const targetEnd = new Date(targetDate);
+  targetEnd.setDate(targetDate.getDate() + 1); // Include day after for timezone tolerance
+  
+  // Find orders that match this week (fuzzy match within 2 days of week boundary)
+  const weekOrders = Object.values(ledger.orders).filter(o => {
+    // Try exact match first
+    if (o.weekKey === weekKey) return true;
+    
+    // Try fuzzy match - check if order's weekKey is within 2 days of target
+    const orderWeekDate = new Date(o.weekKey + 'T00:00:00');
+    const diffDays = Math.abs((orderWeekDate - targetDate) / (1000 * 60 * 60 * 24));
+    return diffDays <= 2;
+  });
+  
   if (weekOrders.length === 0) return null;
   
   const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
@@ -479,10 +496,12 @@ const get3PLForWeek = (ledger, weekKey) => {
     }
   });
   
-  // Add non-order charges allocated to this week (storage, shipping fees, etc.)
-  // These come from summary charges that span the week
+  // Add non-order charges allocated to this week (fuzzy match)
   Object.values(ledger.summaryCharges || {}).forEach(charge => {
-    if (charge.weekKey === weekKey) {
+    const chargeWeekDate = new Date((charge.weekKey || '') + 'T00:00:00');
+    const diffDays = Math.abs((chargeWeekDate - targetDate) / (1000 * 60 * 60 * 24));
+    
+    if (charge.weekKey === weekKey || diffDays <= 2) {
       const chargeLower = (charge.chargeType || '').toLowerCase();
       if (chargeLower.includes('storage')) breakdown.storage += charge.amount || 0;
       else if (chargeLower.includes('shipping')) {
@@ -505,6 +524,84 @@ const get3PLForWeek = (ledger, weekKey) => {
     metrics.avgCostPerOrder = fulfillmentCost / metrics.orderCount;
     metrics.avgUnitsPerOrder = metrics.totalUnits / metrics.orderCount;
     if (metrics.shippingCount > 0) metrics.avgShippingCost = totalShipping / metrics.shippingCount;
+  }
+  
+  return { breakdown, metrics };
+};
+
+// Get 3PL data for a period (month/quarter/year) by aggregating from ledger
+const get3PLForPeriod = (ledger, periodKey) => {
+  if (!ledger || !ledger.orders) return null;
+  
+  // Parse period key to determine date range
+  let startDate, endDate;
+  
+  if (periodKey.match(/^\d{4}$/)) {
+    // Year: "2025"
+    startDate = new Date(parseInt(periodKey), 0, 1);
+    endDate = new Date(parseInt(periodKey), 11, 31);
+  } else if (periodKey.match(/^Q[1-4] \d{4}$/)) {
+    // Quarter: "Q3 2024"
+    const [q, year] = periodKey.split(' ');
+    const quarter = parseInt(q[1]) - 1;
+    startDate = new Date(parseInt(year), quarter * 3, 1);
+    endDate = new Date(parseInt(year), quarter * 3 + 3, 0);
+  } else if (periodKey.match(/^[A-Za-z]+ \d{4}$/)) {
+    // Month: "September 2025"
+    const months = ['january', 'february', 'march', 'april', 'may', 'june', 
+                    'july', 'august', 'september', 'october', 'november', 'december'];
+    const parts = periodKey.split(' ');
+    const monthIdx = months.indexOf(parts[0].toLowerCase());
+    const year = parseInt(parts[1]);
+    if (monthIdx >= 0) {
+      startDate = new Date(year, monthIdx, 1);
+      endDate = new Date(year, monthIdx + 1, 0);
+    }
+  }
+  
+  if (!startDate || !endDate) return null;
+  
+  // Filter orders within date range
+  const periodOrders = Object.values(ledger.orders).filter(o => {
+    const orderDate = new Date(o.shipDate + 'T00:00:00');
+    return orderDate >= startDate && orderDate <= endDate;
+  });
+  
+  if (periodOrders.length === 0) return null;
+  
+  const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+  const metrics = {
+    totalCost: 0,
+    orderCount: periodOrders.length,
+    totalUnits: 0,
+    avgCostPerOrder: 0,
+    avgUnitsPerOrder: 0,
+  };
+  
+  periodOrders.forEach(order => {
+    const c = order.charges || {};
+    breakdown.pickFees += (c.firstPick || 0) + (c.additionalPick || 0);
+    breakdown.boxCharges += c.box || 0;
+    breakdown.other += (c.reBoxing || 0) + (c.fbaForwarding || 0);
+    metrics.totalUnits += (c.firstPickQty || 0) + (c.additionalPickQty || 0);
+  });
+  
+  // Add summary charges within date range
+  Object.values(ledger.summaryCharges || {}).forEach(charge => {
+    const chargeDate = new Date((charge.weekKey || '') + 'T00:00:00');
+    if (chargeDate >= startDate && chargeDate <= endDate) {
+      const chargeLower = (charge.chargeType || '').toLowerCase();
+      if (chargeLower.includes('storage')) breakdown.storage += charge.amount || 0;
+      else if (chargeLower.includes('shipping')) breakdown.shipping += charge.amount || 0;
+      else if (chargeLower.includes('receiving')) breakdown.receiving += charge.amount || 0;
+      else breakdown.other += charge.amount || 0;
+    }
+  });
+  
+  metrics.totalCost = breakdown.storage + breakdown.shipping + breakdown.pickFees + breakdown.boxCharges + breakdown.receiving + breakdown.other;
+  if (metrics.orderCount > 0) {
+    metrics.avgCostPerOrder = (metrics.totalCost - breakdown.storage) / metrics.orderCount;
+    metrics.avgUnitsPerOrder = metrics.totalUnits / metrics.orderCount;
   }
   
   return { breakdown, metrics };
@@ -1067,9 +1164,10 @@ const combinedData = useMemo(() => ({
   goals,
   productNames: savedProductNames,
   theme,
+  widgetConfig,
   productionPipeline,
   threeplLedger,
-}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, threeplLedger]);
+}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -2354,7 +2452,7 @@ const savePeriods = async (d) => {
   // COMPLETE BACKUP - includes ALL dashboard data
   const exportAll = () => { 
     const fullBackup = {
-      version: '2.2',
+      version: '2.3',
       exportedAt: new Date().toISOString(),
       storeName,
       storeLogo,
@@ -2369,6 +2467,7 @@ const savePeriods = async (d) => {
       salesTaxConfig,
       productNames: savedProductNames,
       theme,
+      widgetConfig,
       // New features
       invoices,
       amazonForecasts,
@@ -2472,6 +2571,11 @@ const savePeriods = async (d) => {
           setThreeplLedger(d.threeplLedger);
           lsSet(THREEPL_LEDGER_KEY, JSON.stringify(d.threeplLedger));
           restored.push(`${Object.keys(d.threeplLedger.orders || {}).length} 3PL orders`);
+        }
+        if (d.widgetConfig) {
+          setWidgetConfig(d.widgetConfig);
+          lsSet(WIDGET_KEY, JSON.stringify(d.widgetConfig));
+          restored.push('widget config');
         }
         
         setToast({ message: `Restored: ${restored.join(', ')}`, type: 'success' });
@@ -4918,6 +5022,11 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
     const periodsSummary = Object.entries(allPeriodsData).map(([label, data]) => {
       const amz = data.amazon || {};
       const shop = data.shopify || {};
+      
+      // Get 3PL data from ledger for this period
+      const ledger3PL = get3PLForPeriod(threeplLedger, label);
+      const threeplFromLedger = ledger3PL?.metrics?.totalCost || 0;
+      
       return {
         period: label,
         label: data.label || label,
@@ -4934,10 +5043,39 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
         shopifyRevenue: shop.revenue || 0,
         shopifyProfit: shop.netProfit || 0,
         shopifyUnits: shop.units || 0,
-        threeplCosts: shop.threeplCosts || 0,
+        threeplCosts: threeplFromLedger || shop.threeplCosts || 0,
         skuCount: ((amz.skuData || []).length + (shop.skuData || []).length),
       };
     }).sort((a, b) => a.period.localeCompare(b.period));
+    
+    // Calculate year-over-year insights
+    const yoyInsights = [];
+    const quarters2024 = periodsSummary.filter(p => p.period.includes('2024') && p.type === 'quarterly');
+    const months2024 = periodsSummary.filter(p => p.period.includes('2024') && p.type === 'monthly');
+    const months2025 = periodsSummary.filter(p => p.period.includes('2025') && p.type === 'monthly');
+    
+    // Q4 2024 vs Q4 2025 (or most recent comparable quarters)
+    quarters2024.forEach(q2024 => {
+      const qNum = q2024.period.split(' ')[0]; // e.g., "Q3"
+      const q2025 = periodsSummary.find(p => p.period === `${qNum} 2025`);
+      if (q2025) {
+        yoyInsights.push({
+          comparison: `${qNum} YoY`,
+          period1: q2024.period,
+          period2: q2025.period,
+          revChange: q2024.totalRevenue > 0 ? ((q2025.totalRevenue - q2024.totalRevenue) / q2024.totalRevenue * 100) : 0,
+          profitChange: q2024.totalProfit > 0 ? ((q2025.totalProfit - q2024.totalProfit) / q2024.totalProfit * 100) : 0,
+        });
+      }
+    });
+    
+    // Monthly trends for 2025
+    const monthlyTrend2025 = months2025.map(m => ({
+      month: m.label,
+      revenue: m.totalRevenue,
+      profit: m.totalProfit,
+      margin: m.margin,
+    }));
     
     const skuWeeklyBreakdown = {};
     sortedWeeks.forEach(week => {
@@ -5049,6 +5187,8 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       dataRange: { weeksTracked: weeksCount, periodsTracked: periodsCount, oldestWeek: sortedWeeks[0], newestWeek: sortedWeeks[sortedWeeks.length - 1] },
       weeklyData: weeksSummary,
       periodData: periodsSummary,
+      yoyInsights,
+      monthlyTrend2025,
       skuAnalysis: skuAnalysis.slice(0, 30),
       skusByProfitPerUnit: [...skuAnalysis].sort((a, b) => b.profitPerUnit - a.profitPerUnit).slice(0, 10),
       decliningSkus: skuAnalysis.filter(s => s.trend === 'declining').slice(0, 10),
@@ -5091,6 +5231,28 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       }
       if (ctx.salesTax?.nexusStates?.length > 0) {
         alertsSummary.push(`Sales tax nexus in ${ctx.salesTax.nexusStates.length} states: ${ctx.salesTax.nexusStates.map(s => s.state).join(', ')}`);
+      }
+      
+      // Channel concentration alert
+      if (ctx.insights.allTimeRevenue > 0) {
+        const amazonShare = ctx.weeklyData.reduce((s, w) => s + w.amazonRevenue, 0) / ctx.insights.allTimeRevenue * 100;
+        if (amazonShare > 90) {
+          alertsSummary.push(`CHANNEL CONCENTRATION: ${amazonShare.toFixed(0)}% of revenue from Amazon - consider diversifying`);
+        }
+      }
+      
+      // 3PL cost alert
+      const ledgerOrders = Object.values(threeplLedger.orders || {});
+      if (ledgerOrders.length > 100) {
+        let total3PL = 0;
+        ledgerOrders.forEach(o => {
+          const c = o.charges || {};
+          total3PL += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0);
+        });
+        const avgCostPerOrder = total3PL / ledgerOrders.length;
+        if (avgCostPerOrder > 12) {
+          alertsSummary.push(`3PL COSTS ELEVATED: Avg $${avgCostPerOrder.toFixed(2)}/order - review fulfillment efficiency`);
+        }
       }
       
       // Include forecast data if available
@@ -5164,6 +5326,26 @@ ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
 === PERIOD DATA (Quarterly/Monthly/Yearly Historical) ===
 ${ctx.periodData.length > 0 ? 'Historical periods tracked: ' + ctx.periodData.length + '\n' + JSON.stringify(ctx.periodData) : 'No historical period data uploaded yet (quarterly/monthly/yearly)'}
 
+=== YEAR-OVER-YEAR INSIGHTS ===
+${ctx.yoyInsights?.length > 0 ? JSON.stringify(ctx.yoyInsights) : 'No comparable year-over-year data available yet'}
+
+=== 2025 MONTHLY TREND ===
+${ctx.monthlyTrend2025?.length > 0 ? JSON.stringify(ctx.monthlyTrend2025) : 'No 2025 monthly data'}
+
+=== SEASONALITY INSIGHTS ===
+${ctx.periodData.length > 0 ? (() => {
+  const months = ctx.periodData.filter(p => p.type === 'monthly');
+  if (months.length < 3) return 'Not enough monthly data for seasonality analysis';
+  const sorted = [...months].sort((a, b) => b.totalRevenue - a.totalRevenue);
+  const best = sorted[0];
+  const worst = sorted[sorted.length - 1];
+  const avgRev = months.reduce((s, m) => s + m.totalRevenue, 0) / months.length;
+  return 'Best Month: ' + best.label + ' ($' + best.totalRevenue.toFixed(0) + ')\n' +
+         'Worst Month: ' + worst.label + ' ($' + worst.totalRevenue.toFixed(0) + ')\n' +
+         'Avg Monthly Revenue: $' + avgRev.toFixed(0) + '\n' +
+         'Peak vs Avg: ' + ((best.totalRevenue / avgRev - 1) * 100).toFixed(0) + '% above average';
+})() : 'No seasonality data'}
+
 === WEEK NOTES (user annotations) ===
 ${notesData.length > 0 ? JSON.stringify(notesData) : 'No notes added'}
 
@@ -5179,6 +5361,37 @@ ${JSON.stringify(ctx.improvingSkus)}
 === INVENTORY STATUS ===
 ${ctx.inventory ? `As of ${ctx.inventory.asOfDate}: ${ctx.inventory.totalUnits} total units, $${ctx.inventory.totalValue?.toFixed(2) || 0} value` : 'No inventory data'}
 ${ctx.inventory?.lowStockItems?.length > 0 ? `Low stock items: ${JSON.stringify(ctx.inventory.lowStockItems)}` : ''}
+
+=== INVENTORY FORECASTING ===
+${(() => {
+  // Calculate velocity and days of supply from weekly data
+  const sortedWeeks = Object.keys(allWeeksData).sort().slice(-8);
+  if (sortedWeeks.length < 2) return 'Not enough weekly data for inventory forecasting';
+  
+  const weeklyUnits = sortedWeeks.map(w => allWeeksData[w]?.total?.units || 0);
+  const avgWeeklyVelocity = weeklyUnits.reduce((s, u) => s + u, 0) / weeklyUnits.length;
+  
+  // Get SKU-level velocity
+  const skuVelocity = {};
+  sortedWeeks.forEach(w => {
+    const shopify = allWeeksData[w]?.shopify?.skuData || [];
+    const amazon = allWeeksData[w]?.amazon?.skuData || [];
+    [...shopify, ...amazon].forEach(s => {
+      const sku = s.sku || s.msku;
+      if (!skuVelocity[sku]) skuVelocity[sku] = [];
+      skuVelocity[sku].push(s.unitsSold || s.units || 0);
+    });
+  });
+  
+  const topVelocity = Object.entries(skuVelocity)
+    .map(([sku, weeks]) => ({ sku, avgPerWeek: weeks.reduce((s,u) => s+u, 0) / weeks.length }))
+    .sort((a, b) => b.avgPerWeek - a.avgPerWeek)
+    .slice(0, 10);
+  
+  return 'Avg Weekly Unit Velocity: ' + avgWeeklyVelocity.toFixed(0) + ' units/week\n' +
+    'Top SKUs by Velocity: ' + JSON.stringify(topVelocity.slice(0, 5)) + '\n' +
+    'Use this to calculate: Days of Supply = Current Inventory / (Weekly Velocity / 7)';
+})()}
 
 === SALES TAX ===
 ${ctx.salesTax?.nexusStates?.length > 0 ? `Nexus states: ${JSON.stringify(ctx.salesTax.nexusStates)}` : 'No nexus states configured'}
