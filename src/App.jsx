@@ -517,7 +517,19 @@ const savePeriods = async (d) => {
     });
 
     let threeplCost = 0;
-    if (reprocessFiles.threepl) reprocessFiles.threepl.forEach(r => { threeplCost += parseFloat(r['Amount Total ($)'] || 0); });
+    const threeplBreakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+    if (reprocessFiles.threepl) reprocessFiles.threepl.forEach(r => { 
+      const charge = r['Charge On Invoice'] || '';
+      const amount = parseFloat(r['Amount Total ($)'] || 0);
+      threeplCost += amount;
+      const chargeLower = charge.toLowerCase();
+      if (chargeLower.includes('storage')) threeplBreakdown.storage += amount;
+      else if (chargeLower.includes('shipping')) threeplBreakdown.shipping += amount;
+      else if (chargeLower.includes('pick')) threeplBreakdown.pickFees += amount;
+      else if (chargeLower.includes('box') || chargeLower.includes('mailer')) threeplBreakdown.boxCharges += amount;
+      else if (chargeLower.includes('receiving')) threeplBreakdown.receiving += amount;
+      else threeplBreakdown.other += amount;
+    });
 
     const metaS = parseFloat(reprocessAdSpend.meta) || 0, googleS = parseFloat(reprocessAdSpend.google) || 0, shopAds = metaS + googleS;
     const shopProfit = shopRev - shopCogs - threeplCost - shopAds;
@@ -531,7 +543,7 @@ const savePeriods = async (d) => {
       amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, netProfit: amzProfit, 
         margin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
         returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
-      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, threeplCosts: threeplCost, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
+      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, threeplCosts: threeplCost, threeplBreakdown, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
         netMargin: shopRev > 0 ? (shopProfit/shopRev)*100 : 0, aov: shopUnits > 0 ? shopRev/shopUnits : 0, roas: shopAds > 0 ? shopRev/shopAds : 0, skuData: shopifySkus },
       total: { revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds, netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0, roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0, amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0, shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0 }
     };
@@ -603,7 +615,19 @@ const savePeriods = async (d) => {
     });
 
     let threeplCost = 0;
-    if (files.threepl) files.threepl.forEach(r => { threeplCost += parseFloat(r['Amount Total ($)'] || 0); });
+    const threeplBreakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+    if (files.threepl) files.threepl.forEach(r => { 
+      const charge = r['Charge On Invoice'] || '';
+      const amount = parseFloat(r['Amount Total ($)'] || 0);
+      threeplCost += amount;
+      const chargeLower = charge.toLowerCase();
+      if (chargeLower.includes('storage')) threeplBreakdown.storage += amount;
+      else if (chargeLower.includes('shipping')) threeplBreakdown.shipping += amount;
+      else if (chargeLower.includes('pick')) threeplBreakdown.pickFees += amount;
+      else if (chargeLower.includes('box') || chargeLower.includes('mailer')) threeplBreakdown.boxCharges += amount;
+      else if (chargeLower.includes('receiving')) threeplBreakdown.receiving += amount;
+      else threeplBreakdown.other += amount;
+    });
 
     const metaS = parseFloat(adSpend.meta) || 0, googleS = parseFloat(adSpend.google) || 0, shopAds = metaS + googleS;
     const shopProfit = shopRev - shopCogs - threeplCost - shopAds;
@@ -618,7 +642,7 @@ const savePeriods = async (d) => {
       amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, netProfit: amzProfit, 
         margin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
         returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
-      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, threeplCosts: threeplCost, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
+      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, threeplCosts: threeplCost, threeplBreakdown, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
         netMargin: shopRev > 0 ? (shopProfit/shopRev)*100 : 0, aov: shopUnits > 0 ? shopRev/shopUnits : 0, roas: shopAds > 0 ? shopRev/shopAds : 0, skuData: shopifySkus },
       total: { revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds, netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0, roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0, amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0, shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0 }
     };
@@ -797,7 +821,19 @@ const savePeriods = async (d) => {
     });
 
     let threeplCost = 0;
-    if (periodFiles.threepl) periodFiles.threepl.forEach(r => { threeplCost += parseFloat(r['Amount Total ($)'] || 0); });
+    const threeplBreakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+    if (periodFiles.threepl) periodFiles.threepl.forEach(r => { 
+      const charge = r['Charge On Invoice'] || '';
+      const amount = parseFloat(r['Amount Total ($)'] || 0);
+      threeplCost += amount;
+      const chargeLower = charge.toLowerCase();
+      if (chargeLower.includes('storage')) threeplBreakdown.storage += amount;
+      else if (chargeLower.includes('shipping')) threeplBreakdown.shipping += amount;
+      else if (chargeLower.includes('pick')) threeplBreakdown.pickFees += amount;
+      else if (chargeLower.includes('box') || chargeLower.includes('mailer')) threeplBreakdown.boxCharges += amount;
+      else if (chargeLower.includes('receiving')) threeplBreakdown.receiving += amount;
+      else threeplBreakdown.other += amount;
+    });
 
     const metaS = parseFloat(periodAdSpend.meta) || 0, googleS = parseFloat(periodAdSpend.google) || 0, shopAds = metaS + googleS;
     const shopProfit = shopRev - shopCogs - threeplCost - shopAds;
@@ -811,7 +847,7 @@ const savePeriods = async (d) => {
       amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, netProfit: amzProfit, 
         margin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
         returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
-      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, threeplCosts: threeplCost, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
+      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, threeplCosts: threeplCost, threeplBreakdown, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
         netMargin: shopRev > 0 ? (shopProfit/shopRev)*100 : 0, aov: shopUnits > 0 ? shopRev/shopUnits : 0, roas: shopAds > 0 ? shopRev/shopAds : 0, skuData: shopifySkus },
       total: { revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds, netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0, roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0, amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0, shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0 }
     };
@@ -1174,7 +1210,10 @@ if (supabase && isAuthReady && session && isLocked) {
 
   const ChannelCard = ({ title, color, data, isAmz, showSkuTable = false }) => {
     const [expanded, setExpanded] = useState(false);
+    const [show3plBreakdown, setShow3plBreakdown] = useState(false);
     const skuData = data.skuData || [];
+    const threeplBreakdown = data.threeplBreakdown || {};
+    const has3plBreakdown = !isAmz && data.threeplCosts > 0 && Object.values(threeplBreakdown).some(v => v > 0);
     return (
       <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
         <div className={`border-l-4 ${color === 'orange' ? 'border-orange-500' : 'border-blue-500'} p-5`}>
@@ -1187,10 +1226,28 @@ if (supabase && isAuthReady && session && isLocked) {
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
             <div><p className="text-slate-500 text-xs uppercase mb-1">COGS</p><p className="text-lg font-semibold text-white">{formatCurrency(data.cogs)}</p></div>
-            <div><p className="text-slate-500 text-xs uppercase mb-1">{isAmz ? 'Fees' : '3PL Costs'}</p><p className="text-lg font-semibold text-white">{formatCurrency(isAmz ? data.fees : data.threeplCosts)}</p></div>
+            <div>
+              <p className="text-slate-500 text-xs uppercase mb-1">{isAmz ? 'Fees' : '3PL Costs'}</p>
+              <p className="text-lg font-semibold text-white">{formatCurrency(isAmz ? data.fees : data.threeplCosts)}</p>
+              {has3plBreakdown && <button onClick={() => setShow3plBreakdown(!show3plBreakdown)} className="text-xs text-blue-400 hover:text-blue-300">{show3plBreakdown ? 'Hide' : 'Details'}</button>}
+            </div>
             <div><p className="text-slate-500 text-xs uppercase mb-1">Ad Spend</p><p className="text-lg font-semibold text-white">{formatCurrency(data.adSpend)}</p></div>
             <div><p className="text-slate-500 text-xs uppercase mb-1">ROAS</p><p className="text-lg font-semibold text-white">{(data.roas || 0).toFixed(2)}x</p></div>
           </div>
+          {/* 3PL Breakdown */}
+          {show3plBreakdown && has3plBreakdown && (
+            <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
+              <h4 className="text-sm font-semibold text-slate-300 mb-3">3PL Cost Breakdown</h4>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {threeplBreakdown.shipping > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Shipping</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.shipping)}</span></div>}
+                {threeplBreakdown.pickFees > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Pick Fees</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.pickFees)}</span></div>}
+                {threeplBreakdown.storage > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Storage</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.storage)}</span></div>}
+                {threeplBreakdown.boxCharges > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Box/Mailer</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.boxCharges)}</span></div>}
+                {threeplBreakdown.receiving > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Receiving</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.receiving)}</span></div>}
+                {threeplBreakdown.other > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Other</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.other)}</span></div>}
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <div><p className="text-slate-500 text-xs uppercase mb-1">AOV</p><p className="text-lg font-semibold text-white">{formatCurrency(data.aov)}</p></div>
             {isAmz ? (
