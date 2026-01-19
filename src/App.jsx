@@ -2448,9 +2448,17 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
                 type="text"
                 value={aiInput}
                 onChange={(e) => setAiInput(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
+                }}
                 placeholder="Ask about your data..."
-                className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-2 text-white text-sm focus:outline-none focus:border-violet-500"
+                className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck="false"
               />
               <button
                 onClick={sendMessage}
