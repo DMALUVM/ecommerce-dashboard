@@ -4305,58 +4305,7 @@ When user asks about a product type (e.g., "lip balm", "deodorant", "soap"), fin
 ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
 
 === PERIOD DATA (Quarterly/Monthly/Yearly Historical) ===
-${ctx.periodData.length > 0 ? `
-Historical periods tracked: ${ctx.periodData.length}
-${JSON.stringify(ctx.periodData)}
-
-PERIOD ANALYSIS:
-${(() => {
-  const yearly = ctx.periodData.filter(p => p.type === 'yearly');
-  const quarterly = ctx.periodData.filter(p => p.type === 'quarterly');
-  const monthly = ctx.periodData.filter(p => p.type === 'monthly');
-  
-  let analysis = '';
-  
-  if (yearly.length >= 2) {
-    const sorted = yearly.sort((a, b) => b.period.localeCompare(a.period));
-    const current = sorted[0];
-    const prior = sorted[1];
-    const yoyRevChange = prior.totalRevenue > 0 ? ((current.totalRevenue - prior.totalRevenue) / prior.totalRevenue * 100) : 0;
-    const yoyProfitChange = prior.totalProfit > 0 ? ((current.totalProfit - prior.totalProfit) / prior.totalProfit * 100) : 0;
-    analysis += 'YEAR-OVER-YEAR COMPARISON:\n';
-    analysis += '- ' + current.period + ': Revenue $' + current.totalRevenue.toFixed(0) + ', Profit $' + current.totalProfit.toFixed(0) + ', Margin ' + current.margin.toFixed(1) + '%\n';
-    analysis += '- ' + prior.period + ': Revenue $' + prior.totalRevenue.toFixed(0) + ', Profit $' + prior.totalProfit.toFixed(0) + ', Margin ' + prior.margin.toFixed(1) + '%\n';
-    analysis += '- YoY Revenue Change: ' + (yoyRevChange >= 0 ? '+' : '') + yoyRevChange.toFixed(1) + '%\n';
-    analysis += '- YoY Profit Change: ' + (yoyProfitChange >= 0 ? '+' : '') + yoyProfitChange.toFixed(1) + '%\n';
-  }
-  
-  if (quarterly.length >= 2) {
-    const sorted = quarterly.sort((a, b) => b.period.localeCompare(a.period));
-    analysis += '\nQUARTERLY TREND (most recent):\n';
-    analysis += sorted.slice(0, 4).map(q => '- ' + (q.label || q.period) + ': Revenue $' + q.totalRevenue.toFixed(0) + ', Profit $' + q.totalProfit.toFixed(0) + ', Margin ' + q.margin.toFixed(1) + '%').join('\n');
-    analysis += '\n';
-  }
-  
-  if (monthly.length >= 2) {
-    const sorted = monthly.sort((a, b) => b.period.localeCompare(a.period));
-    analysis += '\nMONTHLY TREND (most recent):\n';
-    analysis += sorted.slice(0, 6).map(m => '- ' + (m.label || m.period) + ': Revenue $' + m.totalRevenue.toFixed(0) + ', Profit $' + m.totalProfit.toFixed(0) + ', Margin ' + m.margin.toFixed(1) + '%').join('\n');
-    analysis += '\n';
-  }
-  
-  if (ctx.periodData.length > 0) {
-    const totalPeriodRevenue = ctx.periodData.reduce((s, p) => s + p.totalRevenue, 0);
-    const totalPeriodProfit = ctx.periodData.reduce((s, p) => s + p.totalProfit, 0);
-    const avgMargin = ctx.periodData.reduce((s, p) => s + p.margin, 0) / ctx.periodData.length;
-    analysis += '\nPERIOD TOTALS:\n';
-    analysis += '- Total Revenue (all periods): $' + totalPeriodRevenue.toFixed(0) + '\n';
-    analysis += '- Total Profit (all periods): $' + totalPeriodProfit.toFixed(0) + '\n';
-    analysis += '- Average Period Margin: ' + avgMargin.toFixed(1) + '%\n';
-  }
-  
-  return analysis;
-})()}
-` : 'No historical period data uploaded yet (quarterly/monthly/yearly)'}
+${ctx.periodData.length > 0 ? 'Historical periods tracked: ' + ctx.periodData.length + '\n' + JSON.stringify(ctx.periodData) : 'No historical period data uploaded yet (quarterly/monthly/yearly)'}
 
 === WEEK NOTES (user annotations) ===
 ${notesData.length > 0 ? JSON.stringify(notesData) : 'No notes added'}
