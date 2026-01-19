@@ -2354,7 +2354,7 @@ const savePeriods = async (d) => {
   // COMPLETE BACKUP - includes ALL dashboard data
   const exportAll = () => { 
     const fullBackup = {
-      version: '2.1',
+      version: '2.2',
       exportedAt: new Date().toISOString(),
       storeName,
       storeLogo,
@@ -2374,6 +2374,7 @@ const savePeriods = async (d) => {
       amazonForecasts,
       weekNotes,
       productionPipeline,
+      threeplLedger,
     };
     const blob = new Blob([JSON.stringify(fullBackup, null, 2)], { type: 'application/json' }); 
     const a = document.createElement('a'); 
@@ -2466,6 +2467,11 @@ const savePeriods = async (d) => {
         }
         if (d.storeLogo) {
           setStoreLogo(d.storeLogo);
+        }
+        if (d.threeplLedger && (Object.keys(d.threeplLedger.orders || {}).length > 0 || Object.keys(d.threeplLedger.summaryCharges || {}).length > 0)) {
+          setThreeplLedger(d.threeplLedger);
+          lsSet(THREEPL_LEDGER_KEY, JSON.stringify(d.threeplLedger));
+          restored.push(`${Object.keys(d.threeplLedger.orders || {}).length} 3PL orders`);
         }
         
         setToast({ message: `Restored: ${restored.join(', ')}`, type: 'success' });
@@ -3600,23 +3606,50 @@ const savePeriods = async (d) => {
       const reader = new FileReader();
       reader.onload = (evt) => {
         const text = evt.target.result;
-        const lines = text.split('\n').filter(l => l.trim());
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
         if (lines.length < 2) return;
-        const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-        const skuCol = headers.findIndex(h => h.toLowerCase() === 'sku');
-        const nameCol = headers.findIndex(h => h.toLowerCase().includes('product') || h.toLowerCase() === 'name');
+        
+        // Parse CSV properly handling quoted fields with commas
+        const parseCSVLine = (line) => {
+          const result = [];
+          let current = '';
+          let inQuotes = false;
+          for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"') {
+              if (inQuotes && line[i + 1] === '"') {
+                current += '"';
+                i++; // Skip escaped quote
+              } else {
+                inQuotes = !inQuotes;
+              }
+            } else if (char === ',' && !inQuotes) {
+              result.push(current.trim());
+              current = '';
+            } else {
+              current += char;
+            }
+          }
+          result.push(current.trim());
+          return result;
+        };
+        
+        const headers = parseCSVLine(lines[0]).map(h => h.replace(/"/g, '').trim().toLowerCase());
+        const skuCol = headers.findIndex(h => h === 'sku');
+        const nameCol = headers.findIndex(h => h.includes('product') || h === 'name');
         if (skuCol === -1 || nameCol === -1) {
           alert('CSV must have SKU and Product Name columns');
           return;
         }
         const catalog = {};
         for (let i = 1; i < lines.length; i++) {
-          const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
-          const sku = cols[skuCol];
-          const name = cols[nameCol];
+          const cols = parseCSVLine(lines[i]);
+          const sku = (cols[skuCol] || '').replace(/"/g, '').trim();
+          const name = (cols[nameCol] || '').replace(/"/g, '').trim();
           if (sku && name) catalog[sku] = name;
         }
         setProductCatalogFile(catalog);
+        setToast({ message: `Parsed ${Object.keys(catalog).length} products`, type: 'success' });
       };
       reader.readAsText(file);
     };
@@ -8551,28 +8584,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
   if (view === '3pl') {
     const sortedWeeks = Object.keys(allWeeksData).sort();
     
-    // DEBUG: Calculate totals directly from ledger
+    // Get all ledger data
     const ledgerOrders = Object.values(threeplLedger.orders || {});
     const ledgerWeeksSet = new Set(ledgerOrders.map(o => o.weekKey));
     const ledgerWeeksList = [...ledgerWeeksSet].sort();
-    let debugTotalCost = 0;
-    let debugTotalOrders = ledgerOrders.length;
-    ledgerOrders.forEach(o => {
-      const c = o.charges || {};
-      debugTotalCost += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0) + (c.reBoxing || 0) + (c.fbaForwarding || 0);
-    });
-    // Also add summary charges
-    Object.values(threeplLedger.summaryCharges || {}).forEach(c => {
-      debugTotalCost += c.amount || 0;
-    });
-    
-    console.log('3PL Debug:', { 
-      ledgerOrders: debugTotalOrders, 
-      ledgerWeeks: ledgerWeeksList,
-      totalCost: debugTotalCost,
-      sampleOrder: ledgerOrders[0],
-      salesWeeks: sortedWeeks
-    });
     
     // Calculate date boundaries based on selected range
     const getDateBoundaries = () => {
@@ -8913,21 +8928,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </button>
             </div>
             <p className="text-slate-400">Track shipping costs, order metrics, and fulfillment efficiency over time</p>
-          </div>
-          
-          {/* DEBUG INFO - REMOVE LATER */}
-          <div className="bg-rose-900/30 border border-rose-500/50 rounded-xl p-4 mb-6">
-            <p className="text-rose-400 font-bold mb-2">🔧 Debug Info (remove later)</p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-              <div><span className="text-slate-400">Ledger Orders:</span> <span className="text-white">{debugTotalOrders}</span></div>
-              <div><span className="text-slate-400">Ledger Weeks:</span> <span className="text-white">{ledgerWeeksList.length}</span></div>
-              <div><span className="text-slate-400">Ledger Total Cost:</span> <span className="text-white">${debugTotalCost.toFixed(2)}</span></div>
-              <div><span className="text-slate-400">Weekly Data Rows:</span> <span className="text-white">{weeklyData.length}</span></div>
-            </div>
-            <div className="mt-2 text-xs">
-              <p className="text-slate-400">Ledger Week Keys: {ledgerWeeksList.slice(0, 5).join(', ')}{ledgerWeeksList.length > 5 ? '...' : ''}</p>
-              <p className="text-slate-400">Sales Week Keys: {sortedWeeks.slice(0, 5).join(', ')}{sortedWeeks.length > 5 ? '...' : ''}</p>
-            </div>
           </div>
           
           {/* Date Range Selector */}
