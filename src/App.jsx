@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus } from 'lucide-react';
 
 const parseCSV = (text) => {
   const lines = text.split('\n').filter(line => line.trim());
@@ -262,6 +262,10 @@ const handleLogout = async () => {
   
   const [showEditAdSpend, setShowEditAdSpend] = useState(false);
   const [editAdSpend, setEditAdSpend] = useState({ meta: '', google: '' });
+  const [showEdit3PL, setShowEdit3PL] = useState(false);
+  const [edit3PLCost, setEdit3PLCost] = useState('');
+  const [lastBackupDate, setLastBackupDate] = useState(() => localStorage.getItem('ecommerce_last_backup') || null);
+  const [lastSyncDate, setLastSyncDate] = useState(null);
   
   const [showReprocess, setShowReprocess] = useState(false);
   const [reprocessFiles, setReprocessFiles] = useState({ amazon: null, shopify: null, threepl: null });
@@ -1502,6 +1506,34 @@ const savePeriods = async (d) => {
     setAllWeeksData(updated); save(updated); setShowEditAdSpend(false);
   }, [allWeeksData]);
 
+  // Update 3PL costs for a week
+  const updateWeek3PL = useCallback((weekKey, threeplCost) => {
+    const week = allWeeksData[weekKey];
+    if (!week) return;
+    const newCost = parseFloat(threeplCost) || 0;
+    const oldCost = week.shopify?.threeplCosts || 0;
+    const shopProfit = (week.shopify?.netProfit || 0) + oldCost - newCost; // adjust profit
+    const updated = { ...allWeeksData };
+    updated[weekKey] = {
+      ...week,
+      shopify: { 
+        ...week.shopify, 
+        threeplCosts: newCost, 
+        netProfit: shopProfit,
+        netMargin: week.shopify?.revenue > 0 ? (shopProfit / week.shopify.revenue) * 100 : 0,
+      },
+      total: { 
+        ...week.total, 
+        netProfit: (week.amazon?.netProfit || 0) + shopProfit,
+        netMargin: week.total?.revenue > 0 ? (((week.amazon?.netProfit || 0) + shopProfit) / week.total.revenue) * 100 : 0,
+      }
+    };
+    setAllWeeksData(updated); 
+    save(updated); 
+    setShowEdit3PL(false);
+    setToast({ message: '3PL costs updated', type: 'success' });
+  }, [allWeeksData]);
+
   const getMonths = () => { const m = new Set(); Object.keys(allWeeksData).forEach(w => { const d = new Date(w+'T00:00:00'); m.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`); }); return Array.from(m).sort().reverse(); };
   const getYears = () => { const y = new Set(); Object.keys(allWeeksData).forEach(w => { y.add(new Date(w+'T00:00:00').getFullYear()); }); return Array.from(y).sort().reverse(); };
 
@@ -1567,8 +1599,122 @@ const savePeriods = async (d) => {
     return agg;
   };
 
-  const exportAll = () => { const blob = new Blob([JSON.stringify({ sales: allWeeksData, inventory: invHistory, cogs: savedCogs, periods: allPeriodsData, goals, storeName }, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${storeName || 'dashboard'}_backup_${new Date().toISOString().split('T')[0]}.json`; a.click(); };
-  const importData = (file) => { const reader = new FileReader(); reader.onload = async (e) => { try { const d = JSON.parse(e.target.result); if (d.sales) { setAllWeeksData({...allWeeksData, ...d.sales}); await save({...allWeeksData, ...d.sales}); } if (d.inventory) { setInvHistory({...invHistory, ...d.inventory}); await saveInv({...invHistory, ...d.inventory}); } if (d.cogs) { setSavedCogs(d.cogs); await saveCogs(d.cogs); } if (d.periods) { setAllPeriodsData({...allPeriodsData, ...d.periods}); await savePeriods({...allPeriodsData, ...d.periods}); } if (d.goals) { setGoals(d.goals); lsSet(GOALS_KEY, JSON.stringify(d.goals)); } if (d.storeName) { setStoreName(d.storeName); lsSet(STORE_KEY, d.storeName); } alert('Imported!'); } catch { alert('Invalid file'); }}; reader.readAsText(file); };
+  // COMPLETE BACKUP - includes ALL dashboard data
+  const exportAll = () => { 
+    const fullBackup = {
+      version: '2.0',
+      exportedAt: new Date().toISOString(),
+      storeName,
+      // Core sales data
+      sales: allWeeksData, 
+      periods: allPeriodsData,
+      inventory: invHistory, 
+      cogs: savedCogs,
+      // Settings & config
+      goals,
+      settings: appSettings,
+      salesTaxConfig,
+      productNames: savedProductNames,
+      theme,
+      // New features
+      invoices,
+      amazonForecasts,
+      weekNotes,
+    };
+    const blob = new Blob([JSON.stringify(fullBackup, null, 2)], { type: 'application/json' }); 
+    const a = document.createElement('a'); 
+    a.href = URL.createObjectURL(blob); 
+    a.download = `${storeName || 'dashboard'}_FULL_backup_${new Date().toISOString().split('T')[0]}.json`; 
+    a.click();
+    // Track last backup date
+    const now = new Date().toISOString();
+    localStorage.setItem('ecommerce_last_backup', now);
+    setLastBackupDate(now);
+    setToast({ message: 'Backup downloaded successfully', type: 'success' });
+  };
+  
+  // COMPLETE RESTORE - restores ALL dashboard data
+  const importData = (file) => { 
+    const reader = new FileReader(); 
+    reader.onload = async (e) => { 
+      try { 
+        const d = JSON.parse(e.target.result); 
+        let restored = [];
+        
+        // Core data
+        if (d.sales && Object.keys(d.sales).length > 0) { 
+          setAllWeeksData(prev => ({...prev, ...d.sales})); 
+          await save({...allWeeksData, ...d.sales}); 
+          restored.push(`${Object.keys(d.sales).length} weeks`);
+        } 
+        if (d.inventory && Object.keys(d.inventory).length > 0) { 
+          setInvHistory(prev => ({...prev, ...d.inventory})); 
+          await saveInv({...invHistory, ...d.inventory}); 
+          restored.push('inventory');
+        } 
+        if (d.cogs && Object.keys(d.cogs).length > 0) { 
+          setSavedCogs(d.cogs); 
+          await saveCogs(d.cogs); 
+          restored.push('COGS');
+        } 
+        if (d.periods && Object.keys(d.periods).length > 0) { 
+          setAllPeriodsData(prev => ({...prev, ...d.periods})); 
+          await savePeriods({...allPeriodsData, ...d.periods}); 
+          restored.push(`${Object.keys(d.periods).length} periods`);
+        } 
+        if (d.goals) { 
+          setGoals(d.goals); 
+          lsSet(GOALS_KEY, JSON.stringify(d.goals)); 
+          restored.push('goals');
+        } 
+        if (d.storeName) { 
+          setStoreName(d.storeName); 
+          lsSet(STORE_KEY, d.storeName); 
+        }
+        
+        // Settings & config
+        if (d.settings) {
+          setAppSettings(d.settings);
+          lsSet(SETTINGS_KEY, JSON.stringify(d.settings));
+          restored.push('settings');
+        }
+        if (d.salesTaxConfig) {
+          setSalesTaxConfig(d.salesTaxConfig);
+          lsSet(SALES_TAX_KEY, JSON.stringify(d.salesTaxConfig));
+          restored.push('sales tax');
+        }
+        if (d.productNames) {
+          setSavedProductNames(d.productNames);
+          lsSet(PRODUCT_NAMES_KEY, JSON.stringify(d.productNames));
+          restored.push('product names');
+        }
+        if (d.theme) {
+          setTheme(d.theme);
+          lsSet(THEME_KEY, JSON.stringify(d.theme));
+        }
+        
+        // New features
+        if (d.invoices && d.invoices.length > 0) {
+          setInvoices(d.invoices);
+          restored.push(`${d.invoices.length} invoices`);
+        }
+        if (d.amazonForecasts && Object.keys(d.amazonForecasts).length > 0) {
+          setAmazonForecasts(d.amazonForecasts);
+          restored.push(`${Object.keys(d.amazonForecasts).length} forecasts`);
+        }
+        if (d.weekNotes && Object.keys(d.weekNotes).length > 0) {
+          setWeekNotes(prev => ({...prev, ...d.weekNotes}));
+          restored.push('notes');
+        }
+        
+        setToast({ message: `Restored: ${restored.join(', ')}`, type: 'success' });
+      } catch (err) { 
+        console.error('Import error:', err);
+        setToast({ message: 'Invalid backup file', type: 'error' });
+      }
+    }; 
+    reader.readAsText(file); 
+  };
 
   // 5. FORECASTING - Simple linear regression based forecast
   const generateForecast = useMemo(() => {
@@ -4058,12 +4204,48 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
           
           {/* No Data State */}
           {!hasData ? (
-            <div className="text-center py-16">
+            <div className="text-center py-12">
               <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-6">
                 <BarChart3 className="w-10 h-10 text-white" />
               </div>
               <h2 className="text-2xl font-bold text-white mb-3">Welcome to Your Dashboard</h2>
               <p className="text-slate-400 mb-8 max-w-md mx-auto">Get started by uploading your sales data. We support Amazon and Shopify exports.</p>
+              
+              {/* Getting Started Checklist */}
+              <div className="max-w-xl mx-auto mb-8 bg-slate-800/50 rounded-2xl border border-slate-700 p-6 text-left">
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <CheckCircle className="w-5 h-5 text-emerald-400" />
+                  Getting Started Checklist
+                </h3>
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    {session ? <Check className="w-5 h-5 text-emerald-400" /> : <div className="w-5 h-5 rounded-full border-2 border-slate-600" />}
+                    <span className={session ? 'text-emerald-400' : 'text-slate-300'}>Sign up for cloud sync</span>
+                    {!session && <button onClick={() => setView('settings')} className="text-xs text-violet-400 hover:text-violet-300 ml-auto">Setup →</button>}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {Object.keys(savedCogs).length > 0 ? <Check className="w-5 h-5 text-emerald-400" /> : <div className="w-5 h-5 rounded-full border-2 border-slate-600" />}
+                    <span className={Object.keys(savedCogs).length > 0 ? 'text-emerald-400' : 'text-slate-300'}>Set up COGS for profit tracking</span>
+                    {Object.keys(savedCogs).length === 0 && <button onClick={() => setShowCogsManager(true)} className="text-xs text-violet-400 hover:text-violet-300 ml-auto">Setup →</button>}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {Object.keys(allPeriodsData).length > 0 ? <Check className="w-5 h-5 text-emerald-400" /> : <div className="w-5 h-5 rounded-full border-2 border-slate-600" />}
+                    <span className={Object.keys(allPeriodsData).length > 0 ? 'text-emerald-400' : 'text-slate-300'}>Upload historical data (2024-2025)</span>
+                    {Object.keys(allPeriodsData).length === 0 && <button onClick={() => { setUploadTab('period'); setView('upload'); }} className="text-xs text-violet-400 hover:text-violet-300 ml-auto">Upload →</button>}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {Object.keys(allWeeksData).length > 0 ? <Check className="w-5 h-5 text-emerald-400" /> : <div className="w-5 h-5 rounded-full border-2 border-slate-600" />}
+                    <span className={Object.keys(allWeeksData).length > 0 ? 'text-emerald-400' : 'text-slate-300'}>Upload your first weekly report</span>
+                    {Object.keys(allWeeksData).length === 0 && <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="text-xs text-violet-400 hover:text-violet-300 ml-auto">Upload →</button>}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {goals.weeklyRevenue > 0 || goals.monthlyRevenue > 0 ? <Check className="w-5 h-5 text-emerald-400" /> : <div className="w-5 h-5 rounded-full border-2 border-slate-600" />}
+                    <span className={goals.weeklyRevenue > 0 || goals.monthlyRevenue > 0 ? 'text-emerald-400' : 'text-slate-300'}>Set revenue goals</span>
+                    {!(goals.weeklyRevenue > 0 || goals.monthlyRevenue > 0) && <button onClick={() => setShowGoalsModal(true)} className="text-xs text-violet-400 hover:text-violet-300 ml-auto">Setup →</button>}
+                  </div>
+                </div>
+              </div>
+              
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="px-6 py-3 bg-violet-600 hover:bg-violet-500 rounded-xl font-semibold flex items-center justify-center gap-2">
                   <Upload className="w-5 h-5" />Upload Weekly Data
@@ -4116,6 +4298,139 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                   ))}
                 </div>
               )}
+              
+              {/* Quick Action Widgets */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                {/* Amazon Forecast Widget */}
+                {upcomingAmazonForecasts.length > 0 ? (
+                  <div className="bg-gradient-to-br from-orange-900/30 to-amber-900/20 rounded-2xl border border-orange-500/30 p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-orange-400 text-sm font-semibold flex items-center gap-2">
+                        <TrendingUp className="w-4 h-4" />Amazon Forecast
+                      </h3>
+                      <button onClick={() => setUploadTab('forecast'); setView('upload');} className="text-xs text-slate-400 hover:text-white">View all</button>
+                    </div>
+                    <p className="text-2xl font-bold text-white">{formatCurrency(upcomingAmazonForecasts[0].totals.sales)}</p>
+                    <p className="text-slate-400 text-sm">Projected for week ending {new Date(upcomingAmazonForecasts[0].weekEnding + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                    <p className="text-slate-500 text-xs mt-1">{upcomingAmazonForecasts[0].skuCount} SKUs • {formatNumber(upcomingAmazonForecasts[0].totals.units)} units</p>
+                  </div>
+                ) : (
+                  <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-slate-400 text-sm font-semibold flex items-center gap-2">
+                        <TrendingUp className="w-4 h-4" />Amazon Forecast
+                      </h3>
+                    </div>
+                    <p className="text-slate-500 text-sm mb-2">No forecast uploaded</p>
+                    <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1">
+                      <Upload className="w-3 h-3" />Upload Amazon forecast
+                    </button>
+                  </div>
+                )}
+                
+                {/* Upcoming Bills Widget */}
+                {upcomingBills.length > 0 ? (
+                  <div className="bg-gradient-to-br from-rose-900/30 to-pink-900/20 rounded-2xl border border-rose-500/30 p-4 cursor-pointer hover:border-rose-400/50" onClick={() => setShowInvoiceModal(true)}>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-rose-400 text-sm font-semibold flex items-center gap-2">
+                        <FileText className="w-4 h-4" />Upcoming Bills
+                      </h3>
+                      <span className="text-xs text-slate-400">{upcomingBills.length} due</span>
+                    </div>
+                    <p className="text-2xl font-bold text-white">{formatCurrency(totalUpcomingBills)}</p>
+                    {(() => {
+                      const nextBill = upcomingBills.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
+                      const daysUntil = Math.ceil((new Date(nextBill.dueDate) - new Date()) / (1000 * 60 * 60 * 24));
+                      return (
+                        <>
+                          <p className="text-slate-400 text-sm">Next: {nextBill.vendor}</p>
+                          <p className={`text-xs mt-1 ${daysUntil <= 3 ? 'text-rose-400' : daysUntil <= 7 ? 'text-amber-400' : 'text-slate-500'}`}>
+                            {daysUntil <= 0 ? 'Due today!' : `Due in ${daysUntil} days`}
+                          </p>
+                        </>
+                      );
+                    })()}
+                  </div>
+                ) : (
+                  <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-slate-400 text-sm font-semibold flex items-center gap-2">
+                        <FileText className="w-4 h-4" />Upcoming Bills
+                      </h3>
+                    </div>
+                    <p className="text-slate-500 text-sm mb-2">No bills tracked</p>
+                    <button onClick={() => setShowInvoiceModal(true)} className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1">
+                      <Plus className="w-3 h-3" />Add a bill
+                    </button>
+                  </div>
+                )}
+                
+                {/* Sync & Backup Status Widget */}
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
+                      <Database className="w-4 h-4" />Data Status
+                    </h3>
+                  </div>
+                  <div className="space-y-2">
+                    {/* Cloud Sync Status */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 text-sm">Cloud Sync</span>
+                      {session ? (
+                        <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />Connected</span>
+                      ) : (
+                        <span className="text-amber-400 text-xs flex items-center gap-1"><AlertCircle className="w-3 h-3" />Local only</span>
+                      )}
+                    </div>
+                    {/* Last Backup */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 text-sm">Last Backup</span>
+                      {lastBackupDate ? (
+                        <span className={`text-xs ${(new Date() - new Date(lastBackupDate)) / (1000 * 60 * 60 * 24) > 7 ? 'text-amber-400' : 'text-slate-400'}`}>
+                          {new Date(lastBackupDate).toLocaleDateString()}
+                        </span>
+                      ) : (
+                        <span className="text-rose-400 text-xs">Never</span>
+                      )}
+                    </div>
+                    {/* Quick Actions */}
+                    <div className="flex gap-2 mt-2">
+                      <button onClick={exportAll} className="flex-1 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white flex items-center justify-center gap-1">
+                        <Download className="w-3 h-3" />Backup
+                      </button>
+                      {!session && (
+                        <button onClick={() => setView('settings')} className="flex-1 px-2 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-xs text-violet-300 flex items-center justify-center gap-1">
+                          <Cloud className="w-3 h-3" />Enable Sync
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Quick Upload - Show if current week is missing */}
+              {(() => {
+                const today = new Date();
+                const currentWeekEnd = getSunday(today);
+                const hasCurrentWeek = allWeeksData[currentWeekEnd];
+                if (!hasCurrentWeek && Object.keys(allWeeksData).length > 0) {
+                  return (
+                    <div className="bg-violet-900/20 border border-violet-500/30 rounded-xl p-4 mb-6 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Calendar className="w-5 h-5 text-violet-400" />
+                        <div>
+                          <p className="text-violet-300 font-medium">Current week data missing</p>
+                          <p className="text-slate-400 text-sm">Week ending {new Date(currentWeekEnd + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                        </div>
+                      </div>
+                      <button onClick={() => { setWeekEnding(currentWeekEnd); setUploadTab('weekly'); setView('upload'); }} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white flex items-center gap-2">
+                        <Upload className="w-4 h-4" />Upload This Week
+                      </button>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
               
               {/* Time Range Toggle & Key Metrics */}
               <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -4431,6 +4746,45 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                 <input type="date" value={weekEnding} onChange={(e) => setWeekEnding(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
               </div>
               
+              {/* Date Range Guide */}
+              {weekEnding && (() => {
+                const endDate = new Date(weekEnding + 'T00:00:00');
+                const startDate = new Date(endDate);
+                startDate.setDate(startDate.getDate() - 6);
+                const formatDate = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                const formatShort = (d) => d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+                return (
+                  <div className="bg-indigo-900/30 border border-indigo-500/30 rounded-xl p-4 mb-6">
+                    <h3 className="text-indigo-300 font-semibold mb-3 flex items-center gap-2">
+                      <Calendar className="w-4 h-4" />
+                      Date Ranges for Week: {formatDate(startDate)} – {formatDate(endDate)}
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                      <div className="bg-slate-800/50 rounded-lg p-3">
+                        <p className="text-orange-400 font-medium mb-1">📦 Amazon SKU Economics</p>
+                        <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
+                        <p className="text-slate-400 text-xs mt-1">Seller Central → Reports → Business Reports → SKU Economics</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-lg p-3">
+                        <p className="text-blue-400 font-medium mb-1">🛒 Shopify Sales by Product</p>
+                        <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
+                        <p className="text-slate-400 text-xs mt-1">Analytics → Reports → Sales by product variant SKU</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-lg p-3">
+                        <p className="text-teal-400 font-medium mb-1">🚚 3PL Invoice (if applicable)</p>
+                        <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
+                        <p className="text-slate-400 text-xs mt-1">Download fulfillment invoice for this week</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-lg p-3">
+                        <p className="text-violet-400 font-medium mb-1">📣 Ad Spend (Meta/Google)</p>
+                        <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
+                        <p className="text-slate-400 text-xs mt-1">Enter total spend for this 7-day period</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+              
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 <FileBox type="amazon" label="Amazon Report" desc="Business Reports > Detail Page" req />
                 <FileBox type="shopify" label="Shopify Sales" desc="Analytics > Sales by product" req />
@@ -4460,6 +4814,56 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                 <input type="text" value={periodLabel} onChange={(e) => setPeriodLabel(e.target.value)} placeholder="e.g., 2024, Q1 2025, January 2025" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
                 <p className="text-slate-500 text-xs mt-1">Tip: Use "2024" or "2025" for YoY comparisons</p>
               </div>
+              
+              {/* Period Date Range Guide */}
+              {periodLabel && (() => {
+                // Try to determine date range from label
+                let startDate = '', endDate = '', suggestion = '';
+                const label = periodLabel.trim().toLowerCase();
+                const currentYear = new Date().getFullYear();
+                
+                if (/^20\d{2}$/.test(periodLabel.trim())) {
+                  // Full year like "2024"
+                  startDate = `01/01/${periodLabel.trim()}`;
+                  endDate = `12/31/${periodLabel.trim()}`;
+                  suggestion = `Full year ${periodLabel.trim()}`;
+                } else if (/q[1-4]\s*20\d{2}/i.test(label)) {
+                  // Quarter like "Q1 2025"
+                  const match = label.match(/q([1-4])\s*(20\d{2})/i);
+                  if (match) {
+                    const q = parseInt(match[1]);
+                    const y = match[2];
+                    const qStarts = ['01/01', '04/01', '07/01', '10/01'];
+                    const qEnds = ['03/31', '06/30', '09/30', '12/31'];
+                    startDate = `${qStarts[q-1]}/${y}`;
+                    endDate = `${qEnds[q-1]}/${y}`;
+                    suggestion = `Q${q} ${y}`;
+                  }
+                }
+                
+                if (startDate && endDate) {
+                  return (
+                    <div className="bg-teal-900/20 border border-teal-500/30 rounded-xl p-4 mb-6">
+                      <h3 className="text-teal-300 font-semibold mb-3 flex items-center gap-2">
+                        <CalendarRange className="w-4 h-4" />
+                        Date Range for "{suggestion}"
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                        <div className="bg-slate-800/50 rounded-lg p-3">
+                          <p className="text-orange-400 font-medium mb-1">📦 Amazon SKU Economics</p>
+                          <p className="text-white font-mono">{startDate} → {endDate}</p>
+                        </div>
+                        <div className="bg-slate-800/50 rounded-lg p-3">
+                          <p className="text-blue-400 font-medium mb-1">🛒 Shopify Sales by Product</p>
+                          <p className="text-white font-mono">{startDate} → {endDate}</p>
+                        </div>
+                      </div>
+                      <p className="text-slate-400 text-xs mt-3">Make sure both reports use the same date range</p>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 <PeriodFileBox type="amazon" label="Amazon Report" desc="Business Reports" req />
@@ -4504,16 +4908,37 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
               <h2 className="text-lg font-semibold text-white mb-1">Amazon Forecast Upload</h2>
               <p className="text-slate-400 text-sm mb-4">Upload Amazon's projected sales to compare against actual results</p>
               
-              <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6">
-                <h3 className="text-amber-400 font-semibold mb-2">How to Get Amazon Forecast Data</h3>
-                <ol className="text-slate-300 text-sm space-y-1 list-decimal list-inside">
-                  <li>Go to Seller Central → Reports → Business Reports</li>
-                  <li>Click "SKU Economics" report</li>
-                  <li>Set date range to a <span className="text-amber-300 font-medium">future week</span> (e.g., next 7 days)</li>
-                  <li>Amazon shows <span className="text-amber-300 font-medium">projected</span> sales for future dates</li>
-                  <li>Export as CSV and upload here</li>
-                </ol>
-              </div>
+              {/* Next Week Date Range */}
+              {(() => {
+                const today = new Date();
+                const nextSunday = new Date(today);
+                nextSunday.setDate(today.getDate() + (7 - today.getDay()));
+                const nextMonday = new Date(nextSunday);
+                nextMonday.setDate(nextSunday.getDate() + 1);
+                const followingSunday = new Date(nextMonday);
+                followingSunday.setDate(nextMonday.getDate() + 6);
+                const formatDate = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                const formatShort = (d) => d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+                return (
+                  <div className="bg-orange-900/20 border border-orange-500/30 rounded-xl p-4 mb-6">
+                    <h3 className="text-orange-300 font-semibold mb-2 flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4" />
+                      Upload Forecast for Next Week
+                    </h3>
+                    <div className="bg-slate-800/50 rounded-lg p-3 mb-3">
+                      <p className="text-orange-400 font-medium mb-1">📦 Amazon SKU Economics (FUTURE dates)</p>
+                      <p className="text-white font-mono text-lg">{formatShort(nextMonday)} → {formatShort(followingSunday)}</p>
+                      <p className="text-slate-400 text-xs mt-1">Week of {formatDate(nextMonday)} – {formatDate(followingSunday)}</p>
+                    </div>
+                    <ol className="text-slate-300 text-sm space-y-1 list-decimal list-inside">
+                      <li>Seller Central → Reports → Business Reports → <span className="text-orange-300">SKU Economics</span></li>
+                      <li>Set date range: <span className="text-orange-300 font-mono">{formatShort(nextMonday)}</span> to <span className="text-orange-300 font-mono">{formatShort(followingSunday)}</span></li>
+                      <li>Amazon shows <span className="text-orange-300 font-medium">projected</span> sales for future dates</li>
+                      <li>Export as CSV and upload below</li>
+                    </ol>
+                  </div>
+                );
+              })()}
               
               <div className="mb-6">
                 <label className="block text-sm font-medium text-slate-300 mb-2">Amazon Forecast CSV <span className="text-rose-400">*</span></label>
@@ -4745,6 +5170,24 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
               </div>
             </div>
           )}
+          {/* Edit 3PL Costs Modal */}
+          {showEdit3PL && (
+            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+              <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
+                <h2 className="text-xl font-bold text-white mb-4">Edit 3PL / Fulfillment Costs</h2>
+                <p className="text-slate-400 text-sm mb-4">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString()}</p>
+                <div className="mb-6">
+                  <label className="block text-sm text-slate-400 mb-2">3PL Total Cost</label>
+                  <input type="number" value={edit3PLCost} onChange={(e) => setEdit3PLCost(e.target.value)} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+                  <p className="text-slate-500 text-xs mt-2">Enter total fulfillment costs for this week (shipping, pick & pack, storage, etc.)</p>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => updateWeek3PL(selectedWeek, edit3PLCost)} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-xl">Save</button>
+                  <button onClick={() => setShowEdit3PL(false)} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl">Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
           {/* Reprocess Modal */}
           {showReprocess && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -4799,6 +5242,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
             <div className="flex gap-2">
               <button onClick={() => { setReprocessAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowReprocess(true); }} className="bg-violet-900/50 hover:bg-violet-800/50 border border-violet-600/50 text-violet-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><RefreshCw className="w-4 h-4" />Re-process</button>
               <button onClick={() => { setEditAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowEditAdSpend(true); }} className="bg-blue-900/50 hover:bg-blue-800/50 border border-blue-600/50 text-blue-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><DollarSign className="w-4 h-4" />Edit Ads</button>
+              <button onClick={() => { setEdit3PLCost(data.shopify?.threeplCosts?.toString() || ''); setShowEdit3PL(true); }} className="bg-teal-900/50 hover:bg-teal-800/50 border border-teal-600/50 text-teal-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><Truck className="w-4 h-4" />Edit 3PL</button>
               <button onClick={() => deleteWeek(selectedWeek)} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-lg text-sm"><Trash2 className="w-4 h-4" /></button>
             </div>
           </div>
@@ -8355,20 +8799,37 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
           
           {/* Data Management */}
           <SettingSection title="🗄️ Data Management">
-            <SettingRow label="Export All Data" desc="Download complete backup as JSON">
-              <button onClick={exportAll} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-2"><Download className="w-4 h-4" />Export</button>
+            <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-4">
+              <p className="text-amber-400 font-semibold mb-1">💡 Backup Before Updates</p>
+              <p className="text-slate-300 text-sm">Always export a backup before pushing app updates. Your data is stored in the browser - a full backup ensures you can restore everything.</p>
+            </div>
+            <SettingRow label="Full Backup" desc="Downloads ALL data: weeks, periods, inventory, forecasts, invoices, settings">
+              <button onClick={exportAll} className="px-4 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-sm text-emerald-300 flex items-center gap-2"><Download className="w-4 h-4" />Export Full Backup</button>
             </SettingRow>
-            <SettingRow label="Import Data" desc="Restore from JSON backup">
-              <label className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Import<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
+            <SettingRow label="Restore from Backup" desc="Import a previously exported JSON file">
+              <label className="px-4 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Import Backup<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
             </SettingRow>
-            <SettingRow label="Reset Settings" desc="Restore all settings to defaults">
+            <div className="mt-4 p-3 bg-slate-900/50 rounded-lg">
+              <p className="text-slate-400 text-xs mb-2">Backup includes:</p>
+              <div className="grid grid-cols-2 gap-1 text-xs">
+                <span className="text-slate-500">• {Object.keys(allWeeksData).length} weeks of sales data</span>
+                <span className="text-slate-500">• {Object.keys(allPeriodsData).length} period reports</span>
+                <span className="text-slate-500">• {Object.keys(invHistory).length} inventory snapshots</span>
+                <span className="text-slate-500">• {Object.keys(savedCogs).length} COGS entries</span>
+                <span className="text-slate-500">• {Object.keys(amazonForecasts).length} Amazon forecasts</span>
+                <span className="text-slate-500">• {invoices.length} invoices/bills</span>
+                <span className="text-slate-500">• {Object.keys(weekNotes).length} week notes</span>
+                <span className="text-slate-500">• All settings & goals</span>
+              </div>
+            </div>
+            <SettingRow label="Reset Settings Only" desc="Restore settings to defaults (keeps all data)">
               {showResetConfirm ? (
                 <div className="flex gap-2">
                   <button onClick={resetToDefaults} className="px-3 py-2 bg-rose-600 hover:bg-rose-500 rounded-lg text-sm text-white">Confirm Reset</button>
                   <button onClick={() => setShowResetConfirm(false)} className="px-3 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm text-white">Cancel</button>
                 </div>
               ) : (
-                <button onClick={() => setShowResetConfirm(true)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">Reset</button>
+                <button onClick={() => setShowResetConfirm(true)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">Reset Settings</button>
               )}
             </SettingRow>
           </SettingSection>
