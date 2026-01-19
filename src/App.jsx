@@ -2210,51 +2210,6 @@ if (supabase && isAuthReady && !session) {
   );
 }
 
-// Locked screen (session exists, password recheck)
-if (supabase && isAuthReady && session && isLocked) {
-  return (
-    <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 rounded-xl bg-violet-500 flex items-center justify-center">
-            <Database className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold">Locked</h1>
-            <p className="text-slate-400 text-sm">Enter your password to continue.</p>
-          </div>
-        </div>
-
-        <form onSubmit={handleUnlock} className="space-y-4">
-          <div>
-            <label className="block text-sm text-slate-300 mb-1">Password</label>
-            <input
-              value={unlockPassword}
-              onChange={(e) => setUnlockPassword(e.target.value)}
-              type="password"
-              required
-              className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-violet-500"
-            />
-          </div>
-
-          {unlockError && (
-            <div className="text-sm text-rose-300 bg-rose-950/30 border border-rose-900/50 rounded-xl p-3">
-              {unlockError}
-            </div>
-          )}
-
-          <button type="submit" className="w-full rounded-xl bg-violet-500 hover:bg-violet-400 text-slate-950 font-semibold py-2">
-            Unlock
-          </button>
-
-          <button type="button" onClick={handleLogout} className="w-full rounded-xl border border-slate-700 hover:border-slate-500 text-slate-200 py-2">
-            Sign out
-          </button>
-        </form>
-      </div>
-    </div>
-  );
-}
   // UI Components
   const FileBox = ({ type, label, desc, req, isInv }) => {
     const fs = isInv ? invFiles : files, fn = isInv ? invFileNames : fileNames;
@@ -7239,9 +7194,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               })}
             </div>
             <div className="flex gap-4 mt-3 text-xs justify-center">
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great (≤$10)</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great ($10 or less)</span>
               <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />OK ($10-15)</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />High (&gt;$15)</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />High ($15+)</span>
             </div>
           </div>
           
