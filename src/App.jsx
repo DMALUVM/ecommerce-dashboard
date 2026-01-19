@@ -2110,106 +2110,6 @@ const savePeriods = async (d) => {
     exportToCSV(data, 'inventory', ['SKU', 'Location', 'Units', 'COGS', 'Value']);
   };
 
-// Show loading spinner while auth is initializing
-if (supabase && !isAuthReady) {
-  return (
-    <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">
-      <div className="w-12 h-12 border-4 border-violet-500 border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
-}
-
-// If logged in but locked, require password to continue
-if (supabase && isAuthReady && session && isLocked) {
-  return (
-    <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 rounded-xl bg-violet-500 flex items-center justify-center">
-            <Clock className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold">Unlock Dashboard</h1>
-            <p className="text-slate-400 text-sm">Session locked after 10 minutes of inactivity.</p>
-          </div>
-        </div>
-
-        <form onSubmit={handleUnlock} className="space-y-4">
-          <div>
-            <label className="block text-sm text-slate-300 mb-1">Password</label>
-            <input value={unlockPassword} onChange={(e) => setUnlockPassword(e.target.value)} type="password" required
-              className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-violet-500" />
-          </div>
-
-          {unlockError && (
-            <div className="text-sm text-rose-300 bg-rose-950/30 border border-rose-900/50 rounded-xl p-3">
-              {unlockError}
-            </div>
-          )}
-
-          <button type="submit" className="w-full rounded-xl bg-violet-500 hover:bg-violet-400 text-slate-950 font-semibold py-2">
-            Unlock
-          </button>
-
-          <button type="button" onClick={handleLogout}
-            className="w-full rounded-xl border border-slate-700 hover:border-slate-500 text-slate-200 py-2">
-            Sign out
-          </button>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// If Supabase is configured, require login so your data is private.
-if (supabase && isAuthReady && !session) {
-  return (
-    <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500 flex items-center justify-center">
-            <Database className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold">Dashboard Login</h1>
-            <p className="text-slate-400 text-sm">Sign in to access your data from any device.</p>
-          </div>
-        </div>
-
-        <form onSubmit={handleAuth} className="space-y-4">
-          <div>
-            <label className="block text-sm text-slate-300 mb-1">Email</label>
-            <input value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} type="email" required
-              className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-emerald-500" />
-          </div>
-          <div>
-            <label className="block text-sm text-slate-300 mb-1">Password</label>
-            <input value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} type="password" required
-              className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-emerald-500" />
-          </div>
-
-          {authError && (
-            <div className="text-sm text-rose-300 bg-rose-950/30 border border-rose-900/50 rounded-xl p-3">
-              {authError}
-            </div>
-          )}
-
-          <button type="submit" className="w-full rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold py-2">
-            {authMode === 'sign_up' ? 'Create account' : 'Sign in'}
-          </button>
-
-          <button type="button" onClick={() => setAuthMode(authMode === 'sign_up' ? 'sign_in' : 'sign_up')}
-            className="w-full rounded-xl border border-slate-700 hover:border-slate-500 text-slate-200 py-2">
-            {authMode === 'sign_up' ? 'Have an account? Sign in' : 'New here? Create an account'}
-          </button>
-
-          <p className="text-xs text-slate-500">If you haven't added your Supabase keys yet, the app will run without login but data will stay on this device only.</p>
-        </form>
-      </div>
-    </div>
-  );
-}
-
   // UI Components
   const FileBox = ({ type, label, desc, req, isInv }) => {
     const fs = isInv ? invFiles : files, fn = isInv ? invFileNames : fileNames;
@@ -4153,6 +4053,108 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
       comparisonLabel: dashboardRange === 'year' ? `vs ${lastYear}` : 'vs Prior Period'
     };
   }, [allWeeksData, allPeriodsData, dashboardRange]);
+
+  // ==================== AUTH SCREENS (must come after all hooks) ====================
+  
+  // Show loading spinner while auth is initializing
+  if (supabase && !isAuthReady) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-violet-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // If logged in but locked, require password to continue
+  if (supabase && isAuthReady && session && isLocked) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl bg-violet-500 flex items-center justify-center">
+              <Clock className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold">Unlock Dashboard</h1>
+              <p className="text-slate-400 text-sm">Session locked after 10 minutes of inactivity.</p>
+            </div>
+          </div>
+
+          <form onSubmit={handleUnlock} className="space-y-4">
+            <div>
+              <label className="block text-sm text-slate-300 mb-1">Password</label>
+              <input value={unlockPassword} onChange={(e) => setUnlockPassword(e.target.value)} type="password" required
+                className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-violet-500" />
+            </div>
+
+            {unlockError && (
+              <div className="text-sm text-rose-300 bg-rose-950/30 border border-rose-900/50 rounded-xl p-3">
+                {unlockError}
+              </div>
+            )}
+
+            <button type="submit" className="w-full rounded-xl bg-violet-500 hover:bg-violet-400 text-slate-950 font-semibold py-2">
+              Unlock
+            </button>
+
+            <button type="button" onClick={handleLogout}
+              className="w-full rounded-xl border border-slate-700 hover:border-slate-500 text-slate-200 py-2">
+              Sign out
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // If Supabase is configured, require login so your data is private.
+  if (supabase && isAuthReady && !session) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500 flex items-center justify-center">
+              <Database className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold">Dashboard Login</h1>
+              <p className="text-slate-400 text-sm">Sign in to access your data from any device.</p>
+            </div>
+          </div>
+
+          <form onSubmit={handleAuth} className="space-y-4">
+            <div>
+              <label className="block text-sm text-slate-300 mb-1">Email</label>
+              <input value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} type="email" required
+                className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-emerald-500" />
+            </div>
+            <div>
+              <label className="block text-sm text-slate-300 mb-1">Password</label>
+              <input value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} type="password" required
+                className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-emerald-500" />
+            </div>
+
+            {authError && (
+              <div className="text-sm text-rose-300 bg-rose-950/30 border border-rose-900/50 rounded-xl p-3">
+                {authError}
+              </div>
+            )}
+
+            <button type="submit" className="w-full rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold py-2">
+              {authMode === 'sign_up' ? 'Create account' : 'Sign in'}
+            </button>
+
+            <button type="button" onClick={() => setAuthMode(authMode === 'sign_up' ? 'sign_in' : 'sign_up')}
+              className="w-full rounded-xl border border-slate-700 hover:border-slate-500 text-slate-200 py-2">
+              {authMode === 'sign_up' ? 'Have an account? Sign in' : 'New here? Create an account'}
+            </button>
+
+            <p className="text-xs text-slate-500">If you haven't added your Supabase keys yet, the app will run without login but data will stay on this device only.</p>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   // VIEWS
   
