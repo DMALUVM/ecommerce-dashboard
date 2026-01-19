@@ -233,8 +233,12 @@ const handleLogout = async () => {
 
   
   const [savedCogs, setSavedCogs] = useState({});
+  const [savedProductNames, setSavedProductNames] = useState({}); // SKU -> Product Name mapping
   const [cogsLastUpdated, setCogsLastUpdated] = useState(null);
   const [showCogsManager, setShowCogsManager] = useState(false);
+  const [showProductCatalog, setShowProductCatalog] = useState(false);
+  const [productCatalogFile, setProductCatalogFile] = useState(null);
+  const [productCatalogFileName, setProductCatalogFileName] = useState('');
   
   const [bulkImportResult, setBulkImportResult] = useState(null);
   const [customStartDate, setCustomStartDate] = useState('');
@@ -560,6 +564,12 @@ const loadFromLocal = useCallback(() => {
       setSavedCogs(d.lookup || {});
       setCogsLastUpdated(d.updatedAt || null);
     }
+  } catch {}
+
+  // Load product names
+  try {
+    const names = lsGet('ecommerce_product_names_v1');
+    if (names) setSavedProductNames(JSON.parse(names));
   } catch {}
 
   try {
@@ -976,8 +986,20 @@ const savePeriods = async (d) => {
   const processAndSaveCogs = useCallback(() => {
     if (!files.cogs) return;
     const lookup = {};
-    files.cogs.forEach(r => { const s = r['SKU'] || r['sku']; const c = parseFloat(r['Cost Per Unit'] || 0); if (s) lookup[s] = c; });
+    const names = {};
+    files.cogs.forEach(r => { 
+      const s = r['SKU'] || r['sku']; 
+      const c = parseFloat(r['Cost Per Unit'] || 0); 
+      const name = r['Product Name'] || r['Product Name '] || r['product name'] || r['Name'] || r['name'] || '';
+      if (s) {
+        lookup[s] = c;
+        if (name) names[s] = name.trim();
+      }
+    });
     saveCogs(lookup);
+    setSavedProductNames(names);
+    // Save product names to localStorage
+    try { localStorage.setItem('ecommerce_product_names_v1', JSON.stringify(names)); } catch(e) {}
     setFiles(p => ({ ...p, cogs: null })); setFileNames(p => ({ ...p, cogs: '' })); setShowCogsManager(false);
   }, [files.cogs]);
 
@@ -1917,6 +1939,7 @@ if (supabase && isAuthReady && session && isLocked) {
       <div className="flex items-center gap-2">
         {Object.keys(savedCogs).length > 0 ? <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />{Object.keys(savedCogs).length} SKUs</span> : <span className="text-amber-400 text-xs">No COGS</span>}
         <button onClick={() => setShowCogsManager(true)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white flex items-center gap-1"><Settings className="w-3 h-3" />COGS</button>
+        <button onClick={() => setShowProductCatalog(true)} className="px-2 py-1 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded text-xs text-violet-300 flex items-center gap-1"><Package className="w-3 h-3" />Catalog{Object.keys(savedProductNames).length > 0 && <span className="text-violet-400">✓</span>}</button>
       </div>
       <button onClick={() => setShowGoalsModal(true)} className="px-2 py-1 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded text-xs text-amber-300 flex items-center gap-1"><Target className="w-3 h-3" />Goals</button>
       <div className="flex items-center gap-2">
@@ -1928,7 +1951,7 @@ if (supabase && isAuthReady && session && isLocked) {
       <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" />Export</button>
       <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" />Import<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
     </div>
-  ), [allWeeksData, allPeriodsData, savedCogs, storeName, isLocked, cloudStatus, session]);
+  ), [allWeeksData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session]);
 
   const Toast = () => showSaveConfirm && <div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50"><Check className="w-4 h-4" />Saved!</div>;
 
@@ -1986,6 +2009,160 @@ if (supabase && isAuthReady && session && isLocked) {
           <div className="flex gap-3 mt-6">
             <button onClick={() => saveGoals(tempGoals)} className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-semibold py-2 rounded-xl">Save Goals</button>
             <button onClick={() => setShowGoalsModal(false)} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl">Cancel</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Product Catalog Modal - maps SKUs to product names for AI
+  const ProductCatalogModal = () => {
+    if (!showProductCatalog) return null;
+    
+    const handleFileUpload = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      setProductCatalogFileName(file.name);
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const text = evt.target.result;
+        const lines = text.split('\n').filter(l => l.trim());
+        if (lines.length < 2) return;
+        const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+        const skuCol = headers.findIndex(h => h.toLowerCase() === 'sku');
+        const nameCol = headers.findIndex(h => h.toLowerCase().includes('product') || h.toLowerCase() === 'name');
+        if (skuCol === -1 || nameCol === -1) {
+          alert('CSV must have SKU and Product Name columns');
+          return;
+        }
+        const catalog = {};
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+          const sku = cols[skuCol];
+          const name = cols[nameCol];
+          if (sku && name) catalog[sku] = name;
+        }
+        setProductCatalogFile(catalog);
+      };
+      reader.readAsText(file);
+    };
+    
+    const saveCatalog = () => {
+      if (!productCatalogFile) return;
+      setSavedProductNames(productCatalogFile);
+      try { localStorage.setItem('ecommerce_product_names_v1', JSON.stringify(productCatalogFile)); } catch(e) {}
+      setShowProductCatalog(false);
+      setProductCatalogFile(null);
+      setProductCatalogFileName('');
+    };
+    
+    // Get category summary
+    const getCategorySummary = (names) => {
+      const categories = {};
+      Object.entries(names).forEach(([sku, name]) => {
+        const nameLower = name.toLowerCase();
+        let cat = 'Other';
+        if (nameLower.includes('lip balm')) cat = 'Lip Balm';
+        else if (nameLower.includes('deodorant') && nameLower.includes('sensitive')) cat = 'Sensitive Deodorant';
+        else if (nameLower.includes('deodorant') && nameLower.includes('extra strength')) cat = 'Extra Strength Deodorant';
+        else if (nameLower.includes('deodorant')) cat = 'Deodorant';
+        else if (nameLower.includes('soap') && nameLower.includes('athlete')) cat = "Athlete's Shield";
+        else if (nameLower.includes('soap')) cat = 'Tallow Soap';
+        else if (nameLower.includes('sun balm')) cat = 'Sun Balm';
+        else if (nameLower.includes('tallow balm')) cat = 'Tallow Balm';
+        if (!categories[cat]) categories[cat] = 0;
+        categories[cat]++;
+      });
+      return categories;
+    };
+    
+    const currentCategories = getCategorySummary(savedProductNames);
+    const previewCategories = productCatalogFile ? getCategorySummary(productCatalogFile) : null;
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+          <h2 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+            <Package className="w-6 h-6 text-violet-400" />
+            Product Catalog
+          </h2>
+          <p className="text-slate-400 text-sm mb-4">
+            Map SKUs to product names so AI can answer questions like "How much lip balm did I sell?"
+          </p>
+          
+          {/* Current catalog status */}
+          {Object.keys(savedProductNames).length > 0 ? (
+            <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-4 mb-4">
+              <div className="flex items-center gap-2 text-emerald-400 mb-2">
+                <Check className="w-5 h-5" />
+                <span className="font-semibold">{Object.keys(savedProductNames).length} Products Mapped</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(currentCategories).map(([cat, count]) => (
+                  <span key={cat} className="text-xs bg-slate-700 px-2 py-1 rounded text-slate-300">
+                    {cat}: {count}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-amber-900/30 border border-amber-500/30 rounded-xl p-4 mb-4">
+              <p className="text-amber-400 font-semibold">No Product Catalog</p>
+              <p className="text-slate-400 text-sm">Upload a CSV with SKU and Product Name columns</p>
+            </div>
+          )}
+          
+          {/* File upload */}
+          <div className="mb-4">
+            <label className="block text-sm text-slate-300 mb-2">Upload Product Catalog CSV:</label>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={handleFileUpload}
+              className="w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-violet-600 file:text-white file:cursor-pointer"
+            />
+            {productCatalogFileName && (
+              <p className="text-violet-400 text-sm mt-2">📄 {productCatalogFileName}</p>
+            )}
+          </div>
+          
+          {/* Preview */}
+          {productCatalogFile && (
+            <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
+              <p className="text-white font-semibold mb-2">Preview: {Object.keys(productCatalogFile).length} products found</p>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {Object.entries(previewCategories).map(([cat, count]) => (
+                  <span key={cat} className="text-xs bg-violet-600/30 px-2 py-1 rounded text-violet-300">
+                    {cat}: {count}
+                  </span>
+                ))}
+              </div>
+              <div className="max-h-32 overflow-y-auto text-xs space-y-1">
+                {Object.entries(productCatalogFile).slice(0, 5).map(([sku, name]) => (
+                  <div key={sku} className="flex gap-2">
+                    <span className="text-slate-500 font-mono">{sku}</span>
+                    <span className="text-slate-300 truncate">{name}</span>
+                  </div>
+                ))}
+                {Object.keys(productCatalogFile).length > 5 && (
+                  <p className="text-slate-500">...and {Object.keys(productCatalogFile).length - 5} more</p>
+                )}
+              </div>
+            </div>
+          )}
+          
+          <div className="flex gap-3">
+            {productCatalogFile && (
+              <button onClick={saveCatalog} className="flex-1 bg-violet-600 hover:bg-violet-500 text-white font-semibold py-2 rounded-xl">
+                Save Catalog
+              </button>
+            )}
+            <button 
+              onClick={() => { setShowProductCatalog(false); setProductCatalogFile(null); setProductCatalogFileName(''); }} 
+              className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl"
+            >
+              {productCatalogFile ? 'Cancel' : 'Close'}
+            </button>
           </div>
         </div>
       </div>
@@ -2072,8 +2249,10 @@ if (supabase && isAuthReady && session && isLocked) {
       const ppuChange = olderWeeks.length > 0 ? recentPPU - olderPPU : 0;
       const overallPPU = s.totals.units > 0 ? s.totals.profit / s.totals.units : 0;
       const overallMargin = s.totals.revenue > 0 ? (s.totals.profit / s.totals.revenue * 100) : 0;
+      // Get product name from savedProductNames if available
+      const productName = savedProductNames[s.sku] || s.name || s.sku;
       return {
-        sku: s.sku, name: s.name, channel: s.channel,
+        sku: s.sku, name: s.name, productName, channel: s.channel,
         totalRevenue: s.totals.revenue, totalUnits: s.totals.units, totalProfit: s.totals.profit, totalFees: s.totals.fees,
         profitPerUnit: overallPPU, margin: overallMargin,
         recentProfitPerUnit: recentPPU, priorProfitPerUnit: olderPPU, profitPerUnitChange: ppuChange,
@@ -2092,6 +2271,30 @@ if (supabase && isAuthReady && session && isLocked) {
       nexusStates: Object.entries(salesTaxConfig.nexusStates || {}).filter(([,v]) => v.hasNexus).map(([code, config]) => ({ state: US_STATES_TAX_INFO[code]?.name || code, frequency: config.frequency })),
       totalPaidAllTime: Object.values(salesTaxConfig.filingHistory || {}).reduce((sum, periods) => sum + Object.values(periods).reduce((s, p) => s + (p.amount || 0), 0), 0),
     };
+    
+    // Build product catalog with categories from product names
+    const productCatalog = Object.entries(savedProductNames).map(([sku, name]) => {
+      // Auto-detect category from product name
+      const nameLower = name.toLowerCase();
+      let category = 'Other';
+      if (nameLower.includes('lip balm')) category = 'Lip Balm';
+      else if (nameLower.includes('deodorant') && nameLower.includes('sensitive')) category = 'Sensitive Skin Deodorant';
+      else if (nameLower.includes('deodorant') && nameLower.includes('extra strength')) category = 'Extra Strength Deodorant';
+      else if (nameLower.includes('deodorant')) category = 'Deodorant';
+      else if (nameLower.includes('soap') && nameLower.includes('athlete')) category = "Athlete's Shield Soap";
+      else if (nameLower.includes('soap')) category = 'Tallow Soap Bars';
+      else if (nameLower.includes('sun balm')) category = 'Sun Balm';
+      else if (nameLower.includes('tallow balm')) category = 'Tallow Balm';
+      
+      return { sku, name, category };
+    });
+    
+    // Group SKUs by category for easier AI lookup
+    const skusByCategory = {};
+    productCatalog.forEach(p => {
+      if (!skusByCategory[p.category]) skusByCategory[p.category] = [];
+      skusByCategory[p.category].push(p.sku);
+    });
     
     const allTimeRevenue = weeksSummary.reduce((s, w) => s + w.totalRevenue, 0);
     const allTimeProfit = weeksSummary.reduce((s, w) => s + w.totalProfit, 0);
@@ -2112,6 +2315,8 @@ if (supabase && isAuthReady && session && isLocked) {
       skusByProfitPerUnit: [...skuAnalysis].sort((a, b) => b.profitPerUnit - a.profitPerUnit).slice(0, 10),
       decliningSkus: skuAnalysis.filter(s => s.trend === 'declining').slice(0, 10),
       improvingSkus: skuAnalysis.filter(s => s.trend === 'improving').slice(0, 10),
+      productCatalog,
+      skusByCategory,
       inventory: inventorySummary,
       salesTax: taxSummary,
       goals,
@@ -2155,9 +2360,16 @@ RECENT TREND (4wk vs prior):
 - Revenue: ${ctx.insights.recentVsPrior.revenueChange.toFixed(1)}% change
 - Profit: ${ctx.insights.recentVsPrior.profitChange.toFixed(1)}% change
 
+=== PRODUCT CATALOG (SKU to Product Name mapping) ===
+${JSON.stringify(ctx.productCatalog)}
+
+=== SKUs BY CATEGORY (use this to answer questions about product types) ===
+${JSON.stringify(ctx.skusByCategory)}
+When user asks about a product type (e.g., "lip balm", "deodorant", "soap"), find the matching category and use those SKUs.
+
 WEEKLY DATA: ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
 
-TOP SKUS: ${JSON.stringify(ctx.skuAnalysis.slice(0, 15))}
+TOP SKUS (with profit/unit data): ${JSON.stringify(ctx.skuAnalysis.slice(0, 15))}
 
 DECLINING SKUS: ${JSON.stringify(ctx.decliningSkus)}
 
@@ -2437,7 +2649,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -2743,7 +2955,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -2859,7 +3071,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -2877,7 +3089,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -2902,7 +3114,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -2937,7 +3149,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const data = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -3041,7 +3253,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -3067,7 +3279,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -3104,7 +3316,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -3320,7 +3532,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -3503,7 +3715,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -3851,7 +4063,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4163,7 +4375,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!hasWeeklyData && !hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -4183,7 +4395,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!hasWeeklyData && hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -4245,7 +4457,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4640,7 +4852,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4894,7 +5106,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5064,7 +5276,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5600,7 +5812,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -5974,7 +6186,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
