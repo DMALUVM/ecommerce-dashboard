@@ -2055,17 +2055,69 @@ if (supabase && isAuthReady && session && isLocked) {
         ),
       };
       
-      // Top SKUs
+      // Top SKUs - collect from all sources
       const allSkuData = {};
+      
+      // From weekly data
       Object.values(allWeeksData).forEach(week => {
-        [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])].forEach(sku => {
-          if (!allSkuData[sku.sku]) allSkuData[sku.sku] = { sku: sku.sku, title: sku.title, revenue: 0, units: 0, profit: 0 };
-          allSkuData[sku.sku].revenue += sku.revenue || 0;
-          allSkuData[sku.sku].units += sku.units || 0;
-          allSkuData[sku.sku].profit += sku.profit || 0;
+        // Check amazon skuData
+        const amzSkus = week.amazon?.skuData || [];
+        amzSkus.forEach(sku => {
+          const skuId = sku.sku || sku.SKU || sku.msku || sku.MSKU || 'unknown';
+          if (!allSkuData[skuId]) allSkuData[skuId] = { sku: skuId, title: sku.title || sku.name || skuId, revenue: 0, units: 0, profit: 0, channel: 'Amazon' };
+          allSkuData[skuId].revenue += parseFloat(sku.revenue || sku.sales || 0);
+          allSkuData[skuId].units += parseInt(sku.units || sku.quantity || 0);
+          allSkuData[skuId].profit += parseFloat(sku.profit || sku.netProfit || 0);
+        });
+        
+        // Check shopify skuData
+        const shopSkus = week.shopify?.skuData || [];
+        shopSkus.forEach(sku => {
+          const skuId = sku.sku || sku.SKU || 'unknown';
+          if (!allSkuData[skuId]) allSkuData[skuId] = { sku: skuId, title: sku.title || sku.name || skuId, revenue: 0, units: 0, profit: 0, channel: 'Shopify' };
+          allSkuData[skuId].revenue += parseFloat(sku.revenue || sku.sales || 0);
+          allSkuData[skuId].units += parseInt(sku.units || sku.quantity || 0);
+          allSkuData[skuId].profit += parseFloat(sku.profit || sku.netProfit || 0);
         });
       });
-      const topSkus = Object.values(allSkuData).sort((a, b) => b.revenue - a.revenue).slice(0, 20);
+      
+      // From period data as well
+      Object.values(allPeriodsData).forEach(period => {
+        const amzSkus = period.amazon?.skuData || [];
+        amzSkus.forEach(sku => {
+          const skuId = sku.sku || sku.SKU || sku.msku || sku.MSKU || 'unknown';
+          if (!allSkuData[skuId]) allSkuData[skuId] = { sku: skuId, title: sku.title || sku.name || skuId, revenue: 0, units: 0, profit: 0, channel: 'Amazon' };
+          // Only add if not already counted (avoid double counting)
+          if (!allSkuData[skuId].fromPeriod) {
+            allSkuData[skuId].revenue += parseFloat(sku.revenue || sku.sales || 0);
+            allSkuData[skuId].units += parseInt(sku.units || sku.quantity || 0);
+            allSkuData[skuId].profit += parseFloat(sku.profit || sku.netProfit || 0);
+            allSkuData[skuId].fromPeriod = true;
+          }
+        });
+        
+        const shopSkus = period.shopify?.skuData || [];
+        shopSkus.forEach(sku => {
+          const skuId = sku.sku || sku.SKU || 'unknown';
+          if (!allSkuData[skuId]) allSkuData[skuId] = { sku: skuId, title: sku.title || sku.name || skuId, revenue: 0, units: 0, profit: 0, channel: 'Shopify' };
+          if (!allSkuData[skuId].fromPeriod) {
+            allSkuData[skuId].revenue += parseFloat(sku.revenue || sku.sales || 0);
+            allSkuData[skuId].units += parseInt(sku.units || sku.quantity || 0);
+            allSkuData[skuId].profit += parseFloat(sku.profit || sku.netProfit || 0);
+            allSkuData[skuId].fromPeriod = true;
+          }
+        });
+      });
+      
+      const topSkus = Object.values(allSkuData)
+        .filter(s => s.revenue > 0 || s.units > 0)
+        .map(s => ({
+          ...s,
+          profitPerUnit: s.units > 0 ? (s.profit / s.units) : 0,
+          margin: s.revenue > 0 ? ((s.profit / s.revenue) * 100) : 0,
+        }))
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 20);
       
       return {
         storeName: storeName || 'E-Commerce Store',
@@ -2109,7 +2161,7 @@ ${JSON.stringify(dataContext.weeklyData.slice().reverse().slice(0, 12), null, 2)
 PERIOD DATA (yearly/monthly totals):
 ${JSON.stringify(dataContext.periodData, null, 2)}
 
-TOP SELLING SKUS:
+TOP SELLING SKUS (includes: sku, title, revenue, units, profit, profitPerUnit, margin%, channel):
 ${JSON.stringify(dataContext.topSkus.slice(0, 10), null, 2)}
 
 INVENTORY SNAPSHOT:
@@ -2128,6 +2180,7 @@ Monthly Profit Target: $${dataContext.goals.monthlyProfit || 0}
 When answering:
 - Be concise and helpful
 - Format currency values properly (e.g., $1,234.56)
+- For SKU profitability, use the profitPerUnit field (profit ÷ units)
 - If asked about specific dates/periods not in the data, say so
 - Provide insights and suggestions when relevant
 - For calculations, show your work briefly`;
@@ -2175,9 +2228,23 @@ When answering:
                 <p className="text-white/70 text-xs">Ask about your business data</p>
               </div>
             </div>
-            <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button 
+                onClick={() => {
+                  const ctx = prepareDataContext();
+                  console.log('AI Data Context:', ctx);
+                  const summary = `📊 Data Available to AI:\n\n• Weeks tracked: ${ctx.dataRange.weeksTracked}\n• Periods tracked: ${ctx.dataRange.periodsTracked}\n• Date range: ${ctx.dataRange.oldestWeek || 'none'} to ${ctx.dataRange.newestWeek || 'none'}\n• Top SKUs found: ${ctx.topSkus.length}\n• SKUs with revenue: ${ctx.topSkus.filter(s => s.revenue > 0).length}\n\nTop 5 SKUs:\n${ctx.topSkus.slice(0,5).map(s => `  ${s.sku}: $${s.revenue.toFixed(2)} rev | ${s.units} units | $${s.profitPerUnit?.toFixed(2) || '0.00'}/unit profit`).join('\n') || '  No SKU data'}\n\n(Full data logged to browser console)`;
+                  setAiMessages(prev => [...prev, { role: 'assistant', content: summary }]);
+                }} 
+                className="p-2 hover:bg-white/20 rounded-lg text-white/70 hover:text-white"
+                title="Show data context"
+              >
+                <Database className="w-4 h-4" />
+              </button>
+              <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
           
           {/* Messages */}
@@ -2186,6 +2253,7 @@ When answering:
               <div className="text-center text-slate-400 py-8">
                 <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
                 <p className="text-sm">Ask me anything about your business!</p>
+                <p className="text-xs text-slate-500 mt-1">Click the 🗄️ icon to see what data I have access to</p>
                 <div className="mt-4 space-y-2">
                   <button onClick={() => setAiInput("What was my total revenue last month?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "What was my total revenue last month?"</button>
                   <button onClick={() => setAiInput("Which SKU is my best seller?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which SKU is my best seller?"</button>
