@@ -376,20 +376,30 @@ const handleLogout = async () => {
     try { return JSON.parse(localStorage.getItem(AMAZON_FORECAST_KEY)) || {}; } catch { return {}; }
   });
   
-  // Save Amazon forecasts to localStorage
+  // Save Amazon forecasts to localStorage and cloud
   useEffect(() => {
     localStorage.setItem(AMAZON_FORECAST_KEY, JSON.stringify(amazonForecasts));
   }, [amazonForecasts]);
   
-  // Save invoices to localStorage
+  // Save invoices to localStorage and cloud
   useEffect(() => {
     localStorage.setItem(INVOICES_KEY, JSON.stringify(invoices));
   }, [invoices]);
   
-  // Save notes to localStorage
+  // Save notes to localStorage and cloud
   useEffect(() => {
     localStorage.setItem(NOTES_KEY, JSON.stringify(weekNotes));
   }, [weekNotes]);
+  
+  // Save goals to localStorage
+  useEffect(() => {
+    localStorage.setItem(GOALS_KEY, JSON.stringify(goals));
+  }, [goals]);
+  
+  // Save product names to localStorage
+  useEffect(() => {
+    localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(savedProductNames));
+  }, [savedProductNames]);
   
   // Save widget config to localStorage
   useEffect(() => {
@@ -657,7 +667,14 @@ const combinedData = useMemo(() => ({
   storeName,
   salesTax: salesTaxConfig,
   settings: appSettings,
-}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, salesTaxConfig, appSettings]);
+  // New features
+  invoices,
+  amazonForecasts,
+  weekNotes,
+  goals,
+  productNames: savedProductNames,
+  theme,
+}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, salesTaxConfig, appSettings, invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -666,7 +683,7 @@ const loadFromLocal = useCallback(() => {
       const d = JSON.parse(r);
       setAllWeeksData(d);
       const w = Object.keys(d).sort().reverse();
-      if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }
+      if (w.length) { setSelectedWeek(w[0]); }
     }
   } catch {}
 
@@ -750,6 +767,7 @@ const pushToCloudNow = useCallback(async (dataObj) => {
     return;
   }
   lastSavedRef.current = Date.now();
+  setLastSyncDate(new Date().toISOString());
   setCloudStatus('Saved');
   setTimeout(() => setCloudStatus(''), 1500);
 }, [session]);
@@ -771,6 +789,12 @@ useEffect(() => {
   } catch {}
   queueCloudSave({ ...combinedData, storeName });
 }, [storeName]);
+
+// Sync new features to cloud when they change
+useEffect(() => {
+  if (!session?.user?.id || !supabase) return;
+  queueCloudSave(combinedData);
+}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme]);
 
 const loadFromCloud = useCallback(async () => {
   if (!supabase || !session?.user?.id) return false;
@@ -796,7 +820,7 @@ const loadFromCloud = useCallback(async () => {
   try {
     setAllWeeksData(cloud.sales || {});
     const w = Object.keys(cloud.sales || {}).sort().reverse();
-    if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }
+    if (w.length) { setSelectedWeek(w[0]); }
     setInvHistory(cloud.inventory || {});
     setSavedCogs(cloud.cogs?.lookup || {});
     setCogsLastUpdated(cloud.cogs?.updatedAt || null);
@@ -804,6 +828,14 @@ const loadFromCloud = useCallback(async () => {
     setStoreName(cloud.storeName || '');
     setSalesTaxConfig(cloud.salesTax || { nexusStates: {}, filingHistory: {}, hiddenStates: [] });
     if (cloud.settings) setAppSettings(prev => ({ ...prev, ...cloud.settings }));
+    
+    // Load new features from cloud
+    if (cloud.invoices) setInvoices(cloud.invoices);
+    if (cloud.amazonForecasts) setAmazonForecasts(cloud.amazonForecasts);
+    if (cloud.weekNotes) setWeekNotes(cloud.weekNotes);
+    if (cloud.goals) setGoals(cloud.goals);
+    if (cloud.productNames) setSavedProductNames(cloud.productNames);
+    if (cloud.theme) setTheme(cloud.theme);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -813,6 +845,12 @@ const loadFromCloud = useCallback(async () => {
     writeToLocal(STORE_KEY, cloud.storeName || '');
     writeToLocal(SALES_TAX_KEY, JSON.stringify(cloud.salesTax || { nexusStates: {}, filingHistory: {}, hiddenStates: [] }));
     if (cloud.settings) writeToLocal(SETTINGS_KEY, JSON.stringify(cloud.settings));
+    if (cloud.invoices) writeToLocal(INVOICES_KEY, JSON.stringify(cloud.invoices));
+    if (cloud.amazonForecasts) writeToLocal(AMAZON_FORECAST_KEY, JSON.stringify(cloud.amazonForecasts));
+    if (cloud.weekNotes) writeToLocal(NOTES_KEY, JSON.stringify(cloud.weekNotes));
+    if (cloud.goals) writeToLocal(GOALS_KEY, JSON.stringify(cloud.goals));
+    if (cloud.productNames) writeToLocal(PRODUCT_NAMES_KEY, JSON.stringify(cloud.productNames));
+    if (cloud.theme) writeToLocal(THEME_KEY, JSON.stringify(cloud.theme));
   } finally {
     isLoadingDataRef.current = false
   }
@@ -4377,11 +4415,21 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                     <div className="flex items-center justify-between">
                       <span className="text-slate-400 text-sm">Cloud Sync</span>
                       {session ? (
-                        <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />Connected</span>
+                        <div className="flex items-center gap-2">
+                          {cloudStatus && <span className="text-blue-400 text-xs">{cloudStatus}</span>}
+                          {!cloudStatus && <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />Connected</span>}
+                        </div>
                       ) : (
                         <span className="text-amber-400 text-xs flex items-center gap-1"><AlertCircle className="w-3 h-3" />Local only</span>
                       )}
                     </div>
+                    {/* Last Sync (for cloud users) */}
+                    {session && lastSyncDate && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400 text-sm">Last Sync</span>
+                        <span className="text-slate-400 text-xs">{new Date(lastSyncDate).toLocaleString()}</span>
+                      </div>
+                    )}
                     {/* Last Backup */}
                     <div className="flex items-center justify-between">
                       <span className="text-slate-400 text-sm">Last Backup</span>
