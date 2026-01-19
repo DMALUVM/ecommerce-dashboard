@@ -7241,7 +7241,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             <div className="flex gap-4 mt-3 text-xs justify-center">
               <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great (≤$10)</span>
               <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />OK ($10-15)</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />High (>$15)</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />High (&gt;$15)</span>
             </div>
           </div>
           
