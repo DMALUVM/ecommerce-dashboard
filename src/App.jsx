@@ -305,6 +305,9 @@ const handleLogout = async () => {
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   
+  // Help modal
+  const [showUploadHelp, setShowUploadHelp] = useState(false);
+  
   // App Settings
   const [appSettings, setAppSettings] = useState({
     // Inventory thresholds
@@ -1688,8 +1691,9 @@ if (supabase && isAuthReady && session && isLocked) {
         const profit = isAmz 
           ? (item.netProceeds || 0) - (item.cogs || 0) - (item.adSpend || 0)
           : (item.netSales || 0) - (item.cogs || 0) - (item.discounts || 0);
+        // For Shopify, $/Unit should be (Sales - Discounts) / Units to show actual revenue per unit
         const proceedsPerUnit = item.unitsSold > 0 
-          ? (isAmz ? item.netProceeds : item.netSales) / item.unitsSold 
+          ? (isAmz ? item.netProceeds : (item.netSales || 0) - (item.discounts || 0)) / item.unitsSold 
           : 0;
         return { ...item, profit, proceedsPerUnit };
       });
@@ -2206,6 +2210,116 @@ if (supabase && isAuthReady && session && isLocked) {
     );
   };
 
+  // Upload Help Modal
+  const UploadHelpModal = () => {
+    if (!showUploadHelp) return null;
+    
+    const HelpSection = ({ icon, title, steps, color = 'violet' }) => (
+      <div className={`bg-slate-900/50 rounded-xl p-4 border border-${color}-500/20`}>
+        <h4 className={`text-${color}-400 font-semibold mb-3 flex items-center gap-2`}>
+          {icon}
+          {title}
+        </h4>
+        <ol className="space-y-2 text-sm text-slate-300">
+          {steps.map((step, i) => (
+            <li key={i} className="flex gap-2">
+              <span className={`text-${color}-400 font-medium`}>{i + 1}.</span>
+              <span>{step}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+    );
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <FileText className="w-6 h-6 text-violet-400" />
+              How to Upload Data
+            </h2>
+            <button onClick={() => setShowUploadHelp(false)} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          <div className="space-y-4">
+            <HelpSection 
+              icon={<ShoppingCart className="w-5 h-5" />}
+              title="Amazon Sales (SKU Economics Report)"
+              color="orange"
+              steps={[
+                'Go to Seller Central → Reports → Business Reports → SKU Economics',
+                'Select your marketplace',
+                'Set Data Aggregation to "MSKU"',
+                'Select your desired date range',
+                'Check ALL boxes under "Set Report Configurations"',
+                'Important: Make sure COGS are entered in Amazon for accurate data',
+                'Export as CSV'
+              ]}
+            />
+            
+            <HelpSection 
+              icon={<ShoppingBag className="w-5 h-5" />}
+              title="Shopify Sales"
+              color="blue"
+              steps={[
+                'Go to Analytics → Reports',
+                'Find "Total sales by product variant SKU"',
+                'Select your date range',
+                'Export as CSV'
+              ]}
+            />
+            
+            <HelpSection 
+              icon={<Boxes className="w-5 h-5" />}
+              title="Amazon Inventory (FBA)"
+              color="emerald"
+              steps={[
+                'Go to Inventory → FBA Inventory',
+                'Click "Reports"',
+                'Select "Inventory Report"',
+                'Download as CSV'
+              ]}
+            />
+            
+            <HelpSection 
+              icon={<Truck className="w-5 h-5" />}
+              title="3PL Inventory (Packiyo)"
+              color="amber"
+              steps={[
+                'Go to Inventory → Products',
+                'Click Export',
+                'Convert Excel file to CSV format'
+              ]}
+            />
+            
+            <HelpSection 
+              icon={<DollarSign className="w-5 h-5" />}
+              title="3PL Charges"
+              color="rose"
+              steps={[
+                'Create or export a CSV with your weekly 3PL charges',
+                'Include columns for charge types and amounts',
+                'Upload to track fulfillment costs'
+              ]}
+            />
+          </div>
+          
+          <div className="mt-6 pt-4 border-t border-slate-700">
+            <button 
+              onClick={() => setShowUploadHelp(false)} 
+              className="w-full bg-violet-600 hover:bg-violet-500 text-white font-semibold py-2 rounded-xl"
+            >
+              Got It!
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const hasCogs = Object.keys(savedCogs).length > 0;
   
   // AI Chat - Prepare data context function
@@ -2686,7 +2800,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -2720,6 +2834,9 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
                 </button>
                 <button onClick={() => { setUploadTab('period'); setView('upload'); }} className="px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-semibold flex items-center justify-center gap-2">
                   <CalendarRange className="w-5 h-5" />Upload Period Data
+                </button>
+                <button onClick={() => setShowUploadHelp(true)} className="px-6 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-xl font-semibold flex items-center justify-center gap-2 text-slate-300">
+                  <FileText className="w-5 h-5" />How to Upload
                 </button>
               </div>
               <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 max-w-2xl mx-auto text-left">
@@ -2993,14 +3110,17 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
               <Upload className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">Upload Data</h1>
-            <p className="text-slate-400">Import your sales reports and track performance</p>
+            <p className="text-slate-400 mb-3">Import your sales reports and track performance</p>
+            <button onClick={() => setShowUploadHelp(true)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300 flex items-center gap-2 mx-auto">
+              <FileText className="w-4 h-4" />How to Get These Files
+            </button>
           </div>
           
           <NavTabs />
@@ -3109,7 +3229,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -3127,7 +3247,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -3152,7 +3272,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -3187,7 +3307,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const data = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -3291,7 +3411,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -3317,7 +3437,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -3354,7 +3474,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -3570,7 +3690,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -3753,7 +3873,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4101,7 +4221,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4413,7 +4533,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!hasWeeklyData && !hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -4433,7 +4553,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     if (!hasWeeklyData && hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -4495,7 +4615,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4890,7 +5010,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5144,7 +5264,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5314,7 +5434,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5850,7 +5970,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -6224,7 +6344,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><GoalsModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
