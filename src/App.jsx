@@ -1688,12 +1688,14 @@ if (supabase && isAuthReady && session && isLocked) {
     // Add calculated fields and sort
     const skuData = useMemo(() => {
       const withCalcs = skuDataRaw.map(item => {
+        // Amazon: netProceeds IS the profit (already has COGS, fees, and ad spend deducted)
+        // Shopify: netSales already has discounts deducted, subtract COGS
         const profit = isAmz 
-          ? (item.netProceeds || 0) - (item.cogs || 0) - (item.adSpend || 0)
-          : (item.netSales || 0) - (item.cogs || 0) - (item.discounts || 0);
-        // For Shopify, $/Unit should be (Sales - Discounts) / Units to show actual revenue per unit
+          ? (item.netProceeds || 0)
+          : (item.netSales || 0) - (item.cogs || 0);
+        // For $/Unit: Amazon uses proceeds (the profit), Shopify uses netSales
         const proceedsPerUnit = item.unitsSold > 0 
-          ? (isAmz ? item.netProceeds : (item.netSales || 0) - (item.discounts || 0)) / item.unitsSold 
+          ? (isAmz ? item.netProceeds : item.netSales) / item.unitsSold 
           : 0;
         return { ...item, profit, proceedsPerUnit };
       });
@@ -2364,8 +2366,8 @@ if (supabase && isAuthReady && session && isLocked) {
         const units = s.unitsSold || s.units || 0;
         const revenue = s.netSales || s.revenue || 0;
         const proceeds = s.netProceeds || revenue;
-        const cogs = s.cogs || 0;
-        const profit = proceeds - cogs;
+        // Amazon: netProceeds IS the profit (already has COGS, fees, and ad spend deducted)
+        const profit = proceeds;
         const fees = revenue - proceeds;
         skuWeeklyBreakdown[sku].weeks[week] = { units, revenue, profit, fees, profitPerUnit: units > 0 ? profit / units : 0 };
         skuWeeklyBreakdown[sku].totals.revenue += revenue;
@@ -2380,6 +2382,7 @@ if (supabase && isAuthReady && session && isLocked) {
         }
         const units = s.unitsSold || s.units || 0;
         const revenue = s.netSales || s.revenue || 0;
+        // Shopify: netSales already has discounts deducted, subtract COGS
         const profit = revenue - (s.cogs || 0);
         skuWeeklyBreakdown[sku].weeks[week] = { units, revenue, profit, fees: 0, profitPerUnit: units > 0 ? profit / units : 0 };
         skuWeeklyBreakdown[sku].totals.revenue += revenue;
@@ -2814,6 +2817,7 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
               <button onClick={() => setShowGoalsModal(true)} className="px-3 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-1"><Target className="w-4 h-4" />Goals</button>
               <button onClick={() => setShowCogsManager(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Settings className="w-4 h-4" />COGS</button>
               <button onClick={() => setShowProductCatalog(true)} className="px-3 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-1"><Package className="w-4 h-4" />Catalog{Object.keys(savedProductNames).length > 0 && <span className="ml-1">✓</span>}</button>
+              <button onClick={() => setShowUploadHelp(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><FileText className="w-4 h-4" />Help</button>
               <button onClick={() => setView('settings')} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Settings className="w-4 h-4" /></button>
             </div>
           </div>
@@ -4800,26 +4804,27 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
       
       // Amazon SKUs
       (week.amazon?.skuData || []).forEach(s => {
+        // Amazon: netProceeds IS the profit (already has COGS, fees, and ad spend deducted)
+        const weekProceeds = s.netProceeds || 0;
+        const weekProfit = weekProceeds;
+        
         if (!skuAggregates[s.sku]) skuAggregates[s.sku] = { sku: s.sku, name: s.name, channel: 'Amazon', units: 0, revenue: 0, profit: 0, cogs: 0, weeks: 0 };
         skuAggregates[s.sku].units += s.unitsSold || 0;
         skuAggregates[s.sku].revenue += s.netSales || 0;
         skuAggregates[s.sku].cogs += s.cogs || 0;
-        skuAggregates[s.sku].profit += (s.netProceeds || s.netSales || 0) - (s.cogs || 0);
+        skuAggregates[s.sku].profit += weekProfit;
         skuAggregates[s.sku].weeks += 1;
         
         // Track weekly data for profit per unit trending
         if (!skuWeeklyData[s.sku]) skuWeeklyData[s.sku] = { sku: s.sku, name: s.name, channel: 'Amazon', weeks: {} };
         const weekUnits = s.unitsSold || 0;
         const weekRevenue = s.netSales || 0;
-        const weekProceeds = s.netProceeds || 0;
-        const weekCogs = s.cogs || 0;
-        const weekProfit = weekProceeds - weekCogs;
         const weekFees = weekRevenue - weekProceeds; // Amazon fees = net sales - net proceeds
         skuWeeklyData[s.sku].weeks[w] = {
           units: weekUnits,
           revenue: weekRevenue,
           proceeds: weekProceeds,
-          cogs: weekCogs,
+          cogs: s.cogs || 0,
           profit: weekProfit,
           fees: weekFees,
           profitPerUnit: weekUnits > 0 ? weekProfit / weekUnits : 0,
@@ -4831,36 +4836,37 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
           if (!skuRecentData[s.sku]) skuRecentData[s.sku] = { units: 0, revenue: 0, profit: 0 };
           skuRecentData[s.sku].units += s.unitsSold || 0;
           skuRecentData[s.sku].revenue += s.netSales || 0;
-          skuRecentData[s.sku].profit += (s.netProceeds || s.netSales || 0) - (s.cogs || 0);
+          skuRecentData[s.sku].profit += weekProfit;
         }
         if (isOlder) {
           if (!skuOlderData[s.sku]) skuOlderData[s.sku] = { units: 0, revenue: 0, profit: 0 };
           skuOlderData[s.sku].units += s.unitsSold || 0;
           skuOlderData[s.sku].revenue += s.netSales || 0;
-          skuOlderData[s.sku].profit += (s.netProceeds || s.netSales || 0) - (s.cogs || 0);
+          skuOlderData[s.sku].profit += weekProfit;
         }
       });
       
       // Shopify SKUs
       (week.shopify?.skuData || []).forEach(s => {
+        // Shopify: netSales already has discounts deducted, subtract COGS
+        const weekProfit = (s.netSales || 0) - (s.cogs || 0);
+        
         const key = 'shop_' + s.sku;
         if (!skuAggregates[key]) skuAggregates[key] = { sku: s.sku, name: s.name, channel: 'Shopify', units: 0, revenue: 0, profit: 0, cogs: 0, weeks: 0 };
         skuAggregates[key].units += s.unitsSold || 0;
         skuAggregates[key].revenue += s.netSales || 0;
         skuAggregates[key].cogs += s.cogs || 0;
-        skuAggregates[key].profit += (s.netSales || 0) - (s.cogs || 0);
+        skuAggregates[key].profit += weekProfit;
         skuAggregates[key].weeks += 1;
         
         // Track weekly data for Shopify too
         if (!skuWeeklyData[key]) skuWeeklyData[key] = { sku: s.sku, name: s.name, channel: 'Shopify', weeks: {} };
         const weekUnits = s.unitsSold || 0;
         const weekRevenue = s.netSales || 0;
-        const weekCogs = s.cogs || 0;
-        const weekProfit = weekRevenue - weekCogs;
         skuWeeklyData[key].weeks[w] = {
           units: weekUnits,
           revenue: weekRevenue,
-          cogs: weekCogs,
+          cogs: s.cogs || 0,
           profit: weekProfit,
           fees: 0,
           profitPerUnit: weekUnits > 0 ? weekProfit / weekUnits : 0,
@@ -4869,9 +4875,10 @@ Format currency as $X,XXX.XX. Be concise but thorough.`;
         };
         
         if (isRecent) {
-          if (!skuRecentData[key]) skuRecentData[key] = { units: 0, revenue: 0 };
+          if (!skuRecentData[key]) skuRecentData[key] = { units: 0, revenue: 0, profit: 0 };
           skuRecentData[key].units += s.unitsSold || 0;
           skuRecentData[key].revenue += s.netSales || 0;
+          skuRecentData[key].profit += weekProfit;
         }
         if (isOlder) {
           if (!skuOlderData[key]) skuOlderData[key] = { units: 0, revenue: 0 };
