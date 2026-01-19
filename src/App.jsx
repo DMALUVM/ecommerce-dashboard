@@ -4456,22 +4456,27 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                 </div>
               </div>
               
-              {/* Quick Upload - Show if current week is missing */}
+              {/* Quick Upload - Show if most recent week is missing */}
               {(() => {
                 const today = new Date();
-                const currentWeekEnd = getSunday(today);
-                const hasCurrentWeek = allWeeksData[currentWeekEnd];
-                if (!hasCurrentWeek && Object.keys(allWeeksData).length > 0) {
+                // Get the most recent Sunday (last completed week)
+                const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+                const lastSunday = new Date(today);
+                // If today is Sunday, use today; otherwise go back to last Sunday
+                lastSunday.setDate(today.getDate() - (dayOfWeek === 0 ? 0 : dayOfWeek));
+                const lastWeekEnd = lastSunday.toISOString().split('T')[0];
+                const hasLastWeek = allWeeksData[lastWeekEnd];
+                if (!hasLastWeek && Object.keys(allWeeksData).length > 0) {
                   return (
                     <div className="bg-violet-900/20 border border-violet-500/30 rounded-xl p-4 mb-6 flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <Calendar className="w-5 h-5 text-violet-400" />
                         <div>
-                          <p className="text-violet-300 font-medium">Current week data missing</p>
-                          <p className="text-slate-400 text-sm">Week ending {new Date(currentWeekEnd + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                          <p className="text-violet-300 font-medium">Most recent week data missing</p>
+                          <p className="text-slate-400 text-sm">Week ending {new Date(lastWeekEnd + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
                         </div>
                       </div>
-                      <button onClick={() => { setWeekEnding(currentWeekEnd); setUploadTab('weekly'); setView('upload'); }} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white flex items-center gap-2">
+                      <button onClick={() => { setWeekEnding(lastWeekEnd); setUploadTab('weekly'); setView('upload'); }} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white flex items-center gap-2">
                         <Upload className="w-4 h-4" />Upload This Week
                       </button>
                     </div>
