@@ -1249,7 +1249,7 @@ if (supabase && isAuthReady && session && isLocked) {
               {has3plData && <button onClick={() => setShow3plBreakdown(!show3plBreakdown)} className="text-xs text-blue-400 hover:text-blue-300">{show3plBreakdown ? 'Hide' : 'Details'}</button>}
             </div>
             <div><p className="text-slate-500 text-xs uppercase mb-1">Ad Spend</p><p className="text-lg font-semibold text-white">{formatCurrency(data.adSpend)}</p></div>
-            <div><p className="text-slate-500 text-xs uppercase mb-1">ROAS</p><p className="text-lg font-semibold text-white">{(data.roas || 0).toFixed(2)}x</p></div>
+            <div><p className="text-slate-500 text-xs uppercase mb-1">TACOS</p><p className="text-lg font-semibold text-white">{(data.roas || 0).toFixed(2)}x</p></div>
           </div>
           {/* 3PL Breakdown */}
           {show3plBreakdown && has3plData && (
@@ -1640,7 +1640,7 @@ if (supabase && isAuthReady && session && isLocked) {
             <MetricCard label="Total Revenue" value={formatCurrency(data.total.revenue)} icon={DollarSign} color="emerald" />
             <MetricCard label="Total Units" value={formatNumber(data.total.units)} icon={Package} color="blue" />
             <MetricCard label="Net Profit" value={formatCurrency(data.total.netProfit)} sub={`${formatPercent(data.total.netMargin)} margin`} icon={TrendingUp} color={data.total.netProfit >= 0 ? 'emerald' : 'rose'} />
-            <MetricCard label="Ad Spend" value={formatCurrency(data.total.adSpend)} sub={`${(data.total.roas || 0).toFixed(2)}x ROAS`} icon={BarChart3} color="violet" />
+            <MetricCard label="Ad Spend" value={formatCurrency(data.total.adSpend)} sub={`${(data.total.roas || 0).toFixed(2)}x TACOS`} icon={BarChart3} color="violet" />
             <MetricCard label="COGS" value={formatCurrency(data.total.cogs)} icon={ShoppingCart} color="amber" />
           </div>
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5 mb-8">
@@ -1796,7 +1796,7 @@ if (supabase && isAuthReady && session && isLocked) {
             <MetricCard label="Total Revenue" value={formatCurrency(data.total.revenue)} icon={DollarSign} color="emerald" />
             <MetricCard label="Total Units" value={formatNumber(data.total.units)} icon={Package} color="blue" />
             <MetricCard label="Net Profit" value={formatCurrency(data.total.netProfit)} sub={`${formatPercent(data.total.netMargin)} margin`} icon={TrendingUp} color={data.total.netProfit >= 0 ? 'emerald' : 'rose'} />
-            <MetricCard label="Ad Spend" value={formatCurrency(data.total.adSpend)} sub={`${(data.total.roas || 0).toFixed(2)}x ROAS`} icon={BarChart3} color="violet" />
+            <MetricCard label="Ad Spend" value={formatCurrency(data.total.adSpend)} sub={`${(data.total.roas || 0).toFixed(2)}x TACOS`} icon={BarChart3} color="violet" />
             <MetricCard label="COGS" value={formatCurrency(data.total.cogs)} icon={ShoppingCart} color="amber" />
           </div>
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5 mb-8">
@@ -1878,6 +1878,62 @@ if (supabase && isAuthReady && session && isLocked) {
             <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><CheckCircle className="w-5 h-5 text-emerald-400" /><span className="text-emerald-400 font-medium">Healthy</span></div><p className="text-2xl font-bold text-white">{data.summary.healthy}</p><p className="text-xs text-slate-400">30-90 days</p></div>
             <div className="bg-violet-500/10 border border-violet-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><Clock className="w-5 h-5 text-violet-400" /><span className="text-violet-400 font-medium">Overstock</span></div><p className="text-2xl font-bold text-white">{data.summary.overstock}</p><p className="text-xs text-slate-400">&gt;90 days</p></div>
           </div>
+          {/* Reorder Alert - Items with less than 120 days supply */}
+          {(() => {
+            const lowStock = data.items.filter(item => item.daysOfSupply !== 999 && item.daysOfSupply < 120 && item.daysOfSupply > 0);
+            if (lowStock.length === 0) return null;
+            const criticalItems = lowStock.filter(i => i.daysOfSupply < 30);
+            const warningItems = lowStock.filter(i => i.daysOfSupply >= 30 && i.daysOfSupply < 60);
+            const watchItems = lowStock.filter(i => i.daysOfSupply >= 60 && i.daysOfSupply < 120);
+            return (
+              <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-6 h-6 text-amber-400 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h4 className="text-amber-400 font-semibold mb-1">📦 Reorder Alert: Less Than 120 Days Supply</h4>
+                    <p className="text-slate-300 text-sm mb-3">
+                      {lowStock.length} SKU{lowStock.length > 1 ? 's' : ''} running low on inventory
+                      {criticalItems.length > 0 && <span className="text-rose-400 ml-2">({criticalItems.length} critical!)</span>}
+                    </p>
+                    <div className="bg-slate-900/50 rounded-lg p-3 max-h-48 overflow-y-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-slate-500 text-xs">
+                            <th className="text-left pb-2">SKU</th>
+                            <th className="text-right pb-2">Qty</th>
+                            <th className="text-right pb-2">Velocity/wk</th>
+                            <th className="text-right pb-2">Days Left</th>
+                            <th className="text-left pb-2 pl-2">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {lowStock.sort((a, b) => a.daysOfSupply - b.daysOfSupply).slice(0, 15).map(item => (
+                            <tr key={item.sku} className="border-t border-slate-700/50">
+                              <td className="py-1.5 text-white max-w-[150px] truncate" title={item.name}>{item.sku}</td>
+                              <td className="py-1.5 text-right text-white">{formatNumber(item.totalQty)}</td>
+                              <td className="py-1.5 text-right text-slate-400">{item.weeklyVel.toFixed(1)}</td>
+                              <td className={`py-1.5 text-right font-semibold ${item.daysOfSupply < 30 ? 'text-rose-400' : item.daysOfSupply < 60 ? 'text-amber-400' : 'text-yellow-400'}`}>{item.daysOfSupply}</td>
+                              <td className="py-1.5 pl-2">
+                                {item.daysOfSupply < 30 ? <span className="text-xs bg-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded">CRITICAL</span> :
+                                 item.daysOfSupply < 60 ? <span className="text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">ORDER NOW</span> :
+                                 <span className="text-xs bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded">WATCH</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {lowStock.length > 15 && <p className="text-slate-500 text-xs mt-2">+ {lowStock.length - 15} more...</p>}
+                    </div>
+                    <div className="flex gap-4 mt-3 text-xs">
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 bg-rose-500 rounded" />&lt;30 days: {criticalItems.length}</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 bg-amber-500 rounded" />30-60 days: {warningItems.length}</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 bg-yellow-500 rounded" />60-120 days: {watchItems.length}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
             <div className="p-4 border-b border-slate-700"><h3 className="text-lg font-semibold text-white">Products ({data.items.length})</h3></div>
             <div className="overflow-x-auto">
@@ -2867,10 +2923,15 @@ if (supabase && isAuthReady && session && isLocked) {
     const shopifyAds = totals.metaAds + totals.googleAds;
     const shopRoas = shopifyAds > 0 ? totals.shopRev / shopifyAds : 0;
     
-    // Find optimal ad spend (week with best ROAS)
-    const bestWeek = [...adData].filter(d => d.totalAds > 0).sort((a, b) => b.totalRoas - a.totalRoas)[0];
+    // TACOS = Ad Spend / Total Revenue (as percentage)
+    const totalTacos = totals.totalRev > 0 ? (totals.totalAds / totals.totalRev) * 100 : 0;
+    const amzTacos = totals.amzRev > 0 ? (totals.amzAds / totals.amzRev) * 100 : 0;
+    const shopTacos = totals.shopRev > 0 ? (shopifyAds / totals.shopRev) * 100 : 0;
     
-    const roasColor = (roas) => roas >= 4 ? 'text-emerald-400' : roas >= 2 ? 'text-amber-400' : 'text-rose-400';
+    // Find optimal ad spend (week with lowest TACOS that has sales)
+    const bestWeek = [...adData].filter(d => d.totalAds > 0 && d.totalRev > 0).sort((a, b) => a.adPct - b.adPct)[0];
+    
+    const tacosColor = (tacos) => tacos <= 10 ? 'text-emerald-400' : tacos <= 20 ? 'text-amber-400' : 'text-rose-400';
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
@@ -2880,7 +2941,7 @@ if (supabase && isAuthReady && session && isLocked) {
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">⚡ Ad Performance Analytics</h1>
-            <p className="text-slate-400">Track ROAS, ad spend efficiency, and channel performance</p>
+            <p className="text-slate-400">Track TACOS (Total Ad Cost of Sale = Ad Spend ÷ Total Revenue), ad spend efficiency, and channel performance</p>
           </div>
           
           {/* Summary Cards */}
@@ -2888,21 +2949,21 @@ if (supabase && isAuthReady && session && isLocked) {
             <div className="bg-gradient-to-br from-purple-900/30 to-slate-800/50 rounded-xl border border-purple-500/30 p-4">
               <p className="text-slate-400 text-sm">Total Ad Spend (4wk)</p>
               <p className="text-2xl font-bold text-white">{formatCurrency(totals.totalAds)}</p>
-              <p className="text-purple-400 text-sm">{totals.totalRev > 0 ? ((totals.totalAds / totals.totalRev) * 100).toFixed(1) : 0}% of revenue</p>
+              <p className="text-purple-400 text-sm">{totalTacos.toFixed(1)}% of revenue</p>
             </div>
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-              <p className="text-slate-400 text-sm">Overall ROAS</p>
-              <p className={`text-2xl font-bold ${roasColor(avgRoas)}`}>{avgRoas.toFixed(2)}x</p>
-              <p className="text-slate-500 text-sm">Target: 3-4x</p>
+              <p className="text-slate-400 text-sm">Overall TACOS</p>
+              <p className={`text-2xl font-bold ${tacosColor(totalTacos)}`}>{totalTacos.toFixed(1)}%</p>
+              <p className="text-slate-500 text-sm">Target: &lt;15%</p>
             </div>
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-              <p className="text-slate-400 text-sm">Amazon ROAS</p>
-              <p className={`text-2xl font-bold ${roasColor(amzRoas)}`}>{amzRoas.toFixed(2)}x</p>
+              <p className="text-slate-400 text-sm">Amazon TACOS</p>
+              <p className={`text-2xl font-bold ${tacosColor(amzTacos)}`}>{amzTacos.toFixed(1)}%</p>
               <p className="text-orange-400 text-sm">{formatCurrency(totals.amzAds)} spent</p>
             </div>
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-              <p className="text-slate-400 text-sm">Shopify ROAS</p>
-              <p className={`text-2xl font-bold ${roasColor(shopRoas)}`}>{shopRoas.toFixed(2)}x</p>
+              <p className="text-slate-400 text-sm">Shopify TACOS</p>
+              <p className={`text-2xl font-bold ${tacosColor(shopTacos)}`}>{shopTacos.toFixed(1)}%</p>
               <p className="text-blue-400 text-sm">{formatCurrency(shopifyAds)} spent</p>
             </div>
           </div>
@@ -2931,41 +2992,42 @@ if (supabase && isAuthReady && session && isLocked) {
             
             {bestWeek && (
               <div className="bg-gradient-to-br from-emerald-900/30 to-slate-800/50 rounded-xl border border-emerald-500/30 p-5">
-                <h3 className="text-lg font-semibold text-emerald-400 mb-4 flex items-center gap-2"><Star className="w-5 h-5" />Best Performing Week</h3>
+                <h3 className="text-lg font-semibold text-emerald-400 mb-4 flex items-center gap-2"><Star className="w-5 h-5" />Best Performing Week (Lowest TACOS)</h3>
                 <p className="text-white text-xl font-bold mb-2">{new Date(bestWeek.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div><span className="text-slate-400">Ad Spend:</span> <span className="text-white">{formatCurrency(bestWeek.totalAds)}</span></div>
                   <div><span className="text-slate-400">Revenue:</span> <span className="text-white">{formatCurrency(bestWeek.totalRev)}</span></div>
-                  <div><span className="text-slate-400">ROAS:</span> <span className="text-emerald-400 font-bold">{bestWeek.totalRoas.toFixed(2)}x</span></div>
-                  <div><span className="text-slate-400">Ad %:</span> <span className="text-white">{bestWeek.adPct.toFixed(1)}%</span></div>
+                  <div><span className="text-slate-400">TACOS:</span> <span className="text-emerald-400 font-bold">{bestWeek.adPct.toFixed(1)}%</span></div>
+                  <div><span className="text-slate-400">Efficiency:</span> <span className="text-white">${(bestWeek.totalRev / bestWeek.totalAds).toFixed(2)} per $1</span></div>
                 </div>
               </div>
             )}
           </div>
           
-          {/* ROAS Trend Chart */}
+          {/* TACOS Trend Chart */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">ROAS Trend</h3>
+            <h3 className="text-lg font-semibold text-white mb-4">TACOS Trend (Lower is Better)</h3>
             <div className="flex items-end gap-2 h-48">
               {adData.slice(-12).map((d, i) => {
-                const height = Math.min(d.totalRoas * 20, 100);
+                const tacos = d.adPct;
+                const height = Math.min(tacos * 3, 100); // Scale for display
                 return (
                   <div key={d.week} className="flex-1 flex flex-col items-center group relative">
                     <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
                       {new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}<br/>
-                      ROAS: {d.totalRoas.toFixed(2)}x<br/>
+                      TACOS: {tacos.toFixed(1)}%<br/>
                       Spend: {formatCurrency(d.totalAds)}
                     </div>
-                    <div className={`w-full rounded-t transition-all hover:opacity-80 ${d.totalRoas >= 4 ? 'bg-emerald-500' : d.totalRoas >= 2 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ height: `${Math.max(height, 3)}%` }} />
+                    <div className={`w-full rounded-t transition-all hover:opacity-80 ${tacos <= 10 ? 'bg-emerald-500' : tacos <= 20 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ height: `${Math.max(height, 3)}%` }} />
                     <span className="text-[10px] text-slate-500 mt-1">{new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
                   </div>
                 );
               })}
             </div>
             <div className="flex gap-4 mt-3 text-xs justify-center">
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great (4x+)</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />OK (2-4x)</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />Poor (&lt;2x)</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great (&lt;10%)</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />OK (10-20%)</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />High (&gt;20%)</span>
             </div>
           </div>
           
@@ -2982,8 +3044,7 @@ if (supabase && isAuthReady && session && isLocked) {
                     <th className="text-right text-slate-400 py-2">Google</th>
                     <th className="text-right text-slate-400 py-2">Total Ads</th>
                     <th className="text-right text-slate-400 py-2">Revenue</th>
-                    <th className="text-right text-slate-400 py-2">ROAS</th>
-                    <th className="text-right text-slate-400 py-2">Ad %</th>
+                    <th className="text-right text-slate-400 py-2">TACOS</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2995,8 +3056,7 @@ if (supabase && isAuthReady && session && isLocked) {
                       <td className="py-2 text-right text-red-400">{formatCurrency(d.googleAds)}</td>
                       <td className="py-2 text-right text-white">{formatCurrency(d.totalAds)}</td>
                       <td className="py-2 text-right text-white">{formatCurrency(d.totalRev)}</td>
-                      <td className={`py-2 text-right font-semibold ${roasColor(d.totalRoas)}`}>{d.totalRoas.toFixed(2)}x</td>
-                      <td className="py-2 text-right text-slate-400">{d.adPct.toFixed(1)}%</td>
+                      <td className={`py-2 text-right font-semibold ${tacosColor(d.adPct)}`}>{d.adPct.toFixed(1)}%</td>
                     </tr>
                   ))}
                 </tbody>
