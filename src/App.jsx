@@ -4346,7 +4346,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                       <h3 className="text-orange-400 text-sm font-semibold flex items-center gap-2">
                         <TrendingUp className="w-4 h-4" />Amazon Forecast
                       </h3>
-                      <button onClick={() => setUploadTab('forecast'); setView('upload');} className="text-xs text-slate-400 hover:text-white">View all</button>
+                      <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="text-xs text-slate-400 hover:text-white">View all</button>
                     </div>
                     <p className="text-2xl font-bold text-white">{formatCurrency(upcomingAmazonForecasts[0].totals.sales)}</p>
                     <p className="text-slate-400 text-sm">Projected for week ending {new Date(upcomingAmazonForecasts[0].weekEnding + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
