@@ -186,6 +186,7 @@ export default function Dashboard() {
   const [dashboardRange, setDashboardRange] = useState('month'); // 'week' | 'month' | 'quarter' | 'year'
 
   const [storeName, setStoreName] = useState('');
+  const [storeLogo, setStoreLogo] = useState(() => localStorage.getItem('ecommerce_store_logo') || null);
 
   // Goals & Targets
   const [goals, setGoals] = useState({ weeklyRevenue: 0, weeklyProfit: 0, monthlyRevenue: 0, monthlyProfit: 0 });
@@ -238,6 +239,9 @@ const handleAuth = async (e) => {
 const handleLogout = async () => {
   if (!supabase) return;
   await supabase.auth.signOut();
+  setSession(null);
+  // Clear any locked state
+  setIsLocked(false);
 };
 
   
@@ -324,6 +328,18 @@ const handleLogout = async () => {
   });
   const [editingWidgets, setEditingWidgets] = useState(false);
   
+  // Production Pipeline
+  const PRODUCTION_KEY = 'ecommerce_production_v1';
+  const [productionPipeline, setProductionPipeline] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('ecommerce_production_v1')) || []; } catch { return []; }
+  });
+  const [showAddProduction, setShowAddProduction] = useState(false);
+  const [editingProduction, setEditingProduction] = useState(null);
+  const [productionForm, setProductionForm] = useState({ sku: '', productName: '', quantity: '', expectedDate: '', notes: '' });
+  const [productionFile, setProductionFile] = useState(null);
+  const [productionFileName, setProductionFileName] = useState('');
+  const [extractingProduction, setExtractingProduction] = useState(false);
+  
   // 4. Browser Notifications
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   
@@ -401,6 +417,11 @@ const handleLogout = async () => {
     localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(savedProductNames));
   }, [savedProductNames]);
   
+  // Save production pipeline to localStorage
+  useEffect(() => {
+    localStorage.setItem('ecommerce_production_v1', JSON.stringify(productionPipeline));
+  }, [productionPipeline]);
+  
   // Save widget config to localStorage
   useEffect(() => {
     if (widgetConfig) localStorage.setItem(WIDGET_KEY, JSON.stringify(widgetConfig));
@@ -410,6 +431,15 @@ const handleLogout = async () => {
   useEffect(() => {
     localStorage.setItem(THEME_KEY, JSON.stringify(theme));
   }, [theme]);
+  
+  // Save logo to localStorage
+  useEffect(() => {
+    if (storeLogo) {
+      localStorage.setItem('ecommerce_store_logo', storeLogo);
+    } else {
+      localStorage.removeItem('ecommerce_store_logo');
+    }
+  }, [storeLogo]);
   
   // Mobile detection
   useEffect(() => {
@@ -665,6 +695,7 @@ const combinedData = useMemo(() => ({
   cogs: { lookup: savedCogs, updatedAt: cogsLastUpdated },
   periods: allPeriodsData,
   storeName,
+  storeLogo,
   salesTax: salesTaxConfig,
   settings: appSettings,
   // New features
@@ -674,7 +705,8 @@ const combinedData = useMemo(() => ({
   goals,
   productNames: savedProductNames,
   theme,
-}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, salesTaxConfig, appSettings, invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme]);
+  productionPipeline,
+}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -794,7 +826,7 @@ useEffect(() => {
 useEffect(() => {
   if (!session?.user?.id || !supabase) return;
   queueCloudSave(combinedData);
-}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme]);
+}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline]);
 
 const loadFromCloud = useCallback(async () => {
   if (!supabase || !session?.user?.id) return false;
@@ -826,6 +858,7 @@ const loadFromCloud = useCallback(async () => {
     setCogsLastUpdated(cloud.cogs?.updatedAt || null);
     setAllPeriodsData(cloud.periods || {});
     setStoreName(cloud.storeName || '');
+    if (cloud.storeLogo) setStoreLogo(cloud.storeLogo);
     setSalesTaxConfig(cloud.salesTax || { nexusStates: {}, filingHistory: {}, hiddenStates: [] });
     if (cloud.settings) setAppSettings(prev => ({ ...prev, ...cloud.settings }));
     
@@ -836,6 +869,7 @@ const loadFromCloud = useCallback(async () => {
     if (cloud.goals) setGoals(cloud.goals);
     if (cloud.productNames) setSavedProductNames(cloud.productNames);
     if (cloud.theme) setTheme(cloud.theme);
+    if (cloud.productionPipeline) setProductionPipeline(cloud.productionPipeline);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -843,6 +877,7 @@ const loadFromCloud = useCallback(async () => {
     writeToLocal(COGS_KEY, JSON.stringify({ lookup: cloud.cogs?.lookup || {}, updatedAt: cloud.cogs?.updatedAt || null }));
     writeToLocal(PERIODS_KEY, JSON.stringify(cloud.periods || {}));
     writeToLocal(STORE_KEY, cloud.storeName || '');
+    if (cloud.storeLogo) localStorage.setItem('ecommerce_store_logo', cloud.storeLogo);
     writeToLocal(SALES_TAX_KEY, JSON.stringify(cloud.salesTax || { nexusStates: {}, filingHistory: {}, hiddenStates: [] }));
     if (cloud.settings) writeToLocal(SETTINGS_KEY, JSON.stringify(cloud.settings));
     if (cloud.invoices) writeToLocal(INVOICES_KEY, JSON.stringify(cloud.invoices));
@@ -851,6 +886,7 @@ const loadFromCloud = useCallback(async () => {
     if (cloud.goals) writeToLocal(GOALS_KEY, JSON.stringify(cloud.goals));
     if (cloud.productNames) writeToLocal(PRODUCT_NAMES_KEY, JSON.stringify(cloud.productNames));
     if (cloud.theme) writeToLocal(THEME_KEY, JSON.stringify(cloud.theme));
+    if (cloud.productionPipeline) localStorage.setItem('ecommerce_production_v1', JSON.stringify(cloud.productionPipeline));
   } finally {
     isLoadingDataRef.current = false
   }
@@ -1640,9 +1676,10 @@ const savePeriods = async (d) => {
   // COMPLETE BACKUP - includes ALL dashboard data
   const exportAll = () => { 
     const fullBackup = {
-      version: '2.0',
+      version: '2.1',
       exportedAt: new Date().toISOString(),
       storeName,
+      storeLogo,
       // Core sales data
       sales: allWeeksData, 
       periods: allPeriodsData,
@@ -1658,6 +1695,7 @@ const savePeriods = async (d) => {
       invoices,
       amazonForecasts,
       weekNotes,
+      productionPipeline,
     };
     const blob = new Blob([JSON.stringify(fullBackup, null, 2)], { type: 'application/json' }); 
     const a = document.createElement('a'); 
@@ -1743,6 +1781,13 @@ const savePeriods = async (d) => {
         if (d.weekNotes && Object.keys(d.weekNotes).length > 0) {
           setWeekNotes(prev => ({...prev, ...d.weekNotes}));
           restored.push('notes');
+        }
+        if (d.productionPipeline && d.productionPipeline.length > 0) {
+          setProductionPipeline(d.productionPipeline);
+          restored.push(`${d.productionPipeline.length} production orders`);
+        }
+        if (d.storeLogo) {
+          setStoreLogo(d.storeLogo);
         }
         
         setToast({ message: `Restored: ${restored.join(', ')}`, type: 'success' });
@@ -2064,6 +2109,15 @@ const savePeriods = async (d) => {
     }));
     exportToCSV(data, 'inventory', ['SKU', 'Location', 'Units', 'COGS', 'Value']);
   };
+
+// Show loading spinner while auth is initializing
+if (supabase && !isAuthReady) {
+  return (
+    <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">
+      <div className="w-12 h-12 border-4 border-violet-500 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
 
 // If logged in but locked, require password to continue
 if (supabase && isAuthReady && session && isLocked) {
@@ -3905,6 +3959,19 @@ ${JSON.stringify(getAmazonForecastComparison.slice(0, 8).map(c => ({
 Average accuracy: ${getAmazonForecastComparison.length > 0 ? (100 - Math.abs(getAmazonForecastComparison.reduce((s, c) => s + c.variance.revenuePercent, 0) / getAmazonForecastComparison.length)).toFixed(1) : 0}%
 ` : ''}
 
+=== PRODUCTION PIPELINE (incoming inventory) ===
+${productionPipeline.length > 0 ? `
+${productionPipeline.length} production orders in pipeline (${formatNumber(productionPipeline.reduce((s, p) => s + (p.quantity || 0), 0))} total units):
+${JSON.stringify(productionPipeline.map(p => ({ 
+  sku: p.sku, 
+  product: p.productName, 
+  quantity: p.quantity, 
+  expectedDate: p.expectedDate, 
+  status: p.status,
+  daysUntil: p.expectedDate ? Math.ceil((new Date(p.expectedDate) - new Date()) / (1000 * 60 * 60 * 24)) : null
+})))}
+` : 'No production orders in pipeline'}
+
 === WHAT YOU CAN HELP WITH ===
 - Analyze sales trends and patterns
 - Compare performance across weeks, months, products
@@ -3918,6 +3985,7 @@ Average accuracy: ${getAmazonForecastComparison.length > 0 ? (100 - Math.abs(get
 - Provide insights on advertising effectiveness (TACOS, ROAS)
 - Sales tax obligations by state
 - Upcoming bills and cash flow planning
+- Production pipeline tracking and timing
 
 Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. If the user asks about data you don't have, let them know what they need to upload.`;
 
@@ -4213,9 +4281,14 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
-            <div>
-              <h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'E-Commerce Dashboard'}</h1>
-              <p className="text-slate-400">Business performance overview</p>
+            <div className="flex items-center gap-4">
+              {storeLogo && (
+                <img src={storeLogo} alt="Store logo" className="w-12 h-12 object-contain rounded-xl bg-slate-800/50 p-1" />
+              )}
+              <div>
+                <h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'E-Commerce Dashboard'}</h1>
+                <p className="text-slate-400">Business performance overview</p>
+              </div>
             </div>
             <div className="flex items-center gap-3 flex-wrap">
               <input value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="Store name"
@@ -5291,7 +5364,12 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
             </div>
           )}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-            <div><h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'Weekly Performance'}</h1><p className="text-slate-400">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
+            <div className="flex items-center gap-4">
+              {storeLogo && (
+                <img src={storeLogo} alt="Store logo" className="w-12 h-12 object-contain rounded-xl bg-slate-800/50 p-1" />
+              )}
+              <div><h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'Weekly Performance'}</h1><p className="text-slate-400">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
+            </div>
             <div className="flex gap-2">
               <button onClick={() => { setReprocessAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowReprocess(true); }} className="bg-violet-900/50 hover:bg-violet-800/50 border border-violet-600/50 text-violet-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><RefreshCw className="w-4 h-4" />Re-process</button>
               <button onClick={() => { setEditAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowEditAdSpend(true); }} className="bg-blue-900/50 hover:bg-blue-800/50 border border-blue-600/50 text-blue-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><DollarSign className="w-4 h-4" />Edit Ads</button>
@@ -5732,6 +5810,520 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                 </tbody>
               </table>
             </div>
+          </div>
+          
+          {/* Smart Inventory Forecast Section */}
+          <div className="mt-8 mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <TrendingUp className="w-6 h-6 text-emerald-400" />
+                  Smart Inventory Forecast
+                </h2>
+                <p className="text-slate-400 text-sm">AI-powered predictions using historical data, Amazon forecasts, and production pipeline</p>
+              </div>
+              <button 
+                onClick={async () => {
+                  // Gather all the data for AI analysis
+                  const inventoryItems = data.items || [];
+                  const sortedWeeks = Object.keys(allWeeksData).sort();
+                  const recentWeeks = sortedWeeks.slice(-12);
+                  
+                  // Build velocity history per SKU
+                  const skuVelocityHistory = {};
+                  recentWeeks.forEach(week => {
+                    const weekData = allWeeksData[week];
+                    [...(weekData?.amazon?.skus || []), ...(weekData?.shopify?.skus || [])].forEach(sku => {
+                      if (!skuVelocityHistory[sku.sku]) skuVelocityHistory[sku.sku] = [];
+                      skuVelocityHistory[sku.sku].push({ week, units: sku.units || 0 });
+                    });
+                  });
+                  
+                  // Get Amazon forecasts
+                  const amazonForecastData = upcomingAmazonForecasts.length > 0 ? upcomingAmazonForecasts[0] : null;
+                  
+                  // Get production pipeline
+                  const pendingProduction = productionPipeline.filter(p => p.status !== 'received');
+                  
+                  // Build context for AI
+                  const analysisContext = {
+                    currentInventory: inventoryItems.slice(0, 30).map(i => ({
+                      sku: i.sku,
+                      name: i.name,
+                      totalQty: i.totalQty,
+                      weeklyVelocity: i.weeklyVel,
+                      daysOfSupply: i.daysOfSupply,
+                      health: i.health
+                    })),
+                    velocityTrends: Object.entries(skuVelocityHistory).slice(0, 20).map(([sku, history]) => ({
+                      sku,
+                      avgVelocity: history.reduce((s, h) => s + h.units, 0) / Math.max(history.length, 1),
+                      trend: history.length >= 4 ? (history.slice(-2).reduce((s, h) => s + h.units, 0) / 2) - (history.slice(0, 2).reduce((s, h) => s + h.units, 0) / 2) : 0
+                    })),
+                    amazonForecast: amazonForecastData ? {
+                      weekEnding: amazonForecastData.weekEnding,
+                      projectedUnits: amazonForecastData.totals.units,
+                      projectedRevenue: amazonForecastData.totals.sales,
+                      topSkus: Object.entries(amazonForecastData.skus || {}).slice(0, 10).map(([sku, data]) => ({ sku, units: data.units }))
+                    } : null,
+                    productionPipeline: pendingProduction.map(p => ({
+                      sku: p.sku,
+                      product: p.productName,
+                      quantity: p.quantity,
+                      expectedDate: p.expectedDate,
+                      daysUntil: p.expectedDate ? Math.ceil((new Date(p.expectedDate) - new Date()) / (1000 * 60 * 60 * 24)) : null
+                    })),
+                    forecastAccuracy: getAmazonForecastComparison.length > 0 ? {
+                      avgAccuracy: (100 - Math.abs(getAmazonForecastComparison.reduce((s, c) => s + c.variance.revenuePercent, 0) / getAmazonForecastComparison.length)).toFixed(1),
+                      samples: getAmazonForecastComparison.length
+                    } : null
+                  };
+                  
+                  setAiInput('');
+                  setShowAiChat(true);
+                  setAiMessages(prev => [...prev, { 
+                    role: 'user', 
+                    content: `Analyze my inventory and provide a smart forecast. Here's my data:\n\n${JSON.stringify(analysisContext, null, 2)}\n\nPlease:\n1. Identify which SKUs are at risk of stockout\n2. Factor in the production pipeline timing\n3. Compare current velocity vs Amazon's forecast\n4. Give me a prioritized reorder recommendation\n5. Flag any SKUs where production won't arrive in time`
+                  }]);
+                  
+                  // Trigger AI analysis
+                  try {
+                    const response = await fetch('/api/chat', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        messages: [{
+                          role: 'user',
+                          content: `You are an inventory planning expert. Analyze this e-commerce inventory data and provide actionable recommendations.
+
+DATA:
+${JSON.stringify(analysisContext, null, 2)}
+
+Provide a concise analysis covering:
+1. **Stockout Risk** - Which SKUs will run out first and when
+2. **Production Timing** - Will incoming production arrive before stockouts?
+3. **Velocity Analysis** - Are sales trending up/down? How does this compare to Amazon's forecast?
+4. **Reorder Priority** - Ranked list of what to reorder first
+5. **Specific Actions** - What should I do this week?
+
+Be specific with SKU names and numbers. Use bullet points for clarity.`
+                        }]
+                      })
+                    });
+                    const result = await response.json();
+                    setAiMessages(prev => [...prev, { 
+                      role: 'assistant', 
+                      content: result.content?.[0]?.text || result.choices?.[0]?.message?.content || 'Unable to generate forecast analysis.'
+                    }]);
+                  } catch (err) {
+                    setAiMessages(prev => [...prev, { 
+                      role: 'assistant', 
+                      content: 'Error generating forecast. Please try again.'
+                    }]);
+                  }
+                }}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm text-white flex items-center gap-2"
+              >
+                <Zap className="w-4 h-4" />Run AI Forecast Analysis
+              </button>
+            </div>
+            
+            {/* Forecast Data Sources */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+              {/* Historical Velocity */}
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Clock className="w-5 h-5 text-blue-400" />
+                  <span className="text-blue-400 font-medium text-sm">Historical Data</span>
+                </div>
+                <p className="text-2xl font-bold text-white">{Object.keys(allWeeksData).length} weeks</p>
+                <p className="text-slate-400 text-xs">Sales velocity baseline</p>
+              </div>
+              
+              {/* Amazon Forecast */}
+              <div className={`rounded-xl border p-4 ${upcomingAmazonForecasts.length > 0 ? 'bg-orange-900/20 border-orange-500/30' : 'bg-slate-800/50 border-slate-700'}`}>
+                <div className="flex items-center gap-2 mb-2">
+                  <TrendingUp className="w-5 h-5 text-orange-400" />
+                  <span className="text-orange-400 font-medium text-sm">Amazon Forecast</span>
+                </div>
+                {upcomingAmazonForecasts.length > 0 ? (
+                  <>
+                    <p className="text-2xl font-bold text-white">{formatNumber(upcomingAmazonForecasts[0].totals.units)} units</p>
+                    <p className="text-slate-400 text-xs">Projected next week</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-slate-500 text-lg">Not uploaded</p>
+                    <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="text-orange-400 text-xs hover:underline">Upload forecast →</button>
+                  </>
+                )}
+              </div>
+              
+              {/* Production Pipeline */}
+              <div className={`rounded-xl border p-4 ${productionPipeline.filter(p => p.status !== 'received').length > 0 ? 'bg-cyan-900/20 border-cyan-500/30' : 'bg-slate-800/50 border-slate-700'}`}>
+                <div className="flex items-center gap-2 mb-2">
+                  <Truck className="w-5 h-5 text-cyan-400" />
+                  <span className="text-cyan-400 font-medium text-sm">Incoming Production</span>
+                </div>
+                {productionPipeline.filter(p => p.status !== 'received').length > 0 ? (
+                  <>
+                    <p className="text-2xl font-bold text-white">{formatNumber(productionPipeline.filter(p => p.status !== 'received').reduce((s, p) => s + (p.quantity || 0), 0))} units</p>
+                    <p className="text-slate-400 text-xs">{productionPipeline.filter(p => p.status !== 'received').length} orders pending</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-slate-500 text-lg">None tracked</p>
+                    <p className="text-slate-500 text-xs">Add production below</p>
+                  </>
+                )}
+              </div>
+              
+              {/* Forecast Accuracy */}
+              <div className={`rounded-xl border p-4 ${getAmazonForecastComparison.length > 0 ? 'bg-emerald-900/20 border-emerald-500/30' : 'bg-slate-800/50 border-slate-700'}`}>
+                <div className="flex items-center gap-2 mb-2">
+                  <Target className="w-5 h-5 text-emerald-400" />
+                  <span className="text-emerald-400 font-medium text-sm">Forecast Accuracy</span>
+                </div>
+                {getAmazonForecastComparison.length > 0 ? (
+                  <>
+                    <p className="text-2xl font-bold text-white">
+                      {(100 - Math.abs(getAmazonForecastComparison.reduce((s, c) => s + c.variance.revenuePercent, 0) / getAmazonForecastComparison.length)).toFixed(0)}%
+                    </p>
+                    <p className="text-slate-400 text-xs">Based on {getAmazonForecastComparison.length} weeks</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-slate-500 text-lg">No data yet</p>
+                    <p className="text-slate-500 text-xs">Upload actuals after forecasts</p>
+                  </>
+                )}
+              </div>
+            </div>
+            
+            {/* Critical Items Quick View */}
+            {(() => {
+              const criticalItems = data.items.filter(i => i.daysOfSupply < 30 && i.daysOfSupply !== 999 && i.daysOfSupply > 0);
+              const incomingForCritical = criticalItems.map(item => {
+                const incoming = productionPipeline.find(p => p.sku === item.sku && p.status !== 'received');
+                return { ...item, incoming };
+              });
+              
+              if (criticalItems.length === 0) return (
+                <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-xl p-4">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="w-5 h-5 text-emerald-400" />
+                    <span className="text-emerald-400 font-medium">All inventory levels healthy!</span>
+                  </div>
+                  <p className="text-slate-400 text-sm mt-1">No SKUs are critically low on stock.</p>
+                </div>
+              );
+              
+              return (
+                <div className="bg-rose-900/20 border border-rose-500/30 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-5 h-5 text-rose-400" />
+                      <span className="text-rose-400 font-semibold">Critical Stock Alert: {criticalItems.length} SKUs</span>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-slate-500 text-xs border-b border-slate-700">
+                          <th className="text-left pb-2">SKU</th>
+                          <th className="text-right pb-2">Stock</th>
+                          <th className="text-right pb-2">Velocity/wk</th>
+                          <th className="text-right pb-2">Days Left</th>
+                          <th className="text-left pb-2 pl-3">Incoming Production</th>
+                          <th className="text-left pb-2">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {incomingForCritical.sort((a, b) => a.daysOfSupply - b.daysOfSupply).slice(0, 10).map(item => {
+                          const willArrive = item.incoming?.expectedDate ? Math.ceil((new Date(item.incoming.expectedDate) - new Date()) / (1000 * 60 * 60 * 24)) : null;
+                          const willStockOut = willArrive !== null && willArrive > item.daysOfSupply;
+                          return (
+                            <tr key={item.sku} className="border-t border-slate-700/50">
+                              <td className="py-2 text-white font-mono">{item.sku}</td>
+                              <td className="py-2 text-right text-white">{formatNumber(item.totalQty)}</td>
+                              <td className="py-2 text-right text-slate-400">{item.weeklyVel.toFixed(1)}</td>
+                              <td className="py-2 text-right text-rose-400 font-bold">{item.daysOfSupply}</td>
+                              <td className="py-2 pl-3">
+                                {item.incoming ? (
+                                  <span className="text-cyan-400">
+                                    {formatNumber(item.incoming.quantity)} units in {willArrive}d
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-500">None scheduled</span>
+                                )}
+                              </td>
+                              <td className="py-2">
+                                {item.incoming ? (
+                                  willStockOut ? (
+                                    <span className="text-xs bg-rose-500/20 text-rose-400 px-2 py-0.5 rounded">⚠️ Will stockout</span>
+                                  ) : (
+                                    <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded">✓ Covered</span>
+                                  )
+                                ) : (
+                                  <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded">Order now</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+          
+          {/* Production Pipeline Section */}
+          <div className="mt-8">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <Truck className="w-6 h-6 text-cyan-400" />
+                  Production Pipeline
+                </h2>
+                <p className="text-slate-400 text-sm">Track upcoming inventory from manufacturers</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { setProductionForm({ sku: '', productName: '', quantity: '', expectedDate: '', notes: '' }); setEditingProduction(null); setShowAddProduction(true); }} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm text-white flex items-center gap-2">
+                  <Plus className="w-4 h-4" />Add Production
+                </button>
+              </div>
+            </div>
+            
+            {/* AI Extract from File */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 mb-4">
+              <p className="text-slate-300 text-sm mb-3">📄 Have a production order or PO? Upload it and AI will extract the data:</p>
+              <div className="flex items-center gap-3">
+                <label className={`flex-1 border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all ${productionFile ? 'border-cyan-500/50 bg-cyan-950/20' : 'border-slate-600 hover:border-slate-500'}`}>
+                  <input type="file" accept=".csv,.xlsx,.xls,.pdf,.txt" onChange={(e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                      setProductionFileName(file.name);
+                      const reader = new FileReader();
+                      reader.onload = (ev) => setProductionFile(ev.target.result);
+                      reader.readAsText(file);
+                    }
+                  }} className="hidden" />
+                  <div className="flex items-center justify-center gap-2">
+                    {productionFile ? <Check className="w-5 h-5 text-cyan-400" /> : <Upload className="w-5 h-5 text-slate-400" />}
+                    <span className={productionFile ? 'text-cyan-400' : 'text-slate-400'}>{productionFile ? productionFileName : 'Upload PO, invoice, or CSV'}</span>
+                  </div>
+                </label>
+                {productionFile && (
+                  <button 
+                    onClick={async () => {
+                      if (!productionFile) return;
+                      setExtractingProduction(true);
+                      try {
+                        const response = await fetch('/api/chat', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            messages: [{
+                              role: 'user',
+                              content: `Extract production/manufacturing order data from this document. Return ONLY a JSON array with objects containing: sku, productName, quantity (number), expectedDate (YYYY-MM-DD format), notes (optional). If you can't find a date, use empty string. If you can't find SKU, use the product name. Here's the document:\n\n${productionFile}`
+                            }]
+                          })
+                        });
+                        const data = await response.json();
+                        // Try to parse JSON from the response
+                        const text = data.choices?.[0]?.message?.content || data.content || '';
+                        const jsonMatch = text.match(/\[[\s\S]*\]/);
+                        if (jsonMatch) {
+                          const extracted = JSON.parse(jsonMatch[0]);
+                          if (Array.isArray(extracted) && extracted.length > 0) {
+                            // Add each extracted item to pipeline
+                            const newItems = extracted.map(item => ({
+                              id: Date.now() + Math.random(),
+                              sku: item.sku || '',
+                              productName: item.productName || item.product_name || item.name || '',
+                              quantity: parseInt(item.quantity) || 0,
+                              expectedDate: item.expectedDate || item.expected_date || item.date || '',
+                              notes: item.notes || '',
+                              status: 'pending',
+                              createdAt: new Date().toISOString()
+                            }));
+                            setProductionPipeline(prev => [...prev, ...newItems]);
+                            setToast({ message: `Extracted ${newItems.length} production items`, type: 'success' });
+                            setProductionFile(null);
+                            setProductionFileName('');
+                          } else {
+                            setToast({ message: 'No production data found in file', type: 'error' });
+                          }
+                        } else {
+                          setToast({ message: 'Could not parse production data', type: 'error' });
+                        }
+                      } catch (err) {
+                        setToast({ message: 'Error extracting data: ' + err.message, type: 'error' });
+                      }
+                      setExtractingProduction(false);
+                    }}
+                    disabled={extractingProduction}
+                    className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 rounded-lg text-sm text-white flex items-center gap-2"
+                  >
+                    {extractingProduction ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    {extractingProduction ? 'Extracting...' : 'Extract with AI'}
+                  </button>
+                )}
+              </div>
+            </div>
+            
+            {/* Add/Edit Production Modal */}
+            {showAddProduction && (
+              <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
+                  <h3 className="text-lg font-semibold text-white mb-4">{editingProduction ? 'Edit Production' : 'Add Production'}</h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">SKU</label>
+                      <input type="text" value={productionForm.sku} onChange={(e) => setProductionForm(p => ({ ...p, sku: e.target.value }))} placeholder="ABC-123" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Product Name</label>
+                      <input type="text" value={productionForm.productName} onChange={(e) => setProductionForm(p => ({ ...p, productName: e.target.value }))} placeholder="Product description" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Quantity Being Made</label>
+                      <input type="number" value={productionForm.quantity} onChange={(e) => setProductionForm(p => ({ ...p, quantity: e.target.value }))} placeholder="1000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Expected Ready Date</label>
+                      <input type="date" value={productionForm.expectedDate} onChange={(e) => setProductionForm(p => ({ ...p, expectedDate: e.target.value }))} className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Notes (optional)</label>
+                      <textarea value={productionForm.notes} onChange={(e) => setProductionForm(p => ({ ...p, notes: e.target.value }))} placeholder="Manufacturer, PO number, etc." rows={2} className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                    </div>
+                  </div>
+                  <div className="flex gap-3 mt-6">
+                    <button onClick={() => {
+                      if (!productionForm.sku && !productionForm.productName) {
+                        setToast({ message: 'SKU or Product Name required', type: 'error' });
+                        return;
+                      }
+                      if (editingProduction) {
+                        setProductionPipeline(prev => prev.map(p => p.id === editingProduction ? { ...p, ...productionForm, quantity: parseInt(productionForm.quantity) || 0 } : p));
+                        setToast({ message: 'Production updated', type: 'success' });
+                      } else {
+                        const newItem = {
+                          id: Date.now(),
+                          ...productionForm,
+                          quantity: parseInt(productionForm.quantity) || 0,
+                          status: 'pending',
+                          createdAt: new Date().toISOString()
+                        };
+                        setProductionPipeline(prev => [...prev, newItem]);
+                        setToast({ message: 'Production added', type: 'success' });
+                      }
+                      setShowAddProduction(false);
+                      setEditingProduction(null);
+                    }} className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white font-semibold py-2 rounded-lg">
+                      {editingProduction ? 'Save Changes' : 'Add to Pipeline'}
+                    </button>
+                    <button onClick={() => { setShowAddProduction(false); setEditingProduction(null); }} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-lg">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Production Pipeline Table */}
+            {productionPipeline.length > 0 ? (
+              <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-slate-900/50">
+                    <tr>
+                      <th className="text-left px-4 py-3 text-slate-400 text-xs uppercase">SKU</th>
+                      <th className="text-left px-4 py-3 text-slate-400 text-xs uppercase">Product</th>
+                      <th className="text-right px-4 py-3 text-slate-400 text-xs uppercase">Quantity</th>
+                      <th className="text-left px-4 py-3 text-slate-400 text-xs uppercase">Expected Date</th>
+                      <th className="text-left px-4 py-3 text-slate-400 text-xs uppercase">Status</th>
+                      <th className="text-center px-4 py-3 text-slate-400 text-xs uppercase">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {productionPipeline.sort((a, b) => new Date(a.expectedDate || '9999-12-31') - new Date(b.expectedDate || '9999-12-31')).map(item => {
+                      const daysUntil = item.expectedDate ? Math.ceil((new Date(item.expectedDate) - new Date()) / (1000 * 60 * 60 * 24)) : null;
+                      return (
+                        <tr key={item.id} className="border-t border-slate-700/50 hover:bg-slate-700/20">
+                          <td className="px-4 py-3 text-white font-mono text-sm">{item.sku || '—'}</td>
+                          <td className="px-4 py-3 text-white text-sm max-w-[200px] truncate" title={item.productName}>{item.productName || '—'}</td>
+                          <td className="px-4 py-3 text-right text-cyan-400 font-semibold">{formatNumber(item.quantity)}</td>
+                          <td className="px-4 py-3 text-sm">
+                            {item.expectedDate ? (
+                              <span className={daysUntil <= 7 ? 'text-emerald-400' : daysUntil <= 30 ? 'text-amber-400' : 'text-slate-300'}>
+                                {new Date(item.expectedDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                {daysUntil !== null && <span className="text-slate-500 text-xs ml-2">({daysUntil <= 0 ? 'Due!' : `${daysUntil}d`})</span>}
+                              </span>
+                            ) : <span className="text-slate-500">TBD</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            <select 
+                              value={item.status || 'pending'} 
+                              onChange={(e) => setProductionPipeline(prev => prev.map(p => p.id === item.id ? { ...p, status: e.target.value } : p))}
+                              className={`text-xs px-2 py-1 rounded-lg border-0 ${
+                                item.status === 'received' ? 'bg-emerald-500/20 text-emerald-400' :
+                                item.status === 'shipped' ? 'bg-blue-500/20 text-blue-400' :
+                                item.status === 'in_production' ? 'bg-amber-500/20 text-amber-400' :
+                                'bg-slate-700 text-slate-300'
+                              }`}
+                            >
+                              <option value="pending">Pending</option>
+                              <option value="in_production">In Production</option>
+                              <option value="shipped">Shipped</option>
+                              <option value="received">Received</option>
+                            </select>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button onClick={() => {
+                                setProductionForm({
+                                  sku: item.sku || '',
+                                  productName: item.productName || '',
+                                  quantity: item.quantity?.toString() || '',
+                                  expectedDate: item.expectedDate || '',
+                                  notes: item.notes || ''
+                                });
+                                setEditingProduction(item.id);
+                                setShowAddProduction(true);
+                              }} className="p-1.5 hover:bg-slate-700 rounded text-slate-400 hover:text-white">
+                                <Settings className="w-4 h-4" />
+                              </button>
+                              <button onClick={() => {
+                                if (confirm('Delete this production item?')) {
+                                  setProductionPipeline(prev => prev.filter(p => p.id !== item.id));
+                                  setToast({ message: 'Production item deleted', type: 'success' });
+                                }
+                              }} className="p-1.5 hover:bg-rose-900/50 rounded text-slate-400 hover:text-rose-400">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {/* Summary */}
+                <div className="bg-slate-900/50 px-4 py-3 border-t border-slate-700">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-400">{productionPipeline.length} production orders</span>
+                    <span className="text-cyan-400 font-semibold">{formatNumber(productionPipeline.reduce((s, p) => s + (p.quantity || 0), 0))} total units incoming</span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-8 text-center">
+                <Truck className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                <p className="text-slate-400 mb-2">No production orders tracked</p>
+                <p className="text-slate-500 text-sm">Add upcoming manufacturing runs to track incoming inventory</p>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -8850,6 +9442,90 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
             </SettingSection>
           )}
           
+          {/* Store Branding */}
+          <SettingSection title="🏪 Store Branding">
+            <SettingRow label="Store Name" desc="Displayed in the dashboard header">
+              <input 
+                type="text" 
+                value={storeName} 
+                onChange={(e) => setStoreName(e.target.value)} 
+                placeholder="Your Store Name"
+                className="w-48 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+              />
+            </SettingRow>
+            <SettingRow label="Store Logo" desc="Upload your logo (PNG, JPG - max 500KB)">
+              <div className="flex items-center gap-3">
+                {storeLogo && (
+                  <img src={storeLogo} alt="Store logo" className="w-10 h-10 object-contain rounded-lg bg-slate-900 p-1" />
+                )}
+                <label className="px-3 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 cursor-pointer flex items-center gap-2">
+                  <Upload className="w-4 h-4" />{storeLogo ? 'Change' : 'Upload'}
+                  <input 
+                    type="file" 
+                    accept="image/png,image/jpeg,image/jpg,image/webp"
+                    onChange={(e) => {
+                      const file = e.target.files[0];
+                      if (file) {
+                        if (file.size > 500 * 1024) {
+                          setToast({ message: 'Logo must be under 500KB', type: 'error' });
+                          return;
+                        }
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                          setStoreLogo(ev.target.result);
+                          setToast({ message: 'Logo uploaded successfully', type: 'success' });
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }} 
+                    className="hidden" 
+                  />
+                </label>
+                {storeLogo && (
+                  <button onClick={() => { setStoreLogo(null); setToast({ message: 'Logo removed', type: 'success' }); }} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300">
+                    Remove
+                  </button>
+                )}
+              </div>
+            </SettingRow>
+            <p className="text-slate-500 text-xs mt-3">Your logo will appear in the dashboard header next to your store name.</p>
+          </SettingSection>
+          
+          {/* Security & Privacy */}
+          <SettingSection title="🔒 Security & Privacy">
+            <div className="space-y-4">
+              <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-xl p-4">
+                <p className="text-emerald-400 font-semibold mb-2">✅ Your Data is Private</p>
+                <p className="text-slate-300 text-sm">Each user account has completely separate data. Other users who sign up cannot see your data, and you cannot see theirs. This is enforced at the database level using Row Level Security (RLS).</p>
+              </div>
+              
+              <div className="bg-slate-900/50 rounded-xl p-4">
+                <p className="text-white font-medium mb-2">How Data Storage Works</p>
+                <ul className="text-slate-400 text-sm space-y-2">
+                  <li className="flex items-start gap-2">
+                    <Cloud className="w-4 h-4 mt-0.5 text-blue-400 flex-shrink-0" />
+                    <span><strong className="text-white">Cloud Sync (Logged In):</strong> Data syncs to Supabase and is accessible from any device when you log in with the same account.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <Database className="w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" />
+                    <span><strong className="text-white">Local Backup:</strong> Data is also stored in your browser's localStorage as a backup in case of connectivity issues.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <Download className="w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" />
+                    <span><strong className="text-white">Manual Backups:</strong> Downloaded to your browser's default download folder (usually ~/Downloads). You can change this in your browser settings.</span>
+                  </li>
+                </ul>
+              </div>
+              
+              {session && (
+                <div className="bg-slate-900/50 rounded-xl p-4">
+                  <p className="text-white font-medium mb-2">Logged in as</p>
+                  <p className="text-slate-400 text-sm">{session.user?.email}</p>
+                </div>
+              )}
+            </div>
+          </SettingSection>
+          
           {/* Data Management */}
           <SettingSection title="🗄️ Data Management">
             <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-4">
@@ -8886,6 +9562,47 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
               )}
             </SettingRow>
           </SettingSection>
+          
+          {/* Danger Zone */}
+          {session && (
+            <SettingSection title="⚠️ Danger Zone">
+              <div className="bg-rose-900/20 border border-rose-500/30 rounded-xl p-4">
+                <p className="text-rose-400 font-semibold mb-2">Delete All My Data</p>
+                <p className="text-slate-300 text-sm mb-4">This will permanently delete all your data from the cloud. This action cannot be undone. We recommend exporting a backup first.</p>
+                <button 
+                  onClick={async () => {
+                    if (!confirm('Are you sure you want to delete ALL your data? This cannot be undone!')) return;
+                    if (!confirm('FINAL WARNING: All weeks, periods, inventory, forecasts, invoices, and settings will be permanently deleted. Continue?')) return;
+                    try {
+                      // Delete from Supabase
+                      if (supabase && session?.user?.id) {
+                        await supabase.from('app_data').delete().eq('user_id', session.user.id);
+                      }
+                      // Clear localStorage
+                      localStorage.clear();
+                      // Reset all state
+                      setAllWeeksData({});
+                      setAllPeriodsData({});
+                      setInvHistory({});
+                      setSavedCogs({});
+                      setInvoices([]);
+                      setAmazonForecasts({});
+                      setWeekNotes({});
+                      setGoals({ weeklyRevenue: 0, weeklyProfit: 0, monthlyRevenue: 0, monthlyProfit: 0 });
+                      setStoreName('');
+                      setStoreLogo(null);
+                      setToast({ message: 'All data deleted successfully', type: 'success' });
+                    } catch (err) {
+                      setToast({ message: 'Error deleting data: ' + err.message, type: 'error' });
+                    }
+                  }}
+                  className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300 flex items-center gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />Delete All My Data
+                </button>
+              </div>
+            </SettingSection>
+          )}
           
           {/* About */}
           <div className="bg-slate-800/30 rounded-2xl border border-slate-700/50 p-6 text-center">
