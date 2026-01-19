@@ -511,6 +511,9 @@ const handleLogout = async () => {
   });
   const [show3PLBulkUpload, setShow3PLBulkUpload] = useState(false);
   const [threeplUploadStatus, setThreeplUploadStatus] = useState(null); // { processing: bool, results: [] }
+  const [threeplSelectedFiles, setThreeplSelectedFiles] = useState([]);
+  const [threeplProcessing, setThreeplProcessing] = useState(false);
+  const [threeplResults, setThreeplResults] = useState(null);
   
   // Sales Tax Management
   const [salesTaxConfig, setSalesTaxConfig] = useState({
@@ -3980,18 +3983,14 @@ const savePeriods = async (d) => {
   // 3PL BULK UPLOAD MODAL
   const ThreePLBulkUploadModal = () => {
     const [dragActive, setDragActive] = useState(false);
-    const [selectedFiles, setSelectedFiles] = useState([]);
-    const [processing, setProcessing] = useState(false);
-    const [results, setResults] = useState(null);
     
-    // Reset state when modal is closed
-    useEffect(() => {
-      if (!show3PLBulkUpload) {
-        setSelectedFiles([]);
-        setResults(null);
-        setProcessing(false);
-      }
-    }, [show3PLBulkUpload]);
+    // Use Dashboard-level state for files, processing, results
+    const selectedFiles = threeplSelectedFiles;
+    const setSelectedFiles = setThreeplSelectedFiles;
+    const processing = threeplProcessing;
+    const setProcessing = setThreeplProcessing;
+    const results = threeplResults;
+    const setResults = setThreeplResults;
     
     if (!show3PLBulkUpload) return null;
     
@@ -4132,7 +4131,7 @@ const savePeriods = async (d) => {
               <Truck className="w-6 h-6 text-blue-400" />
               3PL Bulk Upload
             </h2>
-            <button onClick={() => { setShow3PLBulkUpload(false); setSelectedFiles([]); setResults(null); }} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white">
+            <button onClick={() => { setShow3PLBulkUpload(false); setThreeplSelectedFiles([]); setThreeplResults(null); }} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white">
               <X className="w-5 h-5" />
             </button>
           </div>
