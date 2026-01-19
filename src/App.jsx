@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake } from 'lucide-react';
 
 const parseCSV = (text) => {
   const lines = text.split('\n').filter(line => line.trim());
@@ -43,6 +43,7 @@ const STORAGE_KEY = 'ecommerce_dashboard_v5';
 const INVENTORY_KEY = 'ecommerce_inventory_v5';
 const COGS_KEY = 'ecommerce_cogs_v1';
 const STORE_KEY = 'ecommerce_store_name_v1';
+const GOALS_KEY = 'ecommerce_goals_v1';
 
 // Supabase (cloud auth + storage)
 // Create a .env.local file in your Vite project with:
@@ -81,6 +82,10 @@ export default function Dashboard() {
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
 
   const [storeName, setStoreName] = useState('');
+
+  // Goals & Targets
+  const [goals, setGoals] = useState({ weeklyRevenue: 0, weeklyProfit: 0, monthlyRevenue: 0, monthlyProfit: 0 });
+  const [showGoalsModal, setShowGoalsModal] = useState(false);
 
 // Auth + cloud sync
 const [session, setSession] = useState(null);
@@ -207,6 +212,17 @@ const loadFromLocal = useCallback(() => {
     const r = lsGet(STORE_KEY);
     if (r) setStoreName(r);
   } catch {}
+
+  try {
+    const r = lsGet(GOALS_KEY);
+    if (r) setGoals(JSON.parse(r));
+  } catch {}
+}, []);
+
+const saveGoals = useCallback((newGoals) => {
+  setGoals(newGoals);
+  lsSet(GOALS_KEY, JSON.stringify(newGoals));
+  setShowGoalsModal(false);
 }, []);
 
 const writeToLocal = useCallback((key, value) => {
@@ -1038,8 +1054,8 @@ const savePeriods = async (d) => {
     return agg;
   };
 
-  const exportAll = () => { const blob = new Blob([JSON.stringify({ sales: allWeeksData, inventory: invHistory, cogs: savedCogs, periods: allPeriodsData }, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `dashboard_backup_${new Date().toISOString().split('T')[0]}.json`; a.click(); };
-  const importData = (file) => { const reader = new FileReader(); reader.onload = async (e) => { try { const d = JSON.parse(e.target.result); if (d.sales) { setAllWeeksData({...allWeeksData, ...d.sales}); await save({...allWeeksData, ...d.sales}); } if (d.inventory) { setInvHistory({...invHistory, ...d.inventory}); await saveInv({...invHistory, ...d.inventory}); } if (d.cogs) { setSavedCogs(d.cogs); await saveCogs(d.cogs); } if (d.periods) { setAllPeriodsData({...allPeriodsData, ...d.periods}); await savePeriods({...allPeriodsData, ...d.periods}); } alert('Imported!'); } catch { alert('Invalid file'); }}; reader.readAsText(file); };
+  const exportAll = () => { const blob = new Blob([JSON.stringify({ sales: allWeeksData, inventory: invHistory, cogs: savedCogs, periods: allPeriodsData, goals, storeName }, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${storeName || 'dashboard'}_backup_${new Date().toISOString().split('T')[0]}.json`; a.click(); };
+  const importData = (file) => { const reader = new FileReader(); reader.onload = async (e) => { try { const d = JSON.parse(e.target.result); if (d.sales) { setAllWeeksData({...allWeeksData, ...d.sales}); await save({...allWeeksData, ...d.sales}); } if (d.inventory) { setInvHistory({...invHistory, ...d.inventory}); await saveInv({...invHistory, ...d.inventory}); } if (d.cogs) { setSavedCogs(d.cogs); await saveCogs(d.cogs); } if (d.periods) { setAllPeriodsData({...allPeriodsData, ...d.periods}); await savePeriods({...allPeriodsData, ...d.periods}); } if (d.goals) { setGoals(d.goals); lsSet(GOALS_KEY, JSON.stringify(d.goals)); } if (d.storeName) { setStoreName(d.storeName); lsSet(STORE_KEY, d.storeName); } alert('Imported!'); } catch { alert('Invalid file'); }}; reader.readAsText(file); };
 
 // If logged in but locked, require password to continue
 if (supabase && isAuthReady && session && isLocked) {
@@ -1213,7 +1229,8 @@ if (supabase && isAuthReady && session && isLocked) {
     const [show3plBreakdown, setShow3plBreakdown] = useState(false);
     const skuData = data.skuData || [];
     const threeplBreakdown = data.threeplBreakdown || {};
-    const has3plBreakdown = !isAmz && data.threeplCosts > 0 && Object.values(threeplBreakdown).some(v => v > 0);
+    const has3plData = !isAmz && (data.threeplCosts > 0);
+    const has3plBreakdown = has3plData && Object.values(threeplBreakdown).some(v => v > 0);
     return (
       <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
         <div className={`border-l-4 ${color === 'orange' ? 'border-orange-500' : 'border-blue-500'} p-5`}>
@@ -1229,23 +1246,27 @@ if (supabase && isAuthReady && session && isLocked) {
             <div>
               <p className="text-slate-500 text-xs uppercase mb-1">{isAmz ? 'Fees' : '3PL Costs'}</p>
               <p className="text-lg font-semibold text-white">{formatCurrency(isAmz ? data.fees : data.threeplCosts)}</p>
-              {has3plBreakdown && <button onClick={() => setShow3plBreakdown(!show3plBreakdown)} className="text-xs text-blue-400 hover:text-blue-300">{show3plBreakdown ? 'Hide' : 'Details'}</button>}
+              {has3plData && <button onClick={() => setShow3plBreakdown(!show3plBreakdown)} className="text-xs text-blue-400 hover:text-blue-300">{show3plBreakdown ? 'Hide' : 'Details'}</button>}
             </div>
             <div><p className="text-slate-500 text-xs uppercase mb-1">Ad Spend</p><p className="text-lg font-semibold text-white">{formatCurrency(data.adSpend)}</p></div>
             <div><p className="text-slate-500 text-xs uppercase mb-1">ROAS</p><p className="text-lg font-semibold text-white">{(data.roas || 0).toFixed(2)}x</p></div>
           </div>
           {/* 3PL Breakdown */}
-          {show3plBreakdown && has3plBreakdown && (
+          {show3plBreakdown && has3plData && (
             <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
               <h4 className="text-sm font-semibold text-slate-300 mb-3">3PL Cost Breakdown</h4>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                {threeplBreakdown.shipping > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Shipping</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.shipping)}</span></div>}
-                {threeplBreakdown.pickFees > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Pick Fees</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.pickFees)}</span></div>}
-                {threeplBreakdown.storage > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Storage</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.storage)}</span></div>}
-                {threeplBreakdown.boxCharges > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Box/Mailer</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.boxCharges)}</span></div>}
-                {threeplBreakdown.receiving > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Receiving</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.receiving)}</span></div>}
-                {threeplBreakdown.other > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Other</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.other)}</span></div>}
-              </div>
+              {has3plBreakdown ? (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  {threeplBreakdown.shipping > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Shipping</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.shipping)}</span></div>}
+                  {threeplBreakdown.pickFees > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Pick Fees</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.pickFees)}</span></div>}
+                  {threeplBreakdown.storage > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Storage</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.storage)}</span></div>}
+                  {threeplBreakdown.boxCharges > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Box/Mailer</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.boxCharges)}</span></div>}
+                  {threeplBreakdown.receiving > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Receiving</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.receiving)}</span></div>}
+                  {threeplBreakdown.other > 0 && <div className="flex justify-between"><span className="text-slate-400 text-sm">Other</span><span className="text-white text-sm">{formatCurrency(threeplBreakdown.other)}</span></div>}
+                </div>
+              ) : (
+                <p className="text-slate-500 text-sm">No breakdown available. Re-process this week with a 3PL CSV to see the breakdown.</p>
+              )}
             </div>
           )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1329,6 +1350,9 @@ if (supabase && isAuthReady && session && isLocked) {
       <div className="w-px bg-slate-600 mx-1" />
       <button onClick={() => setView('trends')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'trends' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><TrendingUp className="w-4 h-4 inline mr-1" />Trends</button>
       <button onClick={() => setView('yoy')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'yoy' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><GitCompare className="w-4 h-4 inline mr-1" />YoY</button>
+      <button onClick={() => setView('skus')} disabled={Object.keys(allWeeksData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'skus' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Trophy className="w-4 h-4 inline mr-1" />SKUs</button>
+      <button onClick={() => setView('profitability')} disabled={Object.keys(allWeeksData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'profitability' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><PieChart className="w-4 h-4 inline mr-1" />Profit</button>
+      <button onClick={() => setView('ads')} disabled={Object.keys(allWeeksData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'ads' ? 'bg-purple-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Zap className="w-4 h-4 inline mr-1" />Ads</button>
       <div className="w-px bg-slate-600 mx-1" />
       <button onClick={() => setView('inv-upload')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'inventory' || view === 'inv-upload' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Boxes className="w-4 h-4 inline mr-1" />Inventory</button>
     </div>
@@ -1341,6 +1365,7 @@ if (supabase && isAuthReady && session && isLocked) {
         {Object.keys(savedCogs).length > 0 ? <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />{Object.keys(savedCogs).length} SKUs</span> : <span className="text-amber-400 text-xs">No COGS</span>}
         <button onClick={() => setShowCogsManager(true)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white flex items-center gap-1"><Settings className="w-3 h-3" />COGS</button>
       </div>
+      <button onClick={() => setShowGoalsModal(true)} className="px-2 py-1 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded text-xs text-amber-300 flex items-center gap-1"><Target className="w-3 h-3" />Goals</button>
       <div className="flex items-center gap-2">
         <span className="text-slate-400 text-sm">Store:</span>
         <input value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="Your brand name"
@@ -1379,13 +1404,48 @@ if (supabase && isAuthReady && session && isLocked) {
     </div>
   );
 
+  const GoalsModal = () => {
+    const [tempGoals, setTempGoals] = useState(goals);
+    if (!showGoalsModal) return null;
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
+          <h2 className="text-xl font-bold text-white mb-2 flex items-center gap-2"><Target className="w-6 h-6 text-amber-400" />Set Goals</h2>
+          <p className="text-slate-400 text-sm mb-4">Set revenue and profit targets to track your progress</p>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm text-slate-300 mb-1">Weekly Revenue Target</label>
+              <input type="number" value={tempGoals.weeklyRevenue || ''} onChange={(e) => setTempGoals(p => ({ ...p, weeklyRevenue: parseFloat(e.target.value) || 0 }))} placeholder="e.g., 5000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+            </div>
+            <div>
+              <label className="block text-sm text-slate-300 mb-1">Weekly Profit Target</label>
+              <input type="number" value={tempGoals.weeklyProfit || ''} onChange={(e) => setTempGoals(p => ({ ...p, weeklyProfit: parseFloat(e.target.value) || 0 }))} placeholder="e.g., 1500" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+            </div>
+            <div>
+              <label className="block text-sm text-slate-300 mb-1">Monthly Revenue Target</label>
+              <input type="number" value={tempGoals.monthlyRevenue || ''} onChange={(e) => setTempGoals(p => ({ ...p, monthlyRevenue: parseFloat(e.target.value) || 0 }))} placeholder="e.g., 20000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+            </div>
+            <div>
+              <label className="block text-sm text-slate-300 mb-1">Monthly Profit Target</label>
+              <input type="number" value={tempGoals.monthlyProfit || ''} onChange={(e) => setTempGoals(p => ({ ...p, monthlyProfit: parseFloat(e.target.value) || 0 }))} placeholder="e.g., 6000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+            </div>
+          </div>
+          <div className="flex gap-3 mt-6">
+            <button onClick={() => saveGoals(tempGoals)} className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-semibold py-2 rounded-xl">Save Goals</button>
+            <button onClick={() => setShowGoalsModal(false)} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl">Cancel</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const hasCogs = Object.keys(savedCogs).length > 0;
 
   // VIEWS
   if (view === 'upload') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4"><BarChart3 className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">{storeName ? storeName + ' Weekly Upload' : 'Weekly Sales Upload'}</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -1417,7 +1477,7 @@ if (supabase && isAuthReady && session && isLocked) {
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -1435,7 +1495,7 @@ if (supabase && isAuthReady && session && isLocked) {
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -1460,7 +1520,7 @@ if (supabase && isAuthReady && session && isLocked) {
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -1495,7 +1555,7 @@ if (supabase && isAuthReady && session && isLocked) {
     const data = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -1599,7 +1659,7 @@ if (supabase && isAuthReady && session && isLocked) {
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -1625,7 +1685,7 @@ if (supabase && isAuthReady && session && isLocked) {
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -1676,7 +1736,7 @@ if (supabase && isAuthReady && session && isLocked) {
     );
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Period Upload</h1><p className="text-slate-400">Upload monthly or yearly totals (no weekly breakdown)</p></div>
           <NavTabs />{dataBar}
           {periods.length > 0 && (
@@ -1716,7 +1776,7 @@ if (supabase && isAuthReady && session && isLocked) {
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">{data.label}</h1><p className="text-slate-400">Period Performance</p></div>
             <div className="flex gap-2">
@@ -1755,7 +1815,7 @@ if (supabase && isAuthReady && session && isLocked) {
     const dates = Object.keys(invHistory).sort().reverse();
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-3xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 mb-4"><Boxes className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Inventory Tracker</h1></div>
           <NavTabs />{dataBar}
           {dates.length > 0 && (
@@ -1789,7 +1849,7 @@ if (supabase && isAuthReady && session && isLocked) {
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -1916,7 +1976,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -1960,6 +2020,73 @@ if (supabase && isAuthReady && session && isLocked) {
               </div>
             </div>
           </div>
+          
+          {/* Goals Progress */}
+          {(goals.weeklyRevenue > 0 || goals.monthlyRevenue > 0) && (
+            <div className="bg-gradient-to-br from-amber-900/20 to-slate-800/50 rounded-xl border border-amber-500/30 p-5 mb-6">
+              <h3 className="text-lg font-semibold text-amber-400 mb-4 flex items-center gap-2"><Target className="w-5 h-5" />Goals Progress</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {goals.weeklyRevenue > 0 && (
+                  <div>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-slate-400">Weekly Revenue</span>
+                      <span className="text-white">{formatCurrency(latestWeek?.total?.revenue || 0)} / {formatCurrency(goals.weeklyRevenue)}</span>
+                    </div>
+                    <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                      <div className={`h-full transition-all ${((latestWeek?.total?.revenue || 0) / goals.weeklyRevenue) >= 1 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${Math.min(((latestWeek?.total?.revenue || 0) / goals.weeklyRevenue) * 100, 100)}%` }} />
+                    </div>
+                    <p className={`text-xs mt-1 ${((latestWeek?.total?.revenue || 0) / goals.weeklyRevenue) >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {(((latestWeek?.total?.revenue || 0) / goals.weeklyRevenue) * 100).toFixed(0)}% of goal
+                      {((latestWeek?.total?.revenue || 0) / goals.weeklyRevenue) >= 1 && ' 🎉'}
+                    </p>
+                  </div>
+                )}
+                {goals.weeklyProfit > 0 && (
+                  <div>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-slate-400">Weekly Profit</span>
+                      <span className="text-white">{formatCurrency(latestWeek?.total?.netProfit || 0)} / {formatCurrency(goals.weeklyProfit)}</span>
+                    </div>
+                    <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                      <div className={`h-full transition-all ${((latestWeek?.total?.netProfit || 0) / goals.weeklyProfit) >= 1 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${Math.min(Math.max(((latestWeek?.total?.netProfit || 0) / goals.weeklyProfit) * 100, 0), 100)}%` }} />
+                    </div>
+                    <p className={`text-xs mt-1 ${((latestWeek?.total?.netProfit || 0) / goals.weeklyProfit) >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {(((latestWeek?.total?.netProfit || 0) / goals.weeklyProfit) * 100).toFixed(0)}% of goal
+                      {((latestWeek?.total?.netProfit || 0) / goals.weeklyProfit) >= 1 && ' 🎉'}
+                    </p>
+                  </div>
+                )}
+                {goals.monthlyRevenue > 0 && months.length > 0 && (
+                  <div>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-slate-400">Monthly Revenue ({new Date(months[months.length-1] + '-01').toLocaleDateString('en-US', { month: 'short' })})</span>
+                      <span className="text-white">{formatCurrency(monthlyData[months[months.length-1]]?.revenue || 0)} / {formatCurrency(goals.monthlyRevenue)}</span>
+                    </div>
+                    <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                      <div className={`h-full transition-all ${((monthlyData[months[months.length-1]]?.revenue || 0) / goals.monthlyRevenue) >= 1 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${Math.min(((monthlyData[months[months.length-1]]?.revenue || 0) / goals.monthlyRevenue) * 100, 100)}%` }} />
+                    </div>
+                    <p className={`text-xs mt-1 ${((monthlyData[months[months.length-1]]?.revenue || 0) / goals.monthlyRevenue) >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {(((monthlyData[months[months.length-1]]?.revenue || 0) / goals.monthlyRevenue) * 100).toFixed(0)}% of goal
+                    </p>
+                  </div>
+                )}
+                {goals.monthlyProfit > 0 && months.length > 0 && (
+                  <div>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-slate-400">Monthly Profit ({new Date(months[months.length-1] + '-01').toLocaleDateString('en-US', { month: 'short' })})</span>
+                      <span className="text-white">{formatCurrency(monthlyData[months[months.length-1]]?.profit || 0)} / {formatCurrency(goals.monthlyProfit)}</span>
+                    </div>
+                    <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                      <div className={`h-full transition-all ${((monthlyData[months[months.length-1]]?.profit || 0) / goals.monthlyProfit) >= 1 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${Math.min(Math.max(((monthlyData[months[months.length-1]]?.profit || 0) / goals.monthlyProfit) * 100, 0), 100)}%` }} />
+                    </div>
+                    <p className={`text-xs mt-1 ${((monthlyData[months[months.length-1]]?.profit || 0) / goals.monthlyProfit) >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {(((monthlyData[months[months.length-1]]?.profit || 0) / goals.monthlyProfit) * 100).toFixed(0)}% of goal
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           
           {/* 4-Week Rolling Averages */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
@@ -2171,7 +2298,7 @@ if (supabase && isAuthReady && session && isLocked) {
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><CogsManager />
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -2326,6 +2453,553 @@ if (supabase && isAuthReady && session && isLocked) {
                     {previousYear && <td className={`py-2 text-right ${previousYearData.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(previousYearData.profit)}</td>}
                   </tr>
                 </tfoot>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==================== SKU RANKINGS VIEW ====================
+  if (view === 'skus') {
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    const recentWeeks = sortedWeeks.slice(-4);
+    const olderWeeks = sortedWeeks.slice(-8, -4);
+    
+    // Aggregate SKU data across all weeks
+    const skuAggregates = {};
+    const skuRecentData = {};
+    const skuOlderData = {};
+    
+    sortedWeeks.forEach(w => {
+      const week = allWeeksData[w];
+      const isRecent = recentWeeks.includes(w);
+      const isOlder = olderWeeks.includes(w);
+      
+      // Amazon SKUs
+      (week.amazon?.skuData || []).forEach(s => {
+        if (!skuAggregates[s.sku]) skuAggregates[s.sku] = { sku: s.sku, name: s.name, channel: 'Amazon', units: 0, revenue: 0, profit: 0, cogs: 0, weeks: 0 };
+        skuAggregates[s.sku].units += s.unitsSold || 0;
+        skuAggregates[s.sku].revenue += s.netSales || 0;
+        skuAggregates[s.sku].cogs += s.cogs || 0;
+        skuAggregates[s.sku].profit += (s.netProceeds || s.netSales || 0) - (s.cogs || 0);
+        skuAggregates[s.sku].weeks += 1;
+        
+        if (isRecent) {
+          if (!skuRecentData[s.sku]) skuRecentData[s.sku] = { units: 0, revenue: 0 };
+          skuRecentData[s.sku].units += s.unitsSold || 0;
+          skuRecentData[s.sku].revenue += s.netSales || 0;
+        }
+        if (isOlder) {
+          if (!skuOlderData[s.sku]) skuOlderData[s.sku] = { units: 0, revenue: 0 };
+          skuOlderData[s.sku].units += s.unitsSold || 0;
+          skuOlderData[s.sku].revenue += s.netSales || 0;
+        }
+      });
+      
+      // Shopify SKUs
+      (week.shopify?.skuData || []).forEach(s => {
+        const key = 'shop_' + s.sku;
+        if (!skuAggregates[key]) skuAggregates[key] = { sku: s.sku, name: s.name, channel: 'Shopify', units: 0, revenue: 0, profit: 0, cogs: 0, weeks: 0 };
+        skuAggregates[key].units += s.unitsSold || 0;
+        skuAggregates[key].revenue += s.netSales || 0;
+        skuAggregates[key].cogs += s.cogs || 0;
+        skuAggregates[key].profit += (s.netSales || 0) - (s.cogs || 0);
+        skuAggregates[key].weeks += 1;
+        
+        if (isRecent) {
+          if (!skuRecentData[key]) skuRecentData[key] = { units: 0, revenue: 0 };
+          skuRecentData[key].units += s.unitsSold || 0;
+          skuRecentData[key].revenue += s.netSales || 0;
+        }
+        if (isOlder) {
+          if (!skuOlderData[key]) skuOlderData[key] = { units: 0, revenue: 0 };
+          skuOlderData[key].units += s.unitsSold || 0;
+          skuOlderData[key].revenue += s.netSales || 0;
+        }
+      });
+    });
+    
+    const allSkus = Object.values(skuAggregates);
+    const topByRevenue = [...allSkus].sort((a, b) => b.revenue - a.revenue).slice(0, 10);
+    const topByUnits = [...allSkus].sort((a, b) => b.units - a.units).slice(0, 10);
+    const topByProfit = [...allSkus].sort((a, b) => b.profit - a.profit).slice(0, 10);
+    
+    // Calculate growth rates
+    const skusWithGrowth = allSkus.map(s => {
+      const key = s.channel === 'Shopify' ? 'shop_' + s.sku : s.sku;
+      const recent = skuRecentData[key]?.revenue || 0;
+      const older = skuOlderData[key]?.revenue || 0;
+      const growth = older > 0 ? ((recent - older) / older) * 100 : (recent > 0 ? 100 : 0);
+      return { ...s, recentRev: recent, olderRev: older, growth };
+    }).filter(s => s.recentRev > 0 || s.olderRev > 0);
+    
+    const risingStars = [...skusWithGrowth].filter(s => s.growth > 0 && s.recentRev > 50).sort((a, b) => b.growth - a.growth).slice(0, 5);
+    const declining = [...skusWithGrowth].filter(s => s.growth < -10 && s.olderRev > 50).sort((a, b) => a.growth - b.growth).slice(0, 5);
+    
+    // Dead stock (in inventory but no recent sales)
+    const invData = selectedInvDate ? invHistory[selectedInvDate] : null;
+    const deadStock = invData ? invData.items.filter(item => {
+      const hasStock = item.totalQty > 0;
+      const noRecentSales = !skuRecentData[item.sku] && !skuRecentData['shop_' + item.sku];
+      return hasStock && noRecentSales;
+    }).slice(0, 10) : [];
+    
+    const SkuTable = ({ data, title, icon, color, showProfit = false, showGrowth = false }) => (
+      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+        <h3 className={`text-lg font-semibold ${color} mb-4 flex items-center gap-2`}>{icon}{title}</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-700">
+                <th className="text-left text-slate-400 font-medium py-2">#</th>
+                <th className="text-left text-slate-400 font-medium py-2">SKU</th>
+                <th className="text-left text-slate-400 font-medium py-2">Channel</th>
+                <th className="text-right text-slate-400 font-medium py-2">Revenue</th>
+                <th className="text-right text-slate-400 font-medium py-2">Units</th>
+                {showProfit && <th className="text-right text-slate-400 font-medium py-2">Profit</th>}
+                {showGrowth && <th className="text-right text-slate-400 font-medium py-2">Growth</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((s, i) => (
+                <tr key={s.sku + s.channel + i} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                  <td className="py-2 text-slate-500">{i + 1}</td>
+                  <td className="py-2"><div className="max-w-[200px] truncate text-white" title={s.name}>{s.sku}</div></td>
+                  <td className="py-2"><span className={`text-xs px-2 py-0.5 rounded ${s.channel === 'Amazon' ? 'bg-orange-500/20 text-orange-400' : 'bg-blue-500/20 text-blue-400'}`}>{s.channel}</span></td>
+                  <td className="py-2 text-right text-white">{formatCurrency(s.revenue)}</td>
+                  <td className="py-2 text-right text-white">{formatNumber(s.units)}</td>
+                  {showProfit && <td className={`py-2 text-right ${s.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profit)}</td>}
+                  {showGrowth && <td className={`py-2 text-right ${s.growth >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.growth > 0 ? '+' : ''}{s.growth.toFixed(0)}%</td>}
+                </tr>
+              ))}
+              {data.length === 0 && <tr><td colSpan={showProfit ? 6 : showGrowth ? 6 : 5} className="py-4 text-center text-slate-500">No data available</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+    
+    return (
+      <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+          <NavTabs />
+          {dataBar}
+          
+          <div className="mb-6">
+            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">🏆 SKU Performance Rankings</h1>
+            <p className="text-slate-400">Identify your best sellers, most profitable products, and trends</p>
+          </div>
+          
+          {/* Summary Stats */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 text-center">
+              <p className="text-3xl font-bold text-white">{allSkus.length}</p>
+              <p className="text-slate-400 text-sm">Total SKUs</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 text-center">
+              <p className="text-3xl font-bold text-emerald-400">{formatCurrency(allSkus.reduce((s, x) => s + x.revenue, 0))}</p>
+              <p className="text-slate-400 text-sm">Total Revenue</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 text-center">
+              <p className="text-3xl font-bold text-white">{formatNumber(allSkus.reduce((s, x) => s + x.units, 0))}</p>
+              <p className="text-slate-400 text-sm">Total Units</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 text-center">
+              <p className="text-3xl font-bold text-amber-400">{formatCurrency(allSkus.length > 0 ? allSkus.reduce((s, x) => s + x.revenue, 0) / allSkus.length : 0)}</p>
+              <p className="text-slate-400 text-sm">Avg Revenue/SKU</p>
+            </div>
+          </div>
+          
+          {/* Top Tables */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <SkuTable data={topByRevenue} title="Top 10 by Revenue" icon={<DollarSign className="w-5 h-5" />} color="text-emerald-400" />
+            <SkuTable data={topByUnits} title="Top 10 by Units" icon={<Package className="w-5 h-5" />} color="text-blue-400" />
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <SkuTable data={topByProfit} title="Top 10 Most Profitable" icon={<Award className="w-5 h-5" />} color="text-amber-400" showProfit />
+            <SkuTable data={risingStars} title="Rising Stars (4wk growth)" icon={<Flame className="w-5 h-5" />} color="text-orange-400" showGrowth />
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <SkuTable data={declining} title="Watch List (Declining)" icon={<TrendingDown className="w-5 h-5" />} color="text-rose-400" showGrowth />
+            {deadStock.length > 0 && (
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                <h3 className="text-lg font-semibold text-slate-400 mb-4 flex items-center gap-2"><Snowflake className="w-5 h-5" />Dead Stock (No Recent Sales)</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead><tr className="border-b border-slate-700"><th className="text-left text-slate-400 py-2">SKU</th><th className="text-right text-slate-400 py-2">Qty</th><th className="text-right text-slate-400 py-2">Value</th></tr></thead>
+                    <tbody>
+                      {deadStock.map(s => (
+                        <tr key={s.sku} className="border-b border-slate-700/50"><td className="py-2 text-white">{s.sku}</td><td className="py-2 text-right text-white">{formatNumber(s.totalQty)}</td><td className="py-2 text-right text-slate-400">{formatCurrency(s.totalValue)}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==================== PROFITABILITY VIEW ====================
+  if (view === 'profitability') {
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    const recentWeeks = sortedWeeks.slice(-4);
+    
+    // Aggregate data
+    const totals = { revenue: 0, cogs: 0, amazonFees: 0, threeplCosts: 0, adSpend: 0, profit: 0 };
+    const weeklyBreakdown = [];
+    
+    recentWeeks.forEach(w => {
+      const week = allWeeksData[w];
+      const rev = week.total?.revenue || 0;
+      const cogs = week.total?.cogs || 0;
+      const amzFees = week.amazon?.fees || 0;
+      const threepl = week.shopify?.threeplCosts || 0;
+      const ads = week.total?.adSpend || 0;
+      const profit = week.total?.netProfit || 0;
+      
+      totals.revenue += rev;
+      totals.cogs += cogs;
+      totals.amazonFees += amzFees;
+      totals.threeplCosts += threepl;
+      totals.adSpend += ads;
+      totals.profit += profit;
+      
+      weeklyBreakdown.push({ week: w, revenue: rev, cogs, amazonFees: amzFees, threeplCosts: threepl, adSpend: ads, profit });
+    });
+    
+    // Calculate percentages
+    const pcts = {
+      cogs: totals.revenue > 0 ? (totals.cogs / totals.revenue) * 100 : 0,
+      amazonFees: totals.revenue > 0 ? (totals.amazonFees / totals.revenue) * 100 : 0,
+      threeplCosts: totals.revenue > 0 ? (totals.threeplCosts / totals.revenue) * 100 : 0,
+      adSpend: totals.revenue > 0 ? (totals.adSpend / totals.revenue) * 100 : 0,
+      profit: totals.revenue > 0 ? (totals.profit / totals.revenue) * 100 : 0,
+    };
+    
+    // Waterfall segments
+    const waterfall = [
+      { label: 'Revenue', value: totals.revenue, color: 'bg-violet-500', running: totals.revenue },
+      { label: 'COGS', value: -totals.cogs, color: 'bg-rose-500', running: totals.revenue - totals.cogs },
+      { label: 'Amazon Fees', value: -totals.amazonFees, color: 'bg-orange-500', running: totals.revenue - totals.cogs - totals.amazonFees },
+      { label: '3PL Costs', value: -totals.threeplCosts, color: 'bg-blue-500', running: totals.revenue - totals.cogs - totals.amazonFees - totals.threeplCosts },
+      { label: 'Ad Spend', value: -totals.adSpend, color: 'bg-purple-500', running: totals.revenue - totals.cogs - totals.amazonFees - totals.threeplCosts - totals.adSpend },
+      { label: 'Net Profit', value: totals.profit, color: totals.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-500', running: totals.profit },
+    ];
+    
+    const maxVal = Math.max(totals.revenue, Math.abs(totals.profit));
+    
+    // Cost trends over time
+    const costTrends = sortedWeeks.slice(-8).map(w => {
+      const week = allWeeksData[w];
+      const rev = week.total?.revenue || 1;
+      return {
+        week: w,
+        cogsPct: ((week.total?.cogs || 0) / rev) * 100,
+        adsPct: ((week.total?.adSpend || 0) / rev) * 100,
+        feesPct: (((week.amazon?.fees || 0) + (week.shopify?.threeplCosts || 0)) / rev) * 100,
+      };
+    });
+    
+    return (
+      <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+          <NavTabs />
+          {dataBar}
+          
+          <div className="mb-6">
+            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">💰 Profitability Deep Dive</h1>
+            <p className="text-slate-400">Understand where your money goes (Last 4 weeks)</p>
+          </div>
+          
+          {/* Profit Waterfall */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+            <h3 className="text-lg font-semibold text-white mb-4">Profit Waterfall</h3>
+            <div className="flex items-end gap-2 h-64 mb-4">
+              {waterfall.map((item, i) => {
+                const height = maxVal > 0 ? (Math.abs(item.value) / maxVal) * 100 : 0;
+                return (
+                  <div key={item.label} className="flex-1 flex flex-col items-center group relative">
+                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                      {item.label}: {formatCurrency(item.value)}
+                    </div>
+                    <div className={`w-full rounded-t ${item.color} transition-all hover:opacity-80`} style={{ height: `${Math.max(height, 3)}%` }} />
+                    <span className="text-xs text-slate-400 mt-2 text-center">{item.label}</span>
+                    <span className={`text-sm font-semibold ${item.value >= 0 ? 'text-white' : 'text-rose-400'}`}>{formatCurrency(item.value)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          
+          {/* Cost Breakdown Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm">COGS</p>
+              <p className="text-xl font-bold text-white">{formatCurrency(totals.cogs)}</p>
+              <p className="text-rose-400 text-sm">{pcts.cogs.toFixed(1)}% of revenue</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm">Amazon Fees</p>
+              <p className="text-xl font-bold text-white">{formatCurrency(totals.amazonFees)}</p>
+              <p className="text-orange-400 text-sm">{pcts.amazonFees.toFixed(1)}% of revenue</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm">3PL Costs</p>
+              <p className="text-xl font-bold text-white">{formatCurrency(totals.threeplCosts)}</p>
+              <p className="text-blue-400 text-sm">{pcts.threeplCosts.toFixed(1)}% of revenue</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm">Ad Spend</p>
+              <p className="text-xl font-bold text-white">{formatCurrency(totals.adSpend)}</p>
+              <p className="text-purple-400 text-sm">{pcts.adSpend.toFixed(1)}% of revenue</p>
+            </div>
+            <div className="bg-gradient-to-br from-emerald-900/30 to-slate-800/50 rounded-xl border border-emerald-500/30 p-4">
+              <p className="text-slate-400 text-sm">Net Profit</p>
+              <p className={`text-xl font-bold ${totals.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(totals.profit)}</p>
+              <p className={`text-sm ${pcts.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{pcts.profit.toFixed(1)}% margin</p>
+            </div>
+          </div>
+          
+          {/* Cost % Trends */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+            <h3 className="text-lg font-semibold text-white mb-4">Cost % of Revenue Over Time</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700">
+                    <th className="text-left text-slate-400 py-2">Week</th>
+                    <th className="text-right text-slate-400 py-2">COGS %</th>
+                    <th className="text-right text-slate-400 py-2">Ads %</th>
+                    <th className="text-right text-slate-400 py-2">Fees %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {costTrends.map(t => (
+                    <tr key={t.week} className="border-b border-slate-700/50">
+                      <td className="py-2 text-white">{new Date(t.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                      <td className="py-2 text-right text-rose-400">{t.cogsPct.toFixed(1)}%</td>
+                      <td className="py-2 text-right text-purple-400">{t.adsPct.toFixed(1)}%</td>
+                      <td className="py-2 text-right text-orange-400">{t.feesPct.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          
+          {/* Break-even Analysis */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+            <h3 className="text-lg font-semibold text-white mb-4">Break-Even Analysis</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <p className="text-slate-400 text-sm mb-2">Your average costs are <span className="text-white font-semibold">{(100 - pcts.profit).toFixed(1)}%</span> of revenue</p>
+                <p className="text-slate-400 text-sm mb-2">To break even, you need <span className="text-emerald-400 font-semibold">{formatCurrency(totals.cogs + totals.amazonFees + totals.threeplCosts + totals.adSpend)}</span> in revenue</p>
+                <p className="text-slate-400 text-sm">Every <span className="text-white font-semibold">$100</span> in revenue generates <span className={`font-semibold ${pcts.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(pcts.profit)}</span> profit</p>
+              </div>
+              <div className="bg-slate-900/50 rounded-lg p-4">
+                <p className="text-slate-500 text-xs uppercase mb-2">Revenue Breakdown</p>
+                <div className="h-4 bg-slate-700 rounded-full overflow-hidden flex">
+                  <div className="bg-rose-500 h-full" style={{ width: `${pcts.cogs}%` }} title={`COGS: ${pcts.cogs.toFixed(1)}%`} />
+                  <div className="bg-orange-500 h-full" style={{ width: `${pcts.amazonFees}%` }} title={`Fees: ${pcts.amazonFees.toFixed(1)}%`} />
+                  <div className="bg-blue-500 h-full" style={{ width: `${pcts.threeplCosts}%` }} title={`3PL: ${pcts.threeplCosts.toFixed(1)}%`} />
+                  <div className="bg-purple-500 h-full" style={{ width: `${pcts.adSpend}%` }} title={`Ads: ${pcts.adSpend.toFixed(1)}%`} />
+                  <div className={`${pcts.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-600'} h-full`} style={{ width: `${Math.abs(pcts.profit)}%` }} />
+                </div>
+                <div className="flex flex-wrap gap-3 mt-3 text-xs">
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-rose-500 rounded" />COGS</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-orange-500 rounded" />Fees</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-500 rounded" />3PL</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-purple-500 rounded" />Ads</span>
+                  <span className="flex items-center gap-1"><span className={`w-2 h-2 ${pcts.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-600'} rounded`} />Profit</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==================== ADS PERFORMANCE VIEW ====================
+  if (view === 'ads') {
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    
+    // Aggregate ad data
+    const adData = sortedWeeks.map(w => {
+      const week = allWeeksData[w];
+      const amzAds = week.amazon?.adSpend || 0;
+      const amzRev = week.amazon?.revenue || 0;
+      const metaAds = week.shopify?.metaSpend || 0;
+      const googleAds = week.shopify?.googleSpend || 0;
+      const shopRev = week.shopify?.revenue || 0;
+      const totalAds = amzAds + metaAds + googleAds;
+      const totalRev = amzRev + shopRev;
+      
+      return {
+        week: w,
+        amzAds, amzRev, amzRoas: amzAds > 0 ? amzRev / amzAds : 0,
+        metaAds, googleAds, shopRev, shopRoas: (metaAds + googleAds) > 0 ? shopRev / (metaAds + googleAds) : 0,
+        totalAds, totalRev, totalRoas: totalAds > 0 ? totalRev / totalAds : 0,
+        adPct: totalRev > 0 ? (totalAds / totalRev) * 100 : 0,
+      };
+    });
+    
+    const recentData = adData.slice(-4);
+    const totals = recentData.reduce((acc, d) => ({
+      amzAds: acc.amzAds + d.amzAds,
+      amzRev: acc.amzRev + d.amzRev,
+      metaAds: acc.metaAds + d.metaAds,
+      googleAds: acc.googleAds + d.googleAds,
+      shopRev: acc.shopRev + d.shopRev,
+      totalAds: acc.totalAds + d.totalAds,
+      totalRev: acc.totalRev + d.totalRev,
+    }), { amzAds: 0, amzRev: 0, metaAds: 0, googleAds: 0, shopRev: 0, totalAds: 0, totalRev: 0 });
+    
+    const avgRoas = totals.totalAds > 0 ? totals.totalRev / totals.totalAds : 0;
+    const amzRoas = totals.amzAds > 0 ? totals.amzRev / totals.amzAds : 0;
+    const shopifyAds = totals.metaAds + totals.googleAds;
+    const shopRoas = shopifyAds > 0 ? totals.shopRev / shopifyAds : 0;
+    
+    // Find optimal ad spend (week with best ROAS)
+    const bestWeek = [...adData].filter(d => d.totalAds > 0).sort((a, b) => b.totalRoas - a.totalRoas)[0];
+    
+    const roasColor = (roas) => roas >= 4 ? 'text-emerald-400' : roas >= 2 ? 'text-amber-400' : 'text-rose-400';
+    
+    return (
+      <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager /><GoalsModal />
+          <NavTabs />
+          {dataBar}
+          
+          <div className="mb-6">
+            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">⚡ Ad Performance Analytics</h1>
+            <p className="text-slate-400">Track ROAS, ad spend efficiency, and channel performance</p>
+          </div>
+          
+          {/* Summary Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-gradient-to-br from-purple-900/30 to-slate-800/50 rounded-xl border border-purple-500/30 p-4">
+              <p className="text-slate-400 text-sm">Total Ad Spend (4wk)</p>
+              <p className="text-2xl font-bold text-white">{formatCurrency(totals.totalAds)}</p>
+              <p className="text-purple-400 text-sm">{totals.totalRev > 0 ? ((totals.totalAds / totals.totalRev) * 100).toFixed(1) : 0}% of revenue</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm">Overall ROAS</p>
+              <p className={`text-2xl font-bold ${roasColor(avgRoas)}`}>{avgRoas.toFixed(2)}x</p>
+              <p className="text-slate-500 text-sm">Target: 3-4x</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm">Amazon ROAS</p>
+              <p className={`text-2xl font-bold ${roasColor(amzRoas)}`}>{amzRoas.toFixed(2)}x</p>
+              <p className="text-orange-400 text-sm">{formatCurrency(totals.amzAds)} spent</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm">Shopify ROAS</p>
+              <p className={`text-2xl font-bold ${roasColor(shopRoas)}`}>{shopRoas.toFixed(2)}x</p>
+              <p className="text-blue-400 text-sm">{formatCurrency(shopifyAds)} spent</p>
+            </div>
+          </div>
+          
+          {/* Meta vs Google breakdown */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+              <h3 className="text-lg font-semibold text-white mb-4">Shopify Ad Breakdown</h3>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Meta Ads</span>
+                  <span className="text-white font-semibold">{formatCurrency(totals.metaAds)}</span>
+                </div>
+                <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                  <div className="bg-blue-500 h-full" style={{ width: shopifyAds > 0 ? `${(totals.metaAds / shopifyAds) * 100}%` : '0%' }} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Google Ads</span>
+                  <span className="text-white font-semibold">{formatCurrency(totals.googleAds)}</span>
+                </div>
+                <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                  <div className="bg-red-500 h-full" style={{ width: shopifyAds > 0 ? `${(totals.googleAds / shopifyAds) * 100}%` : '0%' }} />
+                </div>
+              </div>
+            </div>
+            
+            {bestWeek && (
+              <div className="bg-gradient-to-br from-emerald-900/30 to-slate-800/50 rounded-xl border border-emerald-500/30 p-5">
+                <h3 className="text-lg font-semibold text-emerald-400 mb-4 flex items-center gap-2"><Star className="w-5 h-5" />Best Performing Week</h3>
+                <p className="text-white text-xl font-bold mb-2">{new Date(bestWeek.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div><span className="text-slate-400">Ad Spend:</span> <span className="text-white">{formatCurrency(bestWeek.totalAds)}</span></div>
+                  <div><span className="text-slate-400">Revenue:</span> <span className="text-white">{formatCurrency(bestWeek.totalRev)}</span></div>
+                  <div><span className="text-slate-400">ROAS:</span> <span className="text-emerald-400 font-bold">{bestWeek.totalRoas.toFixed(2)}x</span></div>
+                  <div><span className="text-slate-400">Ad %:</span> <span className="text-white">{bestWeek.adPct.toFixed(1)}%</span></div>
+                </div>
+              </div>
+            )}
+          </div>
+          
+          {/* ROAS Trend Chart */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+            <h3 className="text-lg font-semibold text-white mb-4">ROAS Trend</h3>
+            <div className="flex items-end gap-2 h-48">
+              {adData.slice(-12).map((d, i) => {
+                const height = Math.min(d.totalRoas * 20, 100);
+                return (
+                  <div key={d.week} className="flex-1 flex flex-col items-center group relative">
+                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                      {new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}<br/>
+                      ROAS: {d.totalRoas.toFixed(2)}x<br/>
+                      Spend: {formatCurrency(d.totalAds)}
+                    </div>
+                    <div className={`w-full rounded-t transition-all hover:opacity-80 ${d.totalRoas >= 4 ? 'bg-emerald-500' : d.totalRoas >= 2 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ height: `${Math.max(height, 3)}%` }} />
+                    <span className="text-[10px] text-slate-500 mt-1">{new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex gap-4 mt-3 text-xs justify-center">
+              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great (4x+)</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />OK (2-4x)</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />Poor (&lt;2x)</span>
+            </div>
+          </div>
+          
+          {/* Weekly Ad Performance Table */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+            <h3 className="text-lg font-semibold text-white mb-4">Weekly Breakdown</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700">
+                    <th className="text-left text-slate-400 py-2">Week</th>
+                    <th className="text-right text-slate-400 py-2">Amazon Ads</th>
+                    <th className="text-right text-slate-400 py-2">Meta</th>
+                    <th className="text-right text-slate-400 py-2">Google</th>
+                    <th className="text-right text-slate-400 py-2">Total Ads</th>
+                    <th className="text-right text-slate-400 py-2">Revenue</th>
+                    <th className="text-right text-slate-400 py-2">ROAS</th>
+                    <th className="text-right text-slate-400 py-2">Ad %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adData.slice(-8).reverse().map(d => (
+                    <tr key={d.week} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                      <td className="py-2 text-white">{new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                      <td className="py-2 text-right text-orange-400">{formatCurrency(d.amzAds)}</td>
+                      <td className="py-2 text-right text-blue-400">{formatCurrency(d.metaAds)}</td>
+                      <td className="py-2 text-right text-red-400">{formatCurrency(d.googleAds)}</td>
+                      <td className="py-2 text-right text-white">{formatCurrency(d.totalAds)}</td>
+                      <td className="py-2 text-right text-white">{formatCurrency(d.totalRev)}</td>
+                      <td className={`py-2 text-right font-semibold ${roasColor(d.totalRoas)}`}>{d.totalRoas.toFixed(2)}x</td>
+                      <td className="py-2 text-right text-slate-400">{d.adPct.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
               </table>
             </div>
           </div>
