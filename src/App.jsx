@@ -1,7 +1,21 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus } from 'lucide-react';
-import ExcelJS from 'exceljs';
+
+// Dynamically load SheetJS from CDN (avoids npm vulnerability)
+let XLSX = null;
+const loadXLSX = async () => {
+  if (XLSX) return XLSX;
+  if (window.XLSX) { XLSX = window.XLSX; return XLSX; }
+  
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js';
+    script.onload = () => { XLSX = window.XLSX; resolve(XLSX); };
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+};
 
 const parseCSV = (text) => {
   const lines = text.split('\n').filter(line => line.trim());
@@ -172,12 +186,15 @@ const parse3PLData = (threeplFiles) => {
 
 // Parse Excel file for 3PL bulk upload - extracts Summary and Detail sheets
 const parse3PLExcel = async (file) => {
+  // Load SheetJS from CDN if not already loaded
+  const xlsx = await loadXLSX();
+  
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
-        const workbook = new ExcelJS.Workbook();
-        await workbook.xlsx.load(e.target.result);
+        const data = new Uint8Array(e.target.result);
+        const workbook = xlsx.read(data, { type: 'array' });
         
         const result = {
           fileName: file.name,
@@ -189,39 +206,16 @@ const parse3PLExcel = async (file) => {
           nonOrderCharges: [],
         };
         
-        // Helper to convert worksheet to array of objects
-        const sheetToJson = (worksheet) => {
-          const rows = [];
-          const headers = [];
-          worksheet.eachRow((row, rowNumber) => {
-            if (rowNumber === 1) {
-              row.eachCell((cell, colNumber) => {
-                headers[colNumber] = cell.value?.toString() || '';
-              });
-            } else {
-              const rowData = {};
-              row.eachCell((cell, colNumber) => {
-                const header = headers[colNumber];
-                if (header) {
-                  rowData[header] = cell.value;
-                }
-              });
-              if (Object.keys(rowData).length > 0) rows.push(rowData);
-            }
-          });
-          return rows;
-        };
-        
         // Parse Summary sheet
-        const summarySheet = workbook.getWorksheet('Summary');
-        if (summarySheet) {
-          result.summary = sheetToJson(summarySheet);
+        if (workbook.SheetNames.includes('Summary')) {
+          const sheet = workbook.Sheets['Summary'];
+          result.summary = xlsx.utils.sheet_to_json(sheet);
         }
         
         // Parse Detail sheet (has per-order data with dates)
-        const detailSheet = workbook.getWorksheet('Detail');
-        if (detailSheet) {
-          const rows = sheetToJson(detailSheet);
+        if (workbook.SheetNames.includes('Detail')) {
+          const sheet = workbook.Sheets['Detail'];
+          const rows = xlsx.utils.sheet_to_json(sheet);
           result.detail = rows;
           
           // Extract orders with dates
@@ -229,14 +223,8 @@ const parse3PLExcel = async (file) => {
             const shipDateStr = row['Ship Datetime'] || row['Order Datetime'];
             if (!shipDateStr) return;
             
-            // Parse date - handle both string and Date object
-            let shipDate;
-            if (shipDateStr instanceof Date) {
-              shipDate = shipDateStr;
-            } else {
-              const dateStr = shipDateStr.toString().split(' ')[0];
-              shipDate = new Date(dateStr);
-            }
+            // Parse date (format: "2025-10-19 04:58:32 PM")
+            const shipDate = new Date(shipDateStr.toString().split(' ')[0]);
             if (isNaN(shipDate)) return;
             
             const orderNumber = (row['Order Number'] || '').toString();
@@ -282,9 +270,9 @@ const parse3PLExcel = async (file) => {
         }
         
         // Parse Invoice Level for non-order charges
-        const invoiceSheet = workbook.getWorksheet('Invoice Level');
-        if (invoiceSheet) {
-          result.invoiceLevel = sheetToJson(invoiceSheet);
+        if (workbook.SheetNames.includes('Invoice Level')) {
+          const sheet = workbook.Sheets['Invoice Level'];
+          result.invoiceLevel = xlsx.utils.sheet_to_json(sheet);
         }
         
         // Extract non-order charges from Summary
