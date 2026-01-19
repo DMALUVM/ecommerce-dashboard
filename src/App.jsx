@@ -4527,10 +4527,15 @@ When answering:
       });
     });
     
-    const allSkus = Object.values(skuAggregates);
+    const allSkus = Object.values(skuAggregates).map(s => ({
+      ...s,
+      profitPerUnit: s.units > 0 ? s.profit / s.units : 0,
+      margin: s.revenue > 0 ? (s.profit / s.revenue) * 100 : 0,
+    }));
     const topByRevenue = [...allSkus].sort((a, b) => b.revenue - a.revenue).slice(0, 10);
     const topByUnits = [...allSkus].sort((a, b) => b.units - a.units).slice(0, 10);
     const topByProfit = [...allSkus].sort((a, b) => b.profit - a.profit).slice(0, 10);
+    const topByProfitPerUnit = [...allSkus].filter(s => s.units >= 5).sort((a, b) => b.profitPerUnit - a.profitPerUnit).slice(0, 10);
     
     // Calculate growth rates
     const skusWithGrowth = allSkus.map(s => {
@@ -4552,7 +4557,7 @@ When answering:
       return hasStock && noRecentSales;
     }).slice(0, 10) : [];
     
-    const SkuTable = ({ data, title, icon, color, showProfit = false, showGrowth = false }) => (
+    const SkuTable = ({ data, title, icon, color, showProfit = false, showGrowth = false, showProfitPerUnit = false }) => (
       <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
         <h3 className={`text-lg font-semibold ${color} mb-4 flex items-center gap-2`}>{icon}{title}</h3>
         <div className="overflow-x-auto">
@@ -4565,6 +4570,8 @@ When answering:
                 <th className="text-right text-slate-400 font-medium py-2">Revenue</th>
                 <th className="text-right text-slate-400 font-medium py-2">Units</th>
                 {showProfit && <th className="text-right text-slate-400 font-medium py-2">Profit</th>}
+                {showProfitPerUnit && <th className="text-right text-slate-400 font-medium py-2">$/Unit</th>}
+                {showProfitPerUnit && <th className="text-right text-slate-400 font-medium py-2">Margin</th>}
                 {showGrowth && <th className="text-right text-slate-400 font-medium py-2">Growth</th>}
               </tr>
             </thead>
@@ -4577,10 +4584,12 @@ When answering:
                   <td className="py-2 text-right text-white">{formatCurrency(s.revenue)}</td>
                   <td className="py-2 text-right text-white">{formatNumber(s.units)}</td>
                   {showProfit && <td className={`py-2 text-right ${s.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profit)}</td>}
+                  {showProfitPerUnit && <td className={`py-2 text-right ${s.profitPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profitPerUnit)}</td>}
+                  {showProfitPerUnit && <td className={`py-2 text-right ${s.margin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.margin.toFixed(1)}%</td>}
                   {showGrowth && <td className={`py-2 text-right ${s.growth >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.growth > 0 ? '+' : ''}{s.growth.toFixed(0)}%</td>}
                 </tr>
               ))}
-              {data.length === 0 && <tr><td colSpan={showProfit ? 6 : showGrowth ? 6 : 5} className="py-4 text-center text-slate-500">No data available</td></tr>}
+              {data.length === 0 && <tr><td colSpan={showProfit ? 6 : showProfitPerUnit ? 8 : showGrowth ? 6 : 5} className="py-4 text-center text-slate-500">No data available</td></tr>}
             </tbody>
           </table>
         </div>
@@ -4625,12 +4634,16 @@ When answering:
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <SkuTable data={topByProfit} title="Top 10 Most Profitable" icon={<Award className="w-5 h-5" />} color="text-amber-400" showProfit />
+            <SkuTable data={topByProfit} title="Top 10 Total Profit" icon={<Award className="w-5 h-5" />} color="text-amber-400" showProfit />
+            <SkuTable data={topByProfitPerUnit} title="Top 10 Profit Per Unit" icon={<Zap className="w-5 h-5" />} color="text-violet-400" showProfitPerUnit />
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             <SkuTable data={risingStars} title="Rising Stars (4wk growth)" icon={<Flame className="w-5 h-5" />} color="text-orange-400" showGrowth />
+            <SkuTable data={declining} title="Watch List (Declining)" icon={<TrendingDown className="w-5 h-5" />} color="text-rose-400" showGrowth />
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <SkuTable data={declining} title="Watch List (Declining)" icon={<TrendingDown className="w-5 h-5" />} color="text-rose-400" showGrowth />
             {deadStock.length > 0 && (
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                 <h3 className="text-lg font-semibold text-slate-400 mb-4 flex items-center gap-2"><Snowflake className="w-5 h-5" />Dead Stock (No Recent Sales)</h3>
