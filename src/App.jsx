@@ -6134,6 +6134,26 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                 <FileBox type="cogs" label="COGS File" desc="SKU & Cost Per Unit columns" />
               </div>
               
+              {/* 3PL Bulk Upload Banner */}
+              <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4 mb-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Truck className="w-8 h-8 text-blue-400" />
+                    <div>
+                      <p className="text-white font-medium">3PL Bulk Upload</p>
+                      <p className="text-slate-400 text-sm">Upload multiple Packiyo Excel files at once with auto-deduplication</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setShow3PLBulkUpload(true)}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white font-medium flex items-center gap-2"
+                  >
+                    <Upload className="w-4 h-4" />
+                    Upload 3PL Files
+                  </button>
+                </div>
+              </div>
+              
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div><label className="block text-sm text-slate-400 mb-2">Meta Ad Spend</label><input type="number" value={adSpend.meta} onChange={(e) => setAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
                 <div><label className="block text-sm text-slate-400 mb-2">Google Ad Spend</label><input type="number" value={adSpend.google} onChange={(e) => setAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
@@ -8401,7 +8421,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             <NavTabs />{dataBar}
             
             <div className="mb-6">
-              <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">🚚 3PL Fulfillment Analytics</h1>
+              <div className="flex items-center justify-between mb-2">
+                <h1 className="text-2xl lg:text-3xl font-bold text-white">🚚 3PL Fulfillment Analytics</h1>
+                <button 
+                  onClick={() => setShow3PLBulkUpload(true)}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white font-medium flex items-center gap-2"
+                >
+                  <Upload className="w-4 h-4" />
+                  Bulk Upload
+                </button>
+              </div>
               <p className="text-slate-400">Period-level 3PL data (upload weekly data for trend charts)</p>
             </div>
             
@@ -8464,7 +8493,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           {dataBar}
           
           <div className="mb-6">
-            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">🚚 3PL Fulfillment Analytics</h1>
+            <div className="flex items-center justify-between mb-2">
+              <h1 className="text-2xl lg:text-3xl font-bold text-white">🚚 3PL Fulfillment Analytics</h1>
+              <button 
+                onClick={() => setShow3PLBulkUpload(true)}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white font-medium flex items-center gap-2"
+              >
+                <Upload className="w-4 h-4" />
+                Bulk Upload
+              </button>
+            </div>
             <p className="text-slate-400">Track shipping costs, order metrics, and fulfillment efficiency over time</p>
           </div>
           
