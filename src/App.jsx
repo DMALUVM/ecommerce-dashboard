@@ -1676,10 +1676,43 @@ if (supabase && isAuthReady && session && isLocked) {
   const ChannelCard = ({ title, color, data, isAmz, showSkuTable = false }) => {
     const [expanded, setExpanded] = useState(false);
     const [show3plBreakdown, setShow3plBreakdown] = useState(false);
-    const skuData = data.skuData || [];
+    const [skuSort, setSkuSort] = useState({ field: 'netSales', dir: 'desc' });
+    const skuDataRaw = data.skuData || [];
     const threeplBreakdown = data.threeplBreakdown || {};
     const has3plData = !isAmz && (data.threeplCosts > 0);
     const has3plBreakdown = has3plData && Object.values(threeplBreakdown).some(v => v > 0);
+    
+    // Add calculated fields and sort
+    const skuData = useMemo(() => {
+      const withCalcs = skuDataRaw.map(item => {
+        const profit = isAmz 
+          ? (item.netProceeds || 0) - (item.cogs || 0) - (item.adSpend || 0)
+          : (item.netSales || 0) - (item.cogs || 0) - (item.discounts || 0);
+        const proceedsPerUnit = item.unitsSold > 0 
+          ? (isAmz ? item.netProceeds : item.netSales) / item.unitsSold 
+          : 0;
+        return { ...item, profit, proceedsPerUnit };
+      });
+      return withCalcs.sort((a, b) => {
+        const aVal = a[skuSort.field] || 0;
+        const bVal = b[skuSort.field] || 0;
+        return skuSort.dir === 'desc' ? bVal - aVal : aVal - bVal;
+      });
+    }, [skuDataRaw, skuSort, isAmz]);
+    
+    const handleSort = (field) => {
+      setSkuSort(prev => ({ field, dir: prev.field === field && prev.dir === 'desc' ? 'asc' : 'desc' }));
+    };
+    
+    const SortHeader = ({ field, label, align = 'right' }) => (
+      <th 
+        onClick={() => handleSort(field)}
+        className={`text-${align} text-xs font-medium text-slate-400 uppercase px-2 py-2 cursor-pointer hover:text-white transition-colors ${skuSort.field === field ? 'text-violet-400' : ''}`}
+      >
+        {label} {skuSort.field === field && (skuSort.dir === 'desc' ? '↓' : '↑')}
+      </th>
+    );
+    
     return (
       <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
         <div className={`border-l-4 ${color === 'orange' ? 'border-orange-500' : 'border-blue-500'} p-5`}>
@@ -1799,26 +1832,19 @@ if (supabase && isAuthReady && session && isLocked) {
                       <thead className="bg-slate-900/50 sticky top-0">
                         <tr>
                           <th className="text-left text-xs font-medium text-slate-400 uppercase px-2 py-2">SKU</th>
-                          <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">Units</th>
-                          <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">Sales</th>
-                          {isAmz && <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">Proceeds</th>}
-                          {isAmz && <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">Ad Spend</th>}
-                          {isAmz && <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">Returns</th>}
-                          {!isAmz && <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">Discounts</th>}
-                          <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">COGS</th>
-                          <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">Profit</th>
-                          <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-2">$/Unit</th>
+                          <SortHeader field="unitsSold" label="Units" />
+                          <SortHeader field="netSales" label="Sales" />
+                          {isAmz && <SortHeader field="netProceeds" label="Proceeds" />}
+                          {isAmz && <SortHeader field="adSpend" label="Ad Spend" />}
+                          {isAmz && <SortHeader field="returns" label="Returns" />}
+                          {!isAmz && <SortHeader field="discounts" label="Discounts" />}
+                          <SortHeader field="cogs" label="COGS" />
+                          <SortHeader field="profit" label="Profit" />
+                          <SortHeader field="proceedsPerUnit" label="$/Unit" />
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-700/50">
-                        {skuData.map((item, i) => {
-                          const profit = isAmz 
-                            ? (item.netProceeds || 0) - (item.cogs || 0) - (item.adSpend || 0)
-                            : (item.netSales || 0) - (item.cogs || 0) - (item.discounts || 0);
-                          const proceedsPerUnit = item.unitsSold > 0 
-                            ? (isAmz ? item.netProceeds : item.netSales) / item.unitsSold 
-                            : 0;
-                          return (
+                        {skuData.map((item, i) => (
                           <tr key={item.sku + i} className="hover:bg-slate-700/30">
                             <td className="px-2 py-2"><div className="max-w-[200px] truncate text-white" title={item.name}>{item.sku}</div></td>
                             <td className="text-right px-2 py-2 text-white">{formatNumber(item.unitsSold)}</td>
@@ -1828,11 +1854,10 @@ if (supabase && isAuthReady && session && isLocked) {
                             {isAmz && <td className="text-right px-2 py-2 text-rose-400">{formatNumber(item.returns)}</td>}
                             {!isAmz && <td className="text-right px-2 py-2 text-amber-400">{formatCurrency(item.discounts)}</td>}
                             <td className="text-right px-2 py-2 text-slate-400">{formatCurrency(item.cogs)}</td>
-                            <td className={`text-right px-2 py-2 font-medium ${profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(profit)}</td>
-                            <td className="text-right px-2 py-2 font-medium text-emerald-400">{formatCurrency(proceedsPerUnit)}</td>
+                            <td className={`text-right px-2 py-2 font-medium ${item.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(item.profit)}</td>
+                            <td className={`text-right px-2 py-2 font-medium ${item.proceedsPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(item.proceedsPerUnit)}</td>
                           </tr>
-                          );
-                        })}
+                        ))}
                       </tbody>
                     </table>
                   </div>
