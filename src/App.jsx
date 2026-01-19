@@ -42,6 +42,7 @@ const getSunday = (date) => {
 const STORAGE_KEY = 'ecommerce_dashboard_v5';
 const INVENTORY_KEY = 'ecommerce_inventory_v5';
 const COGS_KEY = 'ecommerce_cogs_v1';
+const STORE_KEY = 'ecommerce_store_name_v1';
 
 // Supabase (cloud auth + storage)
 // Create a .env.local file in your Vite project with:
@@ -50,7 +51,13 @@ const COGS_KEY = 'ecommerce_cogs_v1';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY)
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    })
   : null;
 
 const lsGet = (key) => {
@@ -59,7 +66,6 @@ const lsGet = (key) => {
 const lsSet = (key, value) => {
   try { localStorage.setItem(key, value); } catch {}
 };
-
 
 export default function Dashboard() {
   const [view, setView] = useState('upload');
@@ -74,6 +80,8 @@ export default function Dashboard() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
 
+  const [storeName, setStoreName] = useState('');
+
 // Auth + cloud sync
 const [session, setSession] = useState(null);
 const [authEmail, setAuthEmail] = useState('');
@@ -85,6 +93,19 @@ const [isAuthReady, setIsAuthReady] = useState(false);
 const lastSavedRef = useRef(0);
 const saveTimerRef = useRef(null);
 const isLoadingDataRef = useRef(false);
+// Auto-lock (idle timeout)
+const LOCK_MS = 10 * 60 * 1000; // 10 minutes
+const ACTIVITY_KEY = "ecomm_last_activity_v1";
+const [isLocked, setIsLocked] = useState(false);
+const [unlockPassword, setUnlockPassword] = useState("");
+const [unlockError, setUnlockError] = useState("");
+const lastActivityRef = useRef(Date.now());
+
+const markActivity = useCallback(() => {
+  const now = Date.now();
+  lastActivityRef.current = now;
+  lsSet(ACTIVITY_KEY, String(now));
+}, []);
 
 const handleAuth = async (e) => {
   e.preventDefault();
@@ -109,7 +130,6 @@ const handleLogout = async () => {
   if (!supabase) return;
   await supabase.auth.signOut();
 };
-
 
   
   const [savedCogs, setSavedCogs] = useState({});
@@ -150,7 +170,8 @@ const combinedData = useMemo(() => ({
   inventory: invHistory,
   cogs: { lookup: savedCogs, updatedAt: cogsLastUpdated },
   periods: allPeriodsData,
-}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData]);
+  storeName,
+}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -180,6 +201,11 @@ const loadFromLocal = useCallback(() => {
   try {
     const r = lsGet(PERIODS_KEY);
     if (r) setAllPeriodsData(JSON.parse(r));
+  } catch {}
+
+  try {
+    const r = lsGet(STORE_KEY);
+    if (r) setStoreName(r);
   } catch {}
 }, []);
 
@@ -215,6 +241,14 @@ const queueCloudSave = useCallback((nextDataObj) => {
   }, 800);
 }, [session, pushToCloudNow]);
 
+// Store name persistence
+useEffect(() => {
+  try {
+    if (storeName !== undefined) writeToLocal(STORE_KEY, storeName || '');
+  } catch {}
+  queueCloudSave({ ...combinedData, storeName });
+}, [storeName]);
+
 const loadFromCloud = useCallback(async () => {
   if (!supabase || !session?.user?.id) return false;
   setCloudStatus('Loading…');
@@ -244,12 +278,14 @@ const loadFromCloud = useCallback(async () => {
     setSavedCogs(cloud.cogs?.lookup || {});
     setCogsLastUpdated(cloud.cogs?.updatedAt || null);
     setAllPeriodsData(cloud.periods || {});
+    setStoreName(cloud.storeName || '');
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
     writeToLocal(INVENTORY_KEY, JSON.stringify(cloud.inventory || {}));
     writeToLocal(COGS_KEY, JSON.stringify({ lookup: cloud.cogs?.lookup || {}, updatedAt: cloud.cogs?.updatedAt || null }));
     writeToLocal(PERIODS_KEY, JSON.stringify(cloud.periods || {}));
+    writeToLocal(STORE_KEY, cloud.storeName || '');
   } finally {
     isLoadingDataRef.current = false
   }
@@ -282,6 +318,58 @@ useEffect(() => {
   return () => { if (unsub) unsub.unsubscribe(); };
 }, [loadFromLocal]);
 
+// Auto-lock: track activity + idle check
+useEffect(() => {
+  const saved = parseInt(lsGet(ACTIVITY_KEY) || '0', 10);
+  if (saved) lastActivityRef.current = saved;
+  const bump = () => markActivity();
+  const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'];
+  events.forEach((ev) => window.addEventListener(ev, bump, { passive: true }));
+  return () => events.forEach((ev) => window.removeEventListener(ev, bump));
+}, [markActivity]);
+
+useEffect(() => {
+  if (!session?.user?.id || !supabase) return;
+  if (isLocked) return;
+  const t = setInterval(() => {
+    const last = lastActivityRef.current || parseInt(lsGet(ACTIVITY_KEY) || '0', 10) || Date.now();
+    if (Date.now() - last > LOCK_MS) {
+      setIsLocked(true);
+      setUnlockPassword('');
+      setUnlockError('');
+    }
+  }, 30000);
+  return () => clearInterval(t);
+}, [session, supabase, isLocked]);
+
+// Manual lock helper
+const lockNow = () => {
+  setIsLocked(true);
+  setUnlockPassword('');
+  setUnlockError('');
+};
+
+const handleUnlock = async (e) => {
+  e.preventDefault();
+  setUnlockError('');
+  if (!supabase || !session?.user?.email) {
+    setUnlockError('Auth not ready');
+    return;
+  }
+  try {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: session.user.email,
+      password: unlockPassword,
+    });
+    if (error) throw error;
+    setIsLocked(false);
+    setUnlockPassword('');
+    markActivity();
+  } catch (err) {
+    setUnlockError(err?.message || 'Unlock failed');
+  }
+};
+
 // Whenever session changes: load cloud if present, else fall back to local.
 useEffect(() => {
   const run = async () => {
@@ -298,6 +386,7 @@ useEffect(() => {
             inventory: (() => { try { return JSON.parse(lsGet(INVENTORY_KEY) || '{}'); } catch { return {}; } })(),
             cogs: (() => { try { return JSON.parse(lsGet(COGS_KEY) || '{"lookup":{},"updatedAt":null}'); } catch { return { lookup: {}, updatedAt: null }; } })(),
             periods: (() => { try { return JSON.parse(lsGet(PERIODS_KEY) || '{}'); } catch { return {}; } })(),
+            storeName: (() => { try { return (lsGet(STORE_KEY) || ''); } catch { return ''; } })(),
           };
           await pushToCloudNow(localCombined);
         }
@@ -350,7 +439,6 @@ const savePeriods = async (d) => {
     queueCloudSave({ ...combinedData, periods: d });
   } catch {}
 };
-
 
   const handleFile = useCallback((type, file, isInv = false) => {
     if (!file) return;
@@ -917,7 +1005,47 @@ const savePeriods = async (d) => {
   const exportAll = () => { const blob = new Blob([JSON.stringify({ sales: allWeeksData, inventory: invHistory, cogs: savedCogs, periods: allPeriodsData }, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `dashboard_backup_${new Date().toISOString().split('T')[0]}.json`; a.click(); };
   const importData = (file) => { const reader = new FileReader(); reader.onload = async (e) => { try { const d = JSON.parse(e.target.result); if (d.sales) { setAllWeeksData({...allWeeksData, ...d.sales}); await save({...allWeeksData, ...d.sales}); } if (d.inventory) { setInvHistory({...invHistory, ...d.inventory}); await saveInv({...invHistory, ...d.inventory}); } if (d.cogs) { setSavedCogs(d.cogs); await saveCogs(d.cogs); } if (d.periods) { setAllPeriodsData({...allPeriodsData, ...d.periods}); await savePeriods({...allPeriodsData, ...d.periods}); } alert('Imported!'); } catch { alert('Invalid file'); }}; reader.readAsText(file); };
 
+// If logged in but locked, require password to continue
+if (supabase && isAuthReady && session && isLocked) {
+  return (
+    <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+      <div className="w-full max-w-md bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 rounded-xl bg-violet-500 flex items-center justify-center">
+            <Clock className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold">Unlock Dashboard</h1>
+            <p className="text-slate-400 text-sm">Session locked after 10 minutes of inactivity.</p>
+          </div>
+        </div>
 
+        <form onSubmit={handleUnlock} className="space-y-4">
+          <div>
+            <label className="block text-sm text-slate-300 mb-1">Password</label>
+            <input value={unlockPassword} onChange={(e) => setUnlockPassword(e.target.value)} type="password" required
+              className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-violet-500" />
+          </div>
+
+          {unlockError && (
+            <div className="text-sm text-rose-300 bg-rose-950/30 border border-rose-900/50 rounded-xl p-3">
+              {unlockError}
+            </div>
+          )}
+
+          <button type="submit" className="w-full rounded-xl bg-violet-500 hover:bg-violet-400 text-slate-950 font-semibold py-2">
+            Unlock
+          </button>
+
+          <button type="button" onClick={handleLogout}
+            className="w-full rounded-xl border border-slate-700 hover:border-slate-500 text-slate-200 py-2">
+            Sign out
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 // If Supabase is configured, require login so your data is private.
 if (supabase && isAuthReady && !session) {
@@ -962,6 +1090,52 @@ if (supabase && isAuthReady && !session) {
           </button>
 
           <p className="text-xs text-slate-500">If you haven't added your Supabase keys yet, the app will run without login but data will stay on this device only.</p>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// Locked screen (session exists, password recheck)
+if (supabase && isAuthReady && session && isLocked) {
+  return (
+    <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+      <div className="w-full max-w-md bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 rounded-xl bg-violet-500 flex items-center justify-center">
+            <Database className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold">Locked</h1>
+            <p className="text-slate-400 text-sm">Enter your password to continue.</p>
+          </div>
+        </div>
+
+        <form onSubmit={handleUnlock} className="space-y-4">
+          <div>
+            <label className="block text-sm text-slate-300 mb-1">Password</label>
+            <input
+              value={unlockPassword}
+              onChange={(e) => setUnlockPassword(e.target.value)}
+              type="password"
+              required
+              className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-violet-500"
+            />
+          </div>
+
+          {unlockError && (
+            <div className="text-sm text-rose-300 bg-rose-950/30 border border-rose-900/50 rounded-xl p-3">
+              {unlockError}
+            </div>
+          )}
+
+          <button type="submit" className="w-full rounded-xl bg-violet-500 hover:bg-violet-400 text-slate-950 font-semibold py-2">
+            Unlock
+          </button>
+
+          <button type="button" onClick={handleLogout} className="w-full rounded-xl border border-slate-700 hover:border-slate-500 text-slate-200 py-2">
+            Sign out
+          </button>
         </form>
       </div>
     </div>
@@ -1100,18 +1274,23 @@ if (supabase && isAuthReady && !session) {
     </div>
   );
 
-  const DataBar = () => (
+  const dataBar = useMemo(() => (
     <div className="flex flex-wrap items-center gap-3 mb-6 p-4 bg-slate-800/50 rounded-xl border border-slate-700">
       <div className="flex items-center gap-2 text-slate-400 text-sm"><Database className="w-4 h-4" /><span>{Object.keys(allWeeksData).length} weeks | {Object.keys(allPeriodsData).length} periods</span></div>
       <div className="flex items-center gap-2">
         {Object.keys(savedCogs).length > 0 ? <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />{Object.keys(savedCogs).length} SKUs</span> : <span className="text-amber-400 text-xs">No COGS</span>}
         <button onClick={() => setShowCogsManager(true)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white flex items-center gap-1"><Settings className="w-3 h-3" />COGS</button>
       </div>
+      <div className="flex items-center gap-2">
+        <span className="text-slate-400 text-sm">Store:</span>
+        <input value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="Your brand name"
+          className="bg-slate-900 border border-slate-600 rounded-lg px-2 py-1 text-sm text-white w-44" />
+      </div>
       <div className="flex-1" />
       <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" />Export</button>
       <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" />Import<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
     </div>
-  );
+  ), [allWeeksData, allPeriodsData, savedCogs, storeName, isLocked, cloudStatus, session]);
 
   const Toast = () => showSaveConfirm && <div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50"><Check className="w-4 h-4" />Saved!</div>;
 
@@ -1147,8 +1326,8 @@ if (supabase && isAuthReady && !session) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
         <div className="max-w-3xl mx-auto"><Toast /><CogsManager />
-          <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4"><BarChart3 className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Weekly Sales Upload</h1></div>
-          <NavTabs /><DataBar />
+          <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4"><BarChart3 className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">{storeName ? storeName + ' Weekly Upload' : 'Weekly Sales Upload'}</h1></div>
+          <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
             <label className="block text-sm font-medium text-slate-300 mb-2">Week Ending (Sunday) <span className="text-rose-400">*</span></label>
             <input type="date" value={weekEnding} onChange={(e) => setWeekEnding(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
@@ -1180,7 +1359,7 @@ if (supabase && isAuthReady && !session) {
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
         <div className="max-w-3xl mx-auto"><Toast /><CogsManager />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
-          <NavTabs /><DataBar />
+          <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><FileBox type="amazon" label="Amazon Report" desc="Multi-week CSV" req /><FileBox type="shopify" label="Shopify Sales" desc="Matching period" req /></div>
@@ -1198,7 +1377,7 @@ if (supabase && isAuthReady && !session) {
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
         <div className="max-w-3xl mx-auto"><Toast /><CogsManager />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
-          <NavTabs /><DataBar />
+          <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
             <div className="grid grid-cols-2 gap-4">
               <div><label className="block text-sm text-slate-400 mb-2">Start</label><input type="date" value={customStartDate} onChange={(e) => setCustomStartDate(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
@@ -1324,7 +1503,7 @@ if (supabase && isAuthReady && !session) {
             </div>
           )}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-            <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Weekly Performance</h1><p className="text-slate-400">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
+            <div><h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'Weekly Performance'}</h1><p className="text-slate-400">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
               <button onClick={() => { setReprocessAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowReprocess(true); }} className="bg-violet-900/50 hover:bg-violet-800/50 border border-violet-600/50 text-violet-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><RefreshCw className="w-4 h-4" />Re-process</button>
               <button onClick={() => { setEditAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowEditAdSpend(true); }} className="bg-blue-900/50 hover:bg-blue-800/50 border border-blue-600/50 text-blue-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><DollarSign className="w-4 h-4" />Edit Ads</button>
@@ -1439,7 +1618,7 @@ if (supabase && isAuthReady && !session) {
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
         <div className="max-w-3xl mx-auto"><Toast /><CogsManager />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Period Upload</h1><p className="text-slate-400">Upload monthly or yearly totals (no weekly breakdown)</p></div>
-          <NavTabs /><DataBar />
+          <NavTabs />{dataBar}
           {periods.length > 0 && (
             <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4 mb-6">
               <h3 className="text-sm font-semibold text-slate-300 mb-3">Existing Periods</h3>
@@ -1518,7 +1697,7 @@ if (supabase && isAuthReady && !session) {
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
         <div className="max-w-3xl mx-auto"><Toast /><CogsManager />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 mb-4"><Boxes className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Inventory Tracker</h1></div>
-          <NavTabs /><DataBar />
+          <NavTabs />{dataBar}
           {dates.length > 0 && (
             <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4 mb-6">
               <h3 className="text-sm font-semibold text-slate-300 mb-3">Previous Snapshots</h3>
