@@ -1994,500 +1994,275 @@ if (supabase && isAuthReady && session && isLocked) {
 
   const hasCogs = Object.keys(savedCogs).length > 0;
   
-  // AI Chat Component
-  const AIChat = () => {
-    if (!showAIChat) return null;
+  // AI Chat - Prepare data context function
+  const prepareDataContext = () => {
+    const weeksCount = Object.keys(allWeeksData).length;
+    const periodsCount = Object.keys(allPeriodsData).length;
+    const sortedWeeks = Object.keys(allWeeksData).sort();
     
-    // Prepare comprehensive data summary for AI context
-    const prepareDataContext = () => {
-      const weeksCount = Object.keys(allWeeksData).length;
-      const periodsCount = Object.keys(allPeriodsData).length;
-      const sortedWeeks = Object.keys(allWeeksData).sort();
-      
-      // ===== WEEKLY SUMMARIES =====
-      const weeksSummary = sortedWeeks.map(week => {
-        const data = allWeeksData[week];
-        const amz = data.amazon || {};
-        const shop = data.shopify || {};
-        const total = data.total || {};
-        return {
-          weekEnding: week,
-          // Totals
-          totalRevenue: total.revenue || 0,
-          totalProfit: total.netProfit || 0,
-          totalUnits: total.units || 0,
-          totalCogs: total.cogs || 0,
-          totalAdSpend: total.adSpend || 0,
-          margin: total.revenue ? ((total.netProfit || 0) / total.revenue * 100).toFixed(1) : 0,
-          // Amazon breakdown
-          amazonRevenue: amz.revenue || 0,
-          amazonProfit: amz.netProfit || 0,
-          amazonUnits: amz.units || 0,
-          amazonFees: amz.fees || 0,
-          amazonAdSpend: amz.adSpend || 0,
-          // Shopify breakdown
-          shopifyRevenue: shop.revenue || 0,
-          shopifyProfit: shop.netProfit || 0,
-          shopifyUnits: shop.units || 0,
-          shopify3PLCosts: shop.threeplCosts || 0,
-          shopifyAdSpend: (shop.metaSpend || 0) + (shop.googleSpend || 0),
-        };
-      });
-      
-      // ===== PERIOD SUMMARIES (Monthly/Yearly) =====
-      const periodsSummary = Object.entries(allPeriodsData).map(([label, data]) => {
-        const total = data.total || {};
-        const amz = data.amazon || {};
-        const shop = data.shopify || {};
-        return {
-          period: label,
-          totalRevenue: total.revenue || 0,
-          totalProfit: total.netProfit || 0,
-          totalUnits: total.units || 0,
-          amazonRevenue: amz.revenue || 0,
-          shopifyRevenue: shop.revenue || 0,
-          margin: total.revenue ? ((total.netProfit || 0) / total.revenue * 100).toFixed(1) : 0,
-        };
-      });
-      
-      // ===== SKU-LEVEL DATA WITH WEEKLY BREAKDOWN =====
-      const skuWeeklyBreakdown = {};
-      sortedWeeks.forEach(week => {
-        const data = allWeeksData[week];
-        // Amazon SKUs
-        (data.amazon?.skuData || []).forEach(s => {
-          const sku = s.sku || s.msku || 'unknown';
-          if (!skuWeeklyBreakdown[sku]) {
-            skuWeeklyBreakdown[sku] = { sku, name: s.name || s.title || sku, channel: 'Amazon', weeks: {}, totals: { revenue: 0, units: 0, profit: 0, fees: 0 } };
-          }
-          const units = s.unitsSold || s.units || 0;
-          const revenue = s.netSales || s.revenue || 0;
-          const proceeds = s.netProceeds || revenue;
-          const cogs = s.cogs || 0;
-          const profit = proceeds - cogs;
-          const fees = revenue - proceeds;
-          
-          skuWeeklyBreakdown[sku].weeks[week] = { units, revenue, profit, fees, profitPerUnit: units > 0 ? profit / units : 0, feesPerUnit: units > 0 ? fees / units : 0 };
-          skuWeeklyBreakdown[sku].totals.revenue += revenue;
-          skuWeeklyBreakdown[sku].totals.units += units;
-          skuWeeklyBreakdown[sku].totals.profit += profit;
-          skuWeeklyBreakdown[sku].totals.fees += fees;
-        });
-        // Shopify SKUs
-        (data.shopify?.skuData || []).forEach(s => {
-          const sku = 'SHOP_' + (s.sku || 'unknown');
-          if (!skuWeeklyBreakdown[sku]) {
-            skuWeeklyBreakdown[sku] = { sku: s.sku, name: s.name || s.title || s.sku, channel: 'Shopify', weeks: {}, totals: { revenue: 0, units: 0, profit: 0, fees: 0 } };
-          }
-          const units = s.unitsSold || s.units || 0;
-          const revenue = s.netSales || s.revenue || 0;
-          const cogs = s.cogs || 0;
-          const profit = revenue - cogs;
-          
-          skuWeeklyBreakdown[sku].weeks[week] = { units, revenue, profit, fees: 0, profitPerUnit: units > 0 ? profit / units : 0, feesPerUnit: 0 };
-          skuWeeklyBreakdown[sku].totals.revenue += revenue;
-          skuWeeklyBreakdown[sku].totals.units += units;
-          skuWeeklyBreakdown[sku].totals.profit += profit;
-        });
-      });
-      
-      // Calculate profit per unit trends for each SKU
-      const skuAnalysis = Object.values(skuWeeklyBreakdown)
-        .filter(s => s.totals.units >= 1)
-        .map(s => {
-          const weekDates = Object.keys(s.weeks).sort();
-          const recentWeeks = weekDates.slice(-4);
-          const olderWeeks = weekDates.slice(-8, -4);
-          
-          let recentUnits = 0, recentProfit = 0, olderUnits = 0, olderProfit = 0;
-          recentWeeks.forEach(w => { recentUnits += s.weeks[w].units; recentProfit += s.weeks[w].profit; });
-          olderWeeks.forEach(w => { olderUnits += s.weeks[w].units; olderProfit += s.weeks[w].profit; });
-          
-          const recentPPU = recentUnits > 0 ? recentProfit / recentUnits : 0;
-          const olderPPU = olderUnits > 0 ? olderProfit / olderUnits : 0;
-          const ppuChange = olderWeeks.length > 0 ? recentPPU - olderPPU : 0;
-          const overallPPU = s.totals.units > 0 ? s.totals.profit / s.totals.units : 0;
-          const overallMargin = s.totals.revenue > 0 ? (s.totals.profit / s.totals.revenue * 100) : 0;
-          const avgFeesPerUnit = s.totals.units > 0 ? s.totals.fees / s.totals.units : 0;
-          
-          return {
-            sku: s.sku,
-            name: s.name,
-            channel: s.channel,
-            totalRevenue: s.totals.revenue,
-            totalUnits: s.totals.units,
-            totalProfit: s.totals.profit,
-            totalFees: s.totals.fees,
-            profitPerUnit: overallPPU,
-            margin: overallMargin,
-            avgFeesPerUnit,
-            weeksOfData: weekDates.length,
-            recentProfitPerUnit: recentPPU,
-            priorProfitPerUnit: olderPPU,
-            profitPerUnitChange: ppuChange,
-            trend: ppuChange > 0.5 ? 'improving' : ppuChange < -0.5 ? 'declining' : 'stable',
-            weeklyData: weekDates.slice(-8).map(w => ({ week: w, ...s.weeks[w] })),
-          };
-        })
-        .sort((a, b) => b.totalRevenue - a.totalRevenue);
-      
-      // ===== INVENTORY =====
-      const latestInvDate = Object.keys(invHistory).sort().reverse()[0];
-      const latestInv = latestInvDate ? invHistory[latestInvDate] : null;
-      const inventorySummary = latestInv ? {
-        asOfDate: latestInvDate,
-        totalUnits: latestInv.totalUnits || 0,
-        totalValue: latestInv.totalValue || 0,
-        skuCount: latestInv.items?.length || 0,
-        lowStockItems: (latestInv.items || []).filter(i => i.health === 'low' || i.health === 'critical').map(i => ({ sku: i.sku, units: i.totalUnits, daysOfStock: i.daysOfStock, health: i.health })),
-        outOfStock: (latestInv.items || []).filter(i => (i.totalUnits || 0) === 0).length,
-      } : null;
-      
-      // ===== SALES TAX =====
-      const taxSummary = {
-        nexusStates: Object.entries(salesTaxConfig.nexusStates || {}).filter(([,v]) => v.hasNexus).map(([code, config]) => ({
-          state: US_STATES_TAX_INFO[code]?.name || code,
-          code,
-          frequency: config.frequency,
-        })),
-        totalPaidAllTime: Object.values(salesTaxConfig.filingHistory || {}).reduce((sum, periods) => 
-          sum + Object.values(periods).reduce((s, p) => s + (p.amount || 0), 0), 0),
-        recentFilings: Object.entries(salesTaxConfig.filingHistory || {}).flatMap(([state, periods]) => 
-          Object.entries(periods).map(([period, data]) => ({
-            state: US_STATES_TAX_INFO[state]?.name || state,
-            period,
-            amount: data.amount,
-            filedDate: data.filedDate,
-          }))
-        ).sort((a, b) => (b.filedDate || '').localeCompare(a.filedDate || '')).slice(0, 10),
-      };
-      
-      // ===== CALCULATED INSIGHTS =====
-      const allTimeRevenue = weeksSummary.reduce((s, w) => s + w.totalRevenue, 0);
-      const allTimeProfit = weeksSummary.reduce((s, w) => s + w.totalProfit, 0);
-      const allTimeUnits = weeksSummary.reduce((s, w) => s + w.totalUnits, 0);
-      const avgWeeklyRevenue = weeksCount > 0 ? allTimeRevenue / weeksCount : 0;
-      const avgWeeklyProfit = weeksCount > 0 ? allTimeProfit / weeksCount : 0;
-      const overallMargin = allTimeRevenue > 0 ? (allTimeProfit / allTimeRevenue * 100) : 0;
-      const overallProfitPerUnit = allTimeUnits > 0 ? allTimeProfit / allTimeUnits : 0;
-      
-      // Recent vs prior comparison
-      const recentWeeks = weeksSummary.slice(-4);
-      const priorWeeks = weeksSummary.slice(-8, -4);
-      const recentRevenue = recentWeeks.reduce((s, w) => s + w.totalRevenue, 0);
-      const priorRevenue = priorWeeks.reduce((s, w) => s + w.totalRevenue, 0);
-      const recentProfit = recentWeeks.reduce((s, w) => s + w.totalProfit, 0);
-      const priorProfit = priorWeeks.reduce((s, w) => s + w.totalProfit, 0);
-      
+    const weeksSummary = sortedWeeks.map(week => {
+      const data = allWeeksData[week];
+      const amz = data.amazon || {};
+      const shop = data.shopify || {};
+      const total = data.total || {};
       return {
-        storeName: storeName || 'E-Commerce Store',
-        dataRange: {
-          weeksTracked: weeksCount,
-          periodsTracked: periodsCount,
-          oldestWeek: sortedWeeks[0],
-          newestWeek: sortedWeeks[sortedWeeks.length - 1],
-        },
-        // Summaries
-        weeklyData: weeksSummary,
-        periodData: periodsSummary,
-        // SKU Analysis
-        skuAnalysis: skuAnalysis.slice(0, 30), // Top 30 SKUs with full analysis
-        skusByProfitPerUnit: [...skuAnalysis].sort((a, b) => b.profitPerUnit - a.profitPerUnit).slice(0, 10),
-        decliningSkus: skuAnalysis.filter(s => s.trend === 'declining').slice(0, 10),
-        improvingSkus: skuAnalysis.filter(s => s.trend === 'improving').slice(0, 10),
-        // Inventory
-        inventory: inventorySummary,
-        // Sales Tax
-        salesTax: taxSummary,
-        // Goals
-        goals,
-        // Calculated insights
-        insights: {
-          allTimeRevenue,
-          allTimeProfit,
-          allTimeUnits,
-          avgWeeklyRevenue,
-          avgWeeklyProfit,
-          overallMargin,
-          overallProfitPerUnit,
-          recentVsPrior: {
-            recentRevenue,
-            priorRevenue,
-            revenueChange: priorRevenue > 0 ? ((recentRevenue - priorRevenue) / priorRevenue * 100) : 0,
-            recentProfit,
-            priorProfit,
-            profitChange: priorProfit > 0 ? ((recentProfit - priorProfit) / priorProfit * 100) : 0,
-          },
-          topChannel: allTimeRevenue > 0 ? (weeksSummary.reduce((s, w) => s + w.amazonRevenue, 0) > allTimeRevenue / 2 ? 'Amazon' : 'Shopify') : 'Unknown',
-        },
+        weekEnding: week,
+        totalRevenue: total.revenue || 0,
+        totalProfit: total.netProfit || 0,
+        totalUnits: total.units || 0,
+        margin: total.revenue ? ((total.netProfit || 0) / total.revenue * 100).toFixed(1) : 0,
+        amazonRevenue: amz.revenue || 0,
+        amazonProfit: amz.netProfit || 0,
+        shopifyRevenue: shop.revenue || 0,
+        shopifyProfit: shop.netProfit || 0,
       };
-    };
+    });
     
-    const sendMessage = async () => {
-      if (!aiInput.trim() || aiLoading) return;
-      
-      const userMessage = aiInput.trim();
-      setAiInput('');
-      setAiMessages(prev => [...prev, { role: 'user', content: userMessage }]);
-      setAiLoading(true);
-      
-      try {
-        const dataContext = prepareDataContext();
-        
-        const systemPrompt = `You are an expert e-commerce business analyst AI assistant. You have comprehensive access to this business's data and can answer detailed questions about performance, profitability, SKU analysis, trends, inventory, and finances.
-
-=== BUSINESS OVERVIEW ===
-Store: ${dataContext.storeName}
-Data Range: ${dataContext.dataRange.weeksTracked} weeks tracked (${dataContext.dataRange.oldestWeek || 'N/A'} to ${dataContext.dataRange.newestWeek || 'N/A'})
-Periods: ${dataContext.dataRange.periodsTracked} monthly/yearly periods
-
-=== KEY METRICS (ALL TIME) ===
-Total Revenue: $${dataContext.insights.allTimeRevenue.toFixed(2)}
-Total Profit: $${dataContext.insights.allTimeProfit.toFixed(2)}
-Total Units Sold: ${dataContext.insights.allTimeUnits}
-Overall Margin: ${dataContext.insights.overallMargin.toFixed(1)}%
-Average Profit Per Unit: $${dataContext.insights.overallProfitPerUnit.toFixed(2)}
-Average Weekly Revenue: $${dataContext.insights.avgWeeklyRevenue.toFixed(2)}
-Average Weekly Profit: $${dataContext.insights.avgWeeklyProfit.toFixed(2)}
-Primary Channel: ${dataContext.insights.topChannel}
-
-=== RECENT PERFORMANCE (Last 4 weeks vs Prior 4 weeks) ===
-Recent Revenue: $${dataContext.insights.recentVsPrior.recentRevenue.toFixed(2)}
-Prior Revenue: $${dataContext.insights.recentVsPrior.priorRevenue.toFixed(2)}
-Revenue Change: ${dataContext.insights.recentVsPrior.revenueChange.toFixed(1)}%
-Recent Profit: $${dataContext.insights.recentVsPrior.recentProfit.toFixed(2)}
-Prior Profit: $${dataContext.insights.recentVsPrior.priorProfit.toFixed(2)}
-Profit Change: ${dataContext.insights.recentVsPrior.profitChange.toFixed(1)}%
-
-=== WEEKLY DATA (All weeks, most recent first) ===
-Each week includes: totalRevenue, totalProfit, totalUnits, margin, amazonRevenue, amazonProfit, amazonFees, shopifyRevenue, shopifyProfit, adSpend
-${JSON.stringify(dataContext.weeklyData.slice().reverse(), null, 2)}
-
-=== PERIOD DATA (Monthly/Yearly totals) ===
-${JSON.stringify(dataContext.periodData, null, 2)}
-
-=== SKU ANALYSIS (Top 30 by revenue) ===
-Each SKU includes: sku, name, channel, totalRevenue, totalUnits, totalProfit, totalFees, profitPerUnit, margin, avgFeesPerUnit, weeksOfData, recentProfitPerUnit, priorProfitPerUnit, profitPerUnitChange, trend (improving/stable/declining), and weeklyData array
-${JSON.stringify(dataContext.skuAnalysis, null, 2)}
-
-=== TOP 10 SKUs BY PROFIT PER UNIT ===
-${JSON.stringify(dataContext.skusByProfitPerUnit, null, 2)}
-
-=== SKUs WITH DECLINING PROFIT/UNIT (Watch List) ===
-These SKUs are losing profitability - fees or costs may be increasing:
-${JSON.stringify(dataContext.decliningSkus, null, 2)}
-
-=== SKUs WITH IMPROVING PROFIT/UNIT ===
-${JSON.stringify(dataContext.improvingSkus, null, 2)}
-
-=== INVENTORY ===
-${dataContext.inventory ? `As of: ${dataContext.inventory.asOfDate}
-Total Units: ${dataContext.inventory.totalUnits}
-Total Value: $${dataContext.inventory.totalValue.toFixed(2)}
-SKU Count: ${dataContext.inventory.skuCount}
-Out of Stock: ${dataContext.inventory.outOfStock}
-Low Stock Items: ${JSON.stringify(dataContext.inventory.lowStockItems)}` : 'No inventory data available'}
-
-=== SALES TAX ===
-Nexus States: ${dataContext.salesTax.nexusStates.map(s => s.state + ' (' + s.frequency + ')').join(', ') || 'None configured'}
-Total Paid (All Time): $${dataContext.salesTax.totalPaidAllTime.toFixed(2)}
-Recent Filings: ${JSON.stringify(dataContext.salesTax.recentFilings)}
-
-=== GOALS ===
-Weekly Revenue Target: $${dataContext.goals.weeklyRevenue || 0}
-Weekly Profit Target: $${dataContext.goals.weeklyProfit || 0}
-Monthly Revenue Target: $${dataContext.goals.monthlyRevenue || 0}
-Monthly Profit Target: $${dataContext.goals.monthlyProfit || 0}
-
-=== HOW TO ANSWER QUESTIONS ===
-1. For revenue/profit questions: Use weeklyData for specific weeks, periodData for months/years, insights for totals
-2. For SKU questions: Use skuAnalysis which has complete data including weekly breakdown
-3. For profit per unit trends: Check profitPerUnitChange and trend fields, use weeklyData within each SKU
-4. For Amazon fee analysis: Look at totalFees, avgFeesPerUnit in SKU data
-5. For comparisons: Use recentVsPrior in insights, or calculate from weeklyData
-6. For inventory: Use the inventory section
-7. For sales tax: Use the salesTax section
-
-Always:
-- Format currency as $X,XXX.XX
-- Show percentages with 1 decimal place
-- When showing trends, include the actual numbers
-- If data is missing for a specific query, say so clearly
-- Provide actionable insights when relevant
-- Be concise but thorough`;
-
-        const response = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            system: systemPrompt,
-            messages: [
-              ...aiMessages.map(m => ({ role: m.role, content: m.content })),
-              { role: 'user', content: userMessage }
-            ],
-          }),
-        });
-        
-        if (!response.ok) {
-          throw new Error(`API error: ${response.status}`);
+    const periodsSummary = Object.entries(allPeriodsData).map(([label, data]) => ({
+      period: label,
+      totalRevenue: data.total?.revenue || 0,
+      totalProfit: data.total?.netProfit || 0,
+      totalUnits: data.total?.units || 0,
+    }));
+    
+    const skuWeeklyBreakdown = {};
+    sortedWeeks.forEach(week => {
+      const data = allWeeksData[week];
+      (data.amazon?.skuData || []).forEach(s => {
+        const sku = s.sku || s.msku || 'unknown';
+        if (!skuWeeklyBreakdown[sku]) {
+          skuWeeklyBreakdown[sku] = { sku, name: s.name || s.title || sku, channel: 'Amazon', weeks: {}, totals: { revenue: 0, units: 0, profit: 0, fees: 0 } };
         }
-        
-        const data = await response.json();
-        const assistantMessage = data.content?.[0]?.text || data.message || 'Sorry, I could not process that request.';
-        
-        setAiMessages(prev => [...prev, { role: 'assistant', content: assistantMessage }]);
-      } catch (error) {
-        console.error('AI Chat error:', error);
-        const errorMessage = 'Sorry, there was an error processing your request. Please make sure the /api/chat endpoint is configured correctly.';
-        setAiMessages(prev => [...prev, { role: 'assistant', content: errorMessage }]);
-      } finally {
-        setAiLoading(false);
-      }
+        const units = s.unitsSold || s.units || 0;
+        const revenue = s.netSales || s.revenue || 0;
+        const proceeds = s.netProceeds || revenue;
+        const cogs = s.cogs || 0;
+        const profit = proceeds - cogs;
+        const fees = revenue - proceeds;
+        skuWeeklyBreakdown[sku].weeks[week] = { units, revenue, profit, fees, profitPerUnit: units > 0 ? profit / units : 0 };
+        skuWeeklyBreakdown[sku].totals.revenue += revenue;
+        skuWeeklyBreakdown[sku].totals.units += units;
+        skuWeeklyBreakdown[sku].totals.profit += profit;
+        skuWeeklyBreakdown[sku].totals.fees += fees;
+      });
+      (data.shopify?.skuData || []).forEach(s => {
+        const sku = 'SHOP_' + (s.sku || 'unknown');
+        if (!skuWeeklyBreakdown[sku]) {
+          skuWeeklyBreakdown[sku] = { sku: s.sku, name: s.name || s.title || s.sku, channel: 'Shopify', weeks: {}, totals: { revenue: 0, units: 0, profit: 0, fees: 0 } };
+        }
+        const units = s.unitsSold || s.units || 0;
+        const revenue = s.netSales || s.revenue || 0;
+        const profit = revenue - (s.cogs || 0);
+        skuWeeklyBreakdown[sku].weeks[week] = { units, revenue, profit, fees: 0, profitPerUnit: units > 0 ? profit / units : 0 };
+        skuWeeklyBreakdown[sku].totals.revenue += revenue;
+        skuWeeklyBreakdown[sku].totals.units += units;
+        skuWeeklyBreakdown[sku].totals.profit += profit;
+      });
+    });
+    
+    const skuAnalysis = Object.values(skuWeeklyBreakdown).filter(s => s.totals.units >= 1).map(s => {
+      const weekDates = Object.keys(s.weeks).sort();
+      const recentWeeks = weekDates.slice(-4);
+      const olderWeeks = weekDates.slice(-8, -4);
+      let recentUnits = 0, recentProfit = 0, olderUnits = 0, olderProfit = 0;
+      recentWeeks.forEach(w => { recentUnits += s.weeks[w].units; recentProfit += s.weeks[w].profit; });
+      olderWeeks.forEach(w => { olderUnits += s.weeks[w].units; olderProfit += s.weeks[w].profit; });
+      const recentPPU = recentUnits > 0 ? recentProfit / recentUnits : 0;
+      const olderPPU = olderUnits > 0 ? olderProfit / olderUnits : 0;
+      const ppuChange = olderWeeks.length > 0 ? recentPPU - olderPPU : 0;
+      const overallPPU = s.totals.units > 0 ? s.totals.profit / s.totals.units : 0;
+      const overallMargin = s.totals.revenue > 0 ? (s.totals.profit / s.totals.revenue * 100) : 0;
+      return {
+        sku: s.sku, name: s.name, channel: s.channel,
+        totalRevenue: s.totals.revenue, totalUnits: s.totals.units, totalProfit: s.totals.profit, totalFees: s.totals.fees,
+        profitPerUnit: overallPPU, margin: overallMargin,
+        recentProfitPerUnit: recentPPU, priorProfitPerUnit: olderPPU, profitPerUnitChange: ppuChange,
+        trend: ppuChange > 0.5 ? 'improving' : ppuChange < -0.5 ? 'declining' : 'stable',
+      };
+    }).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    
+    const latestInvDate = Object.keys(invHistory).sort().reverse()[0];
+    const latestInv = latestInvDate ? invHistory[latestInvDate] : null;
+    const inventorySummary = latestInv ? {
+      asOfDate: latestInvDate, totalUnits: latestInv.totalUnits || 0, totalValue: latestInv.totalValue || 0,
+      lowStockItems: (latestInv.items || []).filter(i => i.health === 'low' || i.health === 'critical').map(i => ({ sku: i.sku, units: i.totalUnits })),
+    } : null;
+    
+    const taxSummary = {
+      nexusStates: Object.entries(salesTaxConfig.nexusStates || {}).filter(([,v]) => v.hasNexus).map(([code, config]) => ({ state: US_STATES_TAX_INFO[code]?.name || code, frequency: config.frequency })),
+      totalPaidAllTime: Object.values(salesTaxConfig.filingHistory || {}).reduce((sum, periods) => sum + Object.values(periods).reduce((s, p) => s + (p.amount || 0), 0), 0),
     };
     
-    return (
-      <div className="fixed bottom-4 right-4 z-50 w-96 max-w-[calc(100vw-2rem)]">
-        <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden">
-          {/* Header */}
-          <div className="bg-gradient-to-r from-violet-600 to-indigo-600 p-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-                <MessageSquare className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h3 className="text-white font-semibold">AI Assistant</h3>
-                <p className="text-white/70 text-xs">Ask about your business data</p>
-              </div>
+    const allTimeRevenue = weeksSummary.reduce((s, w) => s + w.totalRevenue, 0);
+    const allTimeProfit = weeksSummary.reduce((s, w) => s + w.totalProfit, 0);
+    const allTimeUnits = weeksSummary.reduce((s, w) => s + w.totalUnits, 0);
+    const recentWeeksData = weeksSummary.slice(-4);
+    const priorWeeksData = weeksSummary.slice(-8, -4);
+    const recentRevenue = recentWeeksData.reduce((s, w) => s + w.totalRevenue, 0);
+    const priorRevenue = priorWeeksData.reduce((s, w) => s + w.totalRevenue, 0);
+    const recentProfit = recentWeeksData.reduce((s, w) => s + w.totalProfit, 0);
+    const priorProfit = priorWeeksData.reduce((s, w) => s + w.totalProfit, 0);
+    
+    return {
+      storeName: storeName || 'E-Commerce Store',
+      dataRange: { weeksTracked: weeksCount, periodsTracked: periodsCount, oldestWeek: sortedWeeks[0], newestWeek: sortedWeeks[sortedWeeks.length - 1] },
+      weeklyData: weeksSummary,
+      periodData: periodsSummary,
+      skuAnalysis: skuAnalysis.slice(0, 30),
+      skusByProfitPerUnit: [...skuAnalysis].sort((a, b) => b.profitPerUnit - a.profitPerUnit).slice(0, 10),
+      decliningSkus: skuAnalysis.filter(s => s.trend === 'declining').slice(0, 10),
+      improvingSkus: skuAnalysis.filter(s => s.trend === 'improving').slice(0, 10),
+      inventory: inventorySummary,
+      salesTax: taxSummary,
+      goals,
+      insights: {
+        allTimeRevenue, allTimeProfit, allTimeUnits,
+        avgWeeklyRevenue: weeksCount > 0 ? allTimeRevenue / weeksCount : 0,
+        avgWeeklyProfit: weeksCount > 0 ? allTimeProfit / weeksCount : 0,
+        overallMargin: allTimeRevenue > 0 ? (allTimeProfit / allTimeRevenue * 100) : 0,
+        overallProfitPerUnit: allTimeUnits > 0 ? allTimeProfit / allTimeUnits : 0,
+        recentVsPrior: {
+          recentRevenue, priorRevenue, revenueChange: priorRevenue > 0 ? ((recentRevenue - priorRevenue) / priorRevenue * 100) : 0,
+          recentProfit, priorProfit, profitChange: priorProfit > 0 ? ((recentProfit - priorProfit) / priorProfit * 100) : 0,
+        },
+        topChannel: allTimeRevenue > 0 ? (weeksSummary.reduce((s, w) => s + w.amazonRevenue, 0) > allTimeRevenue / 2 ? 'Amazon' : 'Shopify') : 'Unknown',
+      },
+    };
+  };
+  
+  // Send AI Message - defined at component level, not nested
+  const sendAIMessage = async () => {
+    if (!aiInput.trim() || aiLoading) return;
+    const userMessage = aiInput.trim();
+    setAiInput('');
+    setAiMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    setAiLoading(true);
+    
+    try {
+      const ctx = prepareDataContext();
+      const systemPrompt = `You are an expert e-commerce analyst. Answer questions about this business data concisely.
+
+STORE: ${ctx.storeName}
+DATA: ${ctx.dataRange.weeksTracked} weeks (${ctx.dataRange.oldestWeek || 'N/A'} to ${ctx.dataRange.newestWeek || 'N/A'})
+
+KEY METRICS:
+- Total Revenue: $${ctx.insights.allTimeRevenue.toFixed(2)}
+- Total Profit: $${ctx.insights.allTimeProfit.toFixed(2)}
+- Overall Margin: ${ctx.insights.overallMargin.toFixed(1)}%
+- Avg Profit/Unit: $${ctx.insights.overallProfitPerUnit.toFixed(2)}
+
+RECENT TREND (4wk vs prior):
+- Revenue: ${ctx.insights.recentVsPrior.revenueChange.toFixed(1)}% change
+- Profit: ${ctx.insights.recentVsPrior.profitChange.toFixed(1)}% change
+
+WEEKLY DATA: ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
+
+TOP SKUS: ${JSON.stringify(ctx.skuAnalysis.slice(0, 15))}
+
+DECLINING SKUS: ${JSON.stringify(ctx.decliningSkus)}
+
+INVENTORY: ${ctx.inventory ? JSON.stringify(ctx.inventory) : 'No data'}
+
+GOALS: Weekly Rev $${ctx.goals.weeklyRevenue || 0}, Weekly Profit $${ctx.goals.weeklyProfit || 0}
+
+Format currency as $X,XXX.XX. Be concise but thorough.`;
+
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ system: systemPrompt, messages: [...aiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }] }),
+      });
+      
+      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      const data = await response.json();
+      setAiMessages(prev => [...prev, { role: 'assistant', content: data.content?.[0]?.text || 'Sorry, I could not process that.' }]);
+    } catch (error) {
+      console.error('AI Chat error:', error);
+      setAiMessages(prev => [...prev, { role: 'assistant', content: 'Error processing request. Check /api/chat endpoint.' }]);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+  
+  // AI Chat UI - rendered as JSX variable, not a component function
+  const aiChatUI = showAIChat && (
+    <div className="fixed bottom-4 right-4 z-50 w-96 max-w-[calc(100vw-2rem)]">
+      <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden">
+        <div className="bg-gradient-to-r from-violet-600 to-indigo-600 p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+              <MessageSquare className="w-5 h-5 text-white" />
             </div>
-            <div className="flex items-center gap-1">
-              <button 
-                onClick={() => {
-                  const ctx = prepareDataContext();
-                  console.log('AI Data Context:', ctx);
-                  const summary = `📊 **AI Data Context Summary**
-
-**Data Range:**
-• Weeks: ${ctx.dataRange.weeksTracked} (${ctx.dataRange.oldestWeek || 'none'} → ${ctx.dataRange.newestWeek || 'none'})
-• Periods: ${ctx.dataRange.periodsTracked}
-
-**Overall Performance:**
-• Total Revenue: $${ctx.insights.allTimeRevenue.toLocaleString()}
-• Total Profit: $${ctx.insights.allTimeProfit.toLocaleString()}
-• Overall Margin: ${ctx.insights.overallMargin.toFixed(1)}%
-• Avg Profit/Unit: $${ctx.insights.overallProfitPerUnit.toFixed(2)}
-
-**Recent Trend (4wk vs prior 4wk):**
-• Revenue: ${ctx.insights.recentVsPrior.revenueChange >= 0 ? '+' : ''}${ctx.insights.recentVsPrior.revenueChange.toFixed(1)}%
-• Profit: ${ctx.insights.recentVsPrior.profitChange >= 0 ? '+' : ''}${ctx.insights.recentVsPrior.profitChange.toFixed(1)}%
-
-**SKU Analysis:**
-• Total SKUs tracked: ${ctx.skuAnalysis.length}
-• Declining profit/unit: ${ctx.decliningSkus.length} SKUs ⚠️
-• Improving profit/unit: ${ctx.improvingSkus.length} SKUs ✅
-
-**Top 3 by Profit/Unit:**
-${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPerUnit.toFixed(2)}/unit (\${s.margin.toFixed(1)}% margin)\`).join('\\n')}
-
-**Inventory:** ${ctx.inventory ? \`\${ctx.inventory.totalUnits} units, \${ctx.inventory.lowStockItems.length} low stock\` : 'No data'}
-
-**Sales Tax:** ${ctx.salesTax.nexusStates.length} nexus states, $${ctx.salesTax.totalPaidAllTime.toFixed(2)} paid all time
-
-(Full data logged to browser console - press F12)`;
-                  setAiMessages(prev => [...prev, { role: 'assistant', content: summary }]);
-                }} 
-                className="p-2 hover:bg-white/20 rounded-lg text-white/70 hover:text-white"
-                title="Show data context"
-              >
-                <Database className="w-4 h-4" />
-              </button>
-              <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
-                <X className="w-5 h-5" />
-              </button>
+            <div>
+              <h3 className="text-white font-semibold">AI Assistant</h3>
+              <p className="text-white/70 text-xs">Ask about your business data</p>
             </div>
           </div>
-          
-          {/* Messages */}
-          <div className="h-80 overflow-y-auto p-4 space-y-4">
-            {aiMessages.length === 0 && (
-              <div className="text-center text-slate-400 py-8">
-                <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p className="text-sm">Ask me anything about your business!</p>
-                <p className="text-xs text-slate-500 mt-1">Click the 🗄️ icon to see what data I have access to</p>
-                <div className="mt-4 space-y-2">
-                  <button onClick={() => setAiInput("What was my total revenue last month?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "What was my total revenue last month?"</button>
-                  <button onClick={() => setAiInput("Which SKU is my best seller?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which SKU is my best seller?"</button>
-                  <button onClick={() => setAiInput("How is my profit margin trending?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "How is my profit margin trending?"</button>
-                  <button onClick={() => setAiInput("Do I have any low stock items?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Do I have any low stock items?"</button>
-                </div>
+          <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="h-80 overflow-y-auto p-4 space-y-4">
+          {aiMessages.length === 0 && (
+            <div className="text-center text-slate-400 py-8">
+              <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
+              <p className="text-sm">Ask me anything about your business!</p>
+              <div className="mt-4 space-y-2">
+                <button onClick={() => setAiInput("What was my total revenue last month?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "What was my total revenue last month?"</button>
+                <button onClick={() => setAiInput("Which SKU has the best profit per unit?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which SKU has the best profit per unit?"</button>
+                <button onClick={() => setAiInput("Which SKUs are declining in profitability?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which SKUs are declining in profitability?"</button>
               </div>
-            )}
-            {aiMessages.map((msg, i) => (
-              <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] rounded-2xl px-4 py-2 ${msg.role === 'user' ? 'bg-violet-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
-                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                </div>
-              </div>
-            ))}
-            {aiLoading && (
-              <div className="flex justify-start">
-                <div className="bg-slate-700 rounded-2xl px-4 py-3">
-                  <div className="flex gap-1">
-                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-          
-          {/* Input */}
-          <div className="p-4 border-t border-slate-700">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={aiInput}
-                onChange={(e) => setAiInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    sendMessage();
-                  }
-                }}
-                placeholder="Ask about your data..."
-                className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20"
-                autoComplete="off"
-                autoCorrect="off"
-                spellCheck="false"
-              />
-              <button
-                onClick={sendMessage}
-                disabled={!aiInput.trim() || aiLoading}
-                className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl text-white"
-              >
-                <Send className="w-4 h-4" />
-              </button>
             </div>
+          )}
+          {aiMessages.map((msg, i) => (
+            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[85%] rounded-2xl px-4 py-2 ${msg.role === 'user' ? 'bg-violet-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
+                <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+              </div>
+            </div>
+          ))}
+          {aiLoading && (
+            <div className="flex justify-start">
+              <div className="bg-slate-700 rounded-2xl px-4 py-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        
+        <div className="p-4 border-t border-slate-700">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={aiInput}
+              onChange={(e) => setAiInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendAIMessage(); } }}
+              placeholder="Ask about your data..."
+              className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-500"
+              autoComplete="off"
+            />
+            <button onClick={sendAIMessage} disabled={!aiInput.trim() || aiLoading} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl text-white">
+              <Send className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </div>
-    );
-  };
-  
-  // Floating AI Chat Button
-  const AIChatButton = () => (
-    !showAIChat && (
-      <button
-        onClick={() => setShowAIChat(true)}
-        className="fixed bottom-4 right-4 z-50 w-14 h-14 bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group"
-      >
-        <MessageSquare className="w-6 h-6 text-white" />
-        <span className="absolute right-full mr-3 px-3 py-1 bg-slate-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-          Ask AI Assistant
-        </span>
-      </button>
-    )
+    </div>
   );
+  
+  // AI Chat Button - rendered as JSX variable
+  const aiChatButton = !showAIChat && (
+    <button onClick={() => setShowAIChat(true)} className="fixed bottom-4 right-4 z-50 w-14 h-14 bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group">
+      <MessageSquare className="w-6 h-6 text-white" />
+      <span className="absolute right-full mr-3 px-3 py-1 bg-slate-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Ask AI Assistant</span>
+    </button>
+  );
+
   
   // Calculate dashboard metrics based on selected range
   const dashboardMetrics = useMemo(() => {
@@ -2662,7 +2437,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -2968,7 +2743,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -3084,7 +2859,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -3102,7 +2877,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -3127,7 +2902,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -3162,7 +2937,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     const data = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -3266,7 +3041,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -3292,7 +3067,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -3329,7 +3104,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -3545,7 +3320,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -3728,7 +3503,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4076,7 +3851,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4388,7 +4163,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     if (!hasWeeklyData && !hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -4408,7 +4183,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     if (!hasWeeklyData && hasPeriodData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -4470,7 +4245,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -4865,7 +4640,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5119,7 +4894,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5289,7 +5064,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           <NavTabs />
           {dataBar}
           
@@ -5825,7 +5600,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -6199,7 +5974,7 @@ ${ctx.skusByProfitPerUnit.slice(0,3).map(s => \`  • \${s.sku}: $\${s.profitPer
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><AIChat /><AIChatButton /><CogsManager /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast />{aiChatUI}{aiChatButton}<CogsManager /><GoalsModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
