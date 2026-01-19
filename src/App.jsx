@@ -8280,26 +8280,75 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       const week = allWeeksData[w];
       const metrics = week.shopify?.threeplMetrics || {};
       const breakdown = week.shopify?.threeplBreakdown || {};
+      
+      // Also check ledger for this week's data
+      const ledgerData = get3PLForWeek(threeplLedger, w);
+      
+      // Merge: prefer ledger data if available, fall back to week data
+      const finalMetrics = ledgerData?.metrics || metrics;
+      const finalBreakdown = ledgerData?.breakdown || breakdown;
+      const finalCost = ledgerData?.metrics?.totalCost || week.shopify?.threeplCosts || 0;
+      
       return {
         week: w,
         type: 'week',
         label: new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        totalCost: week.shopify?.threeplCosts || 0,
-        orderCount: metrics.orderCount || 0,
-        totalUnits: metrics.totalUnits || 0,
-        avgCostPerOrder: metrics.avgCostPerOrder || 0,
-        avgShippingCost: metrics.avgShippingCost || 0,
-        avgPickCost: metrics.avgPickCost || 0,
-        avgPackagingCost: metrics.avgPackagingCost || 0,
-        avgUnitsPerOrder: metrics.avgUnitsPerOrder || 0,
-        storage: breakdown.storage || 0,
-        shipping: breakdown.shipping || 0,
-        pickFees: breakdown.pickFees || 0,
-        boxCharges: breakdown.boxCharges || 0,
-        receiving: breakdown.receiving || 0,
+        totalCost: finalCost,
+        orderCount: finalMetrics.orderCount || 0,
+        totalUnits: finalMetrics.totalUnits || 0,
+        avgCostPerOrder: finalMetrics.avgCostPerOrder || 0,
+        avgShippingCost: finalMetrics.avgShippingCost || 0,
+        avgPickCost: finalMetrics.avgPickCost || 0,
+        avgPackagingCost: finalMetrics.avgPackagingCost || 0,
+        avgUnitsPerOrder: finalMetrics.avgUnitsPerOrder || 0,
+        storage: finalBreakdown.storage || 0,
+        shipping: finalBreakdown.shipping || 0,
+        pickFees: finalBreakdown.pickFees || 0,
+        boxCharges: finalBreakdown.boxCharges || 0,
+        receiving: finalBreakdown.receiving || 0,
         revenue: week.shopify?.revenue || 0,
+        fromLedger: !!ledgerData,
+        carrierBreakdown: finalMetrics.carrierBreakdown || {},
+        stateBreakdown: finalMetrics.stateBreakdown || {},
       };
     }).filter(d => d.totalCost > 0);
+    
+    // Get weeks from ledger that aren't in allWeeksData
+    const ledgerWeeks = new Set(Object.values(threeplLedger.orders || {}).map(o => o.weekKey));
+    const existingWeeks = new Set(sortedWeeks);
+    const ledgerOnlyWeeks = [...ledgerWeeks].filter(w => !existingWeeks.has(w)).sort();
+    
+    // Add ledger-only weeks to weeklyData
+    ledgerOnlyWeeks.forEach(w => {
+      const ledgerData = get3PLForWeek(threeplLedger, w);
+      if (ledgerData && ledgerData.metrics.totalCost > 0) {
+        weeklyData.push({
+          week: w,
+          type: 'week',
+          label: new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          totalCost: ledgerData.metrics.totalCost,
+          orderCount: ledgerData.metrics.orderCount || 0,
+          totalUnits: ledgerData.metrics.totalUnits || 0,
+          avgCostPerOrder: ledgerData.metrics.avgCostPerOrder || 0,
+          avgShippingCost: ledgerData.metrics.avgShippingCost || 0,
+          avgPickCost: ledgerData.metrics.avgPickCost || 0,
+          avgPackagingCost: ledgerData.metrics.avgPackagingCost || 0,
+          avgUnitsPerOrder: ledgerData.metrics.avgUnitsPerOrder || 0,
+          storage: ledgerData.breakdown.storage || 0,
+          shipping: ledgerData.breakdown.shipping || 0,
+          pickFees: ledgerData.breakdown.pickFees || 0,
+          boxCharges: ledgerData.breakdown.boxCharges || 0,
+          receiving: ledgerData.breakdown.receiving || 0,
+          revenue: 0,
+          fromLedger: true,
+          carrierBreakdown: ledgerData.metrics.carrierBreakdown || {},
+          stateBreakdown: ledgerData.metrics.stateBreakdown || {},
+        });
+      }
+    });
+    
+    // Sort weeklyData by week
+    weeklyData.sort((a, b) => a.week.localeCompare(b.week));
     
     // Also get Period 3PL data
     const periodData = Object.entries(allPeriodsData).map(([key, period]) => {
@@ -8386,8 +8435,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     // Check if we have any 3PL data at all
     const hasWeeklyData = weeklyData.length > 0;
     const hasPeriodData = periodData.length > 0;
+    const hasLedgerData = Object.keys(threeplLedger.orders || {}).length > 0;
     
-    if (!hasWeeklyData && !hasPeriodData) {
+    if (!hasWeeklyData && !hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
           <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
@@ -8413,8 +8463,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       );
     }
     
-    // If only period data, show a different view
-    if (!hasWeeklyData && hasPeriodData) {
+    // If only period data (no weekly and no ledger), show a different view
+    if (!hasWeeklyData && hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
           <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
