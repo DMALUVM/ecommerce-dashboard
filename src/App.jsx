@@ -68,6 +68,97 @@ const lsSet = (key, value) => {
   try { localStorage.setItem(key, value); } catch {}
 };
 
+// Enhanced 3PL parsing - extracts detailed metrics from 3PL CSV files
+const parse3PLData = (threeplFiles) => {
+  const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+  const metrics = {
+    totalCost: 0,
+    orderCount: 0,
+    totalUnits: 0,
+    avgShippingCost: 0,
+    avgPickCost: 0,
+    avgPackagingCost: 0,
+    avgCostPerOrder: 0,
+    avgUnitsPerOrder: 0,
+    shippingCount: 0,
+    firstPickCount: 0,
+    additionalPickCount: 0,
+  };
+  
+  if (!threeplFiles) return { breakdown, metrics };
+  
+  // Normalize to array of file data arrays
+  // threeplFiles could be:
+  // 1. null/undefined -> return empty
+  // 2. Array of row objects (single file): [{Charge: x}, {Charge: y}] 
+  // 3. Array of arrays (multiple files): [[{row1}, {row2}], [{row1}, {row2}]]
+  let filesArray;
+  if (Array.isArray(threeplFiles)) {
+    // Check if first element is an array (multiple files) or an object (single file's rows)
+    if (threeplFiles.length > 0 && Array.isArray(threeplFiles[0])) {
+      // Multiple files: [[rows], [rows]]
+      filesArray = threeplFiles;
+    } else {
+      // Single file: [rows] - wrap it
+      filesArray = [threeplFiles];
+    }
+  } else {
+    // Single non-array item (shouldn't happen but handle it)
+    filesArray = [[threeplFiles]];
+  }
+  
+  filesArray.forEach(fileData => {
+    if (!fileData || !Array.isArray(fileData)) return;
+    fileData.forEach(r => {
+      if (!r || typeof r !== 'object') return;
+      const charge = r['Charge On Invoice'] || '';
+      const amount = parseFloat(r['Amount Total ($)'] || 0);
+      const count = parseInt(r['Count Total'] || 0);
+      const avg = parseFloat(r['Average ($)'] || 0);
+      const chargeLower = charge.toLowerCase();
+      
+      metrics.totalCost += amount;
+      
+      if (chargeLower.includes('storage')) {
+        breakdown.storage += amount;
+      } else if (chargeLower.includes('shipping')) {
+        breakdown.shipping += amount;
+        metrics.shippingCount += count;
+        metrics.avgShippingCost = avg; // Use the average from the row
+      } else if (chargeLower.includes('first pick')) {
+        breakdown.pickFees += amount;
+        metrics.firstPickCount += count;
+        metrics.orderCount += count; // First pick count = order count
+      } else if (chargeLower.includes('additional pick')) {
+        breakdown.pickFees += amount;
+        metrics.additionalPickCount += count;
+      } else if (chargeLower.includes('pick')) {
+        breakdown.pickFees += amount;
+      } else if (chargeLower.includes('box') || chargeLower.includes('mailer')) {
+        breakdown.boxCharges += amount;
+      } else if (chargeLower.includes('receiving')) {
+        breakdown.receiving += amount;
+      } else {
+        breakdown.other += amount;
+      }
+    });
+  });
+  
+  // Calculate derived metrics
+  metrics.totalUnits = metrics.firstPickCount + metrics.additionalPickCount;
+  
+  if (metrics.orderCount > 0) {
+    metrics.avgPickCost = breakdown.pickFees / metrics.orderCount;
+    metrics.avgPackagingCost = breakdown.boxCharges / metrics.orderCount;
+    // Fulfillment cost = everything except storage
+    const fulfillmentCost = metrics.totalCost - breakdown.storage;
+    metrics.avgCostPerOrder = fulfillmentCost / metrics.orderCount;
+    metrics.avgUnitsPerOrder = metrics.totalUnits / metrics.orderCount;
+  }
+  
+  return { breakdown, metrics };
+};
+
 export default function Dashboard() {
   const [view, setView] = useState('upload');
   const [weekEnding, setWeekEnding] = useState('');
@@ -81,6 +172,7 @@ export default function Dashboard() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [reprocessPeriod, setReprocessPeriod] = useState(null); // For period reprocessing
+  const [threeplTimeView, setThreeplTimeView] = useState('weekly'); // For 3PL analytics view
 
   const [storeName, setStoreName] = useState('');
 
@@ -462,76 +554,6 @@ const savePeriods = async (d) => {
   } catch {}
 };
 
-// Enhanced 3PL parsing - extracts detailed metrics from 3PL CSV files
-const parse3PLData = (threeplFiles) => {
-  const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
-  const metrics = {
-    totalCost: 0,
-    orderCount: 0,
-    totalUnits: 0,
-    avgShippingCost: 0,
-    avgPickCost: 0,
-    avgPackagingCost: 0,
-    avgCostPerOrder: 0,
-    avgUnitsPerOrder: 0,
-    shippingCount: 0,
-    firstPickCount: 0,
-    additionalPickCount: 0,
-  };
-  
-  const filesArray = Array.isArray(threeplFiles) ? threeplFiles : (threeplFiles ? [threeplFiles] : []);
-  
-  filesArray.forEach(fileData => {
-    if (!fileData) return;
-    fileData.forEach(r => {
-      const charge = r['Charge On Invoice'] || '';
-      const amount = parseFloat(r['Amount Total ($)'] || 0);
-      const count = parseInt(r['Count Total'] || 0);
-      const avg = parseFloat(r['Average ($)'] || 0);
-      const chargeLower = charge.toLowerCase();
-      
-      metrics.totalCost += amount;
-      
-      if (chargeLower.includes('storage')) {
-        breakdown.storage += amount;
-      } else if (chargeLower.includes('shipping')) {
-        breakdown.shipping += amount;
-        metrics.shippingCount += count;
-        metrics.avgShippingCost = avg; // Use the average from the row
-      } else if (chargeLower.includes('first pick')) {
-        breakdown.pickFees += amount;
-        metrics.firstPickCount += count;
-        metrics.orderCount += count; // First pick count = order count
-      } else if (chargeLower.includes('additional pick')) {
-        breakdown.pickFees += amount;
-        metrics.additionalPickCount += count;
-      } else if (chargeLower.includes('pick')) {
-        breakdown.pickFees += amount;
-      } else if (chargeLower.includes('box') || chargeLower.includes('mailer')) {
-        breakdown.boxCharges += amount;
-      } else if (chargeLower.includes('receiving')) {
-        breakdown.receiving += amount;
-      } else {
-        breakdown.other += amount;
-      }
-    });
-  });
-  
-  // Calculate derived metrics
-  metrics.totalUnits = metrics.firstPickCount + metrics.additionalPickCount;
-  
-  if (metrics.orderCount > 0) {
-    metrics.avgPickCost = breakdown.pickFees / metrics.orderCount;
-    metrics.avgPackagingCost = breakdown.boxCharges / metrics.orderCount;
-    // Fulfillment cost = everything except storage
-    const fulfillmentCost = metrics.totalCost - breakdown.storage;
-    metrics.avgCostPerOrder = fulfillmentCost / metrics.orderCount;
-    metrics.avgUnitsPerOrder = metrics.totalUnits / metrics.orderCount;
-  }
-  
-  return { breakdown, metrics };
-};
-
   const handleFile = useCallback((type, file, isInv = false) => {
     if (!file) return;
     const reader = new FileReader();
@@ -582,6 +604,7 @@ const parse3PLData = (threeplFiles) => {
   }, []);
 
   const reprocessWeek = useCallback((weekKey) => {
+    try {
     const cogsLookup = { ...savedCogs };
     if (!reprocessFiles.amazon || !reprocessFiles.shopify) { alert('Upload Amazon & Shopify files'); return; }
     if (Object.keys(cogsLookup).length === 0) { alert('Set up COGS first'); return; }
@@ -624,20 +647,11 @@ const parse3PLData = (threeplFiles) => {
       }
     });
 
-    let threeplCost = 0;
-    const threeplBreakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
-    if (reprocessFiles.threepl) reprocessFiles.threepl.forEach(r => { 
-      const charge = r['Charge On Invoice'] || '';
-      const amount = parseFloat(r['Amount Total ($)'] || 0);
-      threeplCost += amount;
-      const chargeLower = charge.toLowerCase();
-      if (chargeLower.includes('storage')) threeplBreakdown.storage += amount;
-      else if (chargeLower.includes('shipping')) threeplBreakdown.shipping += amount;
-      else if (chargeLower.includes('pick')) threeplBreakdown.pickFees += amount;
-      else if (chargeLower.includes('box') || chargeLower.includes('mailer')) threeplBreakdown.boxCharges += amount;
-      else if (chargeLower.includes('receiving')) threeplBreakdown.receiving += amount;
-      else threeplBreakdown.other += amount;
-    });
+    // Use enhanced 3PL parser
+    const threeplData = parse3PLData(reprocessFiles.threepl);
+    const threeplCost = threeplData.metrics.totalCost;
+    const threeplBreakdown = threeplData.breakdown;
+    const threeplMetrics = threeplData.metrics;
 
     const metaS = parseFloat(reprocessAdSpend.meta) || 0, googleS = parseFloat(reprocessAdSpend.google) || 0, shopAds = metaS + googleS;
     const shopProfit = shopRev - shopCogs - threeplCost - shopAds;
@@ -651,7 +665,7 @@ const parse3PLData = (threeplFiles) => {
       amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, netProfit: amzProfit, 
         margin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
         returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
-      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, threeplCosts: threeplCost, threeplBreakdown, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
+      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, threeplCosts: threeplCost, threeplBreakdown, threeplMetrics, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
         netMargin: shopRev > 0 ? (shopProfit/shopRev)*100 : 0, aov: shopUnits > 0 ? shopRev/shopUnits : 0, roas: shopAds > 0 ? shopRev/shopAds : 0, skuData: shopifySkus },
       total: { revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds, netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0, roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0, amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0, shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0 }
     };
@@ -662,6 +676,10 @@ const parse3PLData = (threeplFiles) => {
     setReprocessFiles({ amazon: null, shopify: null, threepl: null });
     setReprocessFileNames({ amazon: '', shopify: '', threepl: '' });
     setReprocessAdSpend({ meta: '', google: '' });
+    } catch (err) {
+      console.error('Reprocess error:', err);
+      alert('Error reprocessing: ' + err.message);
+    }
   }, [reprocessFiles, reprocessAdSpend, allWeeksData, savedCogs]);
 
   const getCogsLookup = useCallback(() => {
@@ -2056,27 +2074,16 @@ if (supabase && isAuthReady && session && isLocked) {
                     const existing = allPeriodsData[reprocessPeriod];
                     if (!existing) return;
                     
-                    // Calculate new 3PL costs from uploaded files
+                    // Use enhanced 3PL parser for full metrics
                     let newThreeplCost = existing.shopify?.threeplCosts || 0;
-                    const newBreakdown = { ...(existing.shopify?.threeplBreakdown || { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 }) };
+                    let newBreakdown = existing.shopify?.threeplBreakdown || { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+                    let newMetrics = existing.shopify?.threeplMetrics || null;
                     
                     if (periodFiles.threepl?.length > 0) {
-                      newThreeplCost = 0;
-                      Object.keys(newBreakdown).forEach(k => newBreakdown[k] = 0);
-                      periodFiles.threepl.forEach(fileData => {
-                        fileData.forEach(r => {
-                          const charge = r['Charge On Invoice'] || '';
-                          const amount = parseFloat(r['Amount Total ($)'] || 0);
-                          newThreeplCost += amount;
-                          const chargeLower = charge.toLowerCase();
-                          if (chargeLower.includes('storage')) newBreakdown.storage += amount;
-                          else if (chargeLower.includes('shipping')) newBreakdown.shipping += amount;
-                          else if (chargeLower.includes('pick')) newBreakdown.pickFees += amount;
-                          else if (chargeLower.includes('box') || chargeLower.includes('mailer')) newBreakdown.boxCharges += amount;
-                          else if (chargeLower.includes('receiving')) newBreakdown.receiving += amount;
-                          else newBreakdown.other += amount;
-                        });
-                      });
+                      const threeplData = parse3PLData(periodFiles.threepl);
+                      newThreeplCost = threeplData.metrics.totalCost;
+                      newBreakdown = threeplData.breakdown;
+                      newMetrics = threeplData.metrics;
                     }
                     
                     // Update ad spend if provided
@@ -2100,6 +2107,7 @@ if (supabase && isAuthReady && session && isLocked) {
                           ...existing.shopify,
                           threeplCosts: newThreeplCost,
                           threeplBreakdown: newBreakdown,
+                          threeplMetrics: newMetrics,
                           metaSpend: newMeta,
                           googleSpend: newGoogle,
                           adSpend: newShopAds,
@@ -3031,8 +3039,9 @@ if (supabase && isAuthReady && session && isLocked) {
     const maxWeeklyCost = Math.max(...weeklyData.map(d => d.totalCost), 1);
     const maxMonthlyCost = Math.max(...months.map(d => d.totalCost), 1);
     
-    // Toggle between weekly and monthly view
-    const [timeView, setTimeView] = useState('weekly');
+    // Use component-level state for time view toggle
+    const timeView = threeplTimeView;
+    const setTimeView = setThreeplTimeView;
     
     // Check if we have any 3PL data at all
     const hasWeeklyData = weeklyData.length > 0;
