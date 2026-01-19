@@ -397,6 +397,9 @@ export default function Dashboard() {
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [reprocessPeriod, setReprocessPeriod] = useState(null); // For period reprocessing
   const [threeplTimeView, setThreeplTimeView] = useState('weekly'); // For 3PL analytics view
+  const [threeplDateRange, setThreeplDateRange] = useState('4weeks'); // 'week' | '4weeks' | 'month' | 'quarter' | 'year' | 'all' | 'custom'
+  const [threeplCustomStart, setThreeplCustomStart] = useState('');
+  const [threeplCustomEnd, setThreeplCustomEnd] = useState('');
   const [uploadTab, setUploadTab] = useState('weekly'); // For upload view tabs
   const [dashboardRange, setDashboardRange] = useState('month'); // 'week' | 'month' | 'quarter' | 'year'
 
@@ -8403,11 +8406,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
   // ==================== 3PL ANALYTICS VIEW ====================
   if (view === '3pl') {
     const sortedWeeks = Object.keys(allWeeksData).sort();
-    
-    // Date range state for 3PL filtering
-    const [threeplDateRange, setThreeplDateRange] = useState('4weeks'); // 'week' | '4weeks' | 'month' | 'quarter' | 'year' | 'all' | 'custom'
-    const [threeplCustomStart, setThreeplCustomStart] = useState('');
-    const [threeplCustomEnd, setThreeplCustomEnd] = useState('');
     
     // Calculate date boundaries based on selected range
     const getDateBoundaries = () => {
