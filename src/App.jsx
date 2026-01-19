@@ -52,6 +52,7 @@ const NOTES_KEY = 'ecommerce_notes_v1';
 const WIDGET_KEY = 'ecommerce_widgets_v1';
 const THEME_KEY = 'ecommerce_theme_v1';
 const INVOICES_KEY = 'ecommerce_invoices_v1';
+const AMAZON_FORECAST_KEY = 'ecommerce_amazon_forecast_v1';
 
 // Supabase (cloud auth + storage)
 // Create a .env.local file in your Vite project with:
@@ -365,6 +366,16 @@ const handleLogout = async () => {
   const [editingInvoice, setEditingInvoice] = useState(null);
   const [invoiceForm, setInvoiceForm] = useState({ vendor: '', description: '', amount: '', dueDate: '', recurring: false, frequency: 'monthly', category: 'operations' });
   const [processingPdf, setProcessingPdf] = useState(false);
+  
+  // Amazon Forecasts (from Amazon's SKU Economics forecast reports)
+  const [amazonForecasts, setAmazonForecasts] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(AMAZON_FORECAST_KEY)) || {}; } catch { return {}; }
+  });
+  
+  // Save Amazon forecasts to localStorage
+  useEffect(() => {
+    localStorage.setItem(AMAZON_FORECAST_KEY, JSON.stringify(amazonForecasts));
+  }, [amazonForecasts]);
   
   // Save invoices to localStorage
   useEffect(() => {
@@ -1562,63 +1573,229 @@ const savePeriods = async (d) => {
   // 5. FORECASTING - Simple linear regression based forecast
   const generateForecast = useMemo(() => {
     const sortedWeeks = Object.keys(allWeeksData).sort();
-    if (sortedWeeks.length < 4) return null;
     
-    const recentWeeks = sortedWeeks.slice(-8); // Use last 8 weeks for trend
-    const revenues = recentWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
-    const profits = recentWeeks.map(w => allWeeksData[w]?.total?.netProfit || 0);
-    const units = recentWeeks.map(w => allWeeksData[w]?.total?.units || 0);
-    
-    // Simple linear regression
-    const calcTrend = (data) => {
-      const n = data.length;
-      const sumX = data.reduce((s, _, i) => s + i, 0);
-      const sumY = data.reduce((s, v) => s + v, 0);
-      const sumXY = data.reduce((s, v, i) => s + i * v, 0);
-      const sumX2 = data.reduce((s, _, i) => s + i * i, 0);
-      const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-      const intercept = (sumY - slope * sumX) / n;
-      return { slope, intercept, avg: sumY / n };
-    };
-    
-    const revTrend = calcTrend(revenues);
-    const profTrend = calcTrend(profits);
-    const unitTrend = calcTrend(units);
-    
-    // Project next 4 weeks
-    const n = revenues.length;
-    const forecast = [];
-    for (let i = 0; i < 4; i++) {
-      const weekNum = n + i;
-      forecast.push({
-        week: `Week +${i + 1}`,
-        revenue: Math.max(0, revTrend.intercept + revTrend.slope * weekNum),
-        profit: profTrend.intercept + profTrend.slope * weekNum,
-        units: Math.max(0, Math.round(unitTrend.intercept + unitTrend.slope * weekNum)),
-      });
+    // If we have 4+ weeks of weekly data, use that (most accurate)
+    if (sortedWeeks.length >= 4) {
+      const recentWeeks = sortedWeeks.slice(-8); // Use last 8 weeks for trend
+      const revenues = recentWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
+      const profits = recentWeeks.map(w => allWeeksData[w]?.total?.netProfit || 0);
+      const units = recentWeeks.map(w => allWeeksData[w]?.total?.units || 0);
+      
+      // Simple linear regression
+      const calcTrend = (data) => {
+        const n = data.length;
+        const sumX = data.reduce((s, _, i) => s + i, 0);
+        const sumY = data.reduce((s, v) => s + v, 0);
+        const sumXY = data.reduce((s, v, i) => s + i * v, 0);
+        const sumX2 = data.reduce((s, _, i) => s + i * i, 0);
+        const denom = n * sumX2 - sumX * sumX;
+        const slope = denom !== 0 ? (n * sumXY - sumX * sumY) / denom : 0;
+        const intercept = (sumY - slope * sumX) / n;
+        return { slope, intercept, avg: sumY / n };
+      };
+      
+      const revTrend = calcTrend(revenues);
+      const profTrend = calcTrend(profits);
+      const unitTrend = calcTrend(units);
+      
+      // Project next 4 weeks
+      const n = revenues.length;
+      const forecast = [];
+      for (let i = 0; i < 4; i++) {
+        const weekNum = n + i;
+        forecast.push({
+          week: `Week +${i + 1}`,
+          revenue: Math.max(0, revTrend.intercept + revTrend.slope * weekNum),
+          profit: profTrend.intercept + profTrend.slope * weekNum,
+          units: Math.max(0, Math.round(unitTrend.intercept + unitTrend.slope * weekNum)),
+        });
+      }
+      
+      const monthlyRevenue = forecast.reduce((s, f) => s + f.revenue, 0);
+      const monthlyProfit = forecast.reduce((s, f) => s + f.profit, 0);
+      const monthlyUnits = forecast.reduce((s, f) => s + f.units, 0);
+      
+      const variance = revenues.reduce((s, v) => s + Math.pow(v - revTrend.avg, 2), 0) / revenues.length;
+      const stdDev = Math.sqrt(variance);
+      const confidence = revTrend.avg > 0 ? Math.max(0, Math.min(100, 100 - (stdDev / revTrend.avg * 100))) : 0;
+      
+      return {
+        weekly: forecast,
+        monthly: { revenue: monthlyRevenue, profit: monthlyProfit, units: monthlyUnits },
+        trend: { 
+          revenue: revTrend.slope > 0 ? 'up' : revTrend.slope < 0 ? 'down' : 'flat',
+          revenueChange: revTrend.avg > 0 ? (revTrend.slope / revTrend.avg * 100) : 0,
+        },
+        confidence: confidence.toFixed(0),
+        basedOn: recentWeeks.length,
+        source: 'weekly',
+      };
     }
     
-    // Calculate monthly totals (4 weeks)
-    const monthlyRevenue = forecast.reduce((s, f) => s + f.revenue, 0);
-    const monthlyProfit = forecast.reduce((s, f) => s + f.profit, 0);
-    const monthlyUnits = forecast.reduce((s, f) => s + f.units, 0);
+    // Fallback: Use period data if available (less accurate, uses averages)
+    const sortedPeriods = Object.keys(allPeriodsData).sort();
+    if (sortedPeriods.length >= 1) {
+      // Calculate totals from all periods
+      let totalRevenue = 0, totalProfit = 0, totalUnits = 0, totalMonths = 0;
+      
+      sortedPeriods.forEach(p => {
+        const period = allPeriodsData[p];
+        const rev = (period.amazon?.revenue || 0) + (period.shopify?.revenue || 0);
+        const profit = (period.amazon?.netProfit || 0) + (period.shopify?.netProfit || 0);
+        const units = (period.amazon?.units || 0) + (period.shopify?.units || 0);
+        
+        // Estimate months in period (rough)
+        const startDate = new Date(period.startDate || p);
+        const endDate = new Date(period.endDate || p);
+        const months = Math.max(1, Math.round((endDate - startDate) / (1000 * 60 * 60 * 24 * 30)));
+        
+        totalRevenue += rev;
+        totalProfit += profit;
+        totalUnits += units;
+        totalMonths += months;
+      });
+      
+      // Calculate monthly averages
+      const avgMonthlyRevenue = totalMonths > 0 ? totalRevenue / totalMonths : totalRevenue;
+      const avgMonthlyProfit = totalMonths > 0 ? totalProfit / totalMonths : totalProfit;
+      const avgMonthlyUnits = totalMonths > 0 ? totalUnits / totalMonths : totalUnits;
+      
+      // Weekly projections (divide monthly by 4)
+      const weeklyRevenue = avgMonthlyRevenue / 4;
+      const weeklyProfit = avgMonthlyProfit / 4;
+      const weeklyUnits = Math.round(avgMonthlyUnits / 4);
+      
+      const forecast = [
+        { week: 'Week +1', revenue: weeklyRevenue, profit: weeklyProfit, units: weeklyUnits },
+        { week: 'Week +2', revenue: weeklyRevenue, profit: weeklyProfit, units: weeklyUnits },
+        { week: 'Week +3', revenue: weeklyRevenue, profit: weeklyProfit, units: weeklyUnits },
+        { week: 'Week +4', revenue: weeklyRevenue, profit: weeklyProfit, units: weeklyUnits },
+      ];
+      
+      return {
+        weekly: forecast,
+        monthly: { revenue: avgMonthlyRevenue, profit: avgMonthlyProfit, units: Math.round(avgMonthlyUnits) },
+        trend: { revenue: 'flat', revenueChange: 0 },
+        confidence: '50', // Lower confidence for period-based forecast
+        basedOn: sortedPeriods.length,
+        source: 'period',
+        note: 'Based on period averages. Upload weekly data for trend analysis.',
+      };
+    }
     
-    // Confidence based on data consistency
-    const variance = revenues.reduce((s, v) => s + Math.pow(v - revTrend.avg, 2), 0) / revenues.length;
-    const stdDev = Math.sqrt(variance);
-    const confidence = revTrend.avg > 0 ? Math.max(0, Math.min(100, 100 - (stdDev / revTrend.avg * 100))) : 0;
+    return null;
+  }, [allWeeksData, allPeriodsData]);
+
+  // AMAZON FORECAST - Parse and store Amazon's forecast data
+  const processAmazonForecast = (csvData) => {
+    if (!csvData || csvData.length === 0) return null;
+    
+    // Get date range from first row
+    const startDate = csvData[0]['Start date'];
+    const endDate = csvData[0]['End date'];
+    const weekKey = endDate ? getSunday(new Date(endDate)) : null;
+    
+    if (!weekKey) return null;
+    
+    // Aggregate forecast data
+    let totalUnits = 0, totalSales = 0, totalProceeds = 0, totalAds = 0;
+    const skuForecasts = {};
+    
+    csvData.forEach(r => {
+      const sku = r['MSKU'] || '';
+      const units = parseInt(r['Net units sold'] || r['Units sold'] || 0);
+      const sales = parseFloat(r['Net sales'] || r['Sales'] || 0);
+      const proceeds = parseFloat(r['Net proceeds total'] || 0);
+      const ads = parseFloat(r['Sponsored Products charge total'] || 0);
+      const cogs = parseFloat(r['Cost of goods sold per unit'] || 0);
+      
+      if (units > 0 || sales > 0) {
+        totalUnits += units;
+        totalSales += sales;
+        totalProceeds += proceeds;
+        totalAds += ads;
+        
+        if (sku) {
+          skuForecasts[sku] = {
+            sku,
+            units,
+            sales,
+            proceeds,
+            ads,
+            cogsPerUnit: cogs,
+            profitPerUnit: units > 0 ? proceeds / units : 0,
+          };
+        }
+      }
+    });
     
     return {
-      weekly: forecast,
-      monthly: { revenue: monthlyRevenue, profit: monthlyProfit, units: monthlyUnits },
-      trend: { 
-        revenue: revTrend.slope > 0 ? 'up' : revTrend.slope < 0 ? 'down' : 'flat',
-        revenueChange: revTrend.avg > 0 ? (revTrend.slope / revTrend.avg * 100) : 0,
+      weekEnding: weekKey,
+      startDate,
+      endDate,
+      uploadedAt: new Date().toISOString(),
+      totals: {
+        units: totalUnits,
+        sales: totalSales,
+        proceeds: totalProceeds,
+        ads: totalAds,
+        profitPerUnit: totalUnits > 0 ? totalProceeds / totalUnits : 0,
       },
-      confidence: confidence.toFixed(0),
-      basedOn: recentWeeks.length,
+      skus: skuForecasts,
+      skuCount: Object.keys(skuForecasts).length,
     };
-  }, [allWeeksData]);
+  };
+
+  // Compare Amazon forecast vs actual results
+  const getAmazonForecastComparison = useMemo(() => {
+    const comparisons = [];
+    
+    Object.entries(amazonForecasts).forEach(([weekKey, forecast]) => {
+      const actual = allWeeksData[weekKey];
+      if (actual && actual.amazon) {
+        const forecastRev = forecast.totals.sales;
+        const actualRev = actual.amazon.revenue || 0;
+        const forecastUnits = forecast.totals.units;
+        const actualUnits = actual.amazon.units || 0;
+        const forecastProfit = forecast.totals.proceeds;
+        const actualProfit = actual.amazon.netProfit || 0;
+        
+        comparisons.push({
+          weekEnding: weekKey,
+          forecast: {
+            revenue: forecastRev,
+            units: forecastUnits,
+            profit: forecastProfit,
+          },
+          actual: {
+            revenue: actualRev,
+            units: actualUnits,
+            profit: actualProfit,
+          },
+          variance: {
+            revenue: actualRev - forecastRev,
+            revenuePercent: forecastRev > 0 ? ((actualRev - forecastRev) / forecastRev * 100) : 0,
+            units: actualUnits - forecastUnits,
+            unitsPercent: forecastUnits > 0 ? ((actualUnits - forecastUnits) / forecastUnits * 100) : 0,
+            profit: actualProfit - forecastProfit,
+            profitPercent: forecastProfit > 0 ? ((actualProfit - forecastProfit) / forecastProfit * 100) : 0,
+          },
+          status: actualRev >= forecastRev ? 'beat' : 'missed',
+        });
+      }
+    });
+    
+    return comparisons.sort((a, b) => b.weekEnding.localeCompare(a.weekEnding));
+  }, [amazonForecasts, allWeeksData]);
+
+  // Get upcoming Amazon forecasts (weeks we haven't reached yet)
+  const upcomingAmazonForecasts = useMemo(() => {
+    const today = new Date();
+    return Object.entries(amazonForecasts)
+      .filter(([weekKey]) => new Date(weekKey) > today)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([weekKey, data]) => ({ weekEnding: weekKey, ...data }));
+  }, [amazonForecasts]);
 
   // 7. BREAK-EVEN CALCULATOR
   const calculateBreakEven = (adSpend, cogs, price, conversionRate) => {
@@ -2195,7 +2372,7 @@ if (supabase && isAuthReady && session && isLocked) {
       {appSettings.modulesEnabled?.trends !== false && (
         <button onClick={() => setView('trends')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'trends' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><TrendingUp className="w-4 h-4 inline mr-1" />Trends</button>
       )}
-      <button onClick={() => setView('analytics')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'analytics' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />Analytics</button>
+      <button onClick={() => setView('analytics')} disabled={Object.keys(allWeeksData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'analytics' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />Analytics</button>
       {appSettings.modulesEnabled?.yoy !== false && (
         <button onClick={() => setView('yoy')} disabled={Object.keys(allWeeksData).length < 2 && Object.keys(allPeriodsData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'yoy' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><GitCompare className="w-4 h-4 inline mr-1" />YoY</button>
       )}
@@ -2589,8 +2766,13 @@ if (supabase && isAuthReady && session && isLocked) {
           <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
             <div className="flex items-center justify-between mb-2">
               <span className="text-slate-400">Based on</span>
-              <span className="text-white font-medium">{f.basedOn} weeks of data</span>
+              <span className="text-white font-medium">{f.basedOn} {f.source === 'period' ? 'period(s)' : 'weeks'} of data</span>
             </div>
+            {f.source === 'period' && (
+              <div className="mb-2 p-2 bg-amber-900/30 border border-amber-500/30 rounded-lg">
+                <p className="text-amber-300 text-xs">⚠️ Using period averages. Upload weekly data for trend analysis.</p>
+              </div>
+            )}
             <div className="flex items-center justify-between mb-2">
               <span className="text-slate-400">Trend Direction</span>
               <span className={`font-medium flex items-center gap-1 ${f.trend.revenue === 'up' ? 'text-emerald-400' : f.trend.revenue === 'down' ? 'text-rose-400' : 'text-slate-400'}`}>
@@ -3521,13 +3703,32 @@ Upcoming bills (${invoices.filter(i => !i.paid).length} total, $${invoices.filte
 ${JSON.stringify(invoices.filter(i => !i.paid).map(i => ({ vendor: i.vendor, amount: i.amount, dueDate: i.dueDate, category: i.category, daysUntilDue: Math.ceil((new Date(i.dueDate) - new Date()) / (1000 * 60 * 60 * 24)) })))}
 ` : 'No upcoming bills'}
 
+=== AMAZON FORECASTS (from Amazon's projections) ===
+${upcomingAmazonForecasts.length > 0 ? `
+Upcoming Amazon projections:
+${JSON.stringify(upcomingAmazonForecasts.map(f => ({ weekEnding: f.weekEnding, projectedRevenue: f.totals.sales, projectedUnits: f.totals.units, projectedProfit: f.totals.proceeds, skuCount: f.skuCount })))}
+` : 'No upcoming Amazon forecasts uploaded'}
+
+${getAmazonForecastComparison.length > 0 ? `
+Forecast vs Actual Accuracy (Amazon):
+${JSON.stringify(getAmazonForecastComparison.slice(0, 8).map(c => ({ 
+  week: c.weekEnding, 
+  forecastRev: c.forecast.revenue, 
+  actualRev: c.actual.revenue, 
+  variance: c.variance.revenuePercent.toFixed(1) + '%',
+  status: c.status 
+})))}
+Average accuracy: ${getAmazonForecastComparison.length > 0 ? (100 - Math.abs(getAmazonForecastComparison.reduce((s, c) => s + c.variance.revenuePercent, 0) / getAmazonForecastComparison.length)).toFixed(1) : 0}%
+` : ''}
+
 === WHAT YOU CAN HELP WITH ===
 - Analyze sales trends and patterns
 - Compare performance across weeks, months, products
 - Identify best/worst performing SKUs
 - Track progress toward goals
 - Explain profit margins and calculations
-- Forecast future revenue
+- Forecast future revenue (app forecast vs Amazon forecast)
+- Compare Amazon's projections vs actual performance
 - Inventory planning recommendations
 - Answer questions about specific products by name or SKU
 - Provide insights on advertising effectiveness (TACOS, ROAS)
@@ -3841,7 +4042,11 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
               <button onClick={() => setShowInvoiceModal(true)} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-1 ${upcomingBills.length > 0 ? 'bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 text-amber-300' : 'bg-slate-700 hover:bg-slate-600 text-white'}`}>
                 <FileText className="w-4 h-4" />Bills{upcomingBills.length > 0 && <span className="ml-1 px-1.5 py-0.5 bg-amber-500/30 rounded text-xs">{upcomingBills.length}</span>}
               </button>
-              {generateForecast && <button onClick={() => setShowForecast(true)} className="px-3 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-sm text-emerald-300 flex items-center gap-1"><TrendingUp className="w-4 h-4" />Forecast</button>}
+              {generateForecast ? (
+                <button onClick={() => setShowForecast(true)} className="px-3 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-sm text-emerald-300 flex items-center gap-1"><TrendingUp className="w-4 h-4" />Forecast</button>
+              ) : (
+                <button onClick={() => setView('analytics')} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-400 flex items-center gap-1" title="Need 4+ weeks for forecast"><TrendingUp className="w-4 h-4" />Forecast</button>
+              )}
               <button onClick={() => setShowBreakEven(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Calculator className="w-4 h-4" /></button>
               <button onClick={() => setShowExportModal(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><FileDown className="w-4 h-4" /></button>
               <button onClick={() => setShowUploadHelp(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><FileText className="w-4 h-4" /></button>
@@ -4210,6 +4415,9 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
             <button onClick={() => setUploadTab('inventory')} className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Boxes className="w-5 h-5" />Inventory
             </button>
+            <button onClick={() => setUploadTab('forecast')} className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'forecast' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <TrendingUp className="w-5 h-5" />Forecast
+            </button>
           </div>
           
           {/* Weekly Upload */}
@@ -4287,6 +4495,144 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
               </div>
               
               <button onClick={processInventory} disabled={isProcessing || !invFiles.amazon || !invFiles.threepl || !invSnapshotDate} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Process Inventory'}</button>
+            </div>
+          )}
+          
+          {/* Amazon Forecast Upload */}
+          {uploadTab === 'forecast' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-white mb-1">Amazon Forecast Upload</h2>
+              <p className="text-slate-400 text-sm mb-4">Upload Amazon's projected sales to compare against actual results</p>
+              
+              <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6">
+                <h3 className="text-amber-400 font-semibold mb-2">How to Get Amazon Forecast Data</h3>
+                <ol className="text-slate-300 text-sm space-y-1 list-decimal list-inside">
+                  <li>Go to Seller Central → Reports → Business Reports</li>
+                  <li>Click "SKU Economics" report</li>
+                  <li>Set date range to a <span className="text-amber-300 font-medium">future week</span> (e.g., next 7 days)</li>
+                  <li>Amazon shows <span className="text-amber-300 font-medium">projected</span> sales for future dates</li>
+                  <li>Export as CSV and upload here</li>
+                </ol>
+              </div>
+              
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-slate-300 mb-2">Amazon Forecast CSV <span className="text-rose-400">*</span></label>
+                <div className={`relative border-2 border-dashed rounded-xl p-6 transition-all ${files.amazonForecast ? 'border-amber-500/50 bg-amber-950/20' : 'border-slate-600 hover:border-slate-500 bg-slate-800/30'}`}>
+                  <input type="file" accept=".csv" onChange={(e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                      setFiles(p => ({ ...p, amazonForecast: null }));
+                      setFileNames(p => ({ ...p, amazonForecast: file.name }));
+                      const reader = new FileReader();
+                      reader.onload = (ev) => {
+                        const parsed = parseCSV(ev.target.result);
+                        setFiles(p => ({ ...p, amazonForecast: parsed }));
+                      };
+                      reader.readAsText(file);
+                    }
+                  }} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                  <div className="flex flex-col items-center gap-2">
+                    {files.amazonForecast ? <Check className="w-8 h-8 text-amber-400" /> : <Upload className="w-8 h-8 text-slate-400" />}
+                    <p className={`font-medium ${files.amazonForecast ? 'text-amber-400' : 'text-white'}`}>
+                      {files.amazonForecast ? fileNames.amazonForecast : 'Click to upload Amazon forecast CSV'}
+                    </p>
+                    {files.amazonForecast && (
+                      <p className="text-slate-400 text-sm">{files.amazonForecast.length} SKUs found</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+              
+              <button onClick={() => {
+                if (!files.amazonForecast) return;
+                const forecast = processAmazonForecast(files.amazonForecast);
+                if (forecast) {
+                  setAmazonForecasts(prev => ({ ...prev, [forecast.weekEnding]: forecast }));
+                  setFiles(p => ({ ...p, amazonForecast: null }));
+                  setFileNames(p => ({ ...p, amazonForecast: '' }));
+                  setToast({ message: `Forecast saved for week ending ${forecast.weekEnding}`, type: 'success' });
+                } else {
+                  setToast({ message: 'Could not parse forecast data', type: 'error' });
+                }
+              }} disabled={!files.amazonForecast} className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl mb-6">
+                Save Forecast
+              </button>
+              
+              {/* Existing Forecasts */}
+              {Object.keys(amazonForecasts).length > 0 && (
+                <div className="border-t border-slate-700 pt-6">
+                  <h3 className="text-sm font-semibold text-slate-300 uppercase mb-4">Saved Forecasts</h3>
+                  <div className="space-y-2">
+                    {Object.entries(amazonForecasts).sort((a, b) => b[0].localeCompare(a[0])).map(([weekKey, forecast]) => {
+                      const hasActual = allWeeksData[weekKey];
+                      const isPast = new Date(weekKey) < new Date();
+                      return (
+                        <div key={weekKey} className={`flex items-center justify-between p-3 rounded-xl ${hasActual ? 'bg-emerald-900/20 border border-emerald-500/30' : isPast ? 'bg-slate-700/30 border border-slate-600' : 'bg-amber-900/20 border border-amber-500/30'}`}>
+                          <div>
+                            <p className="text-white font-medium">Week ending {new Date(weekKey + 'T00:00:00').toLocaleDateString()}</p>
+                            <p className="text-slate-400 text-sm">
+                              {formatCurrency(forecast.totals.sales)} projected • {forecast.skuCount} SKUs
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {hasActual ? (
+                              <span className="text-emerald-400 text-sm flex items-center gap-1"><Check className="w-4 h-4" />Has actuals</span>
+                            ) : isPast ? (
+                              <span className="text-slate-400 text-sm">Awaiting actuals</span>
+                            ) : (
+                              <span className="text-amber-400 text-sm">Upcoming</span>
+                            )}
+                            <button onClick={() => {
+                              const updated = { ...amazonForecasts };
+                              delete updated[weekKey];
+                              setAmazonForecasts(updated);
+                            }} className="p-1 hover:bg-slate-600 rounded text-slate-400 hover:text-rose-400">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              
+              {/* Forecast vs Actual Comparison */}
+              {getAmazonForecastComparison.length > 0 && (
+                <div className="border-t border-slate-700 pt-6 mt-6">
+                  <h3 className="text-sm font-semibold text-slate-300 uppercase mb-4">Forecast Accuracy</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-700">
+                          <th className="text-left text-slate-400 py-2">Week</th>
+                          <th className="text-right text-slate-400 py-2">Forecast</th>
+                          <th className="text-right text-slate-400 py-2">Actual</th>
+                          <th className="text-right text-slate-400 py-2">Variance</th>
+                          <th className="text-right text-slate-400 py-2">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {getAmazonForecastComparison.map(c => (
+                          <tr key={c.weekEnding} className="border-b border-slate-700/50">
+                            <td className="py-2 text-white">{new Date(c.weekEnding + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                            <td className="py-2 text-right text-slate-400">{formatCurrency(c.forecast.revenue)}</td>
+                            <td className="py-2 text-right text-white font-medium">{formatCurrency(c.actual.revenue)}</td>
+                            <td className={`py-2 text-right font-medium ${c.variance.revenuePercent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {c.variance.revenuePercent >= 0 ? '+' : ''}{c.variance.revenuePercent.toFixed(1)}%
+                            </td>
+                            <td className="py-2 text-right">
+                              <span className={`px-2 py-1 rounded text-xs font-medium ${c.status === 'beat' ? 'bg-emerald-900/50 text-emerald-400' : 'bg-rose-900/50 text-rose-400'}`}>
+                                {c.status === 'beat' ? '↑ Beat' : '↓ Missed'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           
