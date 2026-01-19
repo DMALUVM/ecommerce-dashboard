@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare } from 'lucide-react';
 
 const parseCSV = (text) => {
   const lines = text.split('\n').filter(line => line.trim());
@@ -1327,6 +1327,9 @@ if (supabase && isAuthReady && session && isLocked) {
       <button onClick={() => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}} disabled={!Object.keys(allWeeksData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />View Weeks</button>
       <button onClick={() => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }}} disabled={!Object.keys(allPeriodsData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'period-view' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />View Periods</button>
       <div className="w-px bg-slate-600 mx-1" />
+      <button onClick={() => setView('trends')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'trends' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><TrendingUp className="w-4 h-4 inline mr-1" />Trends</button>
+      <button onClick={() => setView('yoy')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'yoy' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><GitCompare className="w-4 h-4 inline mr-1" />YoY</button>
+      <div className="w-px bg-slate-600 mx-1" />
       <button onClick={() => setView('inv-upload')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'inventory' || view === 'inv-upload' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Boxes className="w-4 h-4 inline mr-1" />Inventory</button>
     </div>
   );
@@ -1847,6 +1850,482 @@ if (supabase && isAuthReady && session && isLocked) {
                     </tr>
                   ))}
                 </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==================== TRENDS VIEW ====================
+  if (view === 'trends') {
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    const recentWeeks = sortedWeeks.slice(-12); // Last 12 weeks
+    const weeklyData = recentWeeks.map(w => ({ week: w, ...allWeeksData[w] }));
+    
+    // Calculate week-over-week changes
+    const latestWeek = weeklyData[weeklyData.length - 1];
+    const prevWeek = weeklyData[weeklyData.length - 2];
+    const fourWeeksAgo = weeklyData[weeklyData.length - 5];
+    
+    const calcChange = (current, previous) => {
+      if (!previous || previous === 0) return null;
+      return ((current - previous) / previous) * 100;
+    };
+    
+    const ChangeIndicator = ({ current, previous, format = 'currency' }) => {
+      const change = calcChange(current, previous);
+      if (change === null) return <span className="text-slate-500 text-sm">—</span>;
+      const isPositive = change > 0;
+      const isNeutral = Math.abs(change) < 0.5;
+      const color = isNeutral ? 'text-slate-400' : isPositive ? 'text-emerald-400' : 'text-rose-400';
+      const Icon = isNeutral ? Minus : isPositive ? ArrowUpRight : ArrowDownRight;
+      return (
+        <span className={`flex items-center gap-1 text-sm ${color}`}>
+          <Icon className="w-4 h-4" />
+          {Math.abs(change).toFixed(1)}%
+        </span>
+      );
+    };
+    
+    // Rolling 4-week averages
+    const calcRolling = (weeks, field, subfield) => {
+      if (weeks.length < 4) return null;
+      const last4 = weeks.slice(-4);
+      const sum = last4.reduce((acc, w) => acc + (subfield ? w[field]?.[subfield] : w[field]) || 0, 0);
+      return sum / 4;
+    };
+    
+    // Monthly aggregation
+    const monthlyData = {};
+    sortedWeeks.forEach(w => {
+      const month = w.substring(0, 7); // YYYY-MM
+      if (!monthlyData[month]) monthlyData[month] = { revenue: 0, profit: 0, units: 0, weeks: 0 };
+      monthlyData[month].revenue += allWeeksData[w].total?.revenue || 0;
+      monthlyData[month].profit += allWeeksData[w].total?.netProfit || 0;
+      monthlyData[month].units += allWeeksData[w].total?.units || 0;
+      monthlyData[month].weeks += 1;
+    });
+    const months = Object.keys(monthlyData).sort().slice(-6);
+    
+    // Find max values for chart scaling
+    const maxRevenue = Math.max(...weeklyData.map(w => w.total?.revenue || 0));
+    const maxProfit = Math.max(...weeklyData.map(w => Math.abs(w.total?.netProfit || 0)));
+    const maxMonthlyRev = Math.max(...months.map(m => monthlyData[m].revenue));
+    
+    return (
+      <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager />
+          <NavTabs />
+          {dataBar}
+          
+          <div className="mb-6">
+            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">📈 Trends Dashboard</h1>
+            <p className="text-slate-400">Performance trends and week-over-week analysis</p>
+          </div>
+          
+          {/* Week-over-Week Summary Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm mb-1">Revenue (This Week)</p>
+              <p className="text-2xl font-bold text-white">{formatCurrency(latestWeek?.total?.revenue)}</p>
+              <div className="flex items-center justify-between mt-2">
+                <span className="text-slate-500 text-xs">vs last week</span>
+                <ChangeIndicator current={latestWeek?.total?.revenue} previous={prevWeek?.total?.revenue} />
+              </div>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm mb-1">Net Profit (This Week)</p>
+              <p className={`text-2xl font-bold ${(latestWeek?.total?.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(latestWeek?.total?.netProfit)}</p>
+              <div className="flex items-center justify-between mt-2">
+                <span className="text-slate-500 text-xs">vs last week</span>
+                <ChangeIndicator current={latestWeek?.total?.netProfit} previous={prevWeek?.total?.netProfit} />
+              </div>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm mb-1">Units Sold (This Week)</p>
+              <p className="text-2xl font-bold text-white">{formatNumber(latestWeek?.total?.units)}</p>
+              <div className="flex items-center justify-between mt-2">
+                <span className="text-slate-500 text-xs">vs last week</span>
+                <ChangeIndicator current={latestWeek?.total?.units} previous={prevWeek?.total?.units} />
+              </div>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+              <p className="text-slate-400 text-sm mb-1">Margin (This Week)</p>
+              <p className={`text-2xl font-bold ${(latestWeek?.total?.netMargin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(latestWeek?.total?.netMargin)}</p>
+              <div className="flex items-center justify-between mt-2">
+                <span className="text-slate-500 text-xs">vs last week</span>
+                <ChangeIndicator current={latestWeek?.total?.netMargin} previous={prevWeek?.total?.netMargin} />
+              </div>
+            </div>
+          </div>
+          
+          {/* 4-Week Rolling Averages */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+            <h3 className="text-lg font-semibold text-white mb-4">📊 4-Week Rolling Averages</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <p className="text-slate-400 text-sm">Avg Weekly Revenue</p>
+                <p className="text-xl font-bold text-white">{formatCurrency(calcRolling(weeklyData, 'total', 'revenue'))}</p>
+              </div>
+              <div>
+                <p className="text-slate-400 text-sm">Avg Weekly Profit</p>
+                <p className="text-xl font-bold text-emerald-400">{formatCurrency(calcRolling(weeklyData, 'total', 'netProfit'))}</p>
+              </div>
+              <div>
+                <p className="text-slate-400 text-sm">Avg Weekly Units</p>
+                <p className="text-xl font-bold text-white">{formatNumber(calcRolling(weeklyData, 'total', 'units'))}</p>
+              </div>
+              <div>
+                <p className="text-slate-400 text-sm">Avg Margin</p>
+                <p className="text-xl font-bold text-emerald-400">{formatPercent(calcRolling(weeklyData, 'total', 'netMargin'))}</p>
+              </div>
+            </div>
+          </div>
+          
+          {/* Weekly Revenue Chart */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+            <h3 className="text-lg font-semibold text-white mb-4">Weekly Revenue Trend</h3>
+            <div className="flex items-end gap-1 h-48">
+              {weeklyData.map((w, i) => {
+                const height = maxRevenue > 0 ? ((w.total?.revenue || 0) / maxRevenue) * 100 : 0;
+                const isLatest = i === weeklyData.length - 1;
+                return (
+                  <div key={w.week} className="flex-1 flex flex-col items-center group relative">
+                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}<br/>
+                      {formatCurrency(w.total?.revenue)}
+                    </div>
+                    <div 
+                      className={`w-full rounded-t transition-all ${isLatest ? 'bg-violet-500' : 'bg-violet-500/60'} hover:bg-violet-400`}
+                      style={{ height: `${Math.max(height, 2)}%` }}
+                    />
+                    <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">
+                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          
+          {/* Weekly Profit Chart */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+            <h3 className="text-lg font-semibold text-white mb-4">Weekly Profit Trend</h3>
+            <div className="flex items-end gap-1 h-48">
+              {weeklyData.map((w, i) => {
+                const profit = w.total?.netProfit || 0;
+                const height = maxProfit > 0 ? (Math.abs(profit) / maxProfit) * 100 : 0;
+                const isPositive = profit >= 0;
+                const isLatest = i === weeklyData.length - 1;
+                return (
+                  <div key={w.week} className="flex-1 flex flex-col items-center group relative">
+                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}<br/>
+                      {formatCurrency(profit)}
+                    </div>
+                    <div 
+                      className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/60') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/60')} hover:opacity-80`}
+                      style={{ height: `${Math.max(height, 2)}%` }}
+                    />
+                    <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">
+                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          
+          {/* Channel Split Over Time */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+            <h3 className="text-lg font-semibold text-white mb-4">Channel Revenue Split</h3>
+            <div className="space-y-2">
+              {weeklyData.slice(-8).map(w => {
+                const amzShare = w.total?.amazonShare || 0;
+                const shopShare = w.total?.shopifyShare || 0;
+                return (
+                  <div key={w.week} className="flex items-center gap-3">
+                    <span className="text-xs text-slate-400 w-20">{new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                    <div className="flex-1 h-6 bg-slate-900 rounded-full overflow-hidden flex">
+                      <div className="bg-orange-500 h-full transition-all" style={{ width: `${amzShare}%` }} title={`Amazon: ${amzShare.toFixed(1)}%`} />
+                      <div className="bg-blue-500 h-full transition-all" style={{ width: `${shopShare}%` }} title={`Shopify: ${shopShare.toFixed(1)}%`} />
+                    </div>
+                    <span className="text-xs text-orange-400 w-12">{amzShare.toFixed(0)}%</span>
+                    <span className="text-xs text-blue-400 w-12">{shopShare.toFixed(0)}%</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex gap-4 mt-3 text-xs">
+              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-orange-500 rounded" />Amazon</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-500 rounded" />Shopify</span>
+            </div>
+          </div>
+          
+          {/* Monthly Summary Table */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+            <h3 className="text-lg font-semibold text-white mb-4">Monthly Summary</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700">
+                    <th className="text-left text-slate-400 font-medium py-2">Month</th>
+                    <th className="text-right text-slate-400 font-medium py-2">Revenue</th>
+                    <th className="text-right text-slate-400 font-medium py-2">Profit</th>
+                    <th className="text-right text-slate-400 font-medium py-2">Units</th>
+                    <th className="text-right text-slate-400 font-medium py-2">Margin</th>
+                    <th className="text-right text-slate-400 font-medium py-2">Weeks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {months.map(m => {
+                    const d = monthlyData[m];
+                    const margin = d.revenue > 0 ? (d.profit / d.revenue) * 100 : 0;
+                    return (
+                      <tr key={m} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                        <td className="py-2 text-white">{new Date(m + '-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</td>
+                        <td className="py-2 text-right text-white">{formatCurrency(d.revenue)}</td>
+                        <td className={`py-2 text-right ${d.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(d.profit)}</td>
+                        <td className="py-2 text-right text-white">{formatNumber(d.units)}</td>
+                        <td className={`py-2 text-right ${margin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(margin)}</td>
+                        <td className="py-2 text-right text-slate-400">{d.weeks}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==================== YEAR-OVER-YEAR VIEW ====================
+  if (view === 'yoy') {
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    const years = [...new Set(sortedWeeks.map(w => w.substring(0, 4)))].sort();
+    const currentYear = years[years.length - 1];
+    const previousYear = years.length > 1 ? years[years.length - 2] : null;
+    
+    // Get year-to-date data for comparison
+    const getYearData = (year) => {
+      const yearWeeks = sortedWeeks.filter(w => w.startsWith(year));
+      return {
+        weeks: yearWeeks.length,
+        revenue: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].total?.revenue || 0), 0),
+        profit: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].total?.netProfit || 0), 0),
+        units: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].total?.units || 0), 0),
+        amazonRev: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].amazon?.revenue || 0), 0),
+        shopifyRev: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].shopify?.revenue || 0), 0),
+        adSpend: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].total?.adSpend || 0), 0),
+        cogs: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].total?.cogs || 0), 0),
+      };
+    };
+    
+    const currentYearData = getYearData(currentYear);
+    const previousYearData = previousYear ? getYearData(previousYear) : null;
+    
+    // Month-over-month YoY comparison
+    const getMonthlyByYear = (year) => {
+      const months = {};
+      sortedWeeks.filter(w => w.startsWith(year)).forEach(w => {
+        const month = w.substring(5, 7);
+        if (!months[month]) months[month] = { revenue: 0, profit: 0, units: 0 };
+        months[month].revenue += allWeeksData[w].total?.revenue || 0;
+        months[month].profit += allWeeksData[w].total?.netProfit || 0;
+        months[month].units += allWeeksData[w].total?.units || 0;
+      });
+      return months;
+    };
+    
+    const currentMonths = getMonthlyByYear(currentYear);
+    const previousMonths = previousYear ? getMonthlyByYear(previousYear) : {};
+    const allMonths = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    
+    const calcYoYChange = (current, previous) => {
+      if (!previous || previous === 0) return null;
+      return ((current - previous) / previous) * 100;
+    };
+    
+    const YoYBadge = ({ change }) => {
+      if (change === null) return <span className="text-slate-500">—</span>;
+      const isPositive = change > 0;
+      const color = isPositive ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400';
+      const Icon = isPositive ? ArrowUpRight : ArrowDownRight;
+      return (
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm ${color}`}>
+          <Icon className="w-3 h-3" />
+          {Math.abs(change).toFixed(1)}%
+        </span>
+      );
+    };
+    
+    // Find max for chart
+    const maxMonthlyRev = Math.max(
+      ...allMonths.map(m => Math.max(currentMonths[m]?.revenue || 0, previousMonths[m]?.revenue || 0))
+    );
+    
+    return (
+      <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto"><Toast /><CogsManager />
+          <NavTabs />
+          {dataBar}
+          
+          <div className="mb-6">
+            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">📅 Year-over-Year Comparison</h1>
+            <p className="text-slate-400">{previousYear ? `Comparing ${currentYear} vs ${previousYear}` : `${currentYear} data (add previous year data to compare)`}</p>
+          </div>
+          
+          {/* Year Summary Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            {/* Current Year */}
+            <div className="bg-gradient-to-br from-violet-900/30 to-slate-800/50 rounded-xl border border-violet-500/30 p-5">
+              <h3 className="text-lg font-semibold text-violet-400 mb-4">{currentYear} Year-to-Date</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-slate-400 text-sm">Revenue</p>
+                  <p className="text-2xl font-bold text-white">{formatCurrency(currentYearData.revenue)}</p>
+                </div>
+                <div>
+                  <p className="text-slate-400 text-sm">Net Profit</p>
+                  <p className={`text-2xl font-bold ${currentYearData.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(currentYearData.profit)}</p>
+                </div>
+                <div>
+                  <p className="text-slate-400 text-sm">Units Sold</p>
+                  <p className="text-xl font-bold text-white">{formatNumber(currentYearData.units)}</p>
+                </div>
+                <div>
+                  <p className="text-slate-400 text-sm">Margin</p>
+                  <p className={`text-xl font-bold ${currentYearData.revenue > 0 && (currentYearData.profit/currentYearData.revenue) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {formatPercent(currentYearData.revenue > 0 ? (currentYearData.profit/currentYearData.revenue)*100 : 0)}
+                  </p>
+                </div>
+              </div>
+              <p className="text-slate-500 text-sm mt-3">{currentYearData.weeks} weeks of data</p>
+            </div>
+            
+            {/* Previous Year */}
+            {previousYearData ? (
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                <h3 className="text-lg font-semibold text-slate-400 mb-4">{previousYear} (Comparison)</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-slate-400 text-sm">Revenue</p>
+                    <p className="text-2xl font-bold text-white">{formatCurrency(previousYearData.revenue)}</p>
+                    <YoYBadge change={calcYoYChange(currentYearData.revenue, previousYearData.revenue)} />
+                  </div>
+                  <div>
+                    <p className="text-slate-400 text-sm">Net Profit</p>
+                    <p className={`text-2xl font-bold ${previousYearData.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(previousYearData.profit)}</p>
+                    <YoYBadge change={calcYoYChange(currentYearData.profit, previousYearData.profit)} />
+                  </div>
+                  <div>
+                    <p className="text-slate-400 text-sm">Units Sold</p>
+                    <p className="text-xl font-bold text-white">{formatNumber(previousYearData.units)}</p>
+                    <YoYBadge change={calcYoYChange(currentYearData.units, previousYearData.units)} />
+                  </div>
+                  <div>
+                    <p className="text-slate-400 text-sm">Margin</p>
+                    <p className={`text-xl font-bold ${previousYearData.revenue > 0 && (previousYearData.profit/previousYearData.revenue) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {formatPercent(previousYearData.revenue > 0 ? (previousYearData.profit/previousYearData.revenue)*100 : 0)}
+                    </p>
+                  </div>
+                </div>
+                <p className="text-slate-500 text-sm mt-3">{previousYearData.weeks} weeks of data</p>
+              </div>
+            ) : (
+              <div className="bg-slate-800/30 rounded-xl border border-dashed border-slate-600 p-5 flex items-center justify-center">
+                <p className="text-slate-500 text-center">Upload {parseInt(currentYear) - 1} data to enable YoY comparison</p>
+              </div>
+            )}
+          </div>
+          
+          {/* Monthly YoY Chart */}
+          {previousYear && (
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+              <h3 className="text-lg font-semibold text-white mb-4">Monthly Revenue: {currentYear} vs {previousYear}</h3>
+              <div className="flex items-end gap-2 h-64">
+                {allMonths.map((m, i) => {
+                  const currRev = currentMonths[m]?.revenue || 0;
+                  const prevRev = previousMonths[m]?.revenue || 0;
+                  const currHeight = maxMonthlyRev > 0 ? (currRev / maxMonthlyRev) * 100 : 0;
+                  const prevHeight = maxMonthlyRev > 0 ? (prevRev / maxMonthlyRev) * 100 : 0;
+                  return (
+                    <div key={m} className="flex-1 flex flex-col items-center">
+                      <div className="flex gap-0.5 items-end h-48 w-full">
+                        <div className="flex-1 flex flex-col justify-end group relative">
+                          <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                            {previousYear}: {formatCurrency(prevRev)}
+                          </div>
+                          <div className="w-full bg-slate-600 rounded-t transition-all hover:bg-slate-500" style={{ height: `${Math.max(prevHeight, 1)}%` }} />
+                        </div>
+                        <div className="flex-1 flex flex-col justify-end group relative">
+                          <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                            {currentYear}: {formatCurrency(currRev)}
+                          </div>
+                          <div className="w-full bg-violet-500 rounded-t transition-all hover:bg-violet-400" style={{ height: `${Math.max(currHeight, 1)}%` }} />
+                        </div>
+                      </div>
+                      <span className="text-xs text-slate-400 mt-2">{monthNames[i]}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex gap-4 mt-3 text-sm justify-center">
+                <span className="flex items-center gap-2"><span className="w-3 h-3 bg-slate-600 rounded" />{previousYear}</span>
+                <span className="flex items-center gap-2"><span className="w-3 h-3 bg-violet-500 rounded" />{currentYear}</span>
+              </div>
+            </div>
+          )}
+          
+          {/* Monthly Comparison Table */}
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+            <h3 className="text-lg font-semibold text-white mb-4">Month-by-Month Breakdown</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700">
+                    <th className="text-left text-slate-400 font-medium py-2">Month</th>
+                    <th className="text-right text-slate-400 font-medium py-2">{currentYear} Revenue</th>
+                    {previousYear && <th className="text-right text-slate-400 font-medium py-2">{previousYear} Revenue</th>}
+                    {previousYear && <th className="text-right text-slate-400 font-medium py-2">YoY Change</th>}
+                    <th className="text-right text-slate-400 font-medium py-2">{currentYear} Profit</th>
+                    {previousYear && <th className="text-right text-slate-400 font-medium py-2">{previousYear} Profit</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {allMonths.map((m, i) => {
+                    const curr = currentMonths[m] || { revenue: 0, profit: 0 };
+                    const prev = previousMonths[m] || { revenue: 0, profit: 0 };
+                    const hasData = curr.revenue > 0 || prev.revenue > 0;
+                    if (!hasData) return null;
+                    const change = calcYoYChange(curr.revenue, prev.revenue);
+                    return (
+                      <tr key={m} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                        <td className="py-2 text-white">{monthNames[i]}</td>
+                        <td className="py-2 text-right text-white">{formatCurrency(curr.revenue)}</td>
+                        {previousYear && <td className="py-2 text-right text-slate-400">{formatCurrency(prev.revenue)}</td>}
+                        {previousYear && <td className="py-2 text-right"><YoYBadge change={change} /></td>}
+                        <td className={`py-2 text-right ${curr.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(curr.profit)}</td>
+                        {previousYear && <td className={`py-2 text-right ${prev.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(prev.profit)}</td>}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="border-t-2 border-slate-600">
+                  <tr className="font-semibold">
+                    <td className="py-2 text-white">Total</td>
+                    <td className="py-2 text-right text-white">{formatCurrency(currentYearData.revenue)}</td>
+                    {previousYear && <td className="py-2 text-right text-slate-400">{formatCurrency(previousYearData.revenue)}</td>}
+                    {previousYear && <td className="py-2 text-right"><YoYBadge change={calcYoYChange(currentYearData.revenue, previousYearData.revenue)} /></td>}
+                    <td className={`py-2 text-right ${currentYearData.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(currentYearData.profit)}</td>
+                    {previousYear && <td className={`py-2 text-right ${previousYearData.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(previousYearData.profit)}</td>}
+                  </tr>
+                </tfoot>
               </table>
             </div>
           </div>
