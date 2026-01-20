@@ -9303,10 +9303,24 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const monthlyTrends = getMonthlyTrends();
     const yearlyTrends = getYearlyTrends();
     
-    // Select data based on active tab
-    const currentData = trendsTab === 'weekly' ? weeklyData : 
-                        trendsTab === 'monthly' ? monthlyTrends.map(([k, v]) => v) :
-                        yearlyTrends.map(([k, v]) => v);
+    // Select data based on active tab with fallbacks
+    let currentData = [];
+    if (trendsTab === 'weekly' && weeklyData.length > 0) {
+      currentData = weeklyData;
+    } else if (trendsTab === 'monthly' && monthlyTrends.length > 0) {
+      currentData = monthlyTrends.map(([k, v]) => v);
+    } else if (trendsTab === 'yearly' && yearlyTrends.length > 0) {
+      currentData = yearlyTrends.map(([k, v]) => v);
+    } else {
+      // Fallback: use whatever data is available
+      if (monthlyTrends.length > 0) {
+        currentData = monthlyTrends.map(([k, v]) => v);
+      } else if (weeklyData.length > 0) {
+        currentData = weeklyData;
+      } else if (yearlyTrends.length > 0) {
+        currentData = yearlyTrends.map(([k, v]) => v);
+      }
+    }
     
     const latestPeriod = currentData[currentData.length - 1];
     const prevPeriod = currentData[currentData.length - 2];
@@ -9456,19 +9470,22 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Revenue Trend Chart */}
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
                 <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Revenue Trend</h3>
-                <div className="flex items-end gap-1 h-48">
-                  {currentData.map((d, i) => {
+                <p className="text-slate-500 text-xs mb-2">Max: {formatCurrency(maxRevenue)} | Data points: {currentData.length}</p>
+                <div className="flex items-end gap-2 h-48 bg-slate-900/30 rounded-lg p-2">
+                  {currentData.length === 0 ? (
+                    <p className="text-slate-500 text-center w-full">No data available</p>
+                  ) : currentData.map((d, i) => {
                     const height = maxRevenue > 0 ? (d.revenue / maxRevenue) * 100 : 0;
                     const isLatest = i === currentData.length - 1;
                     return (
-                      <div key={d.key} className="flex-1 flex flex-col items-center group relative">
+                      <div key={d.key || i} className="flex-1 flex flex-col items-center group relative min-w-[30px]">
                         <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
                           {d.label}<br/>{formatCurrency(d.revenue)}
                           {d.source && <span className="text-slate-400"> ({d.source})</span>}
                         </div>
                         <div 
-                          className={`w-full rounded-t transition-all ${isLatest ? 'bg-violet-500' : 'bg-violet-500/60'} hover:bg-violet-400`}
-                          style={{ height: `${Math.max(height, 2)}%` }}
+                          className={`w-full rounded-t transition-all ${isLatest ? 'bg-violet-500' : 'bg-violet-500/70'} hover:bg-violet-400`}
+                          style={{ height: `${Math.max(height, 5)}%`, minHeight: '8px' }}
                         />
                         <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
                       </div>
@@ -9482,19 +9499,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 {/* Profit Trend */}
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                   <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Profit Trend</h3>
-                  <div className="flex items-end gap-1 h-40">
-                    {currentData.map((d, i) => {
+                  <div className="flex items-end gap-2 h-40 bg-slate-900/30 rounded-lg p-2">
+                    {currentData.length === 0 ? (
+                      <p className="text-slate-500 text-center w-full">No data</p>
+                    ) : currentData.map((d, i) => {
                       const height = maxProfit > 0 ? (Math.abs(d.profit) / maxProfit) * 100 : 0;
                       const isPositive = d.profit >= 0;
                       const isLatest = i === currentData.length - 1;
                       return (
-                        <div key={d.key} className="flex-1 flex flex-col items-center group relative">
+                        <div key={d.key || i} className="flex-1 flex flex-col items-center group relative min-w-[20px]">
                           <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
                             {d.label}<br/>{formatCurrency(d.profit)}
                           </div>
                           <div 
-                            className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/60') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/60')}`}
-                            style={{ height: `${Math.max(height, 2)}%` }}
+                            className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
+                            style={{ height: `${Math.max(height, 5)}%`, minHeight: '8px' }}
                           />
                           <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
                         </div>
@@ -9506,20 +9525,22 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 {/* Margin Trend */}
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                   <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Margin Trend</h3>
-                  <div className="flex items-end gap-1 h-40">
-                    {currentData.map((d, i) => {
-                      const maxMargin = Math.max(...currentData.map(x => Math.abs(x.margin || 0)), 30);
+                  <div className="flex items-end gap-2 h-40 bg-slate-900/30 rounded-lg p-2">
+                    {currentData.length === 0 ? (
+                      <p className="text-slate-500 text-center w-full">No data</p>
+                    ) : currentData.map((d, i) => {
+                      const maxMargin = Math.max(...currentData.map(x => Math.abs(x.margin || 0)), 50);
                       const height = (Math.abs(d.margin) / maxMargin) * 100;
                       const isPositive = d.margin >= 0;
                       const isLatest = i === currentData.length - 1;
                       return (
-                        <div key={d.key} className="flex-1 flex flex-col items-center group relative">
+                        <div key={d.key || i} className="flex-1 flex flex-col items-center group relative min-w-[20px]">
                           <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
                             {d.label}<br/>{formatPercent(d.margin)}
                           </div>
                           <div 
-                            className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-cyan-500' : 'bg-cyan-500/60') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/60')}`}
-                            style={{ height: `${Math.max(height, 2)}%` }}
+                            className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-cyan-500' : 'bg-cyan-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
+                            style={{ height: `${Math.max(height, 5)}%`, minHeight: '8px' }}
                           />
                           <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
                         </div>
@@ -9532,21 +9553,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Profit Per Unit Trend */}
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
                 <h3 className="text-lg font-semibold text-white mb-4">💵 Profit Per Unit Trend</h3>
-                <div className="flex items-end gap-1 h-40">
-                  {currentData.map((d, i) => {
+                <div className="flex items-end gap-2 h-40 bg-slate-900/30 rounded-lg p-2">
+                  {currentData.length === 0 ? (
+                    <p className="text-slate-500 text-center w-full">No data</p>
+                  ) : currentData.map((d, i) => {
                     const ppu = d.units > 0 ? d.profit / d.units : 0;
                     const maxPPU = Math.max(...currentData.map(x => Math.abs(x.units > 0 ? x.profit / x.units : 0)), 1);
                     const height = maxPPU > 0 ? (Math.abs(ppu) / maxPPU) * 100 : 0;
                     const isPositive = ppu >= 0;
                     const isLatest = i === currentData.length - 1;
                     return (
-                      <div key={d.key} className="flex-1 flex flex-col items-center group relative">
+                      <div key={d.key || i} className="flex-1 flex flex-col items-center group relative min-w-[20px]">
                         <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
                           {d.label}<br/>{formatCurrency(ppu)}/unit
                         </div>
                         <div 
-                          className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-amber-500' : 'bg-amber-500/60') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/60')}`}
-                          style={{ height: `${Math.max(height, 2)}%` }}
+                          className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-amber-500' : 'bg-amber-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
+                          style={{ height: `${Math.max(height, 5)}%`, minHeight: '8px' }}
                         />
                         <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
                       </div>
