@@ -1426,46 +1426,49 @@ useEffect(() => {
 const loadFromCloud = useCallback(async (storeId = null) => {
   if (!supabase || !session?.user?.id) return false;
   setCloudStatus('Loading…');
-  const { data, error } = await supabase
-    .from('app_data')
-    .select('data')
-    .eq('user_id', session.user.id)
-    .maybeSingle();
-
-  if (error) {
-    setCloudStatus('');
-    return false;
-  }
-  if (!data?.data) {
-    setCloudStatus('');
-    return false;
-  }
-
-  const cloudData = data.data || {};
   
-  // Handle multi-store structure
-  if (cloudData.stores) {
-    setStores(cloudData.stores);
-  }
-  
-  // Determine which store to load
-  const targetStoreId = storeId || cloudData.activeStoreId || (cloudData.stores?.[0]?.id) || 'default';
-  setActiveStoreId(targetStoreId);
-  
-  // Get store-specific data (support both old and new format)
-  let cloud;
-  if (cloudData.storeData && cloudData.storeData[targetStoreId]) {
-    cloud = cloudData.storeData[targetStoreId];
-  } else if (cloudData.storeData?.default) {
-    cloud = cloudData.storeData.default;
-  } else {
-    // Legacy format - data is directly in cloudData
-    cloud = cloudData;
-  }
-
-  // Apply cloud data to state
-  isLoadingDataRef.current = true
   try {
+    const { data, error } = await supabase
+      .from('app_data')
+      .select('data')
+      .eq('user_id', session.user.id)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Cloud load error:', error);
+      setCloudStatus('');
+      return false;
+    }
+    if (!data?.data) {
+      setCloudStatus('');
+      return false;
+    }
+
+    const cloudData = data.data || {};
+  
+    // Handle multi-store structure
+    if (cloudData.stores) {
+      setStores(cloudData.stores);
+    }
+    
+    // Determine which store to load
+    const targetStoreId = storeId || cloudData.activeStoreId || (cloudData.stores?.[0]?.id) || 'default';
+    setActiveStoreId(targetStoreId);
+    
+    // Get store-specific data (support both old and new format)
+    let cloud;
+    if (cloudData.storeData && cloudData.storeData[targetStoreId]) {
+      cloud = cloudData.storeData[targetStoreId];
+    } else if (cloudData.storeData?.default) {
+      cloud = cloudData.storeData.default;
+    } else {
+      // Legacy format - data is directly in cloudData
+      cloud = cloudData;
+    }
+
+    // Apply cloud data to state
+    isLoadingDataRef.current = true;
+    
     setAllWeeksData(cloud.sales || {});
     setAllDaysData(cloud.dailySales || {}); // Load daily data
     const w = Object.keys(cloud.sales || {}).sort().reverse();
@@ -1507,12 +1510,16 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.theme) writeToLocal(THEME_KEY, JSON.stringify(cloud.theme));
     if (cloud.productionPipeline) localStorage.setItem('ecommerce_production_v1', JSON.stringify(cloud.productionPipeline));
     if (cloud.threeplLedger) writeToLocal(THREEPL_LEDGER_KEY, JSON.stringify(cloud.threeplLedger));
-  } finally {
-    isLoadingDataRef.current = false
-  }
 
-  setCloudStatus('');
-  return true;
+    setCloudStatus('');
+    return true;
+  } catch (err) {
+    console.error('Cloud load unexpected error:', err);
+    setCloudStatus('');
+    return false;
+  } finally {
+    isLoadingDataRef.current = false;
+  }
 }, [session, writeToLocal]);
 
 // Store management functions
@@ -4363,7 +4370,7 @@ const savePeriods = async (d) => {
       <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" />Export</button>
       <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" />Import<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
     </div>
-  ), [allWeeksData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session]);
+  ), [allWeeksData, allDaysData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session, stores, activeStoreId]);
 
   // Toast notification component
   const Toast = () => {
