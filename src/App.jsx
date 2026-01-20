@@ -14495,11 +14495,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    // Get yesterday's daily data if available
+    // Yesterday tab - currently not available (would need daily data storage)
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayKey = yesterday.toISOString().split('T')[0];
-    const yesterdayData = dailyData[yesterdayKey];
+    const yesterdayData = null; // Daily data not yet implemented
     
     // Helper to aggregate ad data from weeks
     const aggregateAdData = (weeks) => {
