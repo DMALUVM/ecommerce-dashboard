@@ -9303,6 +9303,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const monthlyTrends = getMonthlyTrends();
     const yearlyTrends = getYearlyTrends();
     
+    // Debug: check for duplicates
+    console.log('Monthly trends:', monthlyTrends.map(([k, v]) => `${k}: ${v.label} ($${v.revenue})`));
+    
     // Select data based on active tab with fallbacks
     let currentData = [];
     if (trendsTab === 'weekly' && weeklyData.length > 0) {
