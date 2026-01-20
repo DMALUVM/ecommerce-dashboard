@@ -12514,7 +12514,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                   };
                   
                   setAiInput('');
-                  setShowAiChat(true);
+                  setShowAIChat(true);
                   setAiMessages(prev => [...prev, { 
                     role: 'user', 
                     content: `Analyze my inventory and provide a smart forecast. Here's my data:\n\n${JSON.stringify(analysisContext, null, 2)}\n\nPlease:\n1. Identify which SKUs are at risk of stockout\n2. Factor in the production pipeline timing\n3. Compare current velocity vs Amazon's forecast\n4. Give me a prioritized reorder recommendation\n5. Flag any SKUs where production won't arrive in time`
