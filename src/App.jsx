@@ -12455,13 +12455,12 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               <button 
                 disabled={aiLoading}
                 onClick={async () => {
-                  try {
-                    setAiLoading(true);
-                    
-                    // Gather all the data for AI analysis
-                    const inventoryItems = data.items || [];
-                    const sortedWeeks = Object.keys(allWeeksData).sort();
-                    const recentWeeks = sortedWeeks.slice(-12);
+                  setAiLoading(true);
+                  
+                  // Gather all the data for AI analysis
+                  const inventoryItems = data.items || [];
+                  const sortedWeeks = Object.keys(allWeeksData).sort();
+                  const recentWeeks = sortedWeeks.slice(-12);
                   
                   // Build velocity history per SKU
                   const skuVelocityHistory = {};
