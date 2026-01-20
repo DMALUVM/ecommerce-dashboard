@@ -10386,13 +10386,13 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                       'text-slate-400'
                     }`}>{action.message}</span>
                     {action.action === 'upload-forecast' && (
-                      <button onClick={() => setUploadTab('forecast')} className="text-xs px-2 py-1 bg-amber-600 hover:bg-amber-500 rounded text-white">Upload</button>
+                      <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="text-xs px-2 py-1 bg-amber-600 hover:bg-amber-500 rounded text-white">Upload</button>
                     )}
                     {action.action === 'upload-daily' && (
-                      <button onClick={() => setUploadTab('daily')} className="text-xs px-2 py-1 bg-cyan-600 hover:bg-cyan-500 rounded text-white">Upload</button>
+                      <button onClick={() => { setUploadTab('daily'); setView('upload'); }} className="text-xs px-2 py-1 bg-cyan-600 hover:bg-cyan-500 rounded text-white">Upload</button>
                     )}
                     {action.action === 'upload-weekly' && (
-                      <button onClick={() => setUploadTab('weekly')} className="text-xs px-2 py-1 bg-violet-600 hover:bg-violet-500 rounded text-white">Upload</button>
+                      <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="text-xs px-2 py-1 bg-violet-600 hover:bg-violet-500 rounded text-white">Upload</button>
                     )}
                     {action.action === 'aggregate-daily' && (
                       <button onClick={aggregateDailyToWeekly} className="text-xs px-2 py-1 bg-teal-600 hover:bg-teal-500 rounded text-white">Aggregate</button>
@@ -12453,11 +12453,15 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                 <p className="text-slate-400 text-sm">AI-powered predictions using historical data, Amazon forecasts, and production pipeline</p>
               </div>
               <button 
+                disabled={aiLoading}
                 onClick={async () => {
-                  // Gather all the data for AI analysis
-                  const inventoryItems = data.items || [];
-                  const sortedWeeks = Object.keys(allWeeksData).sort();
-                  const recentWeeks = sortedWeeks.slice(-12);
+                  try {
+                    setAiLoading(true);
+                    
+                    // Gather all the data for AI analysis
+                    const inventoryItems = data.items || [];
+                    const sortedWeeks = Object.keys(allWeeksData).sort();
+                    const recentWeeks = sortedWeeks.slice(-12);
                   
                   // Build velocity history per SKU
                   const skuVelocityHistory = {};
@@ -12546,15 +12550,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       content: result.content?.[0]?.text || result.choices?.[0]?.message?.content || 'Unable to generate forecast analysis.'
                     }]);
                   } catch (err) {
+                    console.error('AI Forecast Analysis error:', err);
                     setAiMessages(prev => [...prev, { 
                       role: 'assistant', 
                       content: 'Error generating forecast. Please try again.'
                     }]);
+                  } finally {
+                    setAiLoading(false);
                   }
                 }}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm text-white flex items-center gap-2"
+                className={`px-4 py-2 rounded-lg text-sm text-white flex items-center gap-2 ${aiLoading ? 'bg-slate-600 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-500'}`}
               >
-                <Zap className="w-4 h-4" />Run AI Forecast Analysis
+                {aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                {aiLoading ? 'Analyzing...' : 'Run AI Forecast Analysis'}
               </button>
             </div>
             
