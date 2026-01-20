@@ -2954,7 +2954,7 @@ const savePeriods = async (d) => {
   }, [allWeeksData]);
 
   // Parse bulk ad file (Google Ads or Meta Ads CSV)
-  const parseBulkAdFile = useCallback((content, platform) => {
+  const parseBulkAdFile = useCallback((content, platform, filename = '') => {
     try {
       const lines = content.trim().split('\n');
       if (lines.length < 2) return { error: 'File is empty or has no data rows' };
@@ -2966,19 +2966,21 @@ const savePeriods = async (d) => {
       let totalClicks = 0;
       let totalConversions = 0;
       
-      // Detect format based on headers - support both daily (Date) and monthly (Month) formats
+      // Detect format based on headers - support daily (Date), monthly (Month), and hourly (Hour) formats
       const hasDateCol = header.includes('date') || header.includes('month') || header.includes('day');
+      const hasHourCol = header.includes('hour');
       const hasCostCol = header.includes('cost') || header.includes('spend');
-      const isGoogleAds = hasDateCol && hasCostCol;
-      const isMetaAds = hasDateCol && (header.includes('amount spent') || hasCostCol);
+      const isGoogleAds = (hasDateCol || hasHourCol) && hasCostCol;
+      const isMetaAds = (hasDateCol || hasHourCol) && (header.includes('amount spent') || hasCostCol);
+      const isHourlyData = hasHourCol && !hasDateCol;
       
       if (!isGoogleAds && !isMetaAds) {
-        return { error: 'Could not detect file format. Expected columns: Date/Month and Cost/Spend' };
+        return { error: 'Could not detect file format. Expected columns: Date/Month/Hour and Cost/Spend' };
       }
       
       // Parse headers to find all columns
       const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase());
-      const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h === 'month' || h.includes('date'));
+      const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h === 'month' || h === 'hour' || h.includes('date'));
       const costCol = headers.findIndex(h => h === 'cost' || h === 'spend' || h === 'amount spent' || (h.includes('cost') && !h.includes('/')));
       const impressionsCol = headers.findIndex(h => h === 'impressions' || h === 'impr' || h.includes('impression'));
       const cpcCol = headers.findIndex(h => h === 'avg. cpc' || h === 'cpc' || h.includes('cost per click'));
@@ -2991,7 +2993,75 @@ const savePeriods = async (d) => {
         return { error: `Could not find required columns. Found headers: ${headers.join(', ')}` };
       }
       
-      // Parse data rows
+      // For hourly data, we need to extract the date from the filename or use today
+      // We'll aggregate all hours into a single day entry
+      if (isHourlyData) {
+        let hourlySpend = 0;
+        let hourlyImpressions = 0;
+        let hourlyCpc = 0;
+        let hourlyCpa = 0;
+        let hourCount = 0;
+        
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          
+          const cols = [];
+          let current = '';
+          let inQuotes = false;
+          for (const char of line) {
+            if (char === '"') inQuotes = !inQuotes;
+            else if (char === ',' && !inQuotes) { cols.push(current.trim()); current = ''; }
+            else current += char;
+          }
+          cols.push(current.trim());
+          
+          const cost = parseFloat(cols[costCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '')) || 0;
+          const impressions = parseInt(cols[impressionsCol]?.replace(/"/g, '').replace(/,/g, '')) || 0;
+          const cpc = parseFloat(cols[cpcCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '')) || 0;
+          const cpa = parseFloat(cols[cpaCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '')) || 0;
+          
+          hourlySpend += cost;
+          hourlyImpressions += impressions;
+          if (cpc > 0) { hourlyCpc += cpc; hourCount++; }
+          if (cpa > 0) hourlyCpa += cpa;
+        }
+        
+        // Try to extract date from filename like "Time_series_2025_02_28_.csv"
+        let dateStr;
+        const filenameMatch = filename.match(/(\d{4})_(\d{2})_(\d{2})/);
+        if (filenameMatch) {
+          dateStr = `${filenameMatch[1]}-${filenameMatch[2]}-${filenameMatch[3]}`;
+        } else {
+          // Fall back to yesterday's date
+          const yesterday = new Date();
+          yesterday.setDate(yesterday.getDate() - 1);
+          dateStr = yesterday.toISOString().split('T')[0];
+        }
+        
+        const avgCpc = hourCount > 0 ? hourlyCpc / hourCount : 0;
+        const clicks = avgCpc > 0 ? Math.round(hourlySpend / avgCpc) : 0;
+        const conversions = hourlyCpa > 0 ? Math.round(hourlySpend / hourlyCpa) : 0;
+        
+        dailyData.push({
+          date: dateStr,
+          spend: hourlySpend,
+          impressions: hourlyImpressions,
+          clicks,
+          cpc: avgCpc,
+          cpa: hourlyCpa,
+          conversions,
+          isHourly: true,
+        });
+        
+        totalSpend = hourlySpend;
+        totalImpressions = hourlyImpressions;
+        totalClicks = clicks;
+        totalConversions = conversions;
+        
+        // Skip to aggregation
+      } else {
+        // Parse data rows (daily or monthly)
       for (let i = 1; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
@@ -3096,6 +3166,7 @@ const savePeriods = async (d) => {
           totalConversions += conversions;
         }
       }
+      } // end else (not hourly)
       
       if (dailyData.length === 0) {
         return { error: 'No valid data rows found' };
@@ -9252,8 +9323,8 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                           const text = ev.target?.result;
                           if (typeof text === 'string') {
                             setBulkAdFile({ name: file.name, content: text });
-                            // Auto-parse to show preview
-                            const parsed = parseBulkAdFile(text, bulkAdPlatform);
+                            // Auto-parse to show preview - pass filename for date extraction
+                            const parsed = parseBulkAdFile(text, bulkAdPlatform, file.name);
                             setBulkAdParsed(parsed);
                           }
                         };
