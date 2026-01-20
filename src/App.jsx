@@ -7047,19 +7047,24 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
               <div className="mb-6">
                 <label className="block text-sm font-medium text-slate-300 mb-2">Amazon Forecast CSV <span className="text-rose-400">*</span></label>
                 <div className={`relative border-2 border-dashed rounded-xl p-6 transition-all ${files.amazonForecast ? 'border-amber-500/50 bg-amber-950/20' : 'border-slate-600 hover:border-slate-500 bg-slate-800/30'}`}>
-                  <input type="file" accept=".csv" onChange={(e) => {
-                    const file = e.target.files[0];
-                    if (file) {
-                      setFiles(p => ({ ...p, amazonForecast: null }));
-                      setFileNames(p => ({ ...p, amazonForecast: file.name }));
-                      const reader = new FileReader();
-                      reader.onload = (ev) => {
-                        const parsed = parseCSV(ev.target.result);
-                        setFiles(p => ({ ...p, amazonForecast: parsed }));
-                      };
-                      reader.readAsText(file);
-                    }
-                  }} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                  <input 
+                    key={`forecast-input-${forecastMeta.history?.length || 0}`}
+                    type="file" 
+                    accept=".csv" 
+                    onChange={(e) => {
+                      const file = e.target.files[0];
+                      if (file) {
+                        setFileNames(p => ({ ...p, amazonForecast: file.name }));
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                          const parsed = parseCSV(ev.target.result);
+                          setFiles(p => ({ ...p, amazonForecast: parsed, forecastType: null }));
+                        };
+                        reader.readAsText(file);
+                      }
+                    }} 
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
+                  />
                   <div className="flex flex-col items-center gap-2">
                     {files.amazonForecast ? <Check className="w-8 h-8 text-amber-400" /> : <Upload className="w-8 h-8 text-slate-400" />}
                     <p className={`font-medium ${files.amazonForecast ? 'text-amber-400' : 'text-white'}`}>
@@ -7075,22 +7080,32 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
               {/* Forecast Type Selection */}
               {files.amazonForecast && (
                 <div className="mb-4">
-                  <label className="text-slate-400 text-sm block mb-2">Forecast Type:</label>
-                  <div className="flex gap-2">
-                    {['7day', '30day', '60day'].map(type => (
-                      <button
-                        key={type}
-                        onClick={() => setFiles(p => ({ ...p, forecastType: type }))}
-                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                          files.forecastType === type
-                            ? 'bg-amber-600 text-white'
-                            : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                        }`}
-                      >
-                        {type === '7day' ? '7-Day' : type === '30day' ? '30-Day' : '60-Day'}
-                      </button>
-                    ))}
+                  <label className="text-slate-400 text-sm block mb-2">Forecast Type: <span className="text-slate-500">(select which Amazon forecast period this is)</span></label>
+                  <div className="flex gap-2 flex-wrap">
+                    {['7day', '30day', '60day'].map(type => {
+                      const isSelected = files.forecastType === type;
+                      const isUploaded = forecastMeta.lastUploads?.[type];
+                      return (
+                        <button
+                          key={type}
+                          onClick={() => setFiles(p => ({ ...p, forecastType: type }))}
+                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                            isSelected
+                              ? 'bg-amber-600 text-white'
+                              : isUploaded
+                                ? 'bg-emerald-900/30 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-900/50'
+                                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                          }`}
+                        >
+                          {type === '7day' ? '7-Day' : type === '30day' ? '30-Day' : '60-Day'}
+                          {isUploaded && !isSelected && <Check className="w-3 h-3" />}
+                        </button>
+                      );
+                    })}
                   </div>
+                  {!files.forecastType && (
+                    <p className="text-amber-400 text-xs mt-2">⚠️ Please select which forecast period this file represents</p>
+                  )}
                 </div>
               )}
               
@@ -7110,9 +7125,13 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
               
               <button onClick={() => {
                 if (!files.amazonForecast) return;
+                if (!files.forecastType) {
+                  setToast({ message: 'Please select forecast type (7-Day, 30-Day, or 60-Day)', type: 'error' });
+                  return;
+                }
                 const result = processAmazonForecast(files.amazonForecast);
                 if (result) {
-                  const forecastType = files.forecastType || (result.type === 'monthly' ? '30day' : '7day');
+                  const forecastType = files.forecastType;
                   const now = new Date().toISOString();
                   
                   // Track this upload
@@ -7146,8 +7165,8 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
                 } else {
                   setToast({ message: 'Could not parse forecast data', type: 'error' });
                 }
-              }} disabled={!files.amazonForecast} className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl mb-6">
-                Save Forecast
+              }} disabled={!files.amazonForecast || !files.forecastType} className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:from-slate-700 disabled:to-slate-700 disabled:cursor-not-allowed text-white font-semibold py-4 rounded-xl mb-6">
+                Save {files.forecastType ? (files.forecastType === '7day' ? '7-Day' : files.forecastType === '30day' ? '30-Day' : '60-Day') + ' ' : ''}Forecast
               </button>
               
               {/* Forecast Upload History */}
