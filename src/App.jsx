@@ -3577,7 +3577,7 @@ const savePeriods = async (d) => {
     } finally {
       setIsProcessing(false);
     }
-  }, [allWeeksData, save]);
+  }, [allWeeksData, allDaysData, allPeriodsData, save, combinedData]);
 
   const getMonths = () => { const m = new Set(); Object.keys(allWeeksData).forEach(w => { const d = new Date(w+'T00:00:00'); m.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`); }); return Array.from(m).sort().reverse(); };
   const getYears = () => { const y = new Set(); Object.keys(allWeeksData).forEach(w => { y.add(new Date(w+'T00:00:00').getFullYear()); }); return Array.from(y).sort().reverse(); };
