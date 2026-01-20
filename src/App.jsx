@@ -633,7 +633,8 @@ export default function Dashboard() {
   const [allWeeksData, setAllWeeksData] = useState({});
   const [allDaysData, setAllDaysData] = useState({}); // Daily data keyed by date YYYY-MM-DD
   const [selectedWeek, setSelectedWeek] = useState(null);
-  const [selectedDay, setSelectedDay] = useState(null); // For daily view
+  const [selectedDay, setSelectedDay] = useState(null); // For daily upload
+  const [viewingDayDetails, setViewingDayDetails] = useState(null); // For viewing day data details (date string)
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [selectedYear, setSelectedYear] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -6099,6 +6100,182 @@ Keep insights brief and actionable. Format as numbered list.`;
     return null;
   };
 
+  // Day Details Modal - shows detailed breakdown for a specific day
+  const DayDetailsModal = () => {
+    if (!viewingDayDetails) return null;
+    
+    const dayData = allDaysData[viewingDayDetails];
+    if (!dayData) {
+      return (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setViewingDayDetails(null)}>
+          <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-lg w-full" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-white">
+                {new Date(viewingDayDetails + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+              </h2>
+              <button onClick={() => setViewingDayDetails(null)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+            </div>
+            <p className="text-slate-400">No data available for this day.</p>
+          </div>
+        </div>
+      );
+    }
+    
+    const amazon = dayData.amazon || {};
+    const shopify = dayData.shopify || {};
+    const total = dayData.total || {};
+    const hasAmazon = dayData.amazon && (amazon.revenue > 0 || amazon.units > 0);
+    const hasShopify = dayData.shopify && (shopify.revenue > 0 || shopify.units > 0);
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 overflow-y-auto" onClick={() => setViewingDayDetails(null)}>
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-4xl w-full my-8" onClick={e => e.stopPropagation()}>
+          {/* Header */}
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h2 className="text-xl font-bold text-white">
+                {new Date(viewingDayDetails + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+              </h2>
+              <p className="text-slate-400 text-sm">Daily Performance Details</p>
+            </div>
+            <button onClick={() => setViewingDayDetails(null)} className="text-slate-400 hover:text-white p-2 hover:bg-slate-700 rounded-lg"><X className="w-5 h-5" /></button>
+          </div>
+          
+          {/* Summary Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-slate-900/50 rounded-xl p-4">
+              <p className="text-slate-400 text-xs mb-1">Total Revenue</p>
+              <p className="text-xl font-bold text-white">{formatCurrency(total.revenue || 0)}</p>
+            </div>
+            <div className="bg-slate-900/50 rounded-xl p-4">
+              <p className="text-slate-400 text-xs mb-1">Net Profit</p>
+              <p className={`text-xl font-bold ${(total.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(total.netProfit || 0)}</p>
+            </div>
+            <div className="bg-slate-900/50 rounded-xl p-4">
+              <p className="text-slate-400 text-xs mb-1">Units Sold</p>
+              <p className="text-xl font-bold text-white">{formatNumber(total.units || 0)}</p>
+            </div>
+            <div className="bg-slate-900/50 rounded-xl p-4">
+              <p className="text-slate-400 text-xs mb-1">Profit Margin</p>
+              <p className={`text-xl font-bold ${(total.netMargin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(total.netMargin || 0)}</p>
+            </div>
+          </div>
+          
+          {/* Channel Breakdown */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            {/* Amazon */}
+            <div className={`rounded-xl border p-4 ${hasAmazon ? 'bg-orange-900/20 border-orange-500/30' : 'bg-slate-900/30 border-slate-700'}`}>
+              <h3 className="text-lg font-semibold text-orange-400 mb-3 flex items-center gap-2">
+                <Store className="w-5 h-5" /> Amazon
+                {hasAmazon && <span className="text-xs bg-orange-500/20 px-2 py-0.5 rounded">{formatPercent(total.amazonShare || 0)} of total</span>}
+              </h3>
+              {hasAmazon ? (
+                <div className="space-y-2">
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Revenue</span><span className="text-white font-medium">{formatCurrency(amazon.revenue || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Units Sold</span><span className="text-white font-medium">{formatNumber(amazon.units || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Returns</span><span className="text-rose-400 font-medium">{formatNumber(amazon.returns || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">COGS</span><span className="text-white font-medium">{formatCurrency(amazon.cogs || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">FBA Fees</span><span className="text-white font-medium">{formatCurrency(amazon.fees || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Ad Spend</span><span className="text-amber-400 font-medium">{formatCurrency(amazon.adSpend || 0)}</span></div>
+                  <div className="border-t border-orange-500/30 pt-2 mt-2">
+                    <div className="flex justify-between"><span className="text-slate-300 text-sm font-medium">Net Profit</span><span className={`font-bold ${(amazon.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(amazon.netProfit || 0)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400 text-sm">Margin</span><span className={`font-medium ${(amazon.margin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(amazon.margin || 0)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400 text-sm">ROAS</span><span className="text-cyan-400 font-medium">{(amazon.roas || 0).toFixed(2)}x</span></div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-slate-500 text-sm">No Amazon sales this day</p>
+              )}
+            </div>
+            
+            {/* Shopify */}
+            <div className={`rounded-xl border p-4 ${hasShopify ? 'bg-green-900/20 border-green-500/30' : 'bg-slate-900/30 border-slate-700'}`}>
+              <h3 className="text-lg font-semibold text-green-400 mb-3 flex items-center gap-2">
+                <ShoppingBag className="w-5 h-5" /> Shopify
+                {hasShopify && <span className="text-xs bg-green-500/20 px-2 py-0.5 rounded">{formatPercent(total.shopifyShare || 0)} of total</span>}
+              </h3>
+              {hasShopify ? (
+                <div className="space-y-2">
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Revenue</span><span className="text-white font-medium">{formatCurrency(shopify.revenue || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Units Sold</span><span className="text-white font-medium">{formatNumber(shopify.units || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">COGS</span><span className="text-white font-medium">{formatCurrency(shopify.cogs || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Discounts</span><span className="text-rose-400 font-medium">{formatCurrency(shopify.discounts || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Meta Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.metaSpend || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Google Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.googleSpend || 0)}</span></div>
+                  <div className="border-t border-green-500/30 pt-2 mt-2">
+                    <div className="flex justify-between"><span className="text-slate-300 text-sm font-medium">Net Profit</span><span className={`font-bold ${(shopify.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(shopify.netProfit || 0)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400 text-sm">Margin</span><span className={`font-medium ${(shopify.netMargin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(shopify.netMargin || 0)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400 text-sm">ROAS</span><span className="text-cyan-400 font-medium">{(shopify.roas || 0).toFixed(2)}x</span></div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-slate-500 text-sm">No Shopify sales this day</p>
+              )}
+            </div>
+          </div>
+          
+          {/* Google Ads data if present (without full sales data) */}
+          {(dayData.googleAds || dayData.googleSpend) && (
+            <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4 mb-6">
+              <h3 className="text-lg font-semibold text-blue-400 mb-3">Google Ads Metrics</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div><p className="text-slate-400 text-xs">Spend</p><p className="text-white font-medium">{formatCurrency(dayData.googleSpend || dayData.googleAds || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">Clicks</p><p className="text-white font-medium">{formatNumber(dayData.googleClicks || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">Impressions</p><p className="text-white font-medium">{formatNumber(dayData.googleImpressions || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">Conversions</p><p className="text-white font-medium">{formatNumber(dayData.googleConversions || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">CPC</p><p className="text-white font-medium">{formatCurrency(dayData.googleCpc || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">CPA</p><p className="text-white font-medium">{formatCurrency(dayData.googleCpa || 0)}</p></div>
+              </div>
+            </div>
+          )}
+          
+          {/* SKU Breakdown */}
+          {((amazon.skuData && amazon.skuData.length > 0) || (shopify.skuData && shopify.skuData.length > 0)) && (
+            <div className="bg-slate-900/50 rounded-xl p-4">
+              <h3 className="text-lg font-semibold text-white mb-3">Top Products</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {amazon.skuData && amazon.skuData.length > 0 && (
+                  <div>
+                    <p className="text-orange-400 text-sm font-medium mb-2">Amazon</p>
+                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                      {amazon.skuData.slice(0, 5).map((sku, i) => (
+                        <div key={i} className="flex justify-between text-sm">
+                          <span className="text-slate-300 truncate flex-1 mr-2">{savedProductNames[sku.sku] || sku.name || sku.sku}</span>
+                          <span className="text-white">{formatCurrency(sku.netSales || 0)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {shopify.skuData && shopify.skuData.length > 0 && (
+                  <div>
+                    <p className="text-green-400 text-sm font-medium mb-2">Shopify</p>
+                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                      {shopify.skuData.slice(0, 5).map((sku, i) => (
+                        <div key={i} className="flex justify-between text-sm">
+                          <span className="text-slate-300 truncate flex-1 mr-2">{savedProductNames[sku.sku] || sku.name || sku.sku}</span>
+                          <span className="text-white">{formatCurrency(sku.netSales || 0)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          
+          {/* Footer */}
+          <div className="flex justify-between items-center mt-6 pt-4 border-t border-slate-700">
+            <p className="text-slate-500 text-xs">
+              {dayData.createdAt && `Uploaded: ${new Date(dayData.createdAt).toLocaleString()}`}
+            </p>
+            <button onClick={() => setViewingDayDetails(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white">Close</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const CogsManager = () => showCogsManager && (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
       <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
@@ -9357,7 +9534,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -10071,6 +10248,136 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               </div>
               {/* ============ END DATA HUB ============ */}
               
+              {/* ============ DAILY CALENDAR ============ */}
+              {Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length > 0 && (
+                <div className="bg-gradient-to-br from-slate-800 to-slate-800/50 rounded-2xl border border-slate-700 p-6 shadow-lg">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-cyan-500/20 flex items-center justify-center">
+                        <Calendar className="w-5 h-5 text-cyan-400" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-semibold text-white">Daily Calendar</h3>
+                        <p className="text-slate-400 text-xs">Click any day to view details</p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => { setTrendsTab('daily'); setView('trends'); }}
+                      className="text-xs text-cyan-400 hover:text-cyan-300"
+                    >
+                      View Trends →
+                    </button>
+                  </div>
+                  
+                  {(() => {
+                    // Get current month and year
+                    const now = new Date();
+                    const daysWithSales = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
+                    const latestDate = daysWithSales.length > 0 ? new Date(daysWithSales[daysWithSales.length - 1] + 'T12:00:00') : now;
+                    const viewMonth = latestDate.getMonth();
+                    const viewYear = latestDate.getFullYear();
+                    
+                    // Get first day of month and number of days
+                    const firstDay = new Date(viewYear, viewMonth, 1);
+                    const lastDay = new Date(viewYear, viewMonth + 1, 0);
+                    const startPadding = firstDay.getDay(); // 0=Sunday
+                    const totalDays = lastDay.getDate();
+                    
+                    // Calculate month totals
+                    const monthDays = daysWithSales.filter(d => {
+                      const date = new Date(d + 'T12:00:00');
+                      return date.getMonth() === viewMonth && date.getFullYear() === viewYear;
+                    });
+                    const monthRevenue = monthDays.reduce((sum, d) => sum + (allDaysData[d]?.total?.revenue || 0), 0);
+                    const monthProfit = monthDays.reduce((sum, d) => sum + (allDaysData[d]?.total?.netProfit || 0), 0);
+                    
+                    return (
+                      <>
+                        {/* Month Header */}
+                        <div className="flex items-center justify-between mb-4">
+                          <h4 className="text-white font-medium">
+                            {new Date(viewYear, viewMonth).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                          </h4>
+                          <div className="flex items-center gap-4 text-sm">
+                            <span className="text-slate-400">{monthDays.length} days</span>
+                            <span className="text-emerald-400">{formatCurrency(monthRevenue)}</span>
+                            <span className={monthProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{formatCurrency(monthProfit)} profit</span>
+                          </div>
+                        </div>
+                        
+                        {/* Calendar Grid */}
+                        <div className="grid grid-cols-7 gap-1 mb-2">
+                          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                            <div key={day} className="text-center text-xs text-slate-500 py-1">{day}</div>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-7 gap-1">
+                          {/* Padding for days before month starts */}
+                          {Array(startPadding).fill(null).map((_, i) => (
+                            <div key={`pad-${i}`} className="h-12" />
+                          ))}
+                          
+                          {/* Calendar days */}
+                          {Array(totalDays).fill(null).map((_, i) => {
+                            const dayNum = i + 1;
+                            const dateKey = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+                            const dayData = allDaysData[dateKey];
+                            const hasSales = hasDailySalesData(dayData);
+                            const hasAdsOnly = dayData && !hasSales;
+                            const isToday = dateKey === formatDateKey(now);
+                            const revenue = dayData?.total?.revenue || 0;
+                            const profit = dayData?.total?.netProfit || 0;
+                            
+                            return (
+                              <div 
+                                key={dayNum}
+                                onClick={() => hasSales && setViewingDayDetails(dateKey)}
+                                className={`h-12 rounded-lg p-1 text-center relative transition-all ${
+                                  hasSales 
+                                    ? 'bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 cursor-pointer' 
+                                    : hasAdsOnly
+                                      ? 'bg-amber-500/10 border border-amber-500/20'
+                                      : 'bg-slate-800/50 border border-slate-700/50'
+                                } ${isToday ? 'ring-2 ring-white/50' : ''}`}
+                              >
+                                <div className={`text-xs font-medium ${hasSales ? 'text-cyan-300' : hasAdsOnly ? 'text-amber-400/60' : 'text-slate-500'}`}>
+                                  {dayNum}
+                                </div>
+                                {hasSales && (
+                                  <div className={`text-[10px] font-medium truncate ${profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    {formatCurrency(revenue).replace('$', '').replace('.00', '')}
+                                  </div>
+                                )}
+                                {hasAdsOnly && (
+                                  <div className="text-[10px] text-amber-400/50">●</div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        
+                        {/* Legend */}
+                        <div className="flex items-center justify-center gap-6 mt-4 text-xs text-slate-400">
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded bg-cyan-500/20 border border-cyan-500/30" />
+                            <span>Sales data</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded bg-amber-500/10 border border-amber-500/20" />
+                            <span>Ads only</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded bg-slate-800/50 border border-slate-700/50" />
+                            <span>No data</span>
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+              {/* ============ END DAILY CALENDAR ============ */}
+              
               {/* Check for weeks with missing 3PL or Ad data */}
               {(() => {
                 const recentWeeks = Object.entries(allWeeksData)
@@ -10428,7 +10735,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-4xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -11872,7 +12179,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-3xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -11890,7 +12197,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-3xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -11915,7 +12222,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -11980,7 +12287,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -12187,7 +12494,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -12213,7 +12520,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -12250,7 +12557,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -12466,7 +12773,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -13444,7 +13751,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const decliningSkus = skuTrends.filter(s => s.trend < -10).slice(0, 8);
     const improvingSkus = skuTrends.filter(s => s.trend > 10).sort((a, b) => b.trend - a.trend).slice(0, 8);
     
-    const periodLabel = trendsTab === 'daily' ? 'Day' : trendsTab === 'weekly' ? 'Week' : trendsTab === 'monthly' ? 'Month' : 'Year';
+    const periodLabel = trendsTab === 'daily' ? 'Daily' : trendsTab === 'weekly' ? 'Weekly' : trendsTab === 'monthly' ? 'Monthly' : 'Yearly';
+    const periodLabelShort = trendsTab === 'daily' ? 'Day' : trendsTab === 'weekly' ? 'Week' : trendsTab === 'monthly' ? 'Month' : 'Year';
     const dataAvailable = currentData.length > 0;
     
     // Apply channel filter to data
@@ -13463,7 +13771,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
 
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -13547,7 +13855,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-                  <p className="text-slate-400 text-sm mb-1">Revenue (Latest {periodLabel})</p>
+                  <p className="text-slate-400 text-sm mb-1">Revenue (Latest {periodLabelShort})</p>
                   <p className="text-2xl font-bold text-white">{formatCurrency(getFilteredValue(latestPeriod || {}, 'revenue'))}</p>
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-slate-500 text-xs">vs previous</span>
@@ -13585,7 +13893,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Revenue Trend Chart */}
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
                 <h3 className="text-lg font-semibold text-white mb-4">
-                  {periodLabel}ly Revenue Trend
+                  {periodLabel} Revenue Trend
                   {trendsChannel !== 'combined' && <span className="text-sm font-normal text-slate-400 ml-2">({trendsChannel === 'amazon' ? 'Amazon' : 'Shopify'})</span>}
                 </h3>
                 {(() => {
@@ -13599,11 +13907,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           const value = getFilteredValue(d, 'revenue');
                           const height = chartMaxRevenue > 0 ? (value / chartMaxRevenue) * 100 : 0;
                           const isLatest = i === currentData.length - 1;
+                          const isClickable = trendsTab === 'daily' && d.key;
                           return (
-                            <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[30px]">
+                            <div 
+                              key={d.key || i} 
+                              className={`flex-1 flex flex-col items-center justify-end group relative h-full min-w-[30px] ${isClickable ? 'cursor-pointer' : ''}`}
+                              onClick={() => isClickable && setViewingDayDetails(d.key)}
+                            >
                               <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
                                 {d.label}<br/>{formatCurrency(value)}
                                 {d.source && <span className="text-slate-400"> ({d.source})</span>}
+                                {isClickable && <span className="text-cyan-400 block text-center mt-1">Click for details</span>}
                               </div>
                               <div 
                                 className={`w-full rounded-t transition-all ${isLatest ? 'bg-violet-500' : 'bg-violet-500/70'} hover:bg-violet-400`}
@@ -13628,7 +13942,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 {/* Profit Trend */}
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                   <h3 className="text-lg font-semibold text-white mb-4">
-                    {periodLabel}ly Profit Trend
+                    {periodLabel} Profit Trend
                     {trendsChannel !== 'combined' && <span className="text-sm font-normal text-slate-400 ml-2">({trendsChannel === 'amazon' ? 'Amazon' : 'Shopify'})</span>}
                   </h3>
                   {(() => {
@@ -13643,10 +13957,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             const height = chartMaxProfit > 0 ? (Math.abs(value) / chartMaxProfit) * 100 : 0;
                             const isPositive = value >= 0;
                             const isLatest = i === currentData.length - 1;
+                            const isClickable = trendsTab === 'daily' && d.key;
                             return (
-                              <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[20px]">
+                              <div 
+                                key={d.key || i} 
+                                className={`flex-1 flex flex-col items-center justify-end group relative h-full min-w-[20px] ${isClickable ? 'cursor-pointer' : ''}`}
+                                onClick={() => isClickable && setViewingDayDetails(d.key)}
+                              >
                                 <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
                                   {d.label}<br/>{formatCurrency(value)}
+                                  {isClickable && <span className="text-cyan-400 block text-center mt-1">Click for details</span>}
                                 </div>
                                 <div 
                                   className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
@@ -13668,7 +13988,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 
                 {/* Margin Trend */}
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-                  <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Margin Trend</h3>
+                  <h3 className="text-lg font-semibold text-white mb-4">{periodLabel} Margin Trend</h3>
                   {(() => {
                     const maxMargin = Math.max(...currentData.map(x => Math.abs(x.margin || 0)), 1);
                     return (
@@ -13749,7 +14069,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               
               {/* Data Table */}
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-                <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Summary</h3>
+                <h3 className="text-lg font-semibold text-white mb-4">{periodLabel} Summary</h3>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
@@ -14020,7 +14340,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -14482,7 +14802,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     if (!hasWeeklyData && !hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+          <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -14509,7 +14829,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     if (!hasWeeklyData && hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+          <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -14580,7 +14900,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -15127,7 +15447,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -15532,7 +15852,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white">Analytics & Forecasting</h1>
@@ -16261,7 +16581,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -16852,7 +17172,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -17462,7 +17782,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -18421,7 +18741,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -18795,7 +19115,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-4xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
