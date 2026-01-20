@@ -3213,17 +3213,23 @@ const savePeriods = async (d) => {
     const sortedWeeks = Object.keys(allWeeksData).sort();
     const sortedPeriods = Object.keys(allPeriodsData).sort();
     
-    // Get Amazon forecast data - check all formats
+    // Get Amazon forecast data - check all formats and find upcoming ones
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
     const upcomingForecasts = Object.entries(amazonForecasts)
-      .filter(([weekKey]) => {
+      .filter(([weekKey, data]) => {
         // Try to parse the date - support multiple formats
         const d = new Date(weekKey + 'T00:00:00');
-        return !isNaN(d) && d >= new Date(new Date().setHours(0,0,0,0));
+        const isValidDate = !isNaN(d);
+        const isFuture = d >= today;
+        const hasData = data && ((data.totalSales || 0) > 0 || (data.totals?.sales || 0) > 0);
+        return isValidDate && isFuture && hasData;
       })
       .sort((a, b) => a[0].localeCompare(b[0]));
     
-    // Also check for forecasts stored by week key (like weekly data)
-    const amazonForecastValues = Object.values(amazonForecasts).filter(f => f && f.totalSales > 0);
+    // Debug: count how many forecasts we have
+    const forecastCount = upcomingForecasts.length;
     
     // Calculate trend from recent weeks
     const calcWeeklyTrend = (weeks) => {
@@ -3266,38 +3272,38 @@ const savePeriods = async (d) => {
       const forecast = [];
       
       for (let i = 0; i < 4; i++) {
-        const weekNum = n + i;
         // Calculate trend-based projection
         const trendRevenue = Math.max(0, trend.avgRev + trend.slope * (i + 1));
         const trendProfit = trend.avgProfit + (trend.avgProfit > 0 ? trend.slope * 0.35 * (i + 1) : trend.slope * 0.5 * (i + 1));
         const trendUnits = Math.max(0, Math.round(trend.avgUnits * (1 + trend.slopePercent / 100 * (i + 1))));
         
-        // Add realistic variance (decreasing confidence as we project further)
-        const varianceFactor = 1 + (Math.random() - 0.5) * 0.1 * (i + 1); // ±5-20% variance
-        
-        // Check for Amazon forecast for this week
+        // Check for Amazon forecast for this week (by index)
         const amazonForecast = upcomingForecasts[i]?.[1];
         
-        if (amazonForecast && (amazonForecast.totalSales > 0 || amazonForecast.totals?.sales > 0)) {
+        if (amazonForecast) {
           const amzSales = amazonForecast.totalSales || amazonForecast.totals?.sales || 0;
           const amzProceeds = amazonForecast.totalProceeds || amazonForecast.totals?.proceeds || 0;
           const amzUnits = amazonForecast.totalUnits || amazonForecast.totals?.units || 0;
           
-          // Blend: 60% Amazon forecast, 40% trend (Amazon has real-time demand signals)
+          // Use Amazon forecast primarily (70%) blended with trend (30%)
           forecast.push({
             week: `Week +${i + 1}`,
-            revenue: Math.round(amzSales * 0.6 + trendRevenue * 0.4),
-            profit: Math.round(amzProceeds * 0.6 + trendProfit * 0.4),
-            units: Math.round(amzUnits * 0.6 + trendUnits * 0.4),
+            weekDate: upcomingForecasts[i]?.[0],
+            revenue: Math.round(amzSales * 0.7 + trendRevenue * 0.3),
+            profit: Math.round(amzProceeds * 0.7 + trendProfit * 0.3),
+            units: Math.round(amzUnits * 0.7 + trendUnits * 0.3),
             hasAmazonForecast: true,
+            amazonRaw: { sales: amzSales, proceeds: amzProceeds, units: amzUnits },
           });
         } else {
-          // Apply variance for more realistic non-uniform projections
+          // Use pure trend with slight weekly variance
+          const weekVariance = 1 + (Math.random() - 0.5) * 0.08 * (i + 1); // ±4-16% variance
           forecast.push({
             week: `Week +${i + 1}`,
-            revenue: Math.round(trendRevenue * varianceFactor),
-            profit: Math.round(trendProfit * varianceFactor),
-            units: Math.round(trendUnits * varianceFactor),
+            revenue: Math.round(trendRevenue * weekVariance),
+            profit: Math.round(trendProfit * weekVariance),
+            units: Math.round(trendUnits * weekVariance),
+            hasAmazonForecast: false,
           });
         }
       }
@@ -3317,8 +3323,9 @@ const savePeriods = async (d) => {
         },
         confidence: confidence.toFixed(0),
         basedOn: recentWeeks.length,
-        source: upcomingForecasts.length > 0 ? 'weekly-amazon' : 'weekly',
-        amazonBlended: upcomingForecasts.length > 0,
+        source: forecastCount > 0 ? 'weekly-amazon' : 'weekly',
+        amazonBlended: forecastCount > 0,
+        amazonForecastCount: forecastCount,
       };
     }
     
@@ -4805,7 +4812,14 @@ const savePeriods = async (d) => {
               <div className="mb-2 p-2 bg-orange-900/30 border border-orange-500/30 rounded-lg">
                 <p className="text-orange-300 text-xs flex items-center gap-1">
                   <Target className="w-3 h-3" />
-                  Includes Amazon forecast data for enhanced accuracy
+                  Using {f.amazonForecastCount || 0} Amazon forecast(s) for enhanced accuracy
+                </p>
+              </div>
+            )}
+            {!f.amazonBlended && Object.keys(amazonForecasts).length === 0 && (
+              <div className="mb-2 p-2 bg-slate-700/50 border border-slate-600 rounded-lg">
+                <p className="text-slate-400 text-xs flex items-center gap-1">
+                  💡 Upload Amazon forecasts (7/30/60-day) from Seller Central to improve projections
                 </p>
               </div>
             )}
@@ -10764,16 +10778,71 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const currentYearData = currentYear ? getYearData(currentYear) : null;
     const previousYearData = previousYear ? getYearData(previousYear) : null;
     
-    // Month-over-month YoY comparison (only works with weekly data)
+    // Month-over-month YoY comparison (uses weekly data + monthly period data)
     const getMonthlyByYear = (year) => {
       const months = {};
+      
+      // First, aggregate from weekly data
       sortedWeeks.filter(w => w.startsWith(year)).forEach(w => {
         const month = w.substring(5, 7);
-        if (!months[month]) months[month] = { revenue: 0, profit: 0, units: 0 };
+        if (!months[month]) months[month] = { revenue: 0, profit: 0, units: 0, source: 'weekly' };
         months[month].revenue += allWeeksData[w].total?.revenue || 0;
         months[month].profit += allWeeksData[w].total?.netProfit || 0;
         months[month].units += allWeeksData[w].total?.units || 0;
       });
+      
+      // Then check for monthly period data (e.g., "January 2025", "Jan 2025", "2025-01")
+      const monthPatterns = [
+        { regex: /^january\s+(\d{4})$/i, month: '01' },
+        { regex: /^february\s+(\d{4})$/i, month: '02' },
+        { regex: /^march\s+(\d{4})$/i, month: '03' },
+        { regex: /^april\s+(\d{4})$/i, month: '04' },
+        { regex: /^may\s+(\d{4})$/i, month: '05' },
+        { regex: /^june\s+(\d{4})$/i, month: '06' },
+        { regex: /^july\s+(\d{4})$/i, month: '07' },
+        { regex: /^august\s+(\d{4})$/i, month: '08' },
+        { regex: /^september\s+(\d{4})$/i, month: '09' },
+        { regex: /^october\s+(\d{4})$/i, month: '10' },
+        { regex: /^november\s+(\d{4})$/i, month: '11' },
+        { regex: /^december\s+(\d{4})$/i, month: '12' },
+        { regex: /^jan\s+(\d{4})$/i, month: '01' },
+        { regex: /^feb\s+(\d{4})$/i, month: '02' },
+        { regex: /^mar\s+(\d{4})$/i, month: '03' },
+        { regex: /^apr\s+(\d{4})$/i, month: '04' },
+        { regex: /^jun\s+(\d{4})$/i, month: '06' },
+        { regex: /^jul\s+(\d{4})$/i, month: '07' },
+        { regex: /^aug\s+(\d{4})$/i, month: '08' },
+        { regex: /^sep\s+(\d{4})$/i, month: '09' },
+        { regex: /^oct\s+(\d{4})$/i, month: '10' },
+        { regex: /^nov\s+(\d{4})$/i, month: '11' },
+        { regex: /^dec\s+(\d{4})$/i, month: '12' },
+        { regex: /^(\d{4})-(\d{2})$/, yearGroup: 1, monthGroup: 2 }, // 2025-01 format
+      ];
+      
+      Object.keys(allPeriodsData).forEach(periodKey => {
+        for (const pattern of monthPatterns) {
+          const match = periodKey.match(pattern.regex);
+          if (match) {
+            const periodYear = pattern.yearGroup ? match[pattern.yearGroup] : match[1];
+            const periodMonth = pattern.monthGroup ? match[pattern.monthGroup] : pattern.month;
+            
+            if (periodYear === year) {
+              const p = allPeriodsData[periodKey];
+              // Period data overrides or adds to weekly data
+              if (!months[periodMonth] || months[periodMonth].source === 'weekly') {
+                months[periodMonth] = {
+                  revenue: p.total?.revenue || 0,
+                  profit: p.total?.netProfit || 0,
+                  units: p.total?.units || 0,
+                  source: 'period'
+                };
+              }
+            }
+            break;
+          }
+        }
+      });
+      
       return months;
     };
     
@@ -10939,7 +11008,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             </div>
           )}
           
-          {/* Monthly Comparison Table - only shows with weekly data */}
+          {/* Monthly Comparison Table - uses weekly data + monthly periods */}
           {hasMonthlyData && (
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
             <h3 className="text-lg font-semibold text-white mb-4">Month-by-Month Breakdown</h3>
@@ -10991,8 +11060,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           
           {!hasMonthlyData && (
             <div className="bg-slate-800/30 rounded-xl border border-dashed border-slate-600 p-6 text-center">
-              <p className="text-slate-500">Monthly breakdown requires weekly data uploads.</p>
-              <p className="text-slate-600 text-sm mt-1">Period data shows annual totals only.</p>
+              <p className="text-slate-500">Monthly breakdown requires weekly data or monthly period uploads.</p>
+              <p className="text-slate-600 text-sm mt-1">Upload periods like "January 2025" or "Jan 2025" to see monthly breakdowns.</p>
             </div>
           )}
           </>
@@ -12958,8 +13027,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     // SKU-level profitability
     const skuProfitability = [];
     recentWeeks.forEach(w => {
-      const week = allWeeksData[w];
-      [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])].forEach(s => {
+      const data = getData(w); // Use getData helper instead of direct access
+      if (!data) return;
+      [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])].forEach(s => {
         const existing = skuProfitability.find(x => x.sku === s.sku);
         const profit = s.netProceeds !== undefined ? s.netProceeds : (s.netSales || 0) - (s.cogs || 0);
         const revenue = s.netSales || 0;
@@ -14305,6 +14375,79 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           
           <NavTabs />
           
+          {/* Store Management - For Cloud Users */}
+          {session && (
+            <SettingSection title="🏪 Store Management">
+              <p className="text-slate-400 text-sm mb-4">Manage multiple stores or rename your current store</p>
+              
+              {/* Current Store */}
+              <div className="bg-slate-800/50 rounded-xl p-4 mb-4">
+                <p className="text-slate-400 text-xs uppercase mb-2">Current Store</p>
+                <div className="flex items-center gap-3">
+                  <Store className="w-8 h-8 text-violet-400" />
+                  <div className="flex-1">
+                    <input 
+                      value={stores.find(s => s.id === activeStoreId)?.name || storeName || 'My Store'} 
+                      onChange={(e) => {
+                        const updated = stores.map(s => s.id === activeStoreId ? { ...s, name: e.target.value } : s);
+                        setStores(updated);
+                        setStoreName(e.target.value);
+                      }}
+                      className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white w-full"
+                      placeholder="Store name"
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              {/* All Stores */}
+              {stores.length > 1 && (
+                <div className="space-y-2 mb-4">
+                  <p className="text-slate-400 text-xs uppercase">Switch Store</p>
+                  {stores.map(store => (
+                    <div key={store.id} className={`flex items-center justify-between p-3 rounded-xl border ${store.id === activeStoreId ? 'bg-violet-900/30 border-violet-500/50' : 'bg-slate-800/30 border-slate-700 hover:bg-slate-700/50'}`}>
+                      <div className="flex items-center gap-3">
+                        <Store className={`w-5 h-5 ${store.id === activeStoreId ? 'text-violet-400' : 'text-slate-500'}`} />
+                        <span className={store.id === activeStoreId ? 'text-white font-medium' : 'text-slate-300'}>{store.name}</span>
+                        {store.id === activeStoreId && <span className="text-xs text-violet-400 bg-violet-500/20 px-2 py-0.5 rounded">Active</span>}
+                      </div>
+                      {store.id !== activeStoreId && (
+                        <button 
+                          onClick={() => switchStore(store.id)}
+                          className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"
+                        >
+                          Switch
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              {/* Create New Store */}
+              <div className="flex gap-2">
+                <input 
+                  placeholder="New store name..."
+                  className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                  id="new-store-name"
+                />
+                <button 
+                  onClick={() => {
+                    const input = document.getElementById('new-store-name');
+                    if (input?.value?.trim()) {
+                      createStore(input.value.trim());
+                      input.value = '';
+                    }
+                  }}
+                  className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4" />Add Store
+                </button>
+              </div>
+              <p className="text-slate-500 text-xs mt-2">Each store has separate data. Great for multiple brands or demo data.</p>
+            </SettingSection>
+          )}
+          
           {/* Inventory Thresholds */}
           <SettingSection title="📦 Inventory Thresholds">
             <p className="text-slate-400 text-sm mb-4">Define what stock levels trigger alerts</p>
@@ -14428,8 +14571,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </div>
             </SettingRow>
             <SettingRow label="Mobile-Optimized View" desc="Simplified layout for small screens">
-              <Toggle checked={isMobile} onChange={() => {}} disabled />
-              <span className="text-slate-500 text-xs ml-2">(Auto-detected)</span>
+              <div className="flex items-center gap-2">
+                <Toggle checked={isMobile} onChange={(val) => setIsMobile(val)} />
+                <span className="text-slate-500 text-xs">(Auto-detected)</span>
+              </div>
             </SettingRow>
           </SettingSection>
           
