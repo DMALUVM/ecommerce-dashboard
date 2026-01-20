@@ -5824,44 +5824,119 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
   // Generate Intelligence Report (weekly, monthly, quarterly, annual)
   const generateReport = async (type = 'weekly', forceRegenerate = false) => {
     const sortedWeeks = Object.keys(allWeeksData).sort();
-    if (sortedWeeks.length === 0) {
-      setReportError('No weekly data available to generate report');
+    const sortedPeriods = Object.keys(allPeriodsData).sort();
+    
+    if (sortedWeeks.length === 0 && sortedPeriods.length === 0) {
+      setReportError('No data available to generate report');
       return;
     }
 
-    const today = new Date();
-    let periodKey, periodLabel, weeksInPeriod = [];
+    let periodKey, periodLabel, periodData = null, weeksInPeriod = [], dataSource = '';
+    let comparisonData = null, comparisonLabel = '';
 
     if (type === 'weekly') {
+      if (sortedWeeks.length === 0) {
+        setReportError('No weekly data available');
+        return;
+      }
       periodKey = sortedWeeks[sortedWeeks.length - 1];
       periodLabel = `Week ending ${periodKey}`;
       weeksInPeriod = [periodKey];
+      dataSource = 'weekly';
+      // Comparison: previous week
+      if (sortedWeeks.length > 1) {
+        comparisonLabel = 'vs Last Week';
+        const prevWeek = sortedWeeks[sortedWeeks.length - 2];
+        comparisonData = allWeeksData[prevWeek];
+      }
     } else if (type === 'monthly') {
-      const lastMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
-      const lastMonthYear = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
-      const monthStr = `${lastMonthYear}-${String(lastMonth + 1).padStart(2, '0')}`;
-      periodKey = monthStr;
-      periodLabel = new Date(lastMonthYear, lastMonth, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-      weeksInPeriod = sortedWeeks.filter(w => w.startsWith(monthStr));
+      const monthPeriods = sortedPeriods.filter(p => /^\d{4}-\d{2}$/.test(p) || /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}$/i.test(p));
+      const monthsFromWeeks = [...new Set(sortedWeeks.map(w => w.substring(0, 7)))].sort();
+      
+      if (monthPeriods.length > 0) {
+        const latestMonthPeriod = monthPeriods[monthPeriods.length - 1];
+        periodKey = latestMonthPeriod;
+        periodLabel = latestMonthPeriod;
+        periodData = allPeriodsData[latestMonthPeriod];
+        dataSource = 'period';
+        // Comparison: previous month or same month last year
+        if (monthPeriods.length > 1) {
+          comparisonLabel = 'vs Previous Month';
+          comparisonData = allPeriodsData[monthPeriods[monthPeriods.length - 2]];
+        }
+      } else if (monthsFromWeeks.length > 0) {
+        const latestMonth = monthsFromWeeks[monthsFromWeeks.length - 1];
+        periodKey = latestMonth;
+        const [year, month] = latestMonth.split('-');
+        periodLabel = new Date(parseInt(year), parseInt(month) - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        weeksInPeriod = sortedWeeks.filter(w => w.startsWith(latestMonth));
+        dataSource = 'weekly';
+      } else {
+        setReportError('No monthly data available');
+        return;
+      }
     } else if (type === 'quarterly') {
-      const currentQ = Math.floor(today.getMonth() / 3);
-      const lastQ = currentQ === 0 ? 3 : currentQ - 1;
-      const lastQYear = currentQ === 0 ? today.getFullYear() - 1 : today.getFullYear();
-      periodKey = `${lastQYear}-Q${lastQ + 1}`;
-      periodLabel = `Q${lastQ + 1} ${lastQYear}`;
-      const qStartMonth = lastQ * 3;
-      const qMonths = [0, 1, 2].map(i => `${lastQYear}-${String(qStartMonth + i + 1).padStart(2, '0')}`);
-      weeksInPeriod = sortedWeeks.filter(w => qMonths.some(m => w.startsWith(m)));
+      const quarterPeriods = sortedPeriods.filter(p => /Q[1-4]/i.test(p));
+      
+      if (quarterPeriods.length > 0) {
+        const latestQuarterPeriod = quarterPeriods[quarterPeriods.length - 1];
+        periodKey = latestQuarterPeriod;
+        periodLabel = latestQuarterPeriod;
+        periodData = allPeriodsData[latestQuarterPeriod];
+        dataSource = 'period';
+        // Comparison: previous quarter
+        if (quarterPeriods.length > 1) {
+          comparisonLabel = 'vs Previous Quarter';
+          comparisonData = allPeriodsData[quarterPeriods[quarterPeriods.length - 2]];
+        }
+      } else if (sortedWeeks.length > 0) {
+        const getQuarter = (dateStr) => Math.ceil(parseInt(dateStr.substring(5, 7)) / 3);
+        const getYear = (dateStr) => dateStr.substring(0, 4);
+        const quarterDataMap = {};
+        sortedWeeks.forEach(w => {
+          const q = `${getYear(w)}-Q${getQuarter(w)}`;
+          if (!quarterDataMap[q]) quarterDataMap[q] = [];
+          quarterDataMap[q].push(w);
+        });
+        const quarters = Object.keys(quarterDataMap).sort();
+        if (quarters.length === 0) {
+          setReportError('No quarterly data available');
+          return;
+        }
+        const latestQuarter = quarters[quarters.length - 1];
+        periodKey = latestQuarter;
+        periodLabel = latestQuarter.replace('-', ' ');
+        weeksInPeriod = quarterDataMap[latestQuarter];
+        dataSource = 'weekly';
+      } else {
+        setReportError('No quarterly data available');
+        return;
+      }
     } else if (type === 'annual') {
-      const lastYear = today.getFullYear() - 1;
-      periodKey = lastYear.toString();
-      periodLabel = lastYear.toString();
-      weeksInPeriod = sortedWeeks.filter(w => w.startsWith(periodKey));
-    }
-
-    if (weeksInPeriod.length === 0 && type !== 'weekly') {
-      setReportError(`No data available for ${periodLabel}`);
-      return;
+      const yearPeriods = sortedPeriods.filter(p => /^\d{4}$/.test(p));
+      const yearsFromWeeks = [...new Set(sortedWeeks.map(w => w.substring(0, 4)))].sort();
+      
+      if (yearPeriods.length > 0) {
+        const latestYearPeriod = yearPeriods[yearPeriods.length - 1];
+        periodKey = latestYearPeriod;
+        periodLabel = latestYearPeriod;
+        periodData = allPeriodsData[latestYearPeriod];
+        dataSource = 'period';
+        // Comparison: previous year
+        if (yearPeriods.length > 1) {
+          comparisonLabel = 'vs Previous Year';
+          comparisonData = allPeriodsData[yearPeriods[yearPeriods.length - 2]];
+        }
+      } else if (yearsFromWeeks.length > 0) {
+        const latestYear = yearsFromWeeks[yearsFromWeeks.length - 1];
+        periodKey = latestYear;
+        periodLabel = latestYear;
+        weeksInPeriod = sortedWeeks.filter(w => w.startsWith(latestYear));
+        dataSource = 'weekly';
+      } else {
+        setReportError('No annual data available');
+        return;
+      }
     }
 
     // Check for existing report
@@ -5879,66 +5954,176 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     setShowWeeklyReport(true);
 
     try {
-      // Aggregate data for the period
-      const periodData = { total: { revenue: 0, netProfit: 0, units: 0 }, amazon: { revenue: 0, netProfit: 0 }, shopify: { revenue: 0, netProfit: 0 } };
-      weeksInPeriod.forEach(w => {
-        const d = allWeeksData[w];
-        if (!d) return;
-        periodData.total.revenue += d.total?.revenue || 0;
-        periodData.total.netProfit += d.total?.netProfit || 0;
-        periodData.total.units += d.total?.units || 0;
-        periodData.amazon.revenue += d.amazon?.revenue || 0;
-        periodData.amazon.netProfit += d.amazon?.netProfit || 0;
-        periodData.shopify.revenue += d.shopify?.revenue || 0;
-        periodData.shopify.netProfit += d.shopify?.netProfit || 0;
-      });
-      periodData.total.netMargin = periodData.total.revenue > 0 ? (periodData.total.netProfit / periodData.total.revenue * 100) : 0;
-      periodData.total.amazonShare = periodData.total.revenue > 0 ? (periodData.amazon.revenue / periodData.total.revenue * 100) : 0;
-      periodData.total.shopifyShare = periodData.total.revenue > 0 ? (periodData.shopify.revenue / periodData.total.revenue * 100) : 0;
+      // Build report data
+      let reportData = { total: { revenue: 0, netProfit: 0, units: 0, adSpend: 0 }, amazon: { revenue: 0, netProfit: 0, adSpend: 0 }, shopify: { revenue: 0, netProfit: 0, adSpend: 0, threeplCosts: 0 } };
+      
+      if (dataSource === 'period' && periodData) {
+        reportData.total.revenue = periodData.total?.revenue || 0;
+        reportData.total.netProfit = periodData.total?.netProfit || 0;
+        reportData.total.units = periodData.total?.units || 0;
+        reportData.total.adSpend = periodData.total?.adSpend || 0;
+        reportData.amazon.revenue = periodData.amazon?.revenue || 0;
+        reportData.amazon.netProfit = periodData.amazon?.netProfit || 0;
+        reportData.amazon.adSpend = periodData.amazon?.adSpend || 0;
+        reportData.shopify.revenue = periodData.shopify?.revenue || 0;
+        reportData.shopify.netProfit = periodData.shopify?.netProfit || 0;
+        reportData.shopify.adSpend = periodData.shopify?.adSpend || 0;
+        reportData.shopify.threeplCosts = periodData.shopify?.threeplCosts || 0;
+      } else {
+        weeksInPeriod.forEach(w => {
+          const d = allWeeksData[w];
+          if (!d) return;
+          reportData.total.revenue += d.total?.revenue || 0;
+          reportData.total.netProfit += d.total?.netProfit || 0;
+          reportData.total.units += d.total?.units || 0;
+          reportData.total.adSpend += d.total?.adSpend || 0;
+          reportData.amazon.revenue += d.amazon?.revenue || 0;
+          reportData.amazon.netProfit += d.amazon?.netProfit || 0;
+          reportData.amazon.adSpend += d.amazon?.adSpend || 0;
+          reportData.shopify.revenue += d.shopify?.revenue || 0;
+          reportData.shopify.netProfit += d.shopify?.netProfit || 0;
+          reportData.shopify.adSpend += d.shopify?.adSpend || 0;
+          reportData.shopify.threeplCosts += d.shopify?.threeplCosts || 0;
+        });
+      }
+      
+      reportData.total.netMargin = reportData.total.revenue > 0 ? (reportData.total.netProfit / reportData.total.revenue * 100) : 0;
+      reportData.total.amazonShare = reportData.total.revenue > 0 ? (reportData.amazon.revenue / reportData.total.revenue * 100) : 0;
+      reportData.total.shopifyShare = reportData.total.revenue > 0 ? (reportData.shopify.revenue / reportData.total.revenue * 100) : 0;
+      reportData.amazon.roas = reportData.amazon.adSpend > 0 ? (reportData.amazon.revenue / reportData.amazon.adSpend) : 0;
+      reportData.shopify.roas = reportData.shopify.adSpend > 0 ? (reportData.shopify.revenue / reportData.shopify.adSpend) : 0;
 
+      // Calculate comparison changes
+      let changes = { revenue: 0, profit: 0, units: 0, margin: 0 };
+      if (comparisonData) {
+        const prevRev = comparisonData.total?.revenue || 0;
+        const prevProfit = comparisonData.total?.netProfit || 0;
+        const prevUnits = comparisonData.total?.units || 0;
+        const prevMargin = prevRev > 0 ? (prevProfit / prevRev * 100) : 0;
+        changes.revenue = prevRev > 0 ? ((reportData.total.revenue - prevRev) / prevRev * 100) : 0;
+        changes.profit = prevProfit > 0 ? ((reportData.total.netProfit - prevProfit) / prevProfit * 100) : 0;
+        changes.units = prevUnits > 0 ? ((reportData.total.units - prevUnits) / prevUnits * 100) : 0;
+        changes.margin = reportData.total.netMargin - prevMargin;
+      }
+
+      // Get inventory alerts
+      const latestInvKey = Object.keys(invHistory).sort().pop();
+      const latestInv = latestInvKey ? invHistory[latestInvKey] : null;
+      let inventoryAlerts = [];
+      if (latestInv?.items) {
+        inventoryAlerts = latestInv.items
+          .filter(i => i.daysOfSupply && i.daysOfSupply < 60 && i.daysOfSupply > 0)
+          .sort((a, b) => a.daysOfSupply - b.daysOfSupply)
+          .slice(0, 10)
+          .map(i => ({ sku: i.sku, days: i.daysOfSupply, units: i.totalUnits, status: i.daysOfSupply < 30 ? 'CRITICAL' : 'LOW' }));
+      }
+
+      // Get Amazon forecast data
+      let forecastInfo = { alerts: [], accuracy: null, upcoming: [] };
+      if (Object.keys(amazonForecasts).length > 0) {
+        const forecastWeeks = Object.keys(amazonForecasts).sort();
+        const recentForecasts = forecastWeeks.slice(-4);
+        forecastInfo.upcoming = recentForecasts.map(w => ({
+          week: w,
+          sales: amazonForecasts[w]?.totalSales || 0,
+          proceeds: amazonForecasts[w]?.totalProceeds || 0,
+        }));
+      }
+      
+      // Forecast alerts
+      forecastAlerts.forEach(alert => {
+        forecastInfo.alerts.push(alert.message);
+      });
+
+      // Build enhanced prompt
       const typeLabels = { weekly: 'WEEKLY', monthly: 'MONTHLY', quarterly: 'QUARTERLY', annual: 'ANNUAL' };
       
+      let enhancedData = `
+=== ${typeLabels[type]} REPORT FOR ${periodLabel.toUpperCase()} ===
+
+PERFORMANCE METRICS:
+- Revenue: $${reportData.total.revenue.toFixed(0)}${comparisonData ? ` (${changes.revenue >= 0 ? '+' : ''}${changes.revenue.toFixed(1)}% ${comparisonLabel})` : ''}
+- Profit: $${reportData.total.netProfit.toFixed(0)}${comparisonData ? ` (${changes.profit >= 0 ? '+' : ''}${changes.profit.toFixed(1)}% ${comparisonLabel})` : ''}
+- Units Sold: ${reportData.total.units}${comparisonData ? ` (${changes.units >= 0 ? '+' : ''}${changes.units.toFixed(1)}%)` : ''}
+- Profit Margin: ${reportData.total.netMargin.toFixed(1)}%${comparisonData ? ` (${changes.margin >= 0 ? '+' : ''}${changes.margin.toFixed(1)} pts)` : ''}
+- Total Ad Spend: $${reportData.total.adSpend.toFixed(0)}
+
+CHANNEL BREAKDOWN:
+Amazon:
+- Revenue: $${reportData.amazon.revenue.toFixed(0)} (${reportData.total.amazonShare.toFixed(0)}% of total)
+- Profit: $${reportData.amazon.netProfit.toFixed(0)}
+- Ad Spend: $${reportData.amazon.adSpend.toFixed(0)}
+- ROAS: ${reportData.amazon.roas.toFixed(1)}x
+
+Shopify:
+- Revenue: $${reportData.shopify.revenue.toFixed(0)} (${reportData.total.shopifyShare.toFixed(0)}% of total)
+- Profit: $${reportData.shopify.netProfit.toFixed(0)}
+- Ad Spend: $${reportData.shopify.adSpend.toFixed(0)} (Meta + Google)
+- ROAS: ${reportData.shopify.roas.toFixed(1)}x
+- 3PL Costs: $${reportData.shopify.threeplCosts.toFixed(0)}`;
+
+      if (inventoryAlerts.length > 0) {
+        enhancedData += `
+
+⚠️ INVENTORY ALERTS (${inventoryAlerts.length} items need attention):
+${inventoryAlerts.map(i => `- ${i.sku}: ${i.days} days supply (${i.units} units) [${i.status}]`).join('\n')}`;
+      }
+
+      if (forecastInfo.upcoming.length > 0) {
+        enhancedData += `
+
+📊 AMAZON FORECAST (upcoming weeks):
+${forecastInfo.upcoming.map(f => `- ${f.week}: $${f.sales.toFixed(0)} projected sales`).join('\n')}`;
+      }
+
+      if (forecastInfo.alerts.length > 0) {
+        enhancedData += `
+
+🔔 FORECAST ALERTS:
+${forecastInfo.alerts.map(a => `- ${a}`).join('\n')}`;
+      }
+
       const reportPrompt = `Generate a ${typeLabels[type]} INTELLIGENCE REPORT for "${storeName || 'Store'}".
 
-DATA FOR ${periodLabel.toUpperCase()}:
-- Revenue: $${periodData.total.revenue.toFixed(0)}
-- Profit: $${periodData.total.netProfit.toFixed(0)}
-- Units: ${periodData.total.units}
-- Margin: ${periodData.total.netMargin.toFixed(1)}%
-- Amazon: $${periodData.amazon.revenue.toFixed(0)} (${periodData.total.amazonShare.toFixed(0)}%)
-- Shopify: $${periodData.shopify.revenue.toFixed(0)} (${periodData.total.shopifyShare.toFixed(0)}%)
-- Weeks included: ${weeksInPeriod.length}
+${enhancedData}
 
-Create a markdown report with:
+Create a comprehensive markdown report with these sections:
+
 # 📊 ${typeLabels[type]} Intelligence Report
 **${periodLabel}**
 
 ## Executive Summary
-(3 sentences: performance overview, key highlight, main concern)
+(3-4 sentences: overall performance, biggest win, main concern, outlook)
 
-## Key Metrics
-| Metric | Value | Status |
-(Revenue, Profit, Units, Margin with ✅⚠️❌ indicators)
+## 💰 Key Metrics
+| Metric | Value | ${comparisonData ? 'Change | ' : ''}Status |
+(Revenue, Profit, Units, Margin - use ✅ for good, ⚠️ for watch, ❌ for concern)
 
-## Wins
-(3-4 bullet points with numbers)
+## 🏆 Wins & Achievements
+(3-4 specific wins with actual numbers)
 
-## Attention Needed
-(3-4 actionable items)
+## ⚠️ Areas Needing Attention
+(3-4 actionable items based on the data)
 
-## Channel Performance
-(Amazon & Shopify breakdown)
+## 📈 Channel Performance
+(Detailed Amazon vs Shopify analysis with ROAS insights)
 
-## Recommendations
-(4-5 prioritized actions)
+${inventoryAlerts.length > 0 ? `## 📦 Inventory Alerts
+(Comment on low stock items and recommended actions)
 
-Use actual numbers. Be specific and actionable.`;
+` : ''}${forecastInfo.upcoming.length > 0 ? `## 🔮 Forecast & Outlook
+(Analysis of upcoming Amazon forecasts and what to expect)
+
+` : ''}## 🎯 Recommendations
+(5 specific, prioritized action items with expected impact)
+
+Use the ACTUAL numbers provided. Be specific and actionable. Include period-over-period changes where available.`;
 
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          system: 'You are an expert e-commerce analyst. Generate concise, data-driven reports with specific numbers.',
+          system: 'You are an expert e-commerce analyst. Generate detailed, data-driven reports using ONLY the numbers provided. Be specific with SKUs, percentages, and dollar amounts. Make recommendations actionable.',
           messages: [{ role: 'user', content: reportPrompt }]
         }),
       });
@@ -5955,7 +6140,16 @@ Use actual numbers. Be specific and actionable.`;
         periodLabel,
         generatedAt: new Date().toISOString(),
         content: reportContent,
-        metrics: { revenue: periodData.total.revenue, profit: periodData.total.netProfit, units: periodData.total.units, margin: periodData.total.netMargin },
+        metrics: { 
+          revenue: reportData.total.revenue, 
+          profit: reportData.total.netProfit, 
+          units: reportData.total.units, 
+          margin: reportData.total.netMargin,
+          changes,
+        },
+        dataSource,
+        inventoryAlerts: inventoryAlerts.length,
+        forecastWeeks: forecastInfo.upcoming.length,
       };
 
       setCurrentReport(newReport);
