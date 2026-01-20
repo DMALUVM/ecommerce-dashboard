@@ -9470,27 +9470,31 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Revenue Trend Chart */}
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
                 <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Revenue Trend</h3>
-                <p className="text-slate-500 text-xs mb-2">Max: {formatCurrency(maxRevenue)} | Data points: {currentData.length}</p>
-                <div className="flex items-end gap-2 h-48 bg-slate-900/30 rounded-lg p-2">
+                <div className="flex items-end gap-2 h-52 bg-slate-900/30 rounded-lg p-3">
                   {currentData.length === 0 ? (
-                    <p className="text-slate-500 text-center w-full">No data available</p>
+                    <p className="text-slate-500 text-center w-full self-center">No data available</p>
                   ) : currentData.map((d, i) => {
-                    const height = maxRevenue > 0 ? (d.revenue / maxRevenue) * 100 : 0;
+                    // Scale relative to max, with bars starting from bottom
+                    const height = maxRevenue > 0 ? ((d.revenue || 0) / maxRevenue) * 100 : 0;
                     const isLatest = i === currentData.length - 1;
                     return (
-                      <div key={d.key || i} className="flex-1 flex flex-col items-center group relative min-w-[30px]">
+                      <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[30px]">
                         <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
                           {d.label}<br/>{formatCurrency(d.revenue)}
                           {d.source && <span className="text-slate-400"> ({d.source})</span>}
                         </div>
                         <div 
                           className={`w-full rounded-t transition-all ${isLatest ? 'bg-violet-500' : 'bg-violet-500/70'} hover:bg-violet-400`}
-                          style={{ height: `${Math.max(height, 5)}%`, minHeight: '8px' }}
+                          style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
                         />
-                        <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
                       </div>
                     );
                   })}
+                </div>
+                <div className="flex justify-between px-3 mt-1">
+                  {currentData.map((d, i) => (
+                    <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
+                  ))}
                 </div>
               </div>
               
@@ -9499,87 +9503,112 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 {/* Profit Trend */}
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                   <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Profit Trend</h3>
-                  <div className="flex items-end gap-2 h-40 bg-slate-900/30 rounded-lg p-2">
+                  <div className="flex items-end gap-2 h-44 bg-slate-900/30 rounded-lg p-3">
                     {currentData.length === 0 ? (
-                      <p className="text-slate-500 text-center w-full">No data</p>
+                      <p className="text-slate-500 text-center w-full self-center">No data</p>
                     ) : currentData.map((d, i) => {
                       const height = maxProfit > 0 ? (Math.abs(d.profit) / maxProfit) * 100 : 0;
                       const isPositive = d.profit >= 0;
                       const isLatest = i === currentData.length - 1;
                       return (
-                        <div key={d.key || i} className="flex-1 flex flex-col items-center group relative min-w-[20px]">
+                        <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[20px]">
                           <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
                             {d.label}<br/>{formatCurrency(d.profit)}
                           </div>
                           <div 
                             className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
-                            style={{ height: `${Math.max(height, 5)}%`, minHeight: '8px' }}
+                            style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
                           />
-                          <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
                         </div>
                       );
                     })}
+                  </div>
+                  <div className="flex justify-between px-3 mt-1">
+                    {currentData.map((d, i) => (
+                      <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
+                    ))}
                   </div>
                 </div>
                 
                 {/* Margin Trend */}
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                   <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Margin Trend</h3>
-                  <div className="flex items-end gap-2 h-40 bg-slate-900/30 rounded-lg p-2">
-                    {currentData.length === 0 ? (
-                      <p className="text-slate-500 text-center w-full">No data</p>
-                    ) : currentData.map((d, i) => {
-                      const maxMargin = Math.max(...currentData.map(x => Math.abs(x.margin || 0)), 50);
-                      const height = (Math.abs(d.margin) / maxMargin) * 100;
-                      const isPositive = d.margin >= 0;
-                      const isLatest = i === currentData.length - 1;
-                      return (
-                        <div key={d.key || i} className="flex-1 flex flex-col items-center group relative min-w-[20px]">
-                          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                            {d.label}<br/>{formatPercent(d.margin)}
-                          </div>
-                          <div 
-                            className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-cyan-500' : 'bg-cyan-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
-                            style={{ height: `${Math.max(height, 5)}%`, minHeight: '8px' }}
-                          />
-                          <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
+                  {(() => {
+                    const maxMargin = Math.max(...currentData.map(x => Math.abs(x.margin || 0)), 1);
+                    return (
+                      <>
+                        <div className="flex items-end gap-2 h-44 bg-slate-900/30 rounded-lg p-3">
+                          {currentData.length === 0 ? (
+                            <p className="text-slate-500 text-center w-full self-center">No data</p>
+                          ) : currentData.map((d, i) => {
+                            const height = (Math.abs(d.margin) / maxMargin) * 100;
+                            const isPositive = d.margin >= 0;
+                            const isLatest = i === currentData.length - 1;
+                            return (
+                              <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[20px]">
+                                <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                                  {d.label}<br/>{formatPercent(d.margin)}
+                                </div>
+                                <div 
+                                  className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-cyan-500' : 'bg-cyan-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
+                                  style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
+                                />
+                              </div>
+                            );
+                          })}
                         </div>
-                      );
-                    })}
-                  </div>
+                        <div className="flex justify-between px-3 mt-1">
+                          {currentData.map((d, i) => (
+                            <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
+                          ))}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
               
               {/* Profit Per Unit Trend */}
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
                 <h3 className="text-lg font-semibold text-white mb-4">💵 Profit Per Unit Trend</h3>
-                <div className="flex items-end gap-2 h-40 bg-slate-900/30 rounded-lg p-2">
-                  {currentData.length === 0 ? (
-                    <p className="text-slate-500 text-center w-full">No data</p>
-                  ) : currentData.map((d, i) => {
-                    const ppu = d.units > 0 ? d.profit / d.units : 0;
-                    const maxPPU = Math.max(...currentData.map(x => Math.abs(x.units > 0 ? x.profit / x.units : 0)), 1);
-                    const height = maxPPU > 0 ? (Math.abs(ppu) / maxPPU) * 100 : 0;
-                    const isPositive = ppu >= 0;
-                    const isLatest = i === currentData.length - 1;
-                    return (
-                      <div key={d.key || i} className="flex-1 flex flex-col items-center group relative min-w-[20px]">
-                        <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                          {d.label}<br/>{formatCurrency(ppu)}/unit
-                        </div>
-                        <div 
-                          className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-amber-500' : 'bg-amber-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
-                          style={{ height: `${Math.max(height, 5)}%`, minHeight: '8px' }}
-                        />
-                        <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
+                {(() => {
+                  const ppuData = currentData.map(d => d.units > 0 ? d.profit / d.units : 0);
+                  const maxPPU = Math.max(...ppuData.map(Math.abs), 1);
+                  return (
+                    <>
+                      <div className="flex items-end gap-2 h-44 bg-slate-900/30 rounded-lg p-3">
+                        {currentData.length === 0 ? (
+                          <p className="text-slate-500 text-center w-full self-center">No data</p>
+                        ) : currentData.map((d, i) => {
+                          const ppu = ppuData[i];
+                          const height = maxPPU > 0 ? (Math.abs(ppu) / maxPPU) * 100 : 0;
+                          const isPositive = ppu >= 0;
+                          const isLatest = i === currentData.length - 1;
+                          return (
+                            <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[20px]">
+                              <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                                {d.label}<br/>{formatCurrency(ppu)}/unit
+                              </div>
+                              <div 
+                                className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-amber-500' : 'bg-amber-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
+                                style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
+                              />
+                            </div>
+                          );
+                        })}
                       </div>
-                    );
-                  })}
-                </div>
-                <div className="flex justify-between text-xs text-slate-500 mt-2 px-2">
-                  <span>Avg: {formatCurrency(currentData.reduce((sum, d) => sum + (d.units > 0 ? d.profit / d.units : 0), 0) / (currentData.length || 1))}/unit</span>
-                  <span>Latest: {formatCurrency(latestPeriod?.units > 0 ? latestPeriod.profit / latestPeriod.units : 0)}/unit</span>
-                </div>
+                      <div className="flex justify-between px-3 mt-1">
+                        {currentData.map((d, i) => (
+                          <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
+                        ))}
+                      </div>
+                      <div className="flex justify-between text-xs text-slate-500 mt-2 px-2">
+                        <span>Avg: {formatCurrency(ppuData.reduce((a, b) => a + b, 0) / (ppuData.length || 1))}/unit</span>
+                        <span>Latest: {formatCurrency(ppuData[ppuData.length - 1] || 0)}/unit</span>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
               
               {/* Data Table */}
@@ -13557,6 +13586,100 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 <span className="text-slate-500">• {Object.keys(weekNotes).length} week notes</span>
                 <span className="text-slate-500">• All settings & goals</span>
               </div>
+            </div>
+            
+            {/* Delete Individual Data */}
+            <div className="mt-6 pt-6 border-t border-slate-700">
+              <h4 className="text-white font-medium mb-3 flex items-center gap-2"><Trash2 className="w-4 h-4 text-rose-400" />Delete Individual Records</h4>
+              <p className="text-slate-400 text-sm mb-4">Remove specific weeks or periods from your data.</p>
+              
+              {/* Weekly Data */}
+              {Object.keys(allWeeksData).length > 0 && (
+                <div className="mb-4">
+                  <p className="text-slate-300 text-sm mb-2">Weekly Data ({Object.keys(allWeeksData).length} weeks)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.keys(allWeeksData).sort().reverse().map(weekKey => (
+                      <div key={weekKey} className="flex items-center gap-1 bg-slate-700/50 rounded-lg px-2 py-1">
+                        <span className="text-slate-300 text-xs">{new Date(weekKey + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Delete week ${weekKey}? This cannot be undone.`)) {
+                              setAllWeeksData(prev => {
+                                const updated = { ...prev };
+                                delete updated[weekKey];
+                                return updated;
+                              });
+                              toast('Week deleted', 'success');
+                            }
+                          }}
+                          className="text-rose-400 hover:text-rose-300 p-0.5"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Period Data */}
+              {Object.keys(allPeriodsData).length > 0 && (
+                <div className="mb-4">
+                  <p className="text-slate-300 text-sm mb-2">Period Data ({Object.keys(allPeriodsData).length} periods)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.keys(allPeriodsData).sort().map(periodKey => (
+                      <div key={periodKey} className="flex items-center gap-1 bg-slate-700/50 rounded-lg px-2 py-1">
+                        <span className="text-slate-300 text-xs">{allPeriodsData[periodKey].label || periodKey}</span>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Delete period "${allPeriodsData[periodKey].label || periodKey}"? This cannot be undone.`)) {
+                              setAllPeriodsData(prev => {
+                                const updated = { ...prev };
+                                delete updated[periodKey];
+                                return updated;
+                              });
+                              toast('Period deleted', 'success');
+                            }
+                          }}
+                          className="text-rose-400 hover:text-rose-300 p-0.5"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Inventory Data */}
+              {Object.keys(invHistory).length > 0 && (
+                <div className="mb-4">
+                  <p className="text-slate-300 text-sm mb-2">Inventory Snapshots ({Object.keys(invHistory).length})</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.keys(invHistory).sort().reverse().slice(0, 10).map(invKey => (
+                      <div key={invKey} className="flex items-center gap-1 bg-slate-700/50 rounded-lg px-2 py-1">
+                        <span className="text-slate-300 text-xs">{invKey}</span>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Delete inventory snapshot ${invKey}? This cannot be undone.`)) {
+                              setInvHistory(prev => {
+                                const updated = { ...prev };
+                                delete updated[invKey];
+                                return updated;
+                              });
+                              toast('Inventory snapshot deleted', 'success');
+                            }
+                          }}
+                          className="text-rose-400 hover:text-rose-300 p-0.5"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                    {Object.keys(invHistory).length > 10 && <span className="text-slate-500 text-xs self-center">+{Object.keys(invHistory).length - 10} more</span>}
+                  </div>
+                </div>
+              )}
             </div>
             <SettingRow label="Reset Settings Only" desc="Restore settings to defaults (keeps all data)">
               {showResetConfirm ? (
