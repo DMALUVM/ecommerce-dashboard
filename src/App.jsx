@@ -56,10 +56,16 @@ const hasDailySalesData = (dayData) => {
   return !!(dayData.total || dayData.amazon || dayData.shopify || dayData.orders || dayData.totalSales);
 };
 
+// Helper: Format date to YYYY-MM-DD without timezone issues
+const formatDateKey = (date) => {
+  const d = date instanceof Date ? date : new Date(date);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 const getSunday = (date) => {
   const d = new Date(date);
   d.setDate(d.getDate() + (7 - d.getDay()) % 7);
-  return d.toISOString().split('T')[0];
+  return formatDateKey(d);
 };
 
 const STORAGE_KEY = 'ecommerce_dashboard_v5';
@@ -1125,7 +1131,7 @@ const handleLogout = async () => {
     for (let i = 0; i < 14; i++) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = formatDateKey(d);
       last14Days.push({
         date: dateStr,
         hasData: hasDailySalesData(allDaysData[dateStr]),
@@ -1141,7 +1147,7 @@ const handleLogout = async () => {
     for (let i = 1; i <= 30; i++) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = formatDateKey(d);
       if (hasDailySalesData(allDaysData[dateStr])) {
         streak++;
       } else {
@@ -1184,8 +1190,9 @@ const handleLogout = async () => {
         const date = new Date(d + 'T12:00:00');
         const dayOfWeek = date.getDay();
         const weekEnd = new Date(date);
-        weekEnd.setDate(date.getDate() + (6 - dayOfWeek));
-        return weekEnd.toISOString().split('T')[0];
+        // Move to Sunday (week ending day): if already Sunday add 0, else add days to reach Sunday
+        weekEnd.setDate(date.getDate() + (dayOfWeek === 0 ? 0 : 7 - dayOfWeek));
+        return formatDateKey(weekEnd);
       })).size,
       
       // Weekly → Inventory: How many weeks feed velocity?
@@ -1240,7 +1247,7 @@ const handleLogout = async () => {
     // Check daily data freshness
     const yesterday = new Date(now);
     yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    const yesterdayStr = formatDateKey(yesterday);
     if (!hasDailySalesData(allDaysData[yesterdayStr])) {
       nextActions.push({
         priority: 'medium',
@@ -1255,8 +1262,9 @@ const handleLogout = async () => {
       const date = new Date(d + 'T12:00:00');
       const dayOfWeek = date.getDay();
       const weekEnd = new Date(date);
-      weekEnd.setDate(date.getDate() + (6 - dayOfWeek));
-      const weekKey = weekEnd.toISOString().split('T')[0];
+      // Move to Sunday (week ending day)
+      weekEnd.setDate(date.getDate() + (dayOfWeek === 0 ? 0 : 7 - dayOfWeek));
+      const weekKey = formatDateKey(weekEnd);
       return weekEnd <= now && (!allWeeksData[weekKey] || !allWeeksData[weekKey].aggregatedFrom);
     });
     if (dailyNotInWeekly.length >= 7) {
@@ -2825,7 +2833,7 @@ const savePeriods = async (d) => {
       return;
     }
     
-    // Group days by week (Sunday to Saturday)
+    // Group days by week (Monday to Sunday)
     const weeklyAgg = {};
     
     sortedDays.forEach(dayKey => {
@@ -2834,8 +2842,9 @@ const savePeriods = async (d) => {
       // Get the Sunday of this week (week ending date)
       const dayOfWeek = date.getDay();
       const weekEnd = new Date(date);
-      weekEnd.setDate(date.getDate() + (6 - dayOfWeek)); // Move to Saturday
-      const weekKey = weekEnd.toISOString().split('T')[0];
+      // Move to Sunday: if already Sunday add 0, else add days to reach Sunday
+      weekEnd.setDate(date.getDate() + (dayOfWeek === 0 ? 0 : 7 - dayOfWeek));
+      const weekKey = formatDateKey(weekEnd);
       
       if (!weeklyAgg[weekKey]) {
         weeklyAgg[weekKey] = {
@@ -3770,15 +3779,15 @@ const savePeriods = async (d) => {
           ctr: d.impressions > 0 ? (d.clicks / d.impressions) * 100 : 0,
         }));
       } else {
-        // Aggregate into weeks (ending Sunday)
+        // Aggregate into weeks (Monday to Sunday, ending Sunday)
         const weeklyMap = {};
         dailyData.forEach(d => {
-          const date = new Date(d.date + 'T00:00:00');
+          const date = new Date(d.date + 'T12:00:00');
           const dayOfWeek = date.getDay(); // 0 = Sunday
           const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
           const weekEndDate = new Date(date);
           weekEndDate.setDate(weekEndDate.getDate() + daysUntilSunday);
-          const weekEnding = weekEndDate.toISOString().split('T')[0];
+          const weekEnding = formatDateKey(weekEndDate);
           
           if (!weeklyMap[weekEnding]) {
             weeklyMap[weekEnding] = { 
@@ -9138,24 +9147,23 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
       const daysIntoWeek = dayOfWeek === 0 ? 7 : dayOfWeek; // Sunday is end of week
       const daysRemaining = 7 - daysIntoWeek;
       
-      // Get current week's data from daily data
-      const today = now.toISOString().split('T')[0];
-      const weekStart = new Date(now);
-      weekStart.setDate(weekStart.getDate() - daysIntoWeek + 1); // Monday
+      // Get current week's date range (Monday to Sunday) using consistent date format
+      const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysIntoWeek + 1);
       
       let currentWeekRevenue = 0;
       let daysWithData = 0;
       const dailyRevenues = [];
       
-      // Sum up daily revenue for this week
+      // Sum up daily revenue for this week (check each day of current week)
       for (let i = 0; i < daysIntoWeek; i++) {
         const d = new Date(weekStart);
-        d.setDate(d.getDate() + i);
-        const dateKey = d.toISOString().split('T')[0];
+        d.setDate(weekStart.getDate() + i);
+        const dateKey = formatDateKey(d);
         const dayData = allDaysData[dateKey];
-        if (dayData?.total?.revenue) {
-          currentWeekRevenue += dayData.total.revenue;
-          dailyRevenues.push(dayData.total.revenue);
+        // Only count days with real sales data (not just Google Ads)
+        if (dayData?.total?.revenue || (hasDailySalesData(dayData) && dayData.total)) {
+          currentWeekRevenue += dayData.total?.revenue || 0;
+          dailyRevenues.push(dayData.total?.revenue || 0);
           daysWithData++;
         }
       }
@@ -9170,7 +9178,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
         projectedTotal = currentWeekRevenue + (avgDailyRevenue * daysRemaining);
         projectionMethod = 'daily-avg';
       } else if (daysWithData === 0 && sortedWeeks.length > 0) {
-        // No daily data - use last week's total as projection
+        // No daily data for current week - use last week's total as projection
         const lastWeekData = allWeeksData[sortedWeeks[sortedWeeks.length - 1]];
         projectedTotal = lastWeekData?.total?.revenue || 0;
         projectionMethod = 'last-week';
