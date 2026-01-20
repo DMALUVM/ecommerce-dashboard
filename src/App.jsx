@@ -9125,21 +9125,189 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
 
   // ==================== TRENDS VIEW ====================
   if (view === 'trends') {
-    const sortedWeeks = Object.keys(allWeeksData).sort();
-    const recentWeeks = sortedWeeks.slice(-12); // Last 12 weeks
-    const weeklyData = recentWeeks.map(w => ({ week: w, ...allWeeksData[w] }));
+    // State for trends sub-view
+    const [trendsTab, setTrendsTab] = useState('weekly'); // 'weekly' | 'monthly' | 'yearly'
     
-    // Calculate week-over-week changes
-    const latestWeek = weeklyData[weeklyData.length - 1];
-    const prevWeek = weeklyData[weeklyData.length - 2];
-    const fourWeeksAgo = weeklyData[weeklyData.length - 5];
+    // Get all available data
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    const sortedPeriods = Object.keys(allPeriodsData).sort();
+    
+    // Categorize periods by type
+    const monthlyPeriods = sortedPeriods.filter(p => {
+      // Match formats like "january-2025", "2025-01", "January 2025"
+      return /^(january|february|march|april|may|june|july|august|september|october|november|december)-?\d{4}$/i.test(p) ||
+             /^\d{4}-\d{2}$/.test(p) ||
+             /^[a-z]+-\d{4}$/i.test(p);
+    });
+    
+    const quarterlyPeriods = sortedPeriods.filter(p => /q[1-4]/i.test(p));
+    const yearlyPeriods = sortedPeriods.filter(p => /^\d{4}$/.test(p));
+    
+    // Build unified monthly data (from periods OR aggregated from weeks)
+    const getMonthlyTrends = () => {
+      const monthData = {};
+      
+      // First, add period data for months
+      monthlyPeriods.forEach(p => {
+        const data = allPeriodsData[p];
+        // Normalize the key to YYYY-MM format
+        let monthKey = p;
+        const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+        monthNames.forEach((name, idx) => {
+          if (p.toLowerCase().includes(name)) {
+            const yearMatch = p.match(/\d{4}/);
+            if (yearMatch) monthKey = `${yearMatch[0]}-${String(idx + 1).padStart(2, '0')}`;
+          }
+        });
+        
+        monthData[monthKey] = {
+          key: p,
+          label: data.label || p,
+          source: 'period',
+          revenue: data.total?.revenue || 0,
+          profit: data.total?.netProfit || 0,
+          units: data.total?.units || 0,
+          margin: data.total?.netMargin || 0,
+          amazonRev: data.amazon?.revenue || 0,
+          shopifyRev: data.shopify?.revenue || 0,
+          adSpend: data.total?.adSpend || 0,
+          roas: data.total?.roas || 0,
+          skuData: [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])],
+        };
+      });
+      
+      // Then aggregate weekly data for months not in periods
+      sortedWeeks.forEach(w => {
+        const monthKey = w.substring(0, 7);
+        if (!monthData[monthKey]) {
+          monthData[monthKey] = {
+            key: monthKey,
+            label: new Date(monthKey + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+            source: 'weekly',
+            revenue: 0, profit: 0, units: 0, margin: 0,
+            amazonRev: 0, shopifyRev: 0, adSpend: 0, roas: 0,
+            skuData: [], weekCount: 0,
+          };
+        }
+        if (monthData[monthKey].source === 'weekly') {
+          const week = allWeeksData[w];
+          monthData[monthKey].revenue += week.total?.revenue || 0;
+          monthData[monthKey].profit += week.total?.netProfit || 0;
+          monthData[monthKey].units += week.total?.units || 0;
+          monthData[monthKey].amazonRev += week.amazon?.revenue || 0;
+          monthData[monthKey].shopifyRev += week.shopify?.revenue || 0;
+          monthData[monthKey].adSpend += week.total?.adSpend || 0;
+          monthData[monthKey].weekCount = (monthData[monthKey].weekCount || 0) + 1;
+          // Aggregate SKU data
+          const weekSkus = [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])];
+          monthData[monthKey].skuData.push(...weekSkus);
+        }
+      });
+      
+      // Calculate derived metrics
+      Object.values(monthData).forEach(m => {
+        if (m.source === 'weekly') {
+          m.margin = m.revenue > 0 ? (m.profit / m.revenue) * 100 : 0;
+          m.roas = m.adSpend > 0 ? m.revenue / m.adSpend : 0;
+        }
+      });
+      
+      return Object.entries(monthData).sort((a, b) => a[0].localeCompare(b[0]));
+    };
+    
+    // Build yearly data
+    const getYearlyTrends = () => {
+      const yearData = {};
+      
+      // Add yearly periods first
+      yearlyPeriods.forEach(p => {
+        const data = allPeriodsData[p];
+        yearData[p] = {
+          key: p,
+          label: data.label || p,
+          source: 'period',
+          revenue: data.total?.revenue || 0,
+          profit: data.total?.netProfit || 0,
+          units: data.total?.units || 0,
+          margin: data.total?.netMargin || 0,
+          amazonRev: data.amazon?.revenue || 0,
+          shopifyRev: data.shopify?.revenue || 0,
+          adSpend: data.total?.adSpend || 0,
+          roas: data.total?.roas || 0,
+          skuData: [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])],
+        };
+      });
+      
+      // Aggregate from quarters if available
+      quarterlyPeriods.forEach(p => {
+        const yearMatch = p.match(/\d{4}/);
+        if (!yearMatch) return;
+        const year = yearMatch[0];
+        if (yearData[year]) return; // Already have yearly data
+        
+        if (!yearData[year]) {
+          yearData[year] = {
+            key: year, label: year, source: 'quarterly',
+            revenue: 0, profit: 0, units: 0, amazonRev: 0, shopifyRev: 0, adSpend: 0,
+            skuData: [], quarterCount: 0,
+          };
+        }
+        const data = allPeriodsData[p];
+        yearData[year].revenue += data.total?.revenue || 0;
+        yearData[year].profit += data.total?.netProfit || 0;
+        yearData[year].units += data.total?.units || 0;
+        yearData[year].amazonRev += data.amazon?.revenue || 0;
+        yearData[year].shopifyRev += data.shopify?.revenue || 0;
+        yearData[year].adSpend += data.total?.adSpend || 0;
+        yearData[year].quarterCount++;
+        yearData[year].skuData.push(...(data.amazon?.skuData || []), ...(data.shopify?.skuData || []));
+      });
+      
+      // Calculate derived metrics
+      Object.values(yearData).forEach(y => {
+        y.margin = y.revenue > 0 ? (y.profit / y.revenue) * 100 : 0;
+        y.roas = y.adSpend > 0 ? y.revenue / y.adSpend : 0;
+      });
+      
+      return Object.entries(yearData).sort((a, b) => a[0].localeCompare(b[0]));
+    };
+    
+    // Get weekly data
+    const weeklyData = sortedWeeks.slice(-12).map(w => {
+      const week = allWeeksData[w];
+      return {
+        key: w,
+        label: new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        source: 'weekly',
+        revenue: week.total?.revenue || 0,
+        profit: week.total?.netProfit || 0,
+        units: week.total?.units || 0,
+        margin: week.total?.netMargin || 0,
+        amazonRev: week.amazon?.revenue || 0,
+        shopifyRev: week.shopify?.revenue || 0,
+        adSpend: week.total?.adSpend || 0,
+        roas: week.total?.roas || 0,
+        skuData: [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])],
+      };
+    });
+    
+    const monthlyTrends = getMonthlyTrends();
+    const yearlyTrends = getYearlyTrends();
+    
+    // Select data based on active tab
+    const currentData = trendsTab === 'weekly' ? weeklyData : 
+                        trendsTab === 'monthly' ? monthlyTrends.map(([k, v]) => v) :
+                        yearlyTrends.map(([k, v]) => v);
+    
+    const latestPeriod = currentData[currentData.length - 1];
+    const prevPeriod = currentData[currentData.length - 2];
     
     const calcChange = (current, previous) => {
       if (!previous || previous === 0) return null;
       return ((current - previous) / previous) * 100;
     };
     
-    const ChangeIndicator = ({ current, previous, format = 'currency' }) => {
+    const ChangeIndicator = ({ current, previous }) => {
       const change = calcChange(current, previous);
       if (change === null) return <span className="text-slate-500 text-sm">—</span>;
       const isPositive = change > 0;
@@ -9154,35 +9322,49 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       );
     };
     
-    // Rolling averages - use available weeks (min 1)
-    const calcRolling = (weeks, field, subfield) => {
-      const available = Math.min(weeks.length, 4);
-      if (available === 0) return 0;
-      const lastN = weeks.slice(-available);
-      const sum = lastN.reduce((acc, w) => acc + (subfield ? w[field]?.[subfield] : w[field]) || 0, 0);
-      return sum / available;
+    // Find max values for chart scaling
+    const maxRevenue = Math.max(...currentData.map(d => d.revenue || 0), 1);
+    const maxProfit = Math.max(...currentData.map(d => Math.abs(d.profit || 0)), 1);
+    
+    // Aggregate SKU trends
+    const getSkuTrends = () => {
+      const skuMap = {};
+      currentData.forEach((period, idx) => {
+        (period.skuData || []).forEach(sku => {
+          const key = sku.sku || sku.title || 'Unknown';
+          if (!skuMap[key]) {
+            skuMap[key] = { sku: key, name: sku.title || sku.productName || key, periods: [], totalUnits: 0, totalProfit: 0 };
+          }
+          const profit = sku.netProceeds || ((sku.netSales || 0) - (sku.cogs || 0));
+          const units = sku.unitsSold || 0;
+          const ppu = units > 0 ? profit / units : 0;
+          skuMap[key].periods.push({ idx, units, profit, ppu });
+          skuMap[key].totalUnits += units;
+          skuMap[key].totalProfit += profit;
+        });
+      });
+      
+      return Object.values(skuMap)
+        .filter(s => s.periods.length >= 2 && s.totalUnits >= 3)
+        .map(s => {
+          const avgPPU = s.totalUnits > 0 ? s.totalProfit / s.totalUnits : 0;
+          const recentPeriods = s.periods.slice(-Math.ceil(s.periods.length / 2));
+          const olderPeriods = s.periods.slice(0, Math.floor(s.periods.length / 2));
+          const recentPPU = recentPeriods.length > 0 ? recentPeriods.reduce((sum, p) => sum + p.ppu, 0) / recentPeriods.length : 0;
+          const olderPPU = olderPeriods.length > 0 ? olderPeriods.reduce((sum, p) => sum + p.ppu, 0) / olderPeriods.length : recentPPU;
+          const trend = olderPPU !== 0 ? ((recentPPU - olderPPU) / Math.abs(olderPPU)) * 100 : 0;
+          return { ...s, avgPPU, recentPPU, olderPPU, trend };
+        })
+        .sort((a, b) => a.trend - b.trend);
     };
     
-    // Debug: Check if weeklyData has values
-    console.log('Trends weeklyData:', weeklyData.length, 'weeks, maxRevenue:', Math.max(...weeklyData.map(w => w.total?.revenue || 0)));
+    const skuTrends = getSkuTrends();
+    const decliningSkus = skuTrends.filter(s => s.trend < -10).slice(0, 8);
+    const improvingSkus = skuTrends.filter(s => s.trend > 10).sort((a, b) => b.trend - a.trend).slice(0, 8);
     
-    // Monthly aggregation
-    const monthlyData = {};
-    sortedWeeks.forEach(w => {
-      const month = w.substring(0, 7); // YYYY-MM
-      if (!monthlyData[month]) monthlyData[month] = { revenue: 0, profit: 0, units: 0, weeks: 0 };
-      monthlyData[month].revenue += allWeeksData[w].total?.revenue || 0;
-      monthlyData[month].profit += allWeeksData[w].total?.netProfit || 0;
-      monthlyData[month].units += allWeeksData[w].total?.units || 0;
-      monthlyData[month].weeks += 1;
-    });
-    const months = Object.keys(monthlyData).sort().slice(-6);
-    
-    // Find max values for chart scaling
-    const maxRevenue = Math.max(...weeklyData.map(w => w.total?.revenue || 0));
-    const maxProfit = Math.max(...weeklyData.map(w => Math.abs(w.total?.netProfit || 0)));
-    const maxMonthlyRev = Math.max(...months.map(m => monthlyData[m].revenue));
-    
+    const periodLabel = trendsTab === 'weekly' ? 'Week' : trendsTab === 'monthly' ? 'Month' : 'Year';
+    const dataAvailable = currentData.length > 0;
+
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
@@ -9191,465 +9373,294 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">📈 Trends Dashboard</h1>
-            <p className="text-slate-400">Performance trends and week-over-week analysis</p>
+            <p className="text-slate-400">Performance trends across different time periods</p>
           </div>
           
-          {/* Week-over-Week Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-              <p className="text-slate-400 text-sm mb-1">Revenue (This Week)</p>
-              <p className="text-2xl font-bold text-white">{formatCurrency(latestWeek?.total?.revenue)}</p>
-              <div className="flex items-center justify-between mt-2">
-                <span className="text-slate-500 text-xs">vs last week</span>
-                <ChangeIndicator current={latestWeek?.total?.revenue} previous={prevWeek?.total?.revenue} />
-              </div>
-            </div>
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-              <p className="text-slate-400 text-sm mb-1">Net Profit (This Week)</p>
-              <p className={`text-2xl font-bold ${(latestWeek?.total?.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(latestWeek?.total?.netProfit)}</p>
-              <div className="flex items-center justify-between mt-2">
-                <span className="text-slate-500 text-xs">vs last week</span>
-                <ChangeIndicator current={latestWeek?.total?.netProfit} previous={prevWeek?.total?.netProfit} />
-              </div>
-            </div>
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-              <p className="text-slate-400 text-sm mb-1">Units Sold (This Week)</p>
-              <p className="text-2xl font-bold text-white">{formatNumber(latestWeek?.total?.units)}</p>
-              <div className="flex items-center justify-between mt-2">
-                <span className="text-slate-500 text-xs">vs last week</span>
-                <ChangeIndicator current={latestWeek?.total?.units} previous={prevWeek?.total?.units} />
-              </div>
-            </div>
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-              <p className="text-slate-400 text-sm mb-1">Margin (This Week)</p>
-              <p className={`text-2xl font-bold ${(latestWeek?.total?.netMargin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(latestWeek?.total?.netMargin)}</p>
-              <div className="flex items-center justify-between mt-2">
-                <span className="text-slate-500 text-xs">vs last week</span>
-                <ChangeIndicator current={latestWeek?.total?.netMargin} previous={prevWeek?.total?.netMargin} />
-              </div>
-            </div>
+          {/* Time Period Tabs */}
+          <div className="flex gap-2 mb-6">
+            <button 
+              onClick={() => setTrendsTab('weekly')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'weekly' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              📅 Weekly ({sortedWeeks.length})
+            </button>
+            <button 
+              onClick={() => setTrendsTab('monthly')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'monthly' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              📊 Monthly ({monthlyTrends.length})
+            </button>
+            <button 
+              onClick={() => setTrendsTab('yearly')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'yearly' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              📆 Yearly ({yearlyTrends.length})
+            </button>
           </div>
           
-          {/* Goals Progress */}
-          {(goals.weeklyRevenue > 0 || goals.monthlyRevenue > 0) && (
-            <div className="bg-gradient-to-br from-amber-900/20 to-slate-800/50 rounded-xl border border-amber-500/30 p-5 mb-6">
-              <h3 className="text-lg font-semibold text-amber-400 mb-4 flex items-center gap-2"><Target className="w-5 h-5" />Goals Progress</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {goals.weeklyRevenue > 0 && (
-                  <div>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-slate-400">Weekly Revenue</span>
-                      <span className="text-white">{formatCurrency(latestWeek?.total?.revenue || 0)} / {formatCurrency(goals.weeklyRevenue)}</span>
-                    </div>
-                    <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
-                      <div className={`h-full transition-all ${((latestWeek?.total?.revenue || 0) / goals.weeklyRevenue) >= 1 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${Math.min(((latestWeek?.total?.revenue || 0) / goals.weeklyRevenue) * 100, 100)}%` }} />
-                    </div>
-                    <p className={`text-xs mt-1 ${((latestWeek?.total?.revenue || 0) / goals.weeklyRevenue) >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {(((latestWeek?.total?.revenue || 0) / goals.weeklyRevenue) * 100).toFixed(0)}% of goal
-                      {((latestWeek?.total?.revenue || 0) / goals.weeklyRevenue) >= 1 && ' 🎉'}
-                    </p>
+          {!dataAvailable ? (
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-12 text-center">
+              <Database className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+              <h3 className="text-xl font-semibold text-white mb-2">No {periodLabel} Data Available</h3>
+              <p className="text-slate-400">Upload {trendsTab} data to see trends</p>
+            </div>
+          ) : (
+            <>
+              {/* Summary Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                  <p className="text-slate-400 text-sm mb-1">Revenue (Latest {periodLabel})</p>
+                  <p className="text-2xl font-bold text-white">{formatCurrency(latestPeriod?.revenue)}</p>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-slate-500 text-xs">vs previous</span>
+                    <ChangeIndicator current={latestPeriod?.revenue} previous={prevPeriod?.revenue} />
                   </div>
-                )}
-                {goals.weeklyProfit > 0 && (
-                  <div>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-slate-400">Weekly Profit</span>
-                      <span className="text-white">{formatCurrency(latestWeek?.total?.netProfit || 0)} / {formatCurrency(goals.weeklyProfit)}</span>
-                    </div>
-                    <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
-                      <div className={`h-full transition-all ${((latestWeek?.total?.netProfit || 0) / goals.weeklyProfit) >= 1 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${Math.min(Math.max(((latestWeek?.total?.netProfit || 0) / goals.weeklyProfit) * 100, 0), 100)}%` }} />
-                    </div>
-                    <p className={`text-xs mt-1 ${((latestWeek?.total?.netProfit || 0) / goals.weeklyProfit) >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {(((latestWeek?.total?.netProfit || 0) / goals.weeklyProfit) * 100).toFixed(0)}% of goal
-                      {((latestWeek?.total?.netProfit || 0) / goals.weeklyProfit) >= 1 && ' 🎉'}
-                    </p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                  <p className="text-slate-400 text-sm mb-1">Net Profit</p>
+                  <p className={`text-2xl font-bold ${(latestPeriod?.profit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(latestPeriod?.profit)}</p>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-slate-500 text-xs">vs previous</span>
+                    <ChangeIndicator current={latestPeriod?.profit} previous={prevPeriod?.profit} />
                   </div>
-                )}
-                {goals.monthlyRevenue > 0 && months.length > 0 && (
-                  <div>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-slate-400">Monthly Revenue ({new Date(months[months.length-1] + '-01').toLocaleDateString('en-US', { month: 'short' })})</span>
-                      <span className="text-white">{formatCurrency(monthlyData[months[months.length-1]]?.revenue || 0)} / {formatCurrency(goals.monthlyRevenue)}</span>
-                    </div>
-                    <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
-                      <div className={`h-full transition-all ${((monthlyData[months[months.length-1]]?.revenue || 0) / goals.monthlyRevenue) >= 1 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${Math.min(((monthlyData[months[months.length-1]]?.revenue || 0) / goals.monthlyRevenue) * 100, 100)}%` }} />
-                    </div>
-                    <p className={`text-xs mt-1 ${((monthlyData[months[months.length-1]]?.revenue || 0) / goals.monthlyRevenue) >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {(((monthlyData[months[months.length-1]]?.revenue || 0) / goals.monthlyRevenue) * 100).toFixed(0)}% of goal
-                    </p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                  <p className="text-slate-400 text-sm mb-1">Units Sold</p>
+                  <p className="text-2xl font-bold text-white">{formatNumber(latestPeriod?.units)}</p>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-slate-500 text-xs">vs previous</span>
+                    <ChangeIndicator current={latestPeriod?.units} previous={prevPeriod?.units} />
                   </div>
-                )}
-                {goals.monthlyProfit > 0 && months.length > 0 && (
-                  <div>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-slate-400">Monthly Profit ({new Date(months[months.length-1] + '-01').toLocaleDateString('en-US', { month: 'short' })})</span>
-                      <span className="text-white">{formatCurrency(monthlyData[months[months.length-1]]?.profit || 0)} / {formatCurrency(goals.monthlyProfit)}</span>
-                    </div>
-                    <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
-                      <div className={`h-full transition-all ${((monthlyData[months[months.length-1]]?.profit || 0) / goals.monthlyProfit) >= 1 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${Math.min(Math.max(((monthlyData[months[months.length-1]]?.profit || 0) / goals.monthlyProfit) * 100, 0), 100)}%` }} />
-                    </div>
-                    <p className={`text-xs mt-1 ${((monthlyData[months[months.length-1]]?.profit || 0) / goals.monthlyProfit) >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {(((monthlyData[months[months.length-1]]?.profit || 0) / goals.monthlyProfit) * 100).toFixed(0)}% of goal
-                    </p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                  <p className="text-slate-400 text-sm mb-1">Profit Margin</p>
+                  <p className={`text-2xl font-bold ${(latestPeriod?.margin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(latestPeriod?.margin)}</p>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-slate-500 text-xs">vs previous</span>
+                    {prevPeriod && <span className={`text-sm ${(latestPeriod?.margin - prevPeriod?.margin) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {(latestPeriod?.margin - prevPeriod?.margin) >= 0 ? '+' : ''}{(latestPeriod?.margin - prevPeriod?.margin).toFixed(1)}pt
+                    </span>}
                   </div>
-                )}
+                </div>
               </div>
-            </div>
-          )}
-          
-          {/* 4-Week Rolling Averages */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">📊 4-Week Rolling Averages</h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div>
-                <p className="text-slate-400 text-sm">Avg Weekly Revenue</p>
-                <p className="text-xl font-bold text-white">{formatCurrency(calcRolling(weeklyData, 'total', 'revenue'))}</p>
-              </div>
-              <div>
-                <p className="text-slate-400 text-sm">Avg Weekly Profit</p>
-                <p className="text-xl font-bold text-emerald-400">{formatCurrency(calcRolling(weeklyData, 'total', 'netProfit'))}</p>
-              </div>
-              <div>
-                <p className="text-slate-400 text-sm">Avg Weekly Units</p>
-                <p className="text-xl font-bold text-white">{formatNumber(calcRolling(weeklyData, 'total', 'units'))}</p>
-              </div>
-              <div>
-                <p className="text-slate-400 text-sm">Avg Margin</p>
-                <p className="text-xl font-bold text-emerald-400">{formatPercent(calcRolling(weeklyData, 'total', 'netMargin'))}</p>
-              </div>
-            </div>
-          </div>
-          
-          {/* Weekly Revenue Chart */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">Weekly Revenue Trend</h3>
-            <div className="flex items-end gap-1 h-48">
-              {weeklyData.map((w, i) => {
-                const height = maxRevenue > 0 ? ((w.total?.revenue || 0) / maxRevenue) * 100 : 0;
-                const isLatest = i === weeklyData.length - 1;
-                return (
-                  <div key={w.week} className="flex-1 flex flex-col items-center group relative">
-                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}<br/>
-                      {formatCurrency(w.total?.revenue)}
-                    </div>
-                    <div 
-                      className={`w-full rounded-t transition-all ${isLatest ? 'bg-violet-500' : 'bg-violet-500/60'} hover:bg-violet-400`}
-                      style={{ height: `${Math.max(height, 2)}%` }}
-                    />
-                    <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">
-                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          
-          {/* Weekly Profit Chart */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">Weekly Profit Trend</h3>
-            <div className="flex items-end gap-1 h-48">
-              {weeklyData.map((w, i) => {
-                const profit = w.total?.netProfit || 0;
-                const height = maxProfit > 0 ? (Math.abs(profit) / maxProfit) * 100 : 0;
-                const isPositive = profit >= 0;
-                const isLatest = i === weeklyData.length - 1;
-                return (
-                  <div key={w.week} className="flex-1 flex flex-col items-center group relative">
-                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}<br/>
-                      {formatCurrency(profit)}
-                    </div>
-                    <div 
-                      className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/60') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/60')} hover:opacity-80`}
-                      style={{ height: `${Math.max(height, 2)}%` }}
-                    />
-                    <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">
-                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          
-          {/* Channel Split Over Time */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">Channel Revenue Split</h3>
-            <div className="space-y-2">
-              {weeklyData.slice(-8).map(w => {
-                const amzShare = w.total?.amazonShare || 0;
-                const shopShare = w.total?.shopifyShare || 0;
-                return (
-                  <div key={w.week} className="flex items-center gap-3">
-                    <span className="text-xs text-slate-400 w-20">{new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                    <div className="flex-1 h-6 bg-slate-900 rounded-full overflow-hidden flex">
-                      <div className="bg-orange-500 h-full transition-all" style={{ width: `${amzShare}%` }} title={`Amazon: ${amzShare.toFixed(1)}%`} />
-                      <div className="bg-blue-500 h-full transition-all" style={{ width: `${shopShare}%` }} title={`Shopify: ${shopShare.toFixed(1)}%`} />
-                    </div>
-                    <span className="text-xs text-orange-400 w-12">{amzShare.toFixed(0)}%</span>
-                    <span className="text-xs text-blue-400 w-12">{shopShare.toFixed(0)}%</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="flex gap-4 mt-3 text-xs">
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-orange-500 rounded" />Amazon</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-500 rounded" />Shopify</span>
-            </div>
-          </div>
-          
-          {/* Monthly Summary Table */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">Monthly Summary</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-700">
-                    <th className="text-left text-slate-400 font-medium py-2">Month</th>
-                    <th className="text-right text-slate-400 font-medium py-2">Revenue</th>
-                    <th className="text-right text-slate-400 font-medium py-2">Profit</th>
-                    <th className="text-right text-slate-400 font-medium py-2">Units</th>
-                    <th className="text-right text-slate-400 font-medium py-2">Margin</th>
-                    <th className="text-right text-slate-400 font-medium py-2">$/Unit</th>
-                    <th className="text-right text-slate-400 font-medium py-2">Weeks</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {months.map((m, idx) => {
-                    const d = monthlyData[m];
-                    const margin = d.revenue > 0 ? (d.profit / d.revenue) * 100 : 0;
-                    const profitPerUnit = d.units > 0 ? d.profit / d.units : 0;
-                    const prevMonth = months[idx - 1];
-                    const prevMargin = prevMonth && monthlyData[prevMonth]?.revenue > 0 ? (monthlyData[prevMonth].profit / monthlyData[prevMonth].revenue) * 100 : null;
-                    const prevPPU = prevMonth && monthlyData[prevMonth]?.units > 0 ? monthlyData[prevMonth].profit / monthlyData[prevMonth].units : null;
-                    const marginTrend = prevMargin !== null ? margin - prevMargin : null;
-                    const ppuTrend = prevPPU !== null ? ((profitPerUnit - prevPPU) / Math.abs(prevPPU || 1)) * 100 : null;
+              
+              {/* Revenue Trend Chart */}
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+                <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Revenue Trend</h3>
+                <div className="flex items-end gap-1 h-48">
+                  {currentData.map((d, i) => {
+                    const height = maxRevenue > 0 ? (d.revenue / maxRevenue) * 100 : 0;
+                    const isLatest = i === currentData.length - 1;
                     return (
-                      <tr key={m} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                        <td className="py-2 text-white">{new Date(m + '-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</td>
-                        <td className="py-2 text-right text-white">{formatCurrency(d.revenue)}</td>
-                        <td className={`py-2 text-right ${d.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(d.profit)}</td>
-                        <td className="py-2 text-right text-white">{formatNumber(d.units)}</td>
-                        <td className={`py-2 text-right ${margin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {formatPercent(margin)}
-                          {marginTrend !== null && (
-                            <span className={`ml-1 text-xs ${marginTrend >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
-                              ({marginTrend >= 0 ? '+' : ''}{marginTrend.toFixed(1)}pt)
-                            </span>
-                          )}
-                        </td>
-                        <td className={`py-2 text-right ${profitPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {formatCurrency(profitPerUnit)}
-                          {ppuTrend !== null && (
-                            <span className={`ml-1 text-xs ${ppuTrend >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
-                              ({ppuTrend >= 0 ? '+' : ''}{ppuTrend.toFixed(1)}%)
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2 text-right text-slate-400">{d.weeks}</td>
-                      </tr>
+                      <div key={d.key} className="flex-1 flex flex-col items-center group relative">
+                        <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                          {d.label}<br/>{formatCurrency(d.revenue)}
+                          {d.source && <span className="text-slate-400"> ({d.source})</span>}
+                        </div>
+                        <div 
+                          className={`w-full rounded-t transition-all ${isLatest ? 'bg-violet-500' : 'bg-violet-500/60'} hover:bg-violet-400`}
+                          style={{ height: `${Math.max(height, 2)}%` }}
+                        />
+                        <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
+                      </div>
                     );
                   })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          
-          {/* Profit Margin Trend Chart */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">📈 Profit Margin Trend</h3>
-            <div className="flex items-end gap-1 h-48 relative">
-              {/* Zero line */}
-              <div className="absolute left-0 right-0 bottom-24 border-t border-dashed border-slate-600 z-0" />
-              <span className="absolute -left-1 bottom-[92px] text-[10px] text-slate-500">0%</span>
-              {weeklyData.map((w, i) => {
-                const margin = w.total?.netMargin || 0;
-                const maxMargin = Math.max(...weeklyData.map(w => Math.abs(w.total?.netMargin || 0)), 30);
-                const height = (Math.abs(margin) / maxMargin) * 48;
-                const isPositive = margin >= 0;
-                const isLatest = i === weeklyData.length - 1;
-                const prevMargin = weeklyData[i - 1]?.total?.netMargin;
-                const trend = prevMargin !== undefined ? margin - prevMargin : null;
-                return (
-                  <div key={w.week} className="flex-1 flex flex-col items-center group relative">
-                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}<br/>
-                      Margin: {formatPercent(margin)}
-                      {trend !== null && <><br/><span className={trend >= 0 ? 'text-emerald-300' : 'text-rose-300'}>({trend >= 0 ? '+' : ''}{trend.toFixed(1)}pt vs prev)</span></>}
-                    </div>
-                    <div className="h-24 flex items-end">
-                      <div 
-                        className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-cyan-500' : 'bg-cyan-500/60') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/60')} hover:opacity-80`}
-                        style={{ height: `${Math.max(height, 2)}%` }}
-                      />
-                    </div>
-                    <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">
-                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          
-          {/* Profit Per Unit Trend */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">💵 Profit Per Unit Trend</h3>
-            <div className="flex items-end gap-1 h-48">
-              {weeklyData.map((w, i) => {
-                const ppu = w.total?.units > 0 ? (w.total?.netProfit || 0) / w.total.units : 0;
-                const maxPPU = Math.max(...weeklyData.map(w => Math.abs(w.total?.units > 0 ? (w.total?.netProfit || 0) / w.total.units : 0)), 1);
-                const height = maxPPU > 0 ? (Math.abs(ppu) / maxPPU) * 100 : 0;
-                const isPositive = ppu >= 0;
-                const isLatest = i === weeklyData.length - 1;
-                const prevPPU = weeklyData[i - 1]?.total?.units > 0 ? (weeklyData[i - 1]?.total?.netProfit || 0) / weeklyData[i - 1].total.units : null;
-                const trend = prevPPU !== null ? ((ppu - prevPPU) / Math.abs(prevPPU || 1)) * 100 : null;
-                return (
-                  <div key={w.week} className="flex-1 flex flex-col items-center group relative">
-                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}<br/>
-                      $/Unit: {formatCurrency(ppu)}
-                      {trend !== null && <><br/><span className={trend >= 0 ? 'text-emerald-300' : 'text-rose-300'}>({trend >= 0 ? '+' : ''}{trend.toFixed(1)}% vs prev)</span></>}
-                    </div>
-                    <div 
-                      className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-amber-500' : 'bg-amber-500/60') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/60')} hover:opacity-80`}
-                      style={{ height: `${Math.max(height, 2)}%` }}
-                    />
-                    <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">
-                      {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="flex justify-between text-xs text-slate-500 mt-2 px-2">
-              <span>Avg: {formatCurrency(weeklyData.reduce((sum, w) => sum + (w.total?.units > 0 ? (w.total?.netProfit || 0) / w.total.units : 0), 0) / weeklyData.length)}/unit</span>
-              <span>Latest: {formatCurrency(latestWeek?.total?.units > 0 ? (latestWeek?.total?.netProfit || 0) / latestWeek.total.units : 0)}/unit</span>
-            </div>
-          </div>
-          
-          {/* SKU-Level Profit Per Unit Analysis */}
-          {(() => {
-            // Aggregate SKU data across weeks
-            const skuTrends = {};
-            recentWeeks.forEach((week, weekIdx) => {
-              const weekData = allWeeksData[week];
-              const allSkus = [...(weekData.amazon?.skuData || []), ...(weekData.shopify?.skuData || [])];
-              allSkus.forEach(sku => {
-                const key = sku.sku || sku.title;
-                if (!key) return;
-                if (!skuTrends[key]) {
-                  skuTrends[key] = { 
-                    sku: key, 
-                    name: sku.title || sku.productName || key,
-                    weeks: [],
-                    totalUnits: 0,
-                    totalProfit: 0,
-                  };
-                }
-                const profit = sku.netProceeds || ((sku.netSales || 0) - (sku.cogs || 0));
-                const units = sku.unitsSold || 0;
-                const ppu = units > 0 ? profit / units : 0;
-                skuTrends[key].weeks.push({ week, weekIdx, units, profit, ppu });
-                skuTrends[key].totalUnits += units;
-                skuTrends[key].totalProfit += profit;
-              });
-            });
-            
-            // Calculate trend for each SKU (comparing first half to second half)
-            const skuList = Object.values(skuTrends)
-              .filter(s => s.weeks.length >= 2 && s.totalUnits >= 5)
-              .map(s => {
-                const avgPPU = s.totalUnits > 0 ? s.totalProfit / s.totalUnits : 0;
-                const recentWeeks = s.weeks.slice(-3);
-                const olderWeeks = s.weeks.slice(0, -3);
-                const recentPPU = recentWeeks.reduce((sum, w) => sum + w.ppu, 0) / (recentWeeks.length || 1);
-                const olderPPU = olderWeeks.length > 0 ? olderWeeks.reduce((sum, w) => sum + w.ppu, 0) / olderWeeks.length : recentPPU;
-                const trend = olderPPU !== 0 ? ((recentPPU - olderPPU) / Math.abs(olderPPU)) * 100 : 0;
-                return { ...s, avgPPU, recentPPU, olderPPU, trend };
-              })
-              .sort((a, b) => a.trend - b.trend); // Worst trending first
-            
-            const decliningSkus = skuList.filter(s => s.trend < -5).slice(0, 10);
-            const improvingSkus = skuList.filter(s => s.trend > 5).sort((a, b) => b.trend - a.trend).slice(0, 10);
-            
-            if (skuList.length === 0) return null;
-            
-            return (
-              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-                <h3 className="text-lg font-semibold text-white mb-4">🔍 SKU Profit/Unit Trends</h3>
-                <p className="text-slate-400 text-sm mb-4">Comparing recent 3 weeks vs earlier weeks to identify margin erosion or improvement</p>
-                
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Declining SKUs */}
-                  {decliningSkus.length > 0 && (
-                    <div>
-                      <h4 className="text-rose-400 font-medium mb-3 flex items-center gap-2">
-                        <TrendingDown className="w-4 h-4" />
-                        Margin Declining ({decliningSkus.length} SKUs)
-                      </h4>
-                      <div className="space-y-2">
-                        {decliningSkus.map(sku => (
-                          <div key={sku.sku} className="bg-rose-900/20 border border-rose-500/30 rounded-lg p-3">
-                            <div className="flex justify-between items-start">
-                              <div className="flex-1 min-w-0">
-                                <p className="text-white text-sm font-medium truncate">{sku.name}</p>
-                                <p className="text-slate-400 text-xs truncate">{sku.sku}</p>
-                              </div>
-                              <div className="text-right ml-2">
-                                <p className="text-rose-400 font-bold">{sku.trend.toFixed(1)}%</p>
-                                <p className="text-slate-500 text-xs">trend</p>
-                              </div>
-                            </div>
-                            <div className="flex justify-between mt-2 text-xs">
-                              <span className="text-slate-400">Before: {formatCurrency(sku.olderPPU)}/unit</span>
-                              <span className="text-rose-300">Now: {formatCurrency(sku.recentPPU)}/unit</span>
-                            </div>
+                </div>
+              </div>
+              
+              {/* Profit & Margin Charts */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                {/* Profit Trend */}
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                  <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Profit Trend</h3>
+                  <div className="flex items-end gap-1 h-40">
+                    {currentData.map((d, i) => {
+                      const height = maxProfit > 0 ? (Math.abs(d.profit) / maxProfit) * 100 : 0;
+                      const isPositive = d.profit >= 0;
+                      const isLatest = i === currentData.length - 1;
+                      return (
+                        <div key={d.key} className="flex-1 flex flex-col items-center group relative">
+                          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                            {d.label}<br/>{formatCurrency(d.profit)}
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Improving SKUs */}
-                  {improvingSkus.length > 0 && (
-                    <div>
-                      <h4 className="text-emerald-400 font-medium mb-3 flex items-center gap-2">
-                        <TrendingUp className="w-4 h-4" />
-                        Margin Improving ({improvingSkus.length} SKUs)
-                      </h4>
-                      <div className="space-y-2">
-                        {improvingSkus.map(sku => (
-                          <div key={sku.sku} className="bg-emerald-900/20 border border-emerald-500/30 rounded-lg p-3">
-                            <div className="flex justify-between items-start">
-                              <div className="flex-1 min-w-0">
-                                <p className="text-white text-sm font-medium truncate">{sku.name}</p>
-                                <p className="text-slate-400 text-xs truncate">{sku.sku}</p>
-                              </div>
-                              <div className="text-right ml-2">
-                                <p className="text-emerald-400 font-bold">+{sku.trend.toFixed(1)}%</p>
-                                <p className="text-slate-500 text-xs">trend</p>
-                              </div>
-                            </div>
-                            <div className="flex justify-between mt-2 text-xs">
-                              <span className="text-slate-400">Before: {formatCurrency(sku.olderPPU)}/unit</span>
-                              <span className="text-emerald-300">Now: {formatCurrency(sku.recentPPU)}/unit</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                          <div 
+                            className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/60') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/60')}`}
+                            style={{ height: `${Math.max(height, 2)}%` }}
+                          />
+                          <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
                 
-                {decliningSkus.length === 0 && improvingSkus.length === 0 && (
-                  <p className="text-slate-500 text-center py-4">All SKUs have stable profit margins (within ±5%)</p>
-                )}
+                {/* Margin Trend */}
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                  <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Margin Trend</h3>
+                  <div className="flex items-end gap-1 h-40">
+                    {currentData.map((d, i) => {
+                      const maxMargin = Math.max(...currentData.map(x => Math.abs(x.margin || 0)), 30);
+                      const height = (Math.abs(d.margin) / maxMargin) * 100;
+                      const isPositive = d.margin >= 0;
+                      const isLatest = i === currentData.length - 1;
+                      return (
+                        <div key={d.key} className="flex-1 flex flex-col items-center group relative">
+                          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                            {d.label}<br/>{formatPercent(d.margin)}
+                          </div>
+                          <div 
+                            className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-cyan-500' : 'bg-cyan-500/60') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/60')}`}
+                            style={{ height: `${Math.max(height, 2)}%` }}
+                          />
+                          <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
-            );
-          })()}
+              
+              {/* Profit Per Unit Trend */}
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+                <h3 className="text-lg font-semibold text-white mb-4">💵 Profit Per Unit Trend</h3>
+                <div className="flex items-end gap-1 h-40">
+                  {currentData.map((d, i) => {
+                    const ppu = d.units > 0 ? d.profit / d.units : 0;
+                    const maxPPU = Math.max(...currentData.map(x => Math.abs(x.units > 0 ? x.profit / x.units : 0)), 1);
+                    const height = maxPPU > 0 ? (Math.abs(ppu) / maxPPU) * 100 : 0;
+                    const isPositive = ppu >= 0;
+                    const isLatest = i === currentData.length - 1;
+                    return (
+                      <div key={d.key} className="flex-1 flex flex-col items-center group relative">
+                        <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                          {d.label}<br/>{formatCurrency(ppu)}/unit
+                        </div>
+                        <div 
+                          className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-amber-500' : 'bg-amber-500/60') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/60')}`}
+                          style={{ height: `${Math.max(height, 2)}%` }}
+                        />
+                        <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{d.label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex justify-between text-xs text-slate-500 mt-2 px-2">
+                  <span>Avg: {formatCurrency(currentData.reduce((sum, d) => sum + (d.units > 0 ? d.profit / d.units : 0), 0) / (currentData.length || 1))}/unit</span>
+                  <span>Latest: {formatCurrency(latestPeriod?.units > 0 ? latestPeriod.profit / latestPeriod.units : 0)}/unit</span>
+                </div>
+              </div>
+              
+              {/* Data Table */}
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+                <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Summary</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700">
+                        <th className="text-left text-slate-400 font-medium py-2">{periodLabel}</th>
+                        <th className="text-right text-slate-400 font-medium py-2">Revenue</th>
+                        <th className="text-right text-slate-400 font-medium py-2">Profit</th>
+                        <th className="text-right text-slate-400 font-medium py-2">Units</th>
+                        <th className="text-right text-slate-400 font-medium py-2">Margin</th>
+                        <th className="text-right text-slate-400 font-medium py-2">$/Unit</th>
+                        <th className="text-right text-slate-400 font-medium py-2">Source</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {currentData.slice().reverse().map((d, idx) => {
+                        const prev = currentData[currentData.length - idx - 2];
+                        const ppu = d.units > 0 ? d.profit / d.units : 0;
+                        const prevPPU = prev?.units > 0 ? prev.profit / prev.units : null;
+                        const marginChange = prev ? d.margin - prev.margin : null;
+                        const ppuChange = prevPPU !== null && prevPPU !== 0 ? ((ppu - prevPPU) / Math.abs(prevPPU)) * 100 : null;
+                        return (
+                          <tr key={d.key} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                            <td className="py-2 text-white font-medium">{d.label}</td>
+                            <td className="py-2 text-right text-white">{formatCurrency(d.revenue)}</td>
+                            <td className={`py-2 text-right ${d.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(d.profit)}</td>
+                            <td className="py-2 text-right text-white">{formatNumber(d.units)}</td>
+                            <td className={`py-2 text-right ${d.margin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {formatPercent(d.margin)}
+                              {marginChange !== null && <span className={`ml-1 text-xs ${marginChange >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>({marginChange >= 0 ? '+' : ''}{marginChange.toFixed(1)}pt)</span>}
+                            </td>
+                            <td className={`py-2 text-right ${ppu >= 0 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {formatCurrency(ppu)}
+                              {ppuChange !== null && <span className={`ml-1 text-xs ${ppuChange >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>({ppuChange >= 0 ? '+' : ''}{ppuChange.toFixed(1)}%)</span>}
+                            </td>
+                            <td className="py-2 text-right text-slate-500 text-xs">{d.source}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              
+              {/* SKU Profit/Unit Trends */}
+              {(decliningSkus.length > 0 || improvingSkus.length > 0) && (
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                  <h3 className="text-lg font-semibold text-white mb-4">🔍 SKU Profit/Unit Trends</h3>
+                  <p className="text-slate-400 text-sm mb-4">Comparing recent vs earlier {periodLabel.toLowerCase()}s to identify margin changes</p>
+                  
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {decliningSkus.length > 0 && (
+                      <div>
+                        <h4 className="text-rose-400 font-medium mb-3 flex items-center gap-2">
+                          <TrendingDown className="w-4 h-4" />⚠️ Margin Declining ({decliningSkus.length})
+                        </h4>
+                        <div className="space-y-2 max-h-80 overflow-y-auto">
+                          {decliningSkus.map(sku => (
+                            <div key={sku.sku} className="bg-rose-900/20 border border-rose-500/30 rounded-lg p-3">
+                              <div className="flex justify-between items-start">
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-white text-sm font-medium truncate">{sku.name}</p>
+                                  <p className="text-slate-400 text-xs truncate">{sku.sku}</p>
+                                </div>
+                                <div className="text-right ml-2">
+                                  <p className="text-rose-400 font-bold">{sku.trend.toFixed(1)}%</p>
+                                </div>
+                              </div>
+                              <div className="flex justify-between mt-2 text-xs">
+                                <span className="text-slate-400">Before: {formatCurrency(sku.olderPPU)}/unit</span>
+                                <span className="text-rose-300">Now: {formatCurrency(sku.recentPPU)}/unit</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {improvingSkus.length > 0 && (
+                      <div>
+                        <h4 className="text-emerald-400 font-medium mb-3 flex items-center gap-2">
+                          <TrendingUp className="w-4 h-4" />✅ Margin Improving ({improvingSkus.length})
+                        </h4>
+                        <div className="space-y-2 max-h-80 overflow-y-auto">
+                          {improvingSkus.map(sku => (
+                            <div key={sku.sku} className="bg-emerald-900/20 border border-emerald-500/30 rounded-lg p-3">
+                              <div className="flex justify-between items-start">
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-white text-sm font-medium truncate">{sku.name}</p>
+                                  <p className="text-slate-400 text-xs truncate">{sku.sku}</p>
+                                </div>
+                                <div className="text-right ml-2">
+                                  <p className="text-emerald-400 font-bold">+{sku.trend.toFixed(1)}%</p>
+                                </div>
+                              </div>
+                              <div className="flex justify-between mt-2 text-xs">
+                                <span className="text-slate-400">Before: {formatCurrency(sku.olderPPU)}/unit</span>
+                                <span className="text-emerald-300">Now: {formatCurrency(sku.recentPPU)}/unit</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
     );
@@ -10014,7 +10025,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         totalCost: finalCost,
         orderCount: finalMetrics.orderCount || 0,
         totalUnits: finalMetrics.totalUnits || 0,
-        avgCostPerOrder: finalMetrics.avgCostPerOrder || 0,
+        // Calculate avgCostPerOrder if not provided but we have cost and orders
+        avgCostPerOrder: finalMetrics.avgCostPerOrder || 
+          (finalMetrics.orderCount > 0 ? (finalCost - (finalBreakdown.storage || 0)) / finalMetrics.orderCount : 
+          (finalCost > 0 && week.shopify?.units > 0 ? finalCost / week.shopify.units : 0)),
         avgShippingCost: finalMetrics.avgShippingCost || 0,
         avgPickCost: finalMetrics.avgPickCost || 0,
         avgPackagingCost: finalMetrics.avgPackagingCost || 0,
@@ -10080,14 +10094,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const periodData = Object.entries(allPeriodsData).map(([key, period]) => {
       const metrics = period.shopify?.threeplMetrics || {};
       const breakdown = period.shopify?.threeplBreakdown || {};
+      const totalCost = period.shopify?.threeplCosts || 0;
+      const orderCount = metrics.orderCount || 0;
+      // Calculate avgCostPerOrder if not provided
+      const avgCostPerOrder = metrics.avgCostPerOrder || 
+        (orderCount > 0 ? (totalCost - (breakdown.storage || 0)) / orderCount : 
+        (totalCost > 0 && period.shopify?.units > 0 ? totalCost / period.shopify.units : 0));
       return {
         period: key,
         type: 'period',
         label: period.label || key,
-        totalCost: period.shopify?.threeplCosts || 0,
-        orderCount: metrics.orderCount || 0,
+        totalCost,
+        orderCount,
         totalUnits: metrics.totalUnits || 0,
-        avgCostPerOrder: metrics.avgCostPerOrder || 0,
+        avgCostPerOrder,
         avgShippingCost: metrics.avgShippingCost || 0,
         avgPickCost: metrics.avgPickCost || 0,
         avgPackagingCost: metrics.avgPackagingCost || 0,
@@ -10426,30 +10446,45 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           {/* Cost Per Order Trend */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
             <h3 className="text-lg font-semibold text-white mb-4">Average Cost Per Order Trend</h3>
-            <div className="flex items-end gap-1 h-40">
-              {(timeView === 'weekly' ? weeklyData.slice(-12) : months.slice(-12)).map((d) => {
-                const maxAvg = Math.max(...(timeView === 'weekly' ? weeklyData : months).map(x => x.avgCostPerOrder), 1);
-                const height = (d.avgCostPerOrder / maxAvg) * 100;
-                const label = timeView === 'weekly' 
-                  ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                  : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-                const color = d.avgCostPerOrder <= 10 ? 'bg-emerald-500' : d.avgCostPerOrder <= 15 ? 'bg-amber-500' : 'bg-rose-500';
-                return (
-                  <div key={timeView === 'weekly' ? d.week : d.month} className="flex-1 flex flex-col items-center group relative">
-                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                      {label}: {formatCurrency(d.avgCostPerOrder)}/order
-                    </div>
-                    <div className={`w-full rounded-t transition-all hover:opacity-80 ${color}`} style={{ height: `${Math.max(height, 3)}%` }} />
-                    <span className="text-[9px] text-slate-500 mt-1 truncate w-full text-center">{label}</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="flex gap-4 mt-3 text-xs justify-center">
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great ($10 or less)</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />OK ($10-15)</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />High ($15+)</span>
-            </div>
+            {((timeView === 'weekly' ? weeklyData : months).length === 0) ? (
+              <div className="h-40 flex items-center justify-center text-slate-500">
+                <div className="text-center">
+                  <Truck className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                  <p>No 3PL data available for this period</p>
+                  <p className="text-xs mt-1">Upload 3PL files with your weekly data or use the bulk upload feature</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-end gap-1 h-40">
+                  {(timeView === 'weekly' ? weeklyData.slice(-12) : months.slice(-12)).map((d) => {
+                    const dataArr = timeView === 'weekly' ? weeklyData : months;
+                    const maxAvg = Math.max(...dataArr.map(x => x.avgCostPerOrder || 0), 1);
+                    const height = maxAvg > 0 ? ((d.avgCostPerOrder || 0) / maxAvg) * 100 : 0;
+                    const label = timeView === 'weekly' 
+                      ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                      : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+                    const avgCost = d.avgCostPerOrder || 0;
+                    const color = avgCost <= 0 ? 'bg-slate-600' : avgCost <= 10 ? 'bg-emerald-500' : avgCost <= 15 ? 'bg-amber-500' : 'bg-rose-500';
+                    return (
+                      <div key={timeView === 'weekly' ? d.week : d.month} className="flex-1 flex flex-col items-center group relative">
+                        <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                          {label}: {avgCost > 0 ? `${formatCurrency(avgCost)}/order` : 'No data'}
+                          {d.totalCost > 0 && avgCost === 0 && <><br/><span className="text-amber-300">Total: {formatCurrency(d.totalCost)} (no order count)</span></>}
+                        </div>
+                        <div className={`w-full rounded-t transition-all hover:opacity-80 ${color}`} style={{ height: `${Math.max(height, 3)}%` }} />
+                        <span className="text-[9px] text-slate-500 mt-1 truncate w-full text-center">{label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-4 mt-3 text-xs justify-center">
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great ($10 or less)</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />OK ($10-15)</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />High ($15+)</span>
+                </div>
+              </>
+            )}
           </div>
           
           {/* Detailed Table */}
