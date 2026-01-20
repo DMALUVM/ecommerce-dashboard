@@ -7821,7 +7821,6 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     {current.revenue > 0 ? ((current.profit / current.revenue) * 100).toFixed(1) : 0}%
                   </p>
                 </div>
-                </div>
               </div>
               )}
               
