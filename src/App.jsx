@@ -1267,14 +1267,6 @@ const handleLogout = async () => {
       const weekKey = formatDateKey(weekEnd);
       return weekEnd <= now && (!allWeeksData[weekKey] || !allWeeksData[weekKey].aggregatedFrom);
     });
-    if (dailyNotInWeekly.length >= 7) {
-      nextActions.push({
-        priority: 'medium',
-        type: 'aggregate',
-        message: `${dailyNotInWeekly.length} days ready to aggregate into weekly data`,
-        action: 'aggregate-daily',
-      });
-    }
     
     // === AGGREGATION STATUS ===
     // Group daily data by week and check completeness
@@ -1312,6 +1304,17 @@ const handleLogout = async () => {
     
     const completeWeeks = Object.values(weekGroups).filter(w => w.isComplete && !allWeeksData[w.weekEnding]);
     const incompleteWeeks = Object.values(weekGroups).filter(w => !w.isComplete);
+    
+    // Add aggregate action if there are complete weeks ready
+    if (completeWeeks.length > 0) {
+      const totalDaysInCompleteWeeks = completeWeeks.reduce((sum, w) => sum + w.days.length, 0);
+      nextActions.push({
+        priority: 'medium',
+        type: 'aggregate',
+        message: `${completeWeeks.length} complete week${completeWeeks.length !== 1 ? 's' : ''} ready to aggregate (${totalDaysInCompleteWeeks} days)`,
+        action: 'aggregate-daily',
+      });
+    }
     
     const aggregationStatus = {
       completeWeeks: completeWeeks.length,
