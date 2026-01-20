@@ -1112,7 +1112,16 @@ const handleLogout = async () => {
     const forecastWeeks = Object.keys(amazonForecasts).sort();
     
     // === DAILY DATA STATUS ===
-    const dailyDates = Object.keys(allDaysData).sort();
+    // Helper: Check if a day has REAL sales data (not just Google Ads data)
+    // Real daily data has: total, amazon, shopify objects from Shopify/Amazon CSV uploads
+    // Google Ads-only data just has: googleAds, googleSpend, googleCpc, etc.
+    const hasDailySalesData = (dayData) => {
+      if (!dayData) return false;
+      // Check for real sales data structure (from daily CSV uploads)
+      return !!(dayData.total || dayData.amazon || dayData.shopify || dayData.orders || dayData.totalSales);
+    };
+    
+    const dailyDates = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
     const last14Days = [];
     for (let i = 0; i < 14; i++) {
       const d = new Date(now);
@@ -1120,7 +1129,8 @@ const handleLogout = async () => {
       const dateStr = d.toISOString().split('T')[0];
       last14Days.push({
         date: dateStr,
-        hasData: !!allDaysData[dateStr],
+        hasData: hasDailySalesData(allDaysData[dateStr]),
+        hasAdsOnly: !!allDaysData[dateStr] && !hasDailySalesData(allDaysData[dateStr]),
         data: allDaysData[dateStr] || null,
         dayOfWeek: d.toLocaleDateString('en-US', { weekday: 'short' }),
       });
@@ -1133,7 +1143,7 @@ const handleLogout = async () => {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
       const dateStr = d.toISOString().split('T')[0];
-      if (allDaysData[dateStr]) {
+      if (hasDailySalesData(allDaysData[dateStr])) {
         streak++;
       } else {
         break;
@@ -1232,7 +1242,7 @@ const handleLogout = async () => {
     const yesterday = new Date(now);
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = yesterday.toISOString().split('T')[0];
-    if (!allDaysData[yesterdayStr]) {
+    if (!hasDailySalesData(allDaysData[yesterdayStr])) {
       nextActions.push({
         priority: 'medium',
         type: 'daily',
@@ -2704,8 +2714,9 @@ const savePeriods = async (d) => {
       
       // Parse Amazon data if provided
       if (dailyFiles.amazon) {
-        const amzText = await dailyFiles.amazon.text();
-        const amzData = parseCSV(amzText);
+        const amzData = await new Promise((resolve) => {
+          dailyFiles.amazon.text().then(text => resolve(parseCSV(text)));
+        });
         
         amzData.forEach(r => {
           const net = parseInt(r['Net units sold'] || 0), sold = parseInt(r['Units sold'] || 0), ret = parseInt(r['Units returned'] || 0);
@@ -2733,8 +2744,9 @@ const savePeriods = async (d) => {
       
       // Parse Shopify data if provided
       if (dailyFiles.shopify) {
-        const shopText = await dailyFiles.shopify.text();
-        const shopData = parseCSV(shopText);
+        const shopData = await new Promise((resolve) => {
+          dailyFiles.shopify.text().then(text => resolve(parseCSV(text)));
+        });
         
         shopData.forEach(r => {
           const units = parseInt(r['Net items sold'] || 0), sales = parseFloat(r['Net sales'] || 0), sku = r['Product variant SKU'] || '';
@@ -10439,9 +10451,9 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     <div 
                       key={idx}
                       className={`w-6 h-6 rounded flex items-center justify-center text-xs cursor-pointer transition-all ${
-                        day.hasData ? 'bg-cyan-500/30 text-cyan-300 hover:bg-cyan-500/50' : 'bg-slate-700/50 text-slate-600 hover:bg-slate-600/50'
+                        day.hasData ? 'bg-cyan-500/30 text-cyan-300 hover:bg-cyan-500/50' : day.hasAdsOnly ? 'bg-amber-500/20 text-amber-400/60' : 'bg-slate-700/50 text-slate-600 hover:bg-slate-600/50'
                       }`}
-                      title={`${day.date}${day.hasData ? ' ✓' : ' (no data)'}`}
+                      title={`${day.date}${day.hasData ? ' ✓' : day.hasAdsOnly ? ' (ads only)' : ' (no data)'}`}
                     >
                       {new Date(day.date + 'T12:00:00').getDate()}
                     </div>
@@ -10534,20 +10546,23 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                       className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
                         day.hasData 
                           ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' 
-                          : selectedDay === day.date
-                            ? 'bg-violet-500/30 text-violet-300 border border-violet-500/50'
-                            : 'bg-slate-700/50 text-slate-400 border border-slate-600/30 hover:bg-slate-600/50'
+                          : day.hasAdsOnly
+                            ? 'bg-amber-500/10 text-amber-400/70 border border-amber-500/20 hover:bg-amber-500/20'
+                            : selectedDay === day.date
+                              ? 'bg-violet-500/30 text-violet-300 border border-violet-500/50'
+                              : 'bg-slate-700/50 text-slate-400 border border-slate-600/30 hover:bg-slate-600/50'
                       }`}
-                      title={day.hasData ? `${day.date} - Data uploaded ✓` : `${day.date} - Click to select`}
+                      title={day.hasData ? `${day.date} - Data uploaded ✓` : day.hasAdsOnly ? `${day.date} - Only Google Ads data (click to add sales)` : `${day.date} - Click to select`}
                     >
                       {day.dayOfWeek} {new Date(day.date + 'T12:00:00').getDate()}
                       {day.hasData && <Check className="w-3 h-3 ml-1 inline" />}
+                      {day.hasAdsOnly && !day.hasData && <span className="ml-1 text-amber-400/50">●</span>}
                     </div>
                   ))}
                 </div>
                 {dataStatus.dailyStatus.last14Days.filter(d => !d.hasData).length > 0 && (
                   <p className="text-xs text-slate-500 mt-2">
-                    💡 Click a day without ✓ to select it for upload
+                    💡 Click a day without ✓ to select it for upload {dataStatus.dailyStatus.last14Days.some(d => d.hasAdsOnly && !d.hasData) && <span className="text-amber-400/70">(● = has Google Ads data only)</span>}
                   </p>
                 )}
               </div>
