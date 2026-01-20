@@ -2803,8 +2803,10 @@ const savePeriods = async (d) => {
         }
       };
       
-      // Save to state
-      const updatedDays = { ...allDaysData, [selectedDay]: dayData };
+      // Save to state - merge with existing data (preserves Google Ads data if present)
+      const existingDayData = allDaysData[selectedDay] || {};
+      const mergedDayData = { ...existingDayData, ...dayData };
+      const updatedDays = { ...allDaysData, [selectedDay]: mergedDayData };
       setAllDaysData(updatedDays);
       lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays));
       
@@ -10588,10 +10590,16 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     <p className="text-slate-500 text-sm">
                       Uploading data for: {new Date(selectedDay + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
                     </p>
-                    {allDaysData[selectedDay] && (
+                    {hasDailySalesData(allDaysData[selectedDay]) && (
                       <p className="text-amber-400 text-sm flex items-center gap-1 mt-1">
                         <AlertTriangle className="w-4 h-4" />
-                        Data already exists for this date - uploading will replace it
+                        Sales data already exists for this date - uploading will replace it
+                      </p>
+                    )}
+                    {allDaysData[selectedDay] && !hasDailySalesData(allDaysData[selectedDay]) && (
+                      <p className="text-cyan-400 text-sm flex items-center gap-1 mt-1">
+                        <Check className="w-4 h-4" />
+                        Google Ads data exists - sales data will be added
                       </p>
                     )}
                   </div>
