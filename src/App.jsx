@@ -812,6 +812,19 @@ const handleLogout = async () => {
   const [showHiddenStates, setShowHiddenStates] = useState(false);
   const [taxFilterStatus, setTaxFilterStatus] = useState('all'); // 'all' | 'due' | 'upcoming'
   
+  // Local state for tax config form (to prevent re-render on each keystroke)
+  const [taxFormRegistrationId, setTaxFormRegistrationId] = useState('');
+  const [taxFormNotes, setTaxFormNotes] = useState('');
+  
+  // Initialize tax form fields when modal opens
+  useEffect(() => {
+    if (showTaxStateConfig && taxConfigState) {
+      const config = salesTaxConfig.nexusStates?.[taxConfigState] || {};
+      setTaxFormRegistrationId(config.registrationId || '');
+      setTaxFormNotes(config.notes || '');
+    }
+  }, [showTaxStateConfig, taxConfigState, salesTaxConfig.nexusStates]);
+  
   // Settings view state
   const [localSettings, setLocalSettings] = useState(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -1592,7 +1605,10 @@ const combinedData = useMemo(() => ({
   productionPipeline,
   threeplLedger,
   amazonCampaigns,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns]);
+  // Self-learning forecast data
+  forecastAccuracyHistory,
+  forecastCorrections,
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -1822,6 +1838,10 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.productionPipeline) setProductionPipeline(cloud.productionPipeline);
     if (cloud.threeplLedger) setThreeplLedger(cloud.threeplLedger);
     if (cloud.amazonCampaigns) setAmazonCampaigns(cloud.amazonCampaigns);
+    
+    // Load self-learning forecast data
+    if (cloud.forecastAccuracyHistory) setForecastAccuracyHistory(cloud.forecastAccuracyHistory);
+    if (cloud.forecastCorrections) setForecastCorrections(cloud.forecastCorrections);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -1842,6 +1862,10 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.productionPipeline) localStorage.setItem('ecommerce_production_v1', JSON.stringify(cloud.productionPipeline));
     if (cloud.threeplLedger) writeToLocal(THREEPL_LEDGER_KEY, JSON.stringify(cloud.threeplLedger));
     if (cloud.amazonCampaigns) writeToLocal('ecommerce_amazon_campaigns_v1', JSON.stringify(cloud.amazonCampaigns));
+    
+    // Sync self-learning forecast data to localStorage
+    if (cloud.forecastAccuracyHistory) writeToLocal(FORECAST_ACCURACY_KEY, JSON.stringify(cloud.forecastAccuracyHistory));
+    if (cloud.forecastCorrections) writeToLocal(FORECAST_CORRECTIONS_KEY, JSON.stringify(cloud.forecastCorrections));
 
     setCloudStatus('');
     return true;
@@ -2756,6 +2780,9 @@ const savePeriods = async (d) => {
       setAllDaysData(updatedDays);
       lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays));
       
+      // Sync to cloud
+      queueCloudSave({ ...combinedData, dailySales: updatedDays });
+      
       // Reset form
       setDailyFiles({ amazon: null, shopify: null });
       setDailyAdSpend({ meta: '', google: '' });
@@ -2768,7 +2795,7 @@ const savePeriods = async (d) => {
       setIsProcessing(false);
       setToast({ message: 'Error processing daily data', type: 'error' });
     }
-  }, [selectedDay, dailyFiles, dailyAdSpend, allDaysData, getCogsLookup]);
+  }, [selectedDay, dailyFiles, dailyAdSpend, allDaysData, getCogsLookup, combinedData, queueCloudSave]);
 
   // Auto-aggregate daily data into weekly summaries
   const aggregateDailyToWeekly = useCallback(() => {
@@ -3253,7 +3280,7 @@ const savePeriods = async (d) => {
     const updated = { ...invHistory, [invSnapshotDate]: snapshot };
     setInvHistory(updated); saveInv(updated); setSelectedInvDate(invSnapshotDate); setView('inventory'); setIsProcessing(false);
     setInvFiles({ amazon: null, threepl: null, cogs: null }); setInvFileNames({ amazon: '', threepl: '', cogs: '' }); setInvSnapshotDate('');
-  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData]);
+  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, forecastCorrections]);
 
   const deleteWeek = (k) => { if (!confirm(`Delete ${k}?`)) return; const u = { ...allWeeksData }; delete u[k]; setAllWeeksData(u); save(u); const r = Object.keys(u).sort().reverse(); if (r.length) setSelectedWeek(r[0]); else { setView('upload'); setSelectedWeek(null); }};
   const deleteInv = (k) => { if (!confirm(`Delete ${k}?`)) return; const u = { ...invHistory }; delete u[k]; setInvHistory(u); saveInv(u); const r = Object.keys(u).sort().reverse(); if (r.length) setSelectedInvDate(r[0]); else setSelectedInvDate(null); };
@@ -6284,7 +6311,7 @@ Keep insights brief and actionable. Format as numbered list.`;
   // FORECAST MODAL (Feature 5)
   const ForecastModal = () => {
     if (!showForecast || !generateForecast) return null;
-    const f = generateForecast;
+    const f = enhancedForecast || generateForecast;
     
     const sourceLabels = {
       'weekly': 'Weekly trend analysis (4+ weeks)',
@@ -6300,41 +6327,55 @@ Keep insights brief and actionable. Format as numbered list.`;
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
               <TrendingUp className="w-6 h-6 text-emerald-400" />
               Revenue Forecast
+              {f.corrected && <span className="text-xs bg-purple-500/30 text-purple-300 px-2 py-0.5 rounded ml-2">AI-Enhanced</span>}
             </h2>
             <button onClick={() => setShowForecast(false)} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white">
               <X className="w-5 h-5" />
             </button>
           </div>
           
+          {/* AI Learning Status */}
+          {enhancedForecast && (
+            <div className={`rounded-xl p-3 mb-4 ${enhancedForecast.corrected ? 'bg-purple-900/30 border border-purple-500/30' : 'bg-slate-700/30 border border-slate-600'}`}>
+              <div className="flex items-center gap-2">
+                <Brain className={`w-4 h-4 ${enhancedForecast.corrected ? 'text-purple-400' : 'text-slate-400'}`} />
+                <span className={`text-sm font-medium ${enhancedForecast.corrected ? 'text-purple-300' : 'text-slate-300'}`}>
+                  Self-Learning: {enhancedForecast.corrected ? 'Active' : 'Training'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">{enhancedForecast.correctionNote}</p>
+            </div>
+          )}
+          
           <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
             <div className="flex items-center justify-between mb-2">
               <span className="text-slate-400">Data Source</span>
-              <span className="text-white font-medium">{sourceLabels[f.source] || f.source}</span>
+              <span className="text-white font-medium">{sourceLabels[generateForecast.source] || generateForecast.source}</span>
             </div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-slate-400">Based on</span>
               <span className="text-white font-medium">
-                {f.basedOn} {f.source === 'period' ? 'period(s)' : f.source === 'blended' ? 'week(s) + periods' : 'week(s)'}
+                {generateForecast.basedOn} {generateForecast.source === 'period' ? 'period(s)' : generateForecast.source === 'blended' ? 'week(s) + periods' : 'week(s)'}
               </span>
             </div>
-            {f.amazonBlended && (
+            {generateForecast.amazonBlended && (
               <div className="mb-2 p-2 bg-orange-900/30 border border-orange-500/30 rounded-lg">
                 <p className="text-orange-300 text-xs flex items-center gap-1">
                   <Target className="w-3 h-3" />
-                  Using {f.amazonForecastCount || 0} Amazon forecast(s) for enhanced accuracy
+                  Using {generateForecast.amazonForecastCount || 0} Amazon forecast(s) for enhanced accuracy
                 </p>
               </div>
             )}
-            {!f.amazonBlended && Object.keys(amazonForecasts).length === 0 && (
+            {!generateForecast.amazonBlended && Object.keys(amazonForecasts).length === 0 && (
               <div className="mb-2 p-2 bg-slate-700/50 border border-slate-600 rounded-lg">
                 <p className="text-slate-400 text-xs flex items-center gap-1">
                   💡 Upload Amazon forecasts (7/30/60-day) from Seller Central to improve projections
                 </p>
               </div>
             )}
-            {f.note && (
+            {generateForecast.note && (
               <div className="mb-2 p-2 bg-amber-900/30 border border-amber-500/30 rounded-lg">
-                <p className="text-amber-300 text-xs">⚠️ {f.note}</p>
+                <p className="text-amber-300 text-xs">⚠️ {generateForecast.note}</p>
               </div>
             )}
             <div className="flex items-center justify-between mb-2">
@@ -7640,8 +7681,17 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
         }
       }
       
-      // Include forecast data if available
-      const forecastData = generateForecast ? {
+      // Include forecast data if available (use enhanced if corrections active)
+      const forecastData = enhancedForecast ? {
+        nextMonth: enhancedForecast.monthly,
+        originalNextMonth: enhancedForecast.originalMonthly,
+        trend: generateForecast?.trend,
+        confidence: generateForecast?.confidence,
+        weekly: enhancedForecast.weekly,
+        corrected: enhancedForecast.corrected,
+        correctionNote: enhancedForecast.correctionNote,
+        learningStatus: enhancedForecast.learningStatus,
+      } : generateForecast ? {
         nextMonth: generateForecast.monthly,
         trend: generateForecast.trend,
         confidence: generateForecast.confidence,
@@ -10611,7 +10661,6 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     )}
                   </div>
                 )}
-              </div>
               </div>
               
               {/* Date Range Guide */}
@@ -15472,27 +15521,53 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           {/* TOTAL FORECAST TAB */}
           {analyticsTab === 'forecast' && generateForecast && (
             <div className="space-y-6">
+              {/* Learning Status Banner */}
+              {enhancedForecast && (
+                <div className={`rounded-xl p-4 flex items-center justify-between ${enhancedForecast.corrected ? 'bg-purple-900/30 border border-purple-500/30' : 'bg-slate-800/50 border border-slate-700'}`}>
+                  <div className="flex items-center gap-3">
+                    <Brain className={`w-5 h-5 ${enhancedForecast.corrected ? 'text-purple-400' : 'text-slate-400'}`} />
+                    <div>
+                      <p className={`font-medium ${enhancedForecast.corrected ? 'text-purple-300' : 'text-slate-300'}`}>
+                        AI Self-Learning: {enhancedForecast.corrected ? 'ACTIVE' : 'Training'}
+                      </p>
+                      <p className="text-xs text-slate-400">{enhancedForecast.correctionNote}</p>
+                    </div>
+                  </div>
+                  {enhancedForecast.learningStatus && (
+                    <div className="text-right text-xs">
+                      <p className="text-slate-400">{enhancedForecast.learningStatus.samples} samples</p>
+                      <p className={enhancedForecast.corrected ? 'text-purple-400' : 'text-slate-500'}>{enhancedForecast.learningStatus.confidence.toFixed(0)}% confidence</p>
+                    </div>
+                  )}
+                </div>
+              )}
+              
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 rounded-2xl border border-emerald-500/30 p-6">
                   <p className="text-emerald-400 text-sm font-medium mb-1">Projected Monthly Revenue</p>
-                  <p className="text-3xl font-bold text-white">{formatCurrency(generateForecast.monthly.revenue)}</p>
+                  <p className="text-3xl font-bold text-white">{formatCurrency((enhancedForecast || generateForecast).monthly.revenue)}</p>
+                  {enhancedForecast?.corrected && enhancedForecast.originalMonthly && (
+                    <p className="text-xs text-slate-500 mt-1">
+                      Original: {formatCurrency(enhancedForecast.originalMonthly.revenue)} → Corrected
+                    </p>
+                  )}
                   <p className={`text-sm mt-1 flex items-center gap-1 ${generateForecast.trend.revenue === 'up' ? 'text-emerald-400' : generateForecast.trend.revenue === 'down' ? 'text-rose-400' : 'text-slate-400'}`}>
                     {generateForecast.trend.revenue === 'up' ? <TrendingUp className="w-4 h-4" /> : generateForecast.trend.revenue === 'down' ? <TrendingDown className="w-4 h-4" /> : <Minus className="w-4 h-4" />}
                     {generateForecast.trend.revenueChange > 0 ? '+' : ''}{generateForecast.trend.revenueChange.toFixed(1)}% weekly trend
                   </p>
                 </div>
-                <div className={`rounded-2xl border p-6 ${generateForecast.monthly.profit >= 0 ? 'bg-gradient-to-br from-blue-900/40 to-blue-800/20 border-blue-500/30' : 'bg-gradient-to-br from-rose-900/40 to-rose-800/20 border-rose-500/30'}`}>
-                  <p className={`text-sm font-medium mb-1 ${generateForecast.monthly.profit >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>Projected Monthly Profit</p>
-                  <p className="text-3xl font-bold text-white">{formatCurrency(generateForecast.monthly.profit)}</p>
+                <div className={`rounded-2xl border p-6 ${(enhancedForecast || generateForecast).monthly.profit >= 0 ? 'bg-gradient-to-br from-blue-900/40 to-blue-800/20 border-blue-500/30' : 'bg-gradient-to-br from-rose-900/40 to-rose-800/20 border-rose-500/30'}`}>
+                  <p className={`text-sm font-medium mb-1 ${(enhancedForecast || generateForecast).monthly.profit >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>Projected Monthly Profit</p>
+                  <p className="text-3xl font-bold text-white">{formatCurrency((enhancedForecast || generateForecast).monthly.profit)}</p>
                   {goals.monthlyProfit > 0 && (
-                    <p className={`text-sm mt-1 ${generateForecast.monthly.profit >= goals.monthlyProfit ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {generateForecast.monthly.profit >= goals.monthlyProfit ? '✓ On track for goal' : `${formatCurrency(goals.monthlyProfit - generateForecast.monthly.profit)} below goal`}
+                    <p className={`text-sm mt-1 ${(enhancedForecast || generateForecast).monthly.profit >= goals.monthlyProfit ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {(enhancedForecast || generateForecast).monthly.profit >= goals.monthlyProfit ? '✓ On track for goal' : `${formatCurrency(goals.monthlyProfit - (enhancedForecast || generateForecast).monthly.profit)} below goal`}
                     </p>
                   )}
                 </div>
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
                   <p className="text-slate-400 text-sm font-medium mb-1">Projected Monthly Units</p>
-                  <p className="text-3xl font-bold text-white">{formatNumber(generateForecast.monthly.units)}</p>
+                  <p className="text-3xl font-bold text-white">{formatNumber((enhancedForecast || generateForecast).monthly.units)}</p>
                   <p className="text-slate-500 text-sm mt-1">Confidence: {generateForecast.confidence}%</p>
                 </div>
               </div>
@@ -15500,12 +15575,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
                 <h3 className="text-lg font-semibold text-white mb-4">Weekly Projections</h3>
                 <div className="grid grid-cols-4 gap-4">
-                  {generateForecast.weekly.map((w, i) => (
+                  {(enhancedForecast || generateForecast).weekly.map((w, i) => (
                     <div key={i} className="bg-slate-900/50 rounded-xl p-4 text-center">
                       <p className="text-slate-500 text-sm mb-2">{w.week}</p>
                       <p className="text-xl font-bold text-white">{formatCurrency(w.revenue)}</p>
                       <p className={`text-sm ${w.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(w.profit)} profit</p>
                       <p className="text-slate-500 text-xs mt-1">{w.units} units</p>
+                      {w.correctionApplied && (
+                        <p className="text-purple-400 text-xs mt-1">✨ AI-corrected</p>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -15516,6 +15594,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 {generateForecast.amazonBlended && ' + Amazon forecast data'}
                 {generateForecast.periodsAvailable > 0 && ` + ${generateForecast.periodsAvailable} historical periods for seasonality`}
                 {generateForecast.seasonalityApplied && ` (${((generateForecast.seasonalityApplied - 1) * 100).toFixed(0)}% YoY adjustment)`}
+                {enhancedForecast?.corrected && ' + AI self-learning corrections'}
               </p>
             </div>
           )}
@@ -17820,12 +17899,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               
               <div>
                 <label className="block text-sm text-slate-400 mb-2">State Registration / Account ID</label>
-                <input type="text" value={config.registrationId || ''} onChange={(e) => updateStateConfig(taxConfigState, 'registrationId', e.target.value)} placeholder="e.g., 12-345678-9" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+                <input type="text" value={taxFormRegistrationId} onChange={(e) => setTaxFormRegistrationId(e.target.value)} onBlur={(e) => updateStateConfig(taxConfigState, 'registrationId', e.target.value)} placeholder="e.g., 12-345678-9" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
               </div>
               
               <div>
                 <label className="block text-sm text-slate-400 mb-2">Notes</label>
-                <textarea value={config.notes || ''} onChange={(e) => updateStateConfig(taxConfigState, 'notes', e.target.value)} placeholder="Any notes about this state's requirements..." rows={2} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+                <textarea value={taxFormNotes} onChange={(e) => setTaxFormNotes(e.target.value)} onBlur={(e) => updateStateConfig(taxConfigState, 'notes', e.target.value)} placeholder="Any notes about this state's requirements..." rows={2} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
               </div>
             </div>
             
