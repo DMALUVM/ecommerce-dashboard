@@ -7385,10 +7385,10 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     
     try {
       // Prepare ads-specific context
-      const sortedWeeks = Object.keys(allWeeksData).sort();
-      const sortedDays = Object.keys(allDaysData).sort();
+      const sortedWeeks = Object.keys(allWeeksData || {}).sort();
+      const sortedDays = Object.keys(allDaysData || {}).sort();
       
-      // Weekly ad spend data
+      // Weekly ad spend data (last 12 weeks)
       const weeklyAdData = sortedWeeks.slice(-12).map(w => {
         const week = allWeeksData[w];
         const amazonAds = week?.amazon?.adSpend || 0;
@@ -7397,30 +7397,25 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
         const totalAds = amazonAds + googleAds + metaAds;
         const totalRev = week?.total?.revenue || 0;
         const tacos = totalRev > 0 ? (totalAds / totalRev) * 100 : 0;
-        return { week: w, amazonAds, googleAds, metaAds, totalAds, totalRev, tacos };
+        return { week: w, amazonAds, googleAds, metaAds, totalAds, totalRev, tacos: Math.round(tacos * 10) / 10 };
       });
       
-      // Daily ad data (last 30 days)
-      const dailyAdData = sortedDays.slice(-30).map(d => {
+      // Daily ad data (last 14 days only to reduce payload)
+      const dailyAdData = sortedDays.slice(-14).map(d => {
         const day = allDaysData[d];
         return {
           date: d,
-          googleSpend: day?.googleSpend || day?.googleAds || 0,
+          googleSpend: Math.round((day?.googleSpend || day?.googleAds || 0) * 100) / 100,
           googleImpressions: day?.googleImpressions || 0,
           googleClicks: day?.googleClicks || 0,
           googleConversions: day?.googleConversions || 0,
-          googleCpc: day?.googleCpc || 0,
-          googleCpa: day?.googleCpa || 0,
-          metaSpend: day?.metaSpend || day?.metaAds || 0,
-          metaImpressions: day?.metaImpressions || 0,
-          metaClicks: day?.metaClicks || 0,
-          metaConversions: day?.metaConversions || 0,
+          metaSpend: Math.round((day?.metaSpend || day?.metaAds || 0) * 100) / 100,
         };
       });
       
       // Amazon campaign data
-      const campaignData = amazonCampaigns.campaigns || [];
-      const campaignSummary = amazonCampaigns.summary || {};
+      const campaignData = amazonCampaigns?.campaigns || [];
+      const campaignSummary = amazonCampaigns?.summary || {};
       
       // Calculate totals
       const totalGoogleSpend = weeklyAdData.reduce((s, w) => s + w.googleAds, 0);
@@ -7430,109 +7425,70 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
       const totalRevenue = weeklyAdData.reduce((s, w) => s + w.totalRev, 0);
       const overallTacos = totalRevenue > 0 ? (totalAdSpend / totalRevenue) * 100 : 0;
       
-      // Daily metrics totals
+      // Daily totals
       const dailyTotals = dailyAdData.reduce((acc, d) => ({
         googleSpend: acc.googleSpend + d.googleSpend,
         googleImpressions: acc.googleImpressions + d.googleImpressions,
         googleClicks: acc.googleClicks + d.googleClicks,
         googleConversions: acc.googleConversions + d.googleConversions,
         metaSpend: acc.metaSpend + d.metaSpend,
-        metaImpressions: acc.metaImpressions + d.metaImpressions,
-        metaClicks: acc.metaClicks + d.metaClicks,
-        metaConversions: acc.metaConversions + d.metaConversions,
-      }), { googleSpend: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, metaSpend: 0, metaImpressions: 0, metaClicks: 0, metaConversions: 0 });
+      }), { googleSpend: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, metaSpend: 0 });
       
-      // Calculate KPIs
+      // KPIs
       const googleCpc = dailyTotals.googleClicks > 0 ? dailyTotals.googleSpend / dailyTotals.googleClicks : 0;
       const googleCtr = dailyTotals.googleImpressions > 0 ? (dailyTotals.googleClicks / dailyTotals.googleImpressions) * 100 : 0;
       const googleCpa = dailyTotals.googleConversions > 0 ? dailyTotals.googleSpend / dailyTotals.googleConversions : 0;
-      const googleConvRate = dailyTotals.googleClicks > 0 ? (dailyTotals.googleConversions / dailyTotals.googleClicks) * 100 : 0;
       
-      // Top/bottom Amazon campaigns
-      const topCampaigns = [...campaignData].filter(c => c.state === 'ENABLED' && c.roas > 0).sort((a, b) => b.roas - a.roas).slice(0, 10);
-      const bottomCampaigns = [...campaignData].filter(c => c.state === 'ENABLED' && c.spend > 100).sort((a, b) => a.roas - b.roas).slice(0, 10);
+      // Top/bottom campaigns (limit to 5 each)
+      const topCampaigns = [...campaignData].filter(c => c.state === 'ENABLED' && c.roas > 0).sort((a, b) => b.roas - a.roas).slice(0, 5);
+      const bottomCampaigns = [...campaignData].filter(c => c.state === 'ENABLED' && c.spend > 100).sort((a, b) => a.roas - b.roas).slice(0, 5);
       
-      const systemPrompt = `You are an expert advertising analyst specializing in e-commerce PPC optimization. You ONLY answer questions about advertising, ad spend, campaigns, ROAS, ACOS, TACOS, CPC, CPA, impressions, clicks, and conversions. 
+      const systemPrompt = `You are an expert advertising analyst for e-commerce. ONLY answer questions about advertising.
 
-IMPORTANT: Do NOT answer questions about general business metrics, revenue, profit margins, inventory, or any non-advertising topics. If asked, politely redirect to advertising topics only.
+=== AD PERFORMANCE SUMMARY ===
+Data: ${sortedWeeks.length} weeks, ${sortedDays.length} days
 
-=== ADVERTISING DATA OVERVIEW ===
-Data Range: ${sortedWeeks.length} weeks, ${sortedDays.length} days of ad data
-Amazon Campaign Data: ${campaignData.length > 0 ? 'Available (' + campaignData.length + ' campaigns)' : 'Not uploaded yet'}
+TOTAL SPEND (12 weeks): $${totalAdSpend.toFixed(2)}
+- Google: $${totalGoogleSpend.toFixed(2)} (${totalAdSpend > 0 ? ((totalGoogleSpend/totalAdSpend)*100).toFixed(0) : 0}%)
+- Meta: $${totalMetaSpend.toFixed(2)} (${totalAdSpend > 0 ? ((totalMetaSpend/totalAdSpend)*100).toFixed(0) : 0}%)
+- Amazon: $${totalAmazonSpend.toFixed(2)} (${totalAdSpend > 0 ? ((totalAmazonSpend/totalAdSpend)*100).toFixed(0) : 0}%)
+Revenue: $${totalRevenue.toFixed(2)}
+TACOS: ${overallTacos.toFixed(1)}%
 
-=== OVERALL AD PERFORMANCE (Last 12 Weeks) ===
-- Total Ad Spend: $${totalAdSpend.toLocaleString('en-US', {minimumFractionDigits: 2})}
-  • Google Ads: $${totalGoogleSpend.toLocaleString('en-US', {minimumFractionDigits: 2})} (${totalAdSpend > 0 ? ((totalGoogleSpend/totalAdSpend)*100).toFixed(1) : 0}%)
-  • Meta Ads: $${totalMetaSpend.toLocaleString('en-US', {minimumFractionDigits: 2})} (${totalAdSpend > 0 ? ((totalMetaSpend/totalAdSpend)*100).toFixed(1) : 0}%)
-  • Amazon PPC: $${totalAmazonSpend.toLocaleString('en-US', {minimumFractionDigits: 2})} (${totalAdSpend > 0 ? ((totalAmazonSpend/totalAdSpend)*100).toFixed(1) : 0}%)
-- Total Revenue (for TACOS): $${totalRevenue.toLocaleString('en-US', {minimumFractionDigits: 2})}
-- Overall TACOS: ${overallTacos.toFixed(1)}%
+GOOGLE ADS (14 days):
+Spend: $${dailyTotals.googleSpend.toFixed(2)}, Clicks: ${dailyTotals.googleClicks}, Conv: ${dailyTotals.googleConversions}
+CPC: $${googleCpc.toFixed(2)}, CTR: ${googleCtr.toFixed(2)}%, CPA: $${googleCpa.toFixed(2)}
 
-=== GOOGLE ADS METRICS (Last 30 Days from Daily Data) ===
-- Total Spend: $${dailyTotals.googleSpend.toLocaleString('en-US', {minimumFractionDigits: 2})}
-- Impressions: ${dailyTotals.googleImpressions.toLocaleString()}
-- Clicks: ${dailyTotals.googleClicks.toLocaleString()}
-- Conversions: ${dailyTotals.googleConversions.toLocaleString()}
-- Avg CPC: $${googleCpc.toFixed(2)}
-- CTR: ${googleCtr.toFixed(2)}%
-- CPA: $${googleCpa.toFixed(2)}
-- Conversion Rate: ${googleConvRate.toFixed(2)}%
+WEEKLY TREND: ${JSON.stringify(weeklyAdData.slice(-4))}
 
-=== WEEKLY AD SPEND TREND (Last 12 Weeks) ===
-${JSON.stringify(weeklyAdData)}
+${campaignData.length > 0 ? `AMAZON CAMPAIGNS: ${campaignSummary.totalCampaigns} total
+ROAS: ${(campaignSummary.roas || 0).toFixed(2)}x, ACOS: ${(campaignSummary.acos || 0).toFixed(1)}%
+Spend: $${(campaignSummary.totalSpend || 0).toFixed(2)}, Sales: $${(campaignSummary.totalSales || 0).toFixed(2)}
 
-=== DAILY AD DATA (Last 30 Days - Use for trend analysis) ===
-${JSON.stringify(dailyAdData)}
+TOP 5: ${JSON.stringify(topCampaigns.map(c => ({n: c.name.substring(0,40), roas: c.roas.toFixed(2), spend: c.spend.toFixed(0)})))}
+WORST 5: ${JSON.stringify(bottomCampaigns.map(c => ({n: c.name.substring(0,40), roas: c.roas.toFixed(2), spend: c.spend.toFixed(0)})))}` : 'No Amazon campaign data yet.'}
 
-=== AMAZON CAMPAIGN SUMMARY ===
-${campaignData.length > 0 ? `
-- Total Campaigns: ${campaignSummary.totalCampaigns}
-- Enabled: ${campaignSummary.enabledCount}, Paused: ${campaignSummary.pausedCount}
-- Total Spend: $${(campaignSummary.totalSpend || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}
-- Total Sales: $${(campaignSummary.totalSales || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}
-- Overall ROAS: ${(campaignSummary.roas || 0).toFixed(2)}x
-- Overall ACOS: ${(campaignSummary.acos || 0).toFixed(1)}%
-- Avg CPC: $${(campaignSummary.avgCpc || 0).toFixed(2)}
-- Conversion Rate: ${(campaignSummary.convRate || 0).toFixed(1)}%
-- Total Orders: ${(campaignSummary.totalOrders || 0).toLocaleString()}
-
-Campaign Type Breakdown:
-- SP (Sponsored Products): ${campaignSummary.byType?.SP?.length || 0} campaigns
-- SB (Sponsored Brands): ${campaignSummary.byType?.SB?.length || 0} campaigns
-- SD (Sponsored Display): ${campaignSummary.byType?.SD?.length || 0} campaigns
-` : 'No Amazon campaign data uploaded. Recommend user upload campaign CSV for detailed analysis.'}
-
-=== TOP PERFORMING AMAZON CAMPAIGNS (by ROAS) ===
-${topCampaigns.length > 0 ? JSON.stringify(topCampaigns.map(c => ({ name: c.name, type: c.type, spend: c.spend, sales: c.sales, roas: c.roas, acos: c.acos, orders: c.orders }))) : 'No campaign data'}
-
-=== UNDERPERFORMING AMAZON CAMPAIGNS (Low ROAS, $100+ spend) ===
-${bottomCampaigns.length > 0 ? JSON.stringify(bottomCampaigns.map(c => ({ name: c.name, type: c.type, spend: c.spend, sales: c.sales, roas: c.roas, acos: c.acos, orders: c.orders }))) : 'No campaign data'}
-
-=== YOUR ROLE ===
-You are an advertising expert. Provide insights on:
-1. Which channels (Google, Meta, Amazon) are most efficient
-2. Trends in ad spend and performance over time
-3. Amazon campaign optimization (what to pause, scale, or adjust)
-4. CPC, CPA, CTR analysis and benchmarking
-5. TACOS/ACOS optimization strategies
-6. Day-of-week or time patterns in ad performance
-7. Budget allocation recommendations across channels
-8. Identifying wasted ad spend
-
-Be specific with numbers. Always reference actual data. Suggest actionable next steps. If data is missing, tell the user what to upload.`;
+Be specific with numbers. Suggest actions.`;
 
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system: systemPrompt, messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }] }),
+        body: JSON.stringify({ 
+          system: systemPrompt, 
+          messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }] 
+        }),
       });
       
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API Error:', response.status, errorText);
+        throw new Error(`API error: ${response.status}`);
+      }
       const data = await response.json();
       setAdsAiMessages(prev => [...prev, { role: 'assistant', content: data.content?.[0]?.text || 'Sorry, I could not process that.' }]);
     } catch (error) {
       console.error('Ads AI Chat error:', error);
-      setAdsAiMessages(prev => [...prev, { role: 'assistant', content: 'Error processing request. Check /api/chat endpoint.' }]);
+      setAdsAiMessages(prev => [...prev, { role: 'assistant', content: `Error: ${error.message}. Please try again.` }]);
     } finally {
       setAdsAiLoading(false);
     }
