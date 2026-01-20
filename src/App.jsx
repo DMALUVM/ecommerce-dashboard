@@ -634,6 +634,14 @@ export default function Dashboard() {
   const [trendsChannel, setTrendsChannel] = useState('combined'); // 'amazon' | 'shopify' | 'combined' for trends filtering
   const [dailyFiles, setDailyFiles] = useState({ amazon: null, shopify: null }); // Daily upload files
   const [dailyAdSpend, setDailyAdSpend] = useState({ meta: '', google: '' }); // Daily ad spend inputs
+  
+  // Amazon Campaign Data
+  const [amazonCampaigns, setAmazonCampaigns] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('ecommerce_amazon_campaigns_v1')) || { campaigns: [], lastUpdated: null, history: [] }; }
+    catch { return { campaigns: [], lastUpdated: null, history: [] }; }
+  });
+  const [amazonCampaignSort, setAmazonCampaignSort] = useState({ field: 'spend', dir: 'desc' });
+  const [amazonCampaignFilter, setAmazonCampaignFilter] = useState({ status: 'all', type: 'all', search: '' });
 
   // Weekly Intelligence Reports
   const [weeklyReports, setWeeklyReports] = useState(() => {
@@ -820,6 +828,12 @@ const handleLogout = async () => {
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   
+  // AI Ads Insights Chat (separate from main AI chat)
+  const [showAdsAIChat, setShowAdsAIChat] = useState(false);
+  const [adsAiMessages, setAdsAiMessages] = useState([]);
+  const [adsAiInput, setAdsAiInput] = useState('');
+  const [adsAiLoading, setAdsAiLoading] = useState(false);
+  
   // Help modal
   const [showUploadHelp, setShowUploadHelp] = useState(false);
   
@@ -880,6 +894,7 @@ const handleLogout = async () => {
   const [adsMonth, setAdsMonth] = useState(new Date().getMonth()); // Selected month (0-11)
   const [adsQuarter, setAdsQuarter] = useState(Math.floor(new Date().getMonth() / 3) + 1); // 1-4
   const [adsSelectedWeek, setAdsSelectedWeek] = useState(null); // Selected week ending date for weekly comparison
+  const [adsViewMode, setAdsViewMode] = useState('performance'); // 'performance' | 'campaigns' for ads tab
   
   // 3. Mobile view detection
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -952,8 +967,21 @@ const handleLogout = async () => {
     checkForecastAge('30day', 30, '30-day');
     checkForecastAge('60day', 60, '60-day');
     
+    // Check Amazon Campaign data freshness (weekly upload reminder)
+    if (amazonCampaigns.lastUpdated) {
+      const lastUpdate = new Date(amazonCampaigns.lastUpdated);
+      const daysSince = Math.floor((now - lastUpdate) / (1000 * 60 * 60 * 24));
+      if (daysSince >= 7) {
+        alerts.push({ type: 'amazonCampaigns', severity: 'warning', message: `Amazon Campaign data is ${daysSince} days old (upload weekly)`, action: 'refresh' });
+      } else if (daysSince >= 5) {
+        alerts.push({ type: 'amazonCampaigns', severity: 'info', message: `Amazon Campaign refresh due in ${7 - daysSince} day(s)`, action: 'upcoming' });
+      }
+    } else {
+      alerts.push({ type: 'amazonCampaigns', severity: 'info', message: 'Upload Amazon Campaign data for PPC analysis', action: 'upload' });
+    }
+    
     return alerts;
-  }, [forecastMeta]);
+  }, [forecastMeta, amazonCampaigns.lastUpdated]);
   
   // Save Amazon forecasts to localStorage and cloud
   useEffect(() => {
@@ -1273,7 +1301,8 @@ const combinedData = useMemo(() => ({
   widgetConfig,
   productionPipeline,
   threeplLedger,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger]);
+  amazonCampaigns,
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -1502,6 +1531,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.theme) setTheme(cloud.theme);
     if (cloud.productionPipeline) setProductionPipeline(cloud.productionPipeline);
     if (cloud.threeplLedger) setThreeplLedger(cloud.threeplLedger);
+    if (cloud.amazonCampaigns) setAmazonCampaigns(cloud.amazonCampaigns);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -1521,6 +1551,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.theme) writeToLocal(THEME_KEY, JSON.stringify(cloud.theme));
     if (cloud.productionPipeline) localStorage.setItem('ecommerce_production_v1', JSON.stringify(cloud.productionPipeline));
     if (cloud.threeplLedger) writeToLocal(THREEPL_LEDGER_KEY, JSON.stringify(cloud.threeplLedger));
+    if (cloud.amazonCampaigns) writeToLocal('ecommerce_amazon_campaigns_v1', JSON.stringify(cloud.amazonCampaigns));
 
     setCloudStatus('');
     return true;
@@ -2958,6 +2989,164 @@ const savePeriods = async (d) => {
     setToast({ message: '3PL costs updated', type: 'success' });
   }, [allWeeksData]);
 
+  // Parse Amazon Campaign CSV (aggregate campaign data)
+  const parseAmazonCampaignCSV = useCallback((content) => {
+    try {
+      const lines = content.trim().split(/\r?\n/);
+      if (lines.length < 2) return { error: 'File is empty or has no data rows' };
+      
+      const header = lines[0].toLowerCase();
+      
+      // Check if this is Amazon campaign data
+      if (!header.includes('campaigns') || !header.includes('roas')) {
+        return { error: 'Not a valid Amazon Campaign report. Expected columns: Campaigns, Spend, Sales, ROAS' };
+      }
+      
+      // Parse header to find column indices
+      const headerCols = [];
+      let current = '', inQuotes = false;
+      for (const char of lines[0]) {
+        if (char === '"') inQuotes = !inQuotes;
+        else if (char === ',' && !inQuotes) { headerCols.push(current.trim().toLowerCase()); current = ''; }
+        else current += char;
+      }
+      headerCols.push(current.trim().toLowerCase());
+      
+      const colIdx = {
+        state: headerCols.findIndex(h => h === 'state'),
+        campaign: headerCols.findIndex(h => h === 'campaigns'),
+        status: headerCols.findIndex(h => h === 'status'),
+        type: headerCols.findIndex(h => h === 'type'),
+        targeting: headerCols.findIndex(h => h === 'targeting'),
+        startDate: headerCols.findIndex(h => h === 'start date'),
+        budget: headerCols.findIndex(h => h.includes('budget') && !h.includes('converted')),
+        clicks: headerCols.findIndex(h => h === 'clicks'),
+        ctr: headerCols.findIndex(h => h === 'ctr'),
+        spend: headerCols.findIndex(h => h === 'spend (converted)' || (h === 'spend' && !h.includes('converted'))),
+        cpc: headerCols.findIndex(h => h === 'cpc (converted)' || (h === 'cpc' && !h.includes('converted'))),
+        orders: headerCols.findIndex(h => h === 'orders'),
+        sales: headerCols.findIndex(h => h === 'sales (converted)' || (h === 'sales' && !h.includes('converted'))),
+        roas: headerCols.findIndex(h => h === 'roas'),
+        impressionShare: headerCols.findIndex(h => h.includes('impression share')),
+      };
+      
+      // If spend (converted) not found, try just spend
+      if (colIdx.spend === -1) colIdx.spend = headerCols.findIndex(h => h === 'spend');
+      if (colIdx.sales === -1) colIdx.sales = headerCols.findIndex(h => h === 'sales');
+      if (colIdx.cpc === -1) colIdx.cpc = headerCols.findIndex(h => h === 'cpc');
+      
+      const campaigns = [];
+      let totalSpend = 0, totalSales = 0, totalOrders = 0, totalClicks = 0;
+      
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        // Parse CSV row
+        const cols = [];
+        let curr = '', inQ = false;
+        for (const char of line) {
+          if (char === '"') inQ = !inQ;
+          else if (char === ',' && !inQ) { cols.push(curr); curr = ''; }
+          else curr += char;
+        }
+        cols.push(curr);
+        
+        const parseNum = (val) => parseFloat((val || '').replace(/[\$,%]/g, '').replace(/,/g, '')) || 0;
+        
+        const campaign = {
+          id: i,
+          state: cols[colIdx.state] || '',
+          name: cols[colIdx.campaign] || '',
+          status: cols[colIdx.status] || '',
+          type: cols[colIdx.type] || '',
+          targeting: cols[colIdx.targeting] || '',
+          startDate: cols[colIdx.startDate] || '',
+          budget: parseNum(cols[colIdx.budget]),
+          clicks: parseInt(cols[colIdx.clicks]) || 0,
+          ctr: parseNum(cols[colIdx.ctr]),
+          spend: parseNum(cols[colIdx.spend]),
+          cpc: parseNum(cols[colIdx.cpc]),
+          orders: parseInt(cols[colIdx.orders]) || 0,
+          sales: parseNum(cols[colIdx.sales]),
+          roas: parseNum(cols[colIdx.roas]),
+          impressionShare: cols[colIdx.impressionShare] || '',
+          acos: 0,
+          convRate: 0,
+        };
+        
+        // Calculate derived metrics
+        campaign.acos = campaign.sales > 0 ? (campaign.spend / campaign.sales) * 100 : 0;
+        campaign.convRate = campaign.clicks > 0 ? (campaign.orders / campaign.clicks) * 100 : 0;
+        
+        campaigns.push(campaign);
+        totalSpend += campaign.spend;
+        totalSales += campaign.sales;
+        totalOrders += campaign.orders;
+        totalClicks += campaign.clicks;
+      }
+      
+      // Calculate summary metrics
+      const summary = {
+        totalCampaigns: campaigns.length,
+        enabledCount: campaigns.filter(c => c.state === 'ENABLED').length,
+        pausedCount: campaigns.filter(c => c.state === 'PAUSED').length,
+        totalSpend,
+        totalSales,
+        totalOrders,
+        totalClicks,
+        roas: totalSpend > 0 ? totalSales / totalSpend : 0,
+        acos: totalSales > 0 ? (totalSpend / totalSales) * 100 : 0,
+        avgCpc: totalClicks > 0 ? totalSpend / totalClicks : 0,
+        convRate: totalClicks > 0 ? (totalOrders / totalClicks) * 100 : 0,
+        byType: {
+          SP: campaigns.filter(c => c.type === 'SP'),
+          SB: campaigns.filter(c => c.type === 'SB2' || c.type === 'SB'),
+          SD: campaigns.filter(c => c.type === 'SD'),
+        }
+      };
+      
+      return { campaigns, summary };
+    } catch (e) {
+      return { error: e.message };
+    }
+  }, []);
+
+  // Save Amazon campaign data
+  const saveAmazonCampaigns = useCallback((campaigns, summary) => {
+    const now = new Date().toISOString();
+    const weekKey = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    // Create snapshot with full campaign data for WoW comparison
+    const snapshot = {
+      date: now,
+      weekKey,
+      summary: { ...summary },
+      // Store top campaigns for quick access in history
+      topCampaigns: [...campaigns].sort((a, b) => b.spend - a.spend).slice(0, 20).map(c => ({
+        name: c.name, type: c.type, state: c.state, spend: c.spend, sales: c.sales, orders: c.orders, roas: c.roas, acos: c.acos
+      }))
+    };
+    
+    // Merge with existing history, avoiding duplicate weeks
+    const existingHistory = (amazonCampaigns.history || []).filter(h => h.weekKey !== weekKey);
+    
+    const newData = {
+      campaigns,
+      summary,
+      lastUpdated: now,
+      history: [snapshot, ...existingHistory].slice(0, 52) // Keep up to 52 weeks (1 year)
+    };
+    
+    setAmazonCampaigns(newData);
+    localStorage.setItem('ecommerce_amazon_campaigns_v1', JSON.stringify(newData));
+    
+    // Sync to cloud
+    queueCloudSave({ ...combinedData, amazonCampaigns: newData });
+    
+    return newData;
+  }, [amazonCampaigns, combinedData, queueCloudSave]);
+
   // Parse bulk ad file (Google Ads or Meta Ads CSV)
   const parseBulkAdFile = useCallback((content, platform, filename = '') => {
     try {
@@ -3716,6 +3905,7 @@ const savePeriods = async (d) => {
       weekNotes,
       productionPipeline,
       threeplLedger,
+      amazonCampaigns,
     };
     const blob = new Blob([JSON.stringify(fullBackup, null, 2)], { type: 'application/json' }); 
     const a = document.createElement('a'); 
@@ -7089,6 +7279,56 @@ ${(() => {
   return status.join('\n');
 })()}
 
+=== AMAZON PPC CAMPAIGNS ===
+${amazonCampaigns.campaigns?.length > 0 ? `
+Last Updated: ${amazonCampaigns.lastUpdated ? new Date(amazonCampaigns.lastUpdated).toLocaleDateString() : 'N/A'}
+Total Campaigns: ${amazonCampaigns.summary?.totalCampaigns || 0} (${amazonCampaigns.summary?.enabledCount || 0} enabled, ${amazonCampaigns.summary?.pausedCount || 0} paused)
+
+CAMPAIGN PERFORMANCE SUMMARY:
+- Total Spend: $${(amazonCampaigns.summary?.totalSpend || 0).toFixed(2)}
+- Total Sales: $${(amazonCampaigns.summary?.totalSales || 0).toFixed(2)}
+- Total Orders: ${amazonCampaigns.summary?.totalOrders || 0}
+- ROAS: ${(amazonCampaigns.summary?.roas || 0).toFixed(2)}x
+- ACOS: ${(amazonCampaigns.summary?.acos || 0).toFixed(1)}%
+- Avg CPC: $${(amazonCampaigns.summary?.avgCpc || 0).toFixed(2)}
+- Conversion Rate: ${(amazonCampaigns.summary?.convRate || 0).toFixed(2)}%
+
+BY CAMPAIGN TYPE:
+- Sponsored Products (SP): ${amazonCampaigns.summary?.byType?.SP?.length || 0} campaigns, $${(amazonCampaigns.summary?.byType?.SP?.reduce((s,c) => s + c.spend, 0) || 0).toFixed(0)} spend, ${((amazonCampaigns.summary?.byType?.SP?.reduce((s,c) => s + c.spend, 0) || 0) > 0 ? (amazonCampaigns.summary?.byType?.SP?.reduce((s,c) => s + c.sales, 0) / amazonCampaigns.summary?.byType?.SP?.reduce((s,c) => s + c.spend, 0)).toFixed(2) : 0)}x ROAS
+- Sponsored Brands (SB): ${amazonCampaigns.summary?.byType?.SB?.length || 0} campaigns, $${(amazonCampaigns.summary?.byType?.SB?.reduce((s,c) => s + c.spend, 0) || 0).toFixed(0)} spend
+- Sponsored Display (SD): ${amazonCampaigns.summary?.byType?.SD?.length || 0} campaigns, $${(amazonCampaigns.summary?.byType?.SD?.reduce((s,c) => s + c.spend, 0) || 0).toFixed(0)} spend
+
+TOP 10 CAMPAIGNS BY SPEND:
+${amazonCampaigns.campaigns?.slice().sort((a,b) => b.spend - a.spend).slice(0,10).map(c => 
+  `- ${c.name.substring(0,50)}${c.name.length > 50 ? '...' : ''}: $${c.spend.toFixed(0)} spend, $${c.sales.toFixed(0)} sales, ${c.roas.toFixed(2)}x ROAS, ${c.acos.toFixed(0)}% ACOS`
+).join('\n')}
+
+TOP 5 CAMPAIGNS BY ROAS (>$100 spend):
+${amazonCampaigns.campaigns?.filter(c => c.spend > 100 && c.state === 'ENABLED').sort((a,b) => b.roas - a.roas).slice(0,5).map(c => 
+  `- ${c.name.substring(0,40)}...: ${c.roas.toFixed(2)}x ROAS, $${c.spend.toFixed(0)} spend`
+).join('\n') || 'No qualifying campaigns'}
+
+CAMPAIGNS NEEDING ATTENTION (Low ROAS, >$100 spend):
+${amazonCampaigns.campaigns?.filter(c => c.spend > 100 && c.roas < 2 && c.state === 'ENABLED').sort((a,b) => a.roas - b.roas).slice(0,5).map(c => 
+  `- ${c.name.substring(0,40)}...: ${c.roas.toFixed(2)}x ROAS, ${c.acos.toFixed(0)}% ACOS - consider pausing or optimizing`
+).join('\n') || 'All campaigns performing adequately'}
+
+${amazonCampaigns.history?.length > 1 ? `
+WEEK-OVER-WEEK TREND (${amazonCampaigns.history.length} weeks tracked):
+${(() => {
+  const current = amazonCampaigns.history[0]?.summary;
+  const prior = amazonCampaigns.history[1]?.summary;
+  if (!current || !prior) return 'Insufficient history';
+  const spendChange = prior.totalSpend > 0 ? ((current.totalSpend - prior.totalSpend) / prior.totalSpend * 100) : 0;
+  const salesChange = prior.totalSales > 0 ? ((current.totalSales - prior.totalSales) / prior.totalSales * 100) : 0;
+  const roasChange = current.roas - prior.roas;
+  return `Spend: $${current.totalSpend.toFixed(0)} (${spendChange >= 0 ? '+' : ''}${spendChange.toFixed(1)}% WoW)
+Sales: $${current.totalSales.toFixed(0)} (${salesChange >= 0 ? '+' : ''}${salesChange.toFixed(1)}% WoW)
+ROAS: ${current.roas.toFixed(2)}x (${roasChange >= 0 ? '+' : ''}${roasChange.toFixed(2)} WoW)`;
+})()}
+` : ''}
+` : 'No Amazon campaign data uploaded yet. User can upload Amazon Ads campaign report CSV.'}
+
 === WHAT YOU CAN HELP WITH ===
 - Analyze sales trends and patterns (weekly, monthly, quarterly, yearly)
 - Year-over-year comparisons (2024 vs 2025, Q1 vs Q1, etc.)
@@ -7111,6 +7351,10 @@ ${(() => {
 - 3PL cost analysis (avg cost per order, storage trends, shipping cost changes)
 - Identify rising fulfillment costs that may be eroding margins
 - Compare 3PL efficiency across time periods
+- Amazon PPC campaign analysis (ROAS, ACOS by campaign, top/bottom performers)
+- Campaign optimization recommendations (which campaigns to pause, scale, or optimize)
+- Week-over-week campaign performance changes
+- Campaign type comparison (SP vs SB vs SD effectiveness)
 
 Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. When comparing periods, always show the actual numbers and % change. If the user asks about data you don't have, let them know what they need to upload.`;
 
@@ -7128,6 +7372,169 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
       setAiMessages(prev => [...prev, { role: 'assistant', content: 'Error processing request. Check /api/chat endpoint.' }]);
     } finally {
       setAiLoading(false);
+    }
+  };
+
+  // Send AI Ads Message - specialized for advertising insights only
+  const sendAdsAIMessage = async () => {
+    if (!adsAiInput.trim() || adsAiLoading) return;
+    const userMessage = adsAiInput.trim();
+    setAdsAiInput('');
+    setAdsAiMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    setAdsAiLoading(true);
+    
+    try {
+      // Prepare ads-specific context
+      const sortedWeeks = Object.keys(allWeeksData).sort();
+      const sortedDays = Object.keys(allDaysData).sort();
+      
+      // Weekly ad spend data
+      const weeklyAdData = sortedWeeks.slice(-12).map(w => {
+        const week = allWeeksData[w];
+        const amazonAds = week?.amazon?.adSpend || 0;
+        const googleAds = week?.shopify?.googleAds || week?.shopify?.googleSpend || 0;
+        const metaAds = week?.shopify?.metaAds || week?.shopify?.metaSpend || 0;
+        const totalAds = amazonAds + googleAds + metaAds;
+        const totalRev = week?.total?.revenue || 0;
+        const tacos = totalRev > 0 ? (totalAds / totalRev) * 100 : 0;
+        return { week: w, amazonAds, googleAds, metaAds, totalAds, totalRev, tacos };
+      });
+      
+      // Daily ad data (last 30 days)
+      const dailyAdData = sortedDays.slice(-30).map(d => {
+        const day = allDaysData[d];
+        return {
+          date: d,
+          googleSpend: day?.googleSpend || day?.googleAds || 0,
+          googleImpressions: day?.googleImpressions || 0,
+          googleClicks: day?.googleClicks || 0,
+          googleConversions: day?.googleConversions || 0,
+          googleCpc: day?.googleCpc || 0,
+          googleCpa: day?.googleCpa || 0,
+          metaSpend: day?.metaSpend || day?.metaAds || 0,
+          metaImpressions: day?.metaImpressions || 0,
+          metaClicks: day?.metaClicks || 0,
+          metaConversions: day?.metaConversions || 0,
+        };
+      });
+      
+      // Amazon campaign data
+      const campaignData = amazonCampaigns.campaigns || [];
+      const campaignSummary = amazonCampaigns.summary || {};
+      
+      // Calculate totals
+      const totalGoogleSpend = weeklyAdData.reduce((s, w) => s + w.googleAds, 0);
+      const totalMetaSpend = weeklyAdData.reduce((s, w) => s + w.metaAds, 0);
+      const totalAmazonSpend = weeklyAdData.reduce((s, w) => s + w.amazonAds, 0);
+      const totalAdSpend = totalGoogleSpend + totalMetaSpend + totalAmazonSpend;
+      const totalRevenue = weeklyAdData.reduce((s, w) => s + w.totalRev, 0);
+      const overallTacos = totalRevenue > 0 ? (totalAdSpend / totalRevenue) * 100 : 0;
+      
+      // Daily metrics totals
+      const dailyTotals = dailyAdData.reduce((acc, d) => ({
+        googleSpend: acc.googleSpend + d.googleSpend,
+        googleImpressions: acc.googleImpressions + d.googleImpressions,
+        googleClicks: acc.googleClicks + d.googleClicks,
+        googleConversions: acc.googleConversions + d.googleConversions,
+        metaSpend: acc.metaSpend + d.metaSpend,
+        metaImpressions: acc.metaImpressions + d.metaImpressions,
+        metaClicks: acc.metaClicks + d.metaClicks,
+        metaConversions: acc.metaConversions + d.metaConversions,
+      }), { googleSpend: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, metaSpend: 0, metaImpressions: 0, metaClicks: 0, metaConversions: 0 });
+      
+      // Calculate KPIs
+      const googleCpc = dailyTotals.googleClicks > 0 ? dailyTotals.googleSpend / dailyTotals.googleClicks : 0;
+      const googleCtr = dailyTotals.googleImpressions > 0 ? (dailyTotals.googleClicks / dailyTotals.googleImpressions) * 100 : 0;
+      const googleCpa = dailyTotals.googleConversions > 0 ? dailyTotals.googleSpend / dailyTotals.googleConversions : 0;
+      const googleConvRate = dailyTotals.googleClicks > 0 ? (dailyTotals.googleConversions / dailyTotals.googleClicks) * 100 : 0;
+      
+      // Top/bottom Amazon campaigns
+      const topCampaigns = [...campaignData].filter(c => c.state === 'ENABLED' && c.roas > 0).sort((a, b) => b.roas - a.roas).slice(0, 10);
+      const bottomCampaigns = [...campaignData].filter(c => c.state === 'ENABLED' && c.spend > 100).sort((a, b) => a.roas - b.roas).slice(0, 10);
+      
+      const systemPrompt = `You are an expert advertising analyst specializing in e-commerce PPC optimization. You ONLY answer questions about advertising, ad spend, campaigns, ROAS, ACOS, TACOS, CPC, CPA, impressions, clicks, and conversions. 
+
+IMPORTANT: Do NOT answer questions about general business metrics, revenue, profit margins, inventory, or any non-advertising topics. If asked, politely redirect to advertising topics only.
+
+=== ADVERTISING DATA OVERVIEW ===
+Data Range: ${sortedWeeks.length} weeks, ${sortedDays.length} days of ad data
+Amazon Campaign Data: ${campaignData.length > 0 ? 'Available (' + campaignData.length + ' campaigns)' : 'Not uploaded yet'}
+
+=== OVERALL AD PERFORMANCE (Last 12 Weeks) ===
+- Total Ad Spend: $${totalAdSpend.toLocaleString('en-US', {minimumFractionDigits: 2})}
+  • Google Ads: $${totalGoogleSpend.toLocaleString('en-US', {minimumFractionDigits: 2})} (${totalAdSpend > 0 ? ((totalGoogleSpend/totalAdSpend)*100).toFixed(1) : 0}%)
+  • Meta Ads: $${totalMetaSpend.toLocaleString('en-US', {minimumFractionDigits: 2})} (${totalAdSpend > 0 ? ((totalMetaSpend/totalAdSpend)*100).toFixed(1) : 0}%)
+  • Amazon PPC: $${totalAmazonSpend.toLocaleString('en-US', {minimumFractionDigits: 2})} (${totalAdSpend > 0 ? ((totalAmazonSpend/totalAdSpend)*100).toFixed(1) : 0}%)
+- Total Revenue (for TACOS): $${totalRevenue.toLocaleString('en-US', {minimumFractionDigits: 2})}
+- Overall TACOS: ${overallTacos.toFixed(1)}%
+
+=== GOOGLE ADS METRICS (Last 30 Days from Daily Data) ===
+- Total Spend: $${dailyTotals.googleSpend.toLocaleString('en-US', {minimumFractionDigits: 2})}
+- Impressions: ${dailyTotals.googleImpressions.toLocaleString()}
+- Clicks: ${dailyTotals.googleClicks.toLocaleString()}
+- Conversions: ${dailyTotals.googleConversions.toLocaleString()}
+- Avg CPC: $${googleCpc.toFixed(2)}
+- CTR: ${googleCtr.toFixed(2)}%
+- CPA: $${googleCpa.toFixed(2)}
+- Conversion Rate: ${googleConvRate.toFixed(2)}%
+
+=== WEEKLY AD SPEND TREND (Last 12 Weeks) ===
+${JSON.stringify(weeklyAdData)}
+
+=== DAILY AD DATA (Last 30 Days - Use for trend analysis) ===
+${JSON.stringify(dailyAdData)}
+
+=== AMAZON CAMPAIGN SUMMARY ===
+${campaignData.length > 0 ? `
+- Total Campaigns: ${campaignSummary.totalCampaigns}
+- Enabled: ${campaignSummary.enabledCount}, Paused: ${campaignSummary.pausedCount}
+- Total Spend: $${(campaignSummary.totalSpend || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}
+- Total Sales: $${(campaignSummary.totalSales || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}
+- Overall ROAS: ${(campaignSummary.roas || 0).toFixed(2)}x
+- Overall ACOS: ${(campaignSummary.acos || 0).toFixed(1)}%
+- Avg CPC: $${(campaignSummary.avgCpc || 0).toFixed(2)}
+- Conversion Rate: ${(campaignSummary.convRate || 0).toFixed(1)}%
+- Total Orders: ${(campaignSummary.totalOrders || 0).toLocaleString()}
+
+Campaign Type Breakdown:
+- SP (Sponsored Products): ${campaignSummary.byType?.SP?.length || 0} campaigns
+- SB (Sponsored Brands): ${campaignSummary.byType?.SB?.length || 0} campaigns
+- SD (Sponsored Display): ${campaignSummary.byType?.SD?.length || 0} campaigns
+` : 'No Amazon campaign data uploaded. Recommend user upload campaign CSV for detailed analysis.'}
+
+=== TOP PERFORMING AMAZON CAMPAIGNS (by ROAS) ===
+${topCampaigns.length > 0 ? JSON.stringify(topCampaigns.map(c => ({ name: c.name, type: c.type, spend: c.spend, sales: c.sales, roas: c.roas, acos: c.acos, orders: c.orders }))) : 'No campaign data'}
+
+=== UNDERPERFORMING AMAZON CAMPAIGNS (Low ROAS, $100+ spend) ===
+${bottomCampaigns.length > 0 ? JSON.stringify(bottomCampaigns.map(c => ({ name: c.name, type: c.type, spend: c.spend, sales: c.sales, roas: c.roas, acos: c.acos, orders: c.orders }))) : 'No campaign data'}
+
+=== YOUR ROLE ===
+You are an advertising expert. Provide insights on:
+1. Which channels (Google, Meta, Amazon) are most efficient
+2. Trends in ad spend and performance over time
+3. Amazon campaign optimization (what to pause, scale, or adjust)
+4. CPC, CPA, CTR analysis and benchmarking
+5. TACOS/ACOS optimization strategies
+6. Day-of-week or time patterns in ad performance
+7. Budget allocation recommendations across channels
+8. Identifying wasted ad spend
+
+Be specific with numbers. Always reference actual data. Suggest actionable next steps. If data is missing, tell the user what to upload.`;
+
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ system: systemPrompt, messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }] }),
+      });
+      
+      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      const data = await response.json();
+      setAdsAiMessages(prev => [...prev, { role: 'assistant', content: data.content?.[0]?.text || 'Sorry, I could not process that.' }]);
+    } catch (error) {
+      console.error('Ads AI Chat error:', error);
+      setAdsAiMessages(prev => [...prev, { role: 'assistant', content: 'Error processing request. Check /api/chat endpoint.' }]);
+    } finally {
+      setAdsAiLoading(false);
     }
   };
 
@@ -14972,6 +15379,44 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     // Months with data
     const monthsWithData = [...new Set([...sortedWeeks, ...sortedDays].filter(d => d.startsWith(String(adsYear))).map(d => new Date(d + 'T00:00:00').getMonth()))].sort((a, b) => a - b);
     
+    // Amazon Campaign data processing
+    const campaignData = amazonCampaigns.campaigns || [];
+    const campaignSummary = amazonCampaigns.summary || {};
+    const hasCampaignData = campaignData.length > 0;
+    
+    // Filter and sort campaigns
+    const filteredCampaigns = campaignData.filter(c => {
+      if (amazonCampaignFilter.status !== 'all' && c.state !== amazonCampaignFilter.status) return false;
+      if (amazonCampaignFilter.type !== 'all' && c.type !== amazonCampaignFilter.type && !(amazonCampaignFilter.type === 'SB' && c.type === 'SB2')) return false;
+      if (amazonCampaignFilter.search && !c.name.toLowerCase().includes(amazonCampaignFilter.search.toLowerCase())) return false;
+      return true;
+    }).sort((a, b) => {
+      const dir = amazonCampaignSort.dir === 'asc' ? 1 : -1;
+      const field = amazonCampaignSort.field;
+      if (typeof a[field] === 'string') return dir * a[field].localeCompare(b[field]);
+      return dir * ((a[field] || 0) - (b[field] || 0));
+    });
+    
+    // Handle Amazon campaign file upload
+    const handleAmazonCampaignUpload = (file) => {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const result = parseAmazonCampaignCSV(e.target.result);
+        if (result.error) {
+          setToast({ message: result.error, type: 'error' });
+        } else {
+          saveAmazonCampaigns(result.campaigns, result.summary);
+          setToast({ message: `Imported ${result.campaigns.length} Amazon campaigns`, type: 'success' });
+        }
+      };
+      reader.readAsText(file);
+    };
+    
+    // Get top/bottom performers
+    const topPerformers = [...campaignData].filter(c => c.state === 'ENABLED' && c.roas > 0).sort((a, b) => b.roas - a.roas).slice(0, 5);
+    const bottomPerformers = [...campaignData].filter(c => c.state === 'ENABLED' && c.spend > 100).sort((a, b) => a.roas - b.roas).slice(0, 5);
+    
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
@@ -14984,12 +15429,347 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">⚡ Ad Performance Analytics</h1>
                 <p className="text-slate-400">Track TACOS, ad spend efficiency, and channel performance • {sortedDays.length} days, {sortedWeeks.length} weeks of data</p>
               </div>
-              <button onClick={() => { setUploadTab('bulk-ads'); setView('upload'); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white flex items-center gap-2">
-                <Upload className="w-4 h-4" />Bulk Upload Ads
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setShowAdsAIChat(true)} className="px-4 py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-lg text-white flex items-center gap-2">
+                  <Zap className="w-4 h-4" />AI Insights
+                </button>
+                <button onClick={() => { setUploadTab('bulk-ads'); setView('upload'); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white flex items-center gap-2">
+                  <Upload className="w-4 h-4" />Bulk Upload
+                </button>
+              </div>
             </div>
           </div>
           
+          {/* AI Ads Insights Chat Panel */}
+          {showAdsAIChat && (
+            <div className="fixed bottom-4 right-4 z-50 w-96 max-w-[calc(100vw-2rem)]">
+              <div className="bg-slate-800 rounded-2xl border border-orange-500/50 shadow-2xl overflow-hidden">
+                <div className="bg-gradient-to-r from-orange-600 to-amber-600 p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                      <Zap className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-white font-semibold">AI Ads Analyst</h3>
+                      <p className="text-white/70 text-xs">Ask about your ad performance</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setShowAdsAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                
+                <div className="h-80 overflow-y-auto p-4 space-y-4">
+                  {adsAiMessages.length === 0 && (
+                    <div className="text-center text-slate-400 py-4">
+                      <Zap className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                      <p className="text-sm mb-4">Ask me about your advertising performance!</p>
+                      <div className="space-y-2 text-left">
+                        <button onClick={() => setAdsAiInput("Which ad channel is most efficient?")} className="block w-full px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which ad channel is most efficient?"</button>
+                        <button onClick={() => setAdsAiInput("What campaigns should I pause?")} className="block w-full px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "What campaigns should I pause?"</button>
+                        <button onClick={() => setAdsAiInput("How is my Google Ads CPC trending?")} className="block w-full px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "How is my Google Ads CPC trending?"</button>
+                        <button onClick={() => setAdsAiInput("Give me a full ads performance summary")} className="block w-full px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Give me a full ads performance summary"</button>
+                      </div>
+                    </div>
+                  )}
+                  {adsAiMessages.map((msg, i) => (
+                    <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[85%] rounded-2xl px-4 py-2 ${msg.role === 'user' ? 'bg-orange-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
+                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {adsAiLoading && (
+                    <div className="flex justify-start">
+                      <div className="bg-slate-700 rounded-2xl px-4 py-3">
+                        <div className="flex gap-1">
+                          <div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                          <div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                          <div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                
+                <div className="p-4 border-t border-slate-700">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={adsAiInput}
+                      onChange={(e) => setAdsAiInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendAdsAIMessage(); } }}
+                      placeholder="Ask about your ads..."
+                      className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-orange-500"
+                      autoComplete="off"
+                    />
+                    <button onClick={sendAdsAIMessage} disabled={!adsAiInput.trim() || adsAiLoading} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded-xl text-white">
+                      <Send className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* View Mode Toggle */}
+          <div className="flex gap-2 mb-4">
+            <button onClick={() => setAdsViewMode('performance')} className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${adsViewMode === 'performance' ? 'bg-gradient-to-r from-blue-600 to-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+              📊 Spend Performance
+            </button>
+            <button onClick={() => setAdsViewMode('campaigns')} className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${adsViewMode === 'campaigns' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+              🎯 Amazon Campaigns {hasCampaignData && <span className="ml-1 px-1.5 py-0.5 bg-white/20 rounded text-xs">{campaignData.length}</span>}
+            </button>
+          </div>
+          
+          {/* Amazon Campaigns View */}
+          {adsViewMode === 'campaigns' && (
+            <div>
+              {/* Campaign Upload & Summary */}
+              {!hasCampaignData ? (
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-8 text-center mb-6">
+                  <div className="w-16 h-16 bg-orange-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <ShoppingBag className="w-8 h-8 text-orange-400" />
+                  </div>
+                  <h3 className="text-xl font-semibold text-white mb-2">Upload Amazon Campaign Data</h3>
+                  <p className="text-slate-400 mb-4 max-w-md mx-auto">Upload your Amazon Ads campaign report to analyze ROAS, ACOS, and identify top performers</p>
+                  <label className="inline-flex items-center gap-2 px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-xl text-white font-medium cursor-pointer">
+                    <Upload className="w-5 h-5" />
+                    Upload Campaign CSV
+                    <input type="file" accept=".csv" className="hidden" onChange={(e) => handleAmazonCampaignUpload(e.target.files[0])} />
+                  </label>
+                  <p className="text-slate-500 text-sm mt-3">Export from Amazon Ads → Campaigns → Download Report</p>
+                </div>
+              ) : (
+                <>
+                  {/* Last Updated & Refresh */}
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-slate-400 text-sm">
+                      Last updated: {new Date(amazonCampaigns.lastUpdated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                      {(() => {
+                        const daysSince = Math.floor((new Date() - new Date(amazonCampaigns.lastUpdated)) / (1000 * 60 * 60 * 24));
+                        if (daysSince >= 7) return <span className="text-amber-400 ml-2">⚠️ {daysSince} days old - refresh recommended</span>;
+                        return null;
+                      })()}
+                    </div>
+                    <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm cursor-pointer">
+                      <RefreshCw className="w-4 h-4" />
+                      Refresh Data
+                      <input type="file" accept=".csv" className="hidden" onChange={(e) => handleAmazonCampaignUpload(e.target.files[0])} />
+                    </label>
+                  </div>
+                  
+                  {/* Summary Cards */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
+                    <div className="bg-gradient-to-br from-orange-900/30 to-slate-800/50 rounded-xl border border-orange-500/30 p-4">
+                      <p className="text-slate-400 text-xs uppercase">Total Spend</p>
+                      <p className="text-2xl font-bold text-white">{formatCurrency(campaignSummary.totalSpend || 0)}</p>
+                    </div>
+                    <div className="bg-gradient-to-br from-emerald-900/30 to-slate-800/50 rounded-xl border border-emerald-500/30 p-4">
+                      <p className="text-slate-400 text-xs uppercase">Total Sales</p>
+                      <p className="text-2xl font-bold text-emerald-400">{formatCurrency(campaignSummary.totalSales || 0)}</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                      <p className="text-slate-400 text-xs uppercase">ROAS</p>
+                      <p className={`text-2xl font-bold ${(campaignSummary.roas || 0) >= 3 ? 'text-emerald-400' : (campaignSummary.roas || 0) >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{(campaignSummary.roas || 0).toFixed(2)}x</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                      <p className="text-slate-400 text-xs uppercase">ACOS</p>
+                      <p className={`text-2xl font-bold ${(campaignSummary.acos || 0) <= 25 ? 'text-emerald-400' : (campaignSummary.acos || 0) <= 35 ? 'text-amber-400' : 'text-rose-400'}`}>{(campaignSummary.acos || 0).toFixed(1)}%</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                      <p className="text-slate-400 text-xs uppercase">Orders</p>
+                      <p className="text-2xl font-bold text-white">{(campaignSummary.totalOrders || 0).toLocaleString()}</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                      <p className="text-slate-400 text-xs uppercase">Conv Rate</p>
+                      <p className="text-2xl font-bold text-white">{(campaignSummary.convRate || 0).toFixed(1)}%</p>
+                    </div>
+                  </div>
+                  
+                  {/* Week-over-Week Comparison */}
+                  {amazonCampaigns.history?.length > 1 && (
+                    <div className="bg-gradient-to-br from-violet-900/20 to-slate-800/50 rounded-xl border border-violet-500/30 p-5 mb-6">
+                      <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+                        <TrendingUp className="w-5 h-5 text-violet-400" />
+                        Week-over-Week Trend
+                        <span className="text-sm font-normal text-slate-400 ml-2">({amazonCampaigns.history.length} weeks tracked)</span>
+                      </h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-700">
+                              <th className="text-left text-slate-400 py-2">Week</th>
+                              <th className="text-right text-slate-400 py-2">Spend</th>
+                              <th className="text-right text-slate-400 py-2">Sales</th>
+                              <th className="text-right text-slate-400 py-2">Orders</th>
+                              <th className="text-right text-slate-400 py-2">ROAS</th>
+                              <th className="text-right text-slate-400 py-2">ACOS</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {amazonCampaigns.history.slice(0, 8).map((h, i) => {
+                              const prior = amazonCampaigns.history[i + 1];
+                              const spendChange = prior?.summary?.totalSpend > 0 ? ((h.summary.totalSpend - prior.summary.totalSpend) / prior.summary.totalSpend * 100) : null;
+                              const salesChange = prior?.summary?.totalSales > 0 ? ((h.summary.totalSales - prior.summary.totalSales) / prior.summary.totalSales * 100) : null;
+                              return (
+                                <tr key={h.weekKey} className={`border-b border-slate-700/50 ${i === 0 ? 'bg-violet-900/20' : ''}`}>
+                                  <td className="py-2 text-white">
+                                    {new Date(h.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                    {i === 0 && <span className="ml-2 text-xs text-violet-400">(latest)</span>}
+                                  </td>
+                                  <td className="py-2 text-right text-white">
+                                    {formatCurrency(h.summary.totalSpend)}
+                                    {spendChange !== null && <span className={`ml-1 text-xs ${spendChange <= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>({spendChange >= 0 ? '+' : ''}{spendChange.toFixed(0)}%)</span>}
+                                  </td>
+                                  <td className="py-2 text-right text-emerald-400">
+                                    {formatCurrency(h.summary.totalSales)}
+                                    {salesChange !== null && <span className={`ml-1 text-xs ${salesChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>({salesChange >= 0 ? '+' : ''}{salesChange.toFixed(0)}%)</span>}
+                                  </td>
+                                  <td className="py-2 text-right text-white">{(h.summary.totalOrders || 0).toLocaleString()}</td>
+                                  <td className={`py-2 text-right font-medium ${h.summary.roas >= 3 ? 'text-emerald-400' : h.summary.roas >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{h.summary.roas.toFixed(2)}x</td>
+                                  <td className={`py-2 text-right ${h.summary.acos <= 25 ? 'text-emerald-400' : h.summary.acos <= 35 ? 'text-amber-400' : 'text-rose-400'}`}>{h.summary.acos.toFixed(1)}%</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Campaign Type Breakdown */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    {[
+                      { type: 'SP', label: 'Sponsored Products', color: 'blue', campaigns: campaignSummary.byType?.SP || [] },
+                      { type: 'SB', label: 'Sponsored Brands', color: 'purple', campaigns: campaignSummary.byType?.SB || [] },
+                      { type: 'SD', label: 'Sponsored Display', color: 'teal', campaigns: campaignSummary.byType?.SD || [] },
+                    ].map(({ type, label, color, campaigns: typeCampaigns }) => {
+                      const spend = typeCampaigns.reduce((s, c) => s + c.spend, 0);
+                      const sales = typeCampaigns.reduce((s, c) => s + c.sales, 0);
+                      const roas = spend > 0 ? sales / spend : 0;
+                      return (
+                        <div key={type} className={`bg-slate-800/50 rounded-xl border border-slate-700 p-4`}>
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="text-white font-medium">{label}</h4>
+                            <span className={`px-2 py-0.5 rounded text-xs bg-${color}-500/20 text-${color}-400`}>{typeCampaigns.length} campaigns</span>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2 text-sm">
+                            <div><p className="text-slate-500 text-xs">Spend</p><p className="text-white font-medium">{formatCurrency(spend)}</p></div>
+                            <div><p className="text-slate-500 text-xs">Sales</p><p className="text-white font-medium">{formatCurrency(sales)}</p></div>
+                            <div><p className="text-slate-500 text-xs">ROAS</p><p className={`font-medium ${roas >= 3 ? 'text-emerald-400' : roas >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{roas.toFixed(2)}x</p></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  {/* Top & Bottom Performers */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div className="bg-slate-800/50 rounded-xl border border-emerald-500/30 p-5">
+                      <h3 className="text-lg font-semibold text-emerald-400 mb-3 flex items-center gap-2"><Trophy className="w-5 h-5" />Top Performers (by ROAS)</h3>
+                      <div className="space-y-2">
+                        {topPerformers.map((c, i) => (
+                          <div key={c.id} className="flex items-center justify-between p-2 bg-slate-900/50 rounded-lg">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-white text-sm truncate">{c.name}</p>
+                              <p className="text-slate-500 text-xs">{formatCurrency(c.spend)} spent</p>
+                            </div>
+                            <div className="text-right ml-2">
+                              <p className="text-emerald-400 font-bold">{c.roas.toFixed(2)}x</p>
+                              <p className="text-slate-500 text-xs">{formatCurrency(c.sales)}</p>
+                            </div>
+                          </div>
+                        ))}
+                        {topPerformers.length === 0 && <p className="text-slate-500 text-sm">No enabled campaigns with sales</p>}
+                      </div>
+                    </div>
+                    
+                    <div className="bg-slate-800/50 rounded-xl border border-rose-500/30 p-5">
+                      <h3 className="text-lg font-semibold text-rose-400 mb-3 flex items-center gap-2"><AlertTriangle className="w-5 h-5" />Needs Attention (Low ROAS)</h3>
+                      <div className="space-y-2">
+                        {bottomPerformers.map((c, i) => (
+                          <div key={c.id} className="flex items-center justify-between p-2 bg-slate-900/50 rounded-lg">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-white text-sm truncate">{c.name}</p>
+                              <p className="text-slate-500 text-xs">{formatCurrency(c.spend)} spent</p>
+                            </div>
+                            <div className="text-right ml-2">
+                              <p className="text-rose-400 font-bold">{c.roas.toFixed(2)}x</p>
+                              <p className="text-slate-500 text-xs">ACOS: {c.acos.toFixed(0)}%</p>
+                            </div>
+                          </div>
+                        ))}
+                        {bottomPerformers.length === 0 && <p className="text-slate-500 text-sm">No underperforming campaigns</p>}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Campaign Table */}
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                      <h3 className="text-lg font-semibold text-white">All Campaigns ({filteredCampaigns.length})</h3>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select value={amazonCampaignFilter.status} onChange={(e) => setAmazonCampaignFilter(f => ({...f, status: e.target.value}))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                          <option value="all">All Status</option>
+                          <option value="ENABLED">Enabled</option>
+                          <option value="PAUSED">Paused</option>
+                        </select>
+                        <select value={amazonCampaignFilter.type} onChange={(e) => setAmazonCampaignFilter(f => ({...f, type: e.target.value}))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                          <option value="all">All Types</option>
+                          <option value="SP">SP</option>
+                          <option value="SB">SB</option>
+                          <option value="SD">SD</option>
+                        </select>
+                        <input type="text" placeholder="Search..." value={amazonCampaignFilter.search} onChange={(e) => setAmazonCampaignFilter(f => ({...f, search: e.target.value}))} className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1 text-white text-sm w-40" />
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-700">
+                            {[
+                              { field: 'name', label: 'Campaign' },
+                              { field: 'type', label: 'Type' },
+                              { field: 'state', label: 'Status' },
+                              { field: 'spend', label: 'Spend' },
+                              { field: 'sales', label: 'Sales' },
+                              { field: 'orders', label: 'Orders' },
+                              { field: 'roas', label: 'ROAS' },
+                              { field: 'acos', label: 'ACOS' },
+                            ].map(col => (
+                              <th key={col.field} onClick={() => setAmazonCampaignSort(s => ({ field: col.field, dir: s.field === col.field && s.dir === 'desc' ? 'asc' : 'desc' }))} className={`text-left text-slate-400 py-2 px-2 cursor-pointer hover:text-white ${col.field !== 'name' ? 'text-right' : ''}`}>
+                                {col.label} {amazonCampaignSort.field === col.field && (amazonCampaignSort.dir === 'desc' ? '↓' : '↑')}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredCampaigns.slice(0, 50).map(c => (
+                            <tr key={c.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                              <td className="py-2 px-2 text-white max-w-xs truncate" title={c.name}>{c.name}</td>
+                              <td className="py-2 px-2 text-right"><span className={`px-1.5 py-0.5 rounded text-xs ${c.type === 'SP' ? 'bg-blue-500/20 text-blue-400' : c.type === 'SD' ? 'bg-teal-500/20 text-teal-400' : 'bg-purple-500/20 text-purple-400'}`}>{c.type}</span></td>
+                              <td className="py-2 px-2 text-right"><span className={`px-1.5 py-0.5 rounded text-xs ${c.state === 'ENABLED' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'}`}>{c.state === 'ENABLED' ? 'Active' : 'Paused'}</span></td>
+                              <td className="py-2 px-2 text-right text-white">{formatCurrency(c.spend)}</td>
+                              <td className="py-2 px-2 text-right text-emerald-400">{formatCurrency(c.sales)}</td>
+                              <td className="py-2 px-2 text-right text-white">{c.orders.toLocaleString()}</td>
+                              <td className={`py-2 px-2 text-right font-medium ${c.roas >= 3 ? 'text-emerald-400' : c.roas >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{c.roas.toFixed(2)}x</td>
+                              <td className={`py-2 px-2 text-right ${c.acos <= 25 ? 'text-emerald-400' : c.acos <= 35 ? 'text-amber-400' : 'text-rose-400'}`}>{c.acos.toFixed(1)}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {filteredCampaigns.length > 50 && <p className="text-slate-500 text-sm mt-2 text-center">Showing 50 of {filteredCampaigns.length} campaigns</p>}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          
+          {/* Performance View (existing content) */}
+          {adsViewMode === 'performance' && (
+            <>
           {/* Time Period Tabs */}
           <div className="flex gap-2 mb-4 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
             <button onClick={() => setAdsTimeTab('daily')} disabled={!hasDailyData} className={`flex-1 min-w-fit px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${adsTimeTab === 'daily' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700 disabled:opacity-40'}`}>
@@ -15187,6 +15967,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               <p className="text-slate-400 mb-2">No ad data for {getPeriodLabel()}</p>
               <button onClick={() => { setUploadTab('bulk-ads'); setView('upload'); }} className="text-blue-400 hover:text-blue-300 text-sm">Upload ad spend data →</button>
             </div>
+          )}
+            </>
           )}
         </div>
       </div>
