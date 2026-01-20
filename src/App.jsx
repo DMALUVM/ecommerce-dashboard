@@ -899,6 +899,7 @@ const handleLogout = async () => {
   // Forecast view state
   const [forecastSort, setForecastSort] = useState({ field: 'totalSales', dir: 'desc' });
   const [forecastFilter, setForecastFilter] = useState('');
+  const [forecastPeriodView, setForecastPeriodView] = useState('monthly'); // 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'
   
   // 3. Mobile view detection
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -15057,21 +15058,49 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const cogsLookup = savedCogs || {};
     const productNames = savedProductNames || {};
     
-    // Get the most relevant forecasts (upcoming weeks)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
     
-    const upcomingForecasts = sortedForecastWeeks
+    // Filter to only include WEEKLY forecasts (not cumulative 60-day totals)
+    const weeklyForecasts = sortedForecastWeeks.filter(w => {
+      const f = forecasts[w];
+      if (f.sourceType === 'weekly' && !f.totalWeeks) return true;
+      if (f.sourceType === '30-day-split') return true;
+      if (f.totalWeeks && f.totalWeeks > 5) return false;
+      return f.sourceType !== '60day' && f.sourceType !== '30day';
+    });
+    
+    const upcomingForecasts = weeklyForecasts
       .filter(w => new Date(w + 'T00:00:00') >= today)
-      .slice(0, 8); // Next 8 weeks max
+      .slice(0, 52); // Get up to a year of weekly forecasts
     
-    const pastForecasts = sortedForecastWeeks
+    const pastForecasts = weeklyForecasts
       .filter(w => new Date(w + 'T00:00:00') < today)
-      .slice(-4); // Last 4 weeks for accuracy tracking
+      .slice(-4);
+    
+    // Determine how many weeks to include based on period selection
+    const getWeeksForPeriod = () => {
+      switch (forecastPeriodView) {
+        case 'daily': return 1; // Use first week, divide by 7
+        case 'weekly': return 1;
+        case 'monthly': return 4;
+        case 'quarterly': return 13;
+        case 'yearly': return 52;
+        default: return 4;
+      }
+    };
+    
+    const weeksToInclude = Math.min(getWeeksForPeriod(), upcomingForecasts.length);
+    const selectedForecasts = upcomingForecasts.slice(0, weeksToInclude);
+    
+    // Daily divisor (for daily view, divide weekly by 7)
+    const dailyDivisor = forecastPeriodView === 'daily' ? 7 : 1;
     
     // Build SKU-level forecast data
     const skuForecastData = {};
-    upcomingForecasts.forEach(weekKey => {
+    selectedForecasts.forEach(weekKey => {
       const forecast = forecasts[weekKey];
       if (!forecast?.skus) return;
       
@@ -15089,16 +15118,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           };
         }
         skuForecastData[sku].weeks[weekKey] = data;
-        skuForecastData[sku].totalUnits += data.units || 0;
-        skuForecastData[sku].totalSales += data.sales || 0;
-        skuForecastData[sku].totalProceeds += data.proceeds || 0;
-        skuForecastData[sku].totalAds += data.ads || 0;
+        skuForecastData[sku].totalUnits += (data.units || 0) / dailyDivisor;
+        skuForecastData[sku].totalSales += (data.sales || 0) / dailyDivisor;
+        skuForecastData[sku].totalProceeds += (data.proceeds || 0) / dailyDivisor;
+        skuForecastData[sku].totalAds += (data.ads || 0) / dailyDivisor;
       });
     });
     
     // Calculate profit using COGS
     Object.values(skuForecastData).forEach(sku => {
-      const totalCogs = sku.totalUnits * sku.cogs;
+      sku.totalUnits = Math.round(sku.totalUnits);
       sku.totalProfit = sku.totalProceeds; // Proceeds already has fees deducted
       sku.profitPerUnit = sku.totalUnits > 0 ? sku.totalProfit / sku.totalUnits : 0;
       sku.margin = sku.totalSales > 0 ? (sku.totalProfit / sku.totalSales) * 100 : 0;
@@ -15155,6 +15184,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const lowMarginSkus = [...sortedSkus].filter(s => s.margin < 15 && s.totalSales > 100).sort((a, b) => a.margin - b.margin).slice(0, 5);
     const highAcosSkus = [...sortedSkus].filter(s => s.acos > 30 && s.totalAds > 50).sort((a, b) => b.acos - a.acos).slice(0, 5);
     
+    // Period labels
+    const periodLabels = {
+      daily: 'Tomorrow',
+      weekly: 'This Week',
+      monthly: 'This Month (4 weeks)',
+      quarterly: 'This Quarter (13 weeks)',
+      yearly: 'This Year (52 weeks)',
+    };
+    
+    const periodSubLabels = {
+      daily: '1 day projection',
+      weekly: `${selectedForecasts.length} week`,
+      monthly: `${selectedForecasts.length} weeks`,
+      quarterly: `${selectedForecasts.length} weeks`,
+      yearly: `${selectedForecasts.length} weeks`,
+    };
+    
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
@@ -15165,7 +15211,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             <div className="flex items-center justify-between flex-wrap gap-4">
               <div>
                 <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">🎯 SKU Forecast & Projections</h1>
-                <p className="text-slate-400">Amazon forecast data with profit projections • {upcomingForecasts.length} weeks forecasted • {Object.keys(skuForecastData).length} SKUs</p>
+                <p className="text-slate-400">Amazon forecast data • {periodLabels[forecastPeriodView]} • {Object.keys(skuForecastData).length} SKUs</p>
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={() => setView('upload')} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-white flex items-center gap-2">
@@ -15173,6 +15219,29 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 </button>
               </div>
             </div>
+          </div>
+          
+          {/* Period Toggle */}
+          <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
+            {[
+              { key: 'daily', label: 'Daily', color: 'cyan' },
+              { key: 'weekly', label: 'Weekly', color: 'violet' },
+              { key: 'monthly', label: 'Monthly', color: 'blue' },
+              { key: 'quarterly', label: 'Quarterly', color: 'teal' },
+              { key: 'yearly', label: 'Yearly', color: 'amber' },
+            ].map(p => (
+              <button 
+                key={p.key}
+                onClick={() => setForecastPeriodView(p.key)}
+                className={`flex-1 min-w-fit px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${
+                  forecastPeriodView === p.key 
+                    ? `bg-${p.color}-600 text-white` 
+                    : 'text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
           </div>
           
           {!hasForecastData ? (
@@ -15191,7 +15260,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 <div className="bg-gradient-to-br from-orange-900/30 to-slate-800/50 rounded-xl border border-orange-500/30 p-4">
                   <p className="text-slate-400 text-xs uppercase">Projected Sales</p>
                   <p className="text-2xl font-bold text-white">{formatCurrency(totalProjected.sales)}</p>
-                  <p className="text-orange-400 text-xs">{upcomingForecasts.length} weeks</p>
+                  <p className="text-orange-400 text-xs">{periodSubLabels[forecastPeriodView]}</p>
                 </div>
                 <div className="bg-gradient-to-br from-emerald-900/30 to-slate-800/50 rounded-xl border border-emerald-500/30 p-4">
                   <p className="text-slate-400 text-xs uppercase">Projected Profit</p>
@@ -15200,7 +15269,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 </div>
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                   <p className="text-slate-400 text-xs uppercase">Projected Units</p>
-                  <p className="text-2xl font-bold text-white">{totalProjected.units.toLocaleString()}</p>
+                  <p className="text-2xl font-bold text-white">{Math.round(totalProjected.units).toLocaleString()}</p>
                   <p className="text-slate-500 text-xs">{Object.keys(skuForecastData).length} SKUs</p>
                 </div>
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
