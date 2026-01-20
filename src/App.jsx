@@ -6060,7 +6060,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
       });
       const topSkus = Object.values(skuTotals).sort((a, b) => b.revenue - a.revenue).slice(0, 10);
       
-      // Build type-specific prompts
+      // Build type-specific prompts - OPTIMIZED for faster API response
       const typeLabels = {
         weekly: { title: 'WEEKLY INTELLIGENCE REPORT', period: 'Week', emoji: '📅' },
         monthly: { title: 'MONTHLY BUSINESS REVIEW', period: 'Month', emoji: '📊' },
@@ -6069,174 +6069,113 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
       };
       const typeInfo = typeLabels[type];
       
-      const reportPrompt = `You are an expert e-commerce analyst creating a ${typeInfo.title} for "${ctx.storeName}".
+      // Concise data summary for faster processing
+      const dataBlock = `PERIOD: ${periodLabel}
+Revenue: $${periodData.total.revenue.toFixed(0)} (${changeRevenue >= 0 ? '+' : ''}${changeRevenue.toFixed(1)}% ${comparisonLabel})
+Profit: $${periodData.total.netProfit.toFixed(0)} (${changeProfit >= 0 ? '+' : ''}${changeProfit.toFixed(1)}%)
+Units: ${periodData.total.units} | Margin: ${periodData.total.netMargin.toFixed(1)}%
+Amazon: $${periodData.amazon.revenue.toFixed(0)} (${periodData.total.amazonShare.toFixed(0)}%) | Shopify: $${periodData.shopify.revenue.toFixed(0)} (${periodData.total.shopifyShare.toFixed(0)}%)
+Top SKUs: ${topSkus.slice(0, 3).map(s => `${s.sku}: $${s.revenue.toFixed(0)}`).join(', ')}
+${comparisonData ? `Prior Period: $${comparisonData.total.revenue.toFixed(0)} rev, $${comparisonData.total.netProfit.toFixed(0)} profit` : ''}`;
 
-Generate a comprehensive, actionable ${type} report. Use real numbers from the data. Be specific, insightful, and strategic.
+      const reportPrompt = `Generate a ${typeInfo.title} for "${ctx.storeName || 'Store'}".
 
-=== PERIOD: ${periodLabel} ===
-Total Revenue: $${periodData.total.revenue.toFixed(2)} (${changeRevenue >= 0 ? '+' : ''}${changeRevenue.toFixed(1)}% ${comparisonLabel})
-Total Profit: $${periodData.total.netProfit.toFixed(2)} (${changeProfit >= 0 ? '+' : ''}${changeProfit.toFixed(1)}% ${comparisonLabel})
-Total Units: ${periodData.total.units} (${changeUnits >= 0 ? '+' : ''}${changeUnits.toFixed(1)}% ${comparisonLabel})
-Overall Margin: ${periodData.total.netMargin.toFixed(1)}%
-${type !== 'weekly' ? `Weeks in Period: ${weeksInPeriod.length}` : ''}
+DATA:
+${dataBlock}
 
-=== CHANNEL BREAKDOWN ===
-Amazon: $${periodData.amazon.revenue.toFixed(2)} revenue (${periodData.total.amazonShare.toFixed(0)}%), $${periodData.amazon.netProfit.toFixed(2)} profit, ROAS: ${periodData.amazon.roas.toFixed(1)}x
-Shopify: $${periodData.shopify.revenue.toFixed(2)} revenue (${periodData.total.shopifyShare.toFixed(0)}%), $${periodData.shopify.netProfit.toFixed(2)} profit, ROAS: ${periodData.shopify.roas.toFixed(1)}x
-3PL Costs: $${periodData.shopify.threeplCosts.toFixed(2)}
-
-=== TOP PERFORMERS ===
-${topSkus.slice(0, 5).map((s, i) => `${i + 1}. ${s.sku}: $${s.revenue.toFixed(2)} revenue, $${s.profit.toFixed(2)} profit, ${s.units} units`).join('\n')}
-
-=== GOALS ===
-${type === 'weekly' ? `Weekly Target: $${goals.weeklyRevenue || 50000} revenue, $${goals.weeklyProfit || 15000} profit` : ''}
-${type === 'monthly' ? `Monthly Target: $${goals.monthlyRevenue || 200000} revenue, $${goals.monthlyProfit || 60000} profit` : ''}
-${type === 'quarterly' || type === 'annual' ? `Annual Trajectory based on this ${type}: $${(periodData.total.revenue * (type === 'quarterly' ? 4 : 1)).toFixed(0)} revenue` : ''}
-
-=== COMPARISON DATA (${comparisonLabel}) ===
-${comparisonData ? `Previous Revenue: $${comparisonData.total.revenue.toFixed(2)}
-Previous Profit: $${comparisonData.total.netProfit.toFixed(2)}
-Previous Units: ${comparisonData.total.units}` : 'No comparison data available'}
-
-=== HISTORICAL CONTEXT ===
-Total Weeks Tracked: ${sortedWeeks.length}
-All-Time Revenue: $${ctx.insights.allTimeRevenue.toFixed(2)}
-All-Time Profit: $${ctx.insights.allTimeProfit.toFixed(2)}
-
-NOW GENERATE THE REPORT IN THIS EXACT FORMAT (use markdown):
-
+Create a markdown report with these sections:
 # ${typeInfo.emoji} ${typeInfo.title}
 **${periodLabel}**
-*Generated: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}*
-
----
 
 ## 📊 Executive Summary
-[Write 3-4 sentences summarizing the ${type}'s performance. ${type === 'quarterly' || type === 'annual' ? 'Discuss major trends, strategic wins, and areas for improvement.' : 'Highlight the most important insights.'} Be specific with numbers.]
+(3 sentences: performance overview, key highlight, main concern)
 
----
+## 💰 Key Metrics Table
+| Metric | Value | Change | Status |
+(Revenue, Profit, Units, Margin with ✅⚠️❌)
 
-## 💰 Key Metrics
+## 🏆 Wins
+(3-4 bullet points with specific numbers)
 
-| Metric | ${typeInfo.period} Total | ${comparisonLabel} | Status |
-|--------|-----------|--------------|--------|
-| Revenue | $X | +X% | ✅/⚠️/❌ |
-| Profit | $X | +X% | ✅/⚠️/❌ |
-| Units | X | +X% | - |
-| Margin | X% | +X pts | - |
-${type !== 'weekly' ? '| Avg Weekly | $X | - | - |' : ''}
-
----
-
-## 🏆 ${type === 'weekly' ? 'Wins This Week' : type === 'monthly' ? 'Monthly Wins' : type === 'quarterly' ? 'Quarterly Achievements' : 'Annual Highlights'}
-[List ${type === 'annual' ? '5-7' : type === 'quarterly' ? '4-5' : '3-4'} specific achievements with numbers]
-
----
-
-## ⚠️ ${type === 'weekly' ? 'Attention Needed' : type === 'monthly' ? 'Areas for Improvement' : 'Strategic Challenges'}
-[List ${type === 'annual' ? '4-5' : '3-4'} items that need attention. Be specific and actionable.]
-
----
+## ⚠️ Attention Needed  
+(3-4 actionable items)
 
 ## 📈 Channel Performance
+(Amazon & Shopify: revenue, profit, key insight each)
 
-### Amazon (${periodData.total.amazonShare.toFixed(0)}% of revenue)
-- Revenue: $X
-- Profit: $X
-- ROAS: Xx
-- [Key insight for ${type}]
+## 🎯 Recommendations
+(4-5 prioritized actions with expected impact)
 
-### Shopify (${periodData.total.shopifyShare.toFixed(0)}% of revenue)
-- Revenue: $X
-- Profit: $X
-- ROAS: Xx
-- [Key insight for ${type}]
+Use actual numbers from data. Be specific and actionable. Keep it concise.`;
 
----
-
-## 🏅 Top Performers
-[Analyze the top 5 SKUs - what drove their success?]
-
----
-
-${type === 'quarterly' || type === 'annual' ? `## 📉 Trend Analysis
-[Analyze ${type === 'annual' ? 'yearly' : 'quarterly'} trends:
-- Revenue trajectory
-- Margin evolution
-- Channel mix changes
-- Seasonality patterns]
-
----
-
-` : ''}## 🔮 ${type === 'weekly' ? 'Next Week Outlook' : type === 'monthly' ? 'Next Month Outlook' : type === 'quarterly' ? 'Next Quarter Strategy' : 'Next Year Strategy'}
-[${type === 'annual' || type === 'quarterly' ? 'Provide strategic recommendations for the upcoming period. What should be the focus areas?' : 'What to expect and prepare for.'}]
-
----
-
-## 🎯 ${type === 'weekly' ? 'AI Recommendations' : type === 'monthly' ? 'Monthly Action Items' : 'Strategic Recommendations'}
-[List ${type === 'annual' ? '6-8' : type === 'quarterly' ? '5-6' : '4-5'} specific, actionable recommendations. ${type === 'quarterly' || type === 'annual' ? 'Prioritize by strategic impact. Include both quick wins and longer-term initiatives.' : 'Prioritize by impact.'}]
-
-1. **[Priority 1]**: [Specific action with expected impact]
-2. **[Priority 2]**: [Specific action with expected impact]
-...
-
----
-
-${type === 'annual' ? `## 📊 Year in Review
-[Summarize the year's journey - where you started, major milestones, and where you ended. What were the biggest learnings?]
-
----
-
-` : ''}*Report generated by AI Business Analyst*`;
-
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system: `You are a world-class e-commerce analyst. Generate detailed, actionable ${type} reports with specific numbers and insights. Be concise but thorough. Always use the exact format requested. For ${type === 'quarterly' || type === 'annual' ? 'longer-term reports, think strategically about trends and future direction.' : 'shorter-term reports, focus on immediate actionable insights.'}`,
-          messages: [{ role: 'user', content: reportPrompt }]
-        }),
-      });
+      // Make API call with timeout handling
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 55000); // 55s timeout
       
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-      const data = await response.json();
-      const reportContent = data.content?.[0]?.text || '';
-      
-      if (!reportContent) throw new Error('No report content generated');
-      
-      // Create the report object
-      const newReport = {
-        id: `${type}-report-${Date.now()}`,
-        type,
-        periodKey,
-        periodLabel,
-        generatedAt: new Date().toISOString(),
-        content: reportContent,
-        metrics: {
-          revenue: periodData.total.revenue,
-          profit: periodData.total.netProfit,
-          units: periodData.total.units,
-          margin: periodData.total.netMargin,
-          changeRevenue,
-          changeProfit,
-          changeUnits,
-          weeksIncluded: weeksInPeriod.length,
-        },
-        topSkus: topSkus.slice(0, 5),
-      };
-      
-      // Update state
-      setCurrentReport(newReport);
-      setWeeklyReports(prev => ({
-        ...prev,
-        [type]: {
-          reports: [newReport, ...(prev[type]?.reports || []).filter(r => r.periodKey !== periodKey)].slice(0, type === 'weekly' ? 52 : type === 'monthly' ? 24 : type === 'quarterly' ? 12 : 5),
-          lastGenerated: new Date().toISOString(),
-        },
-      }));
-      
-      const typeNames = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', annual: 'Annual' };
-      setToast({ message: `${typeNames[type]} Intelligence Report generated!`, type: 'success' });
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system: 'You are an expert e-commerce analyst. Generate concise, data-driven reports. Use exact numbers provided. Format in clean markdown.',
+            messages: [{ role: 'user', content: reportPrompt }]
+          }),
+          signal: controller.signal,
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `API error: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        const reportContent = data.content?.[0]?.text || '';
+        
+        if (!reportContent) throw new Error('No report content generated');
+        
+        // Create the report object
+        const newReport = {
+          id: `${type}-report-${Date.now()}`,
+          type,
+          periodKey,
+          periodLabel,
+          generatedAt: new Date().toISOString(),
+          content: reportContent,
+          metrics: {
+            revenue: periodData.total.revenue,
+            profit: periodData.total.netProfit,
+            units: periodData.total.units,
+            margin: periodData.total.netMargin,
+            changeRevenue,
+            changeProfit,
+            changeUnits,
+            weeksIncluded: weeksInPeriod.length,
+          },
+          topSkus: topSkus.slice(0, 5),
+        };
+        
+        // Update state
+        setCurrentReport(newReport);
+        setWeeklyReports(prev => ({
+          ...prev,
+          [type]: {
+            reports: [newReport, ...(prev[type]?.reports || []).filter(r => r.periodKey !== periodKey)].slice(0, type === 'weekly' ? 52 : type === 'monthly' ? 24 : type === 'quarterly' ? 12 : 5),
+            lastGenerated: new Date().toISOString(),
+          },
+        }));
+        
+        const typeNames = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', annual: 'Annual' };
+        setToast({ message: `${typeNames[type]} Intelligence Report generated!`, type: 'success' });
+        
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Request timed out. The report is taking too long to generate. Please try again.');
+        }
+        throw fetchError;
+      }
       
     } catch (error) {
       console.error('Report generation error:', error);

@@ -1,25 +1,37 @@
 // Vercel API Route: /api/chat
-// Place this file at: /api/chat.js in your Vercel project root
-// This version uses Node.js runtime (more compatible)
+// Using Edge Runtime - NO TIMEOUT LIMIT on Hobby plan!
 
-export default async function handler(req, res) {
+export const config = {
+  runtime: 'edge',
+};
+
+export default async function handler(req) {
   // Only allow POST requests
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   // Check for API key
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error('ANTHROPIC_API_KEY is not set');
-    return res.status(500).json({ error: 'API key not configured' });
+    return new Response(JSON.stringify({ error: 'API key not configured' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   try {
-    const { system, messages } = req.body;
+    const { system, messages } = await req.json();
 
     // Validate input
     if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Invalid messages format' });
+      return new Response(JSON.stringify({ error: 'Invalid messages format' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     console.log('Calling Anthropic API with', messages.length, 'messages');
@@ -34,7 +46,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
+        max_tokens: 4096, // Increased for longer reports
         system: system || 'You are a helpful assistant.',
         messages: messages,
       }),
@@ -44,20 +56,29 @@ export default async function handler(req, res) {
 
     if (!response.ok) {
       console.error('Anthropic API error:', response.status, data);
-      return res.status(response.status).json({ 
+      return new Response(JSON.stringify({ 
         error: 'AI service error', 
         details: data.error?.message || 'Unknown error' 
+      }), {
+        status: response.status,
+        headers: { 'Content-Type': 'application/json' },
       });
     }
 
     console.log('Anthropic API success');
-    return res.status(200).json(data);
+    return new Response(JSON.stringify(data), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
 
   } catch (error) {
     console.error('Chat API error:', error);
-    return res.status(500).json({ 
+    return new Response(JSON.stringify({ 
       error: 'Internal server error', 
       message: error.message 
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
     });
   }
 }
