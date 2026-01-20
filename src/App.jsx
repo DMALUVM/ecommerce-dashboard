@@ -17,18 +17,6 @@ const loadXLSX = async () => {
   });
 };
 
-const parseCSVLine = (line) => {
-  const result = []; let current = '', inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    if (char === '"') inQuotes = !inQuotes;
-    else if (char === ',' && !inQuotes) { result.push(current); current = ''; }
-    else current += char;
-  }
-  result.push(current);
-  return result;
-};
-
 const parseCSV = (text) => {
   const lines = text.split('\n').filter(line => line.trim());
   if (lines.length === 0) return [];
@@ -39,6 +27,18 @@ const parseCSV = (text) => {
     headers.forEach((header, i) => { obj[header.trim().replace(/^\uFEFF/, '')] = values[i]?.trim() || ''; });
     return obj;
   });
+};
+
+const parseCSVLine = (line) => {
+  const result = []; let current = '', inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') inQuotes = !inQuotes;
+    else if (char === ',' && !inQuotes) { result.push(current); current = ''; }
+    else current += char;
+  }
+  result.push(current);
+  return result;
 };
 
 const formatCurrency = (num) => {
