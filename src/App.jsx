@@ -1146,20 +1146,27 @@ const handleLogout = async () => {
       weekEnding: w,
       data: allWeeksData[w],
       hasForecast: !!amazonForecasts[w],
-      hasComparison: getAmazonForecastComparison.some(c => c.weekEnding === w || c.actualWeekKey === w),
+      hasComparison: false, // Will be calculated later
     }));
     
     // === LEARNING DATA STATUS ===
-    const comparisons = getAmazonForecastComparison;
+    // Calculate comparisons inline to avoid circular dependency
+    const matchedWeeks = new Set();
+    Object.keys(amazonForecasts).forEach(forecastWeek => {
+      if (allWeeksData[forecastWeek]) {
+        matchedWeeks.add(forecastWeek);
+      }
+    });
+    
     const pendingForecastWeeks = Object.keys(amazonForecasts).filter(w => {
       const weekDate = new Date(w + 'T00:00:00');
-      return weekDate < now && !comparisons.some(c => c.weekEnding === w);
+      return weekDate < now && !matchedWeeks.has(w);
     });
     
     // === DATA FLOW ANALYSIS ===
     const dataFlow = {
       // Forecasts → Learning: How many forecasts have matching actuals?
-      forecastsWithActuals: comparisons.length,
+      forecastsWithActuals: matchedWeeks.size,
       forecastsAwaitingActuals: pendingForecastWeeks.length,
       
       // Daily → Weekly: How many days can be aggregated?
@@ -1272,7 +1279,7 @@ const handleLogout = async () => {
         active: forecastCorrections.confidence >= 30,
         confidence: forecastCorrections.confidence,
         samples: forecastCorrections.samplesUsed,
-        comparisons: comparisons.length,
+        comparisons: matchedWeeks.size,
         pendingComparisons: pendingForecastWeeks.length,
         skusTracked: Object.keys(forecastCorrections.bySku).length,
         lastUpdated: forecastCorrections.lastUpdated,
@@ -1283,7 +1290,7 @@ const handleLogout = async () => {
         return priorityOrder[a.priority] - priorityOrder[b.priority];
       }),
     };
-  }, [forecastMeta, amazonForecasts, allDaysData, allWeeksData, getAmazonForecastComparison, forecastCorrections]);
+  }, [forecastMeta, amazonForecasts, allDaysData, allWeeksData, forecastCorrections]);
   // ============ END DATA STATUS DASHBOARD ============
   
   // Save Amazon forecasts to localStorage and cloud
@@ -9891,36 +9898,18 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                   </div>
                 </div>
                 
-                {/* Forecast vs Actuals Quick Summary */}
-                {getAmazonForecastComparison.length > 0 && (
+                {/* Forecast vs Actuals - Link only to avoid circular dependency */}
+                {Object.keys(amazonForecasts).length > 0 && Object.keys(allWeeksData).length > 0 && (
                   <div className="mt-4 pt-4 border-t border-slate-700/50">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-400">Forecast Accuracy:</span>
-                          <span className={`text-sm font-semibold ${
-                            forecastAccuracyMetrics?.avgAccuracy >= 90 ? 'text-emerald-400' :
-                            forecastAccuracyMetrics?.avgAccuracy >= 80 ? 'text-amber-400' : 'text-rose-400'
-                          }`}>
-                            {forecastAccuracyMetrics?.avgAccuracy?.toFixed(1) || 0}%
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-400">Beat/Miss:</span>
-                          <span className="text-emerald-400 text-sm font-semibold">{forecastAccuracyMetrics?.beatCount || 0}</span>
-                          <span className="text-slate-500">/</span>
-                          <span className="text-rose-400 text-sm font-semibold">{forecastAccuracyMetrics?.missedCount || 0}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-400">Samples:</span>
-                          <span className="text-white text-sm">{getAmazonForecastComparison.length} weeks</span>
-                        </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400">Forecast vs Actuals tracking available</span>
                       </div>
                       <button 
                         onClick={() => { setAnalyticsTab('amazon-accuracy'); setView('analytics'); }}
                         className="text-xs text-purple-400 hover:text-purple-300"
                       >
-                        View Details →
+                        View Accuracy Details →
                       </button>
                     </div>
                   </div>
