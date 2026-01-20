@@ -6101,6 +6101,9 @@ Keep insights brief and actionable. Format as numbered list.`;
   };
 
   // Day Details Modal - shows detailed breakdown for a specific day
+  const [editingDayAdSpend, setEditingDayAdSpend] = useState(false);
+  const [dayAdSpendEdit, setDayAdSpendEdit] = useState({ meta: '', google: '' });
+  
   const DayDetailsModal = () => {
     if (!viewingDayDetails) return null;
     
@@ -6127,8 +6130,66 @@ Keep insights brief and actionable. Format as numbered list.`;
     const hasAmazon = dayData.amazon && (amazon.revenue > 0 || amazon.units > 0);
     const hasShopify = dayData.shopify && (shopify.revenue > 0 || shopify.units > 0);
     
+    // Save ad spend edits
+    const saveAdSpendEdit = () => {
+      const metaSpend = parseFloat(dayAdSpendEdit.meta) || 0;
+      const googleSpend = parseFloat(dayAdSpendEdit.google) || 0;
+      
+      // Calculate new Shopify profit with updated ad spend
+      const oldMetaSpend = shopify.metaSpend || 0;
+      const oldGoogleSpend = shopify.googleSpend || 0;
+      const adSpendDiff = (metaSpend + googleSpend) - (oldMetaSpend + oldGoogleSpend);
+      
+      const updatedShopify = {
+        ...shopify,
+        metaSpend,
+        googleSpend,
+        adSpend: metaSpend + googleSpend,
+        netProfit: (shopify.netProfit || 0) - adSpendDiff,
+        netMargin: shopify.revenue > 0 ? (((shopify.netProfit || 0) - adSpendDiff) / shopify.revenue) * 100 : 0,
+        roas: (metaSpend + googleSpend) > 0 ? (shopify.revenue || 0) / (metaSpend + googleSpend) : 0,
+      };
+      
+      // Update total
+      const newTotalAdSpend = (amazon.adSpend || 0) + metaSpend + googleSpend;
+      const newTotalProfit = (total.netProfit || 0) - adSpendDiff;
+      const newTotalRevenue = total.revenue || 0;
+      
+      const updatedTotal = {
+        ...total,
+        adSpend: newTotalAdSpend,
+        netProfit: newTotalProfit,
+        netMargin: newTotalRevenue > 0 ? (newTotalProfit / newTotalRevenue) * 100 : 0,
+        roas: newTotalAdSpend > 0 ? newTotalRevenue / newTotalAdSpend : 0,
+      };
+      
+      const updatedDayData = {
+        ...dayData,
+        shopify: updatedShopify,
+        total: updatedTotal,
+        lastEdited: new Date().toISOString(),
+      };
+      
+      const updatedDays = { ...allDaysData, [viewingDayDetails]: updatedDayData };
+      setAllDaysData(updatedDays);
+      lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays));
+      queueCloudSave({ ...combinedData, dailySales: updatedDays });
+      
+      setEditingDayAdSpend(false);
+      setToast({ message: 'Ad spend updated!', type: 'success' });
+    };
+    
+    // Start editing
+    const startEditingAdSpend = () => {
+      setDayAdSpendEdit({
+        meta: (shopify.metaSpend || 0).toString(),
+        google: (shopify.googleSpend || 0).toString(),
+      });
+      setEditingDayAdSpend(true);
+    };
+    
     return (
-      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 overflow-y-auto" onClick={() => setViewingDayDetails(null)}>
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 overflow-y-auto" onClick={() => { setViewingDayDetails(null); setEditingDayAdSpend(false); }}>
         <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-4xl w-full my-8" onClick={e => e.stopPropagation()}>
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
@@ -6138,8 +6199,56 @@ Keep insights brief and actionable. Format as numbered list.`;
               </h2>
               <p className="text-slate-400 text-sm">Daily Performance Details</p>
             </div>
-            <button onClick={() => setViewingDayDetails(null)} className="text-slate-400 hover:text-white p-2 hover:bg-slate-700 rounded-lg"><X className="w-5 h-5" /></button>
+            <button onClick={() => { setViewingDayDetails(null); setEditingDayAdSpend(false); }} className="text-slate-400 hover:text-white p-2 hover:bg-slate-700 rounded-lg"><X className="w-5 h-5" /></button>
           </div>
+          
+          {/* Edit Ad Spend Section */}
+          {editingDayAdSpend && (
+            <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6">
+              <h3 className="text-amber-300 font-semibold mb-3 flex items-center gap-2">
+                <DollarSign className="w-4 h-4" /> Edit Ad Spend
+              </h3>
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label className="block text-sm text-slate-300 mb-1">Meta Ad Spend ($)</label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    value={dayAdSpendEdit.meta}
+                    onChange={(e) => setDayAdSpendEdit(prev => ({ ...prev, meta: e.target.value }))}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                    placeholder="0.00"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-300 mb-1">Google Ad Spend ($)</label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    value={dayAdSpendEdit.google}
+                    onChange={(e) => setDayAdSpendEdit(prev => ({ ...prev, google: e.target.value }))}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button 
+                  onClick={saveAdSpendEdit}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm font-medium"
+                >
+                  Save Changes
+                </button>
+                <button 
+                  onClick={() => setEditingDayAdSpend(false)}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+              <p className="text-amber-400/70 text-xs mt-2">Note: This updates Shopify ad spend and recalculates profit/margin</p>
+            </div>
+          )}
           
           {/* Summary Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -6268,8 +6377,19 @@ Keep insights brief and actionable. Format as numbered list.`;
           <div className="flex justify-between items-center mt-6 pt-4 border-t border-slate-700">
             <p className="text-slate-500 text-xs">
               {dayData.createdAt && `Uploaded: ${new Date(dayData.createdAt).toLocaleString()}`}
+              {dayData.lastEdited && ` • Edited: ${new Date(dayData.lastEdited).toLocaleString()}`}
             </p>
-            <button onClick={() => setViewingDayDetails(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white">Close</button>
+            <div className="flex gap-2">
+              {!editingDayAdSpend && hasDailySalesData(dayData) && (
+                <button 
+                  onClick={startEditingAdSpend}
+                  className="px-4 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-amber-300 text-sm flex items-center gap-2"
+                >
+                  <DollarSign className="w-4 h-4" /> Edit Ad Spend
+                </button>
+              )}
+              <button onClick={() => { setViewingDayDetails(null); setEditingDayAdSpend(false); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white">Close</button>
+            </div>
           </div>
         </div>
       </div>
@@ -10331,12 +10451,20 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                             return (
                               <div 
                                 key={dayNum}
-                                onClick={() => hasSales && setViewingDayDetails(dateKey)}
+                                onClick={() => {
+                                  if (hasSales) {
+                                    setViewingDayDetails(dateKey);
+                                  } else if (hasAdsOnly) {
+                                    setSelectedDay(dateKey);
+                                    setUploadTab('daily');
+                                    setView('upload');
+                                  }
+                                }}
                                 className={`h-12 rounded-lg p-1 text-center relative transition-all ${
                                   hasSales 
                                     ? 'bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 cursor-pointer' 
                                     : hasAdsOnly
-                                      ? 'bg-amber-500/10 border border-amber-500/20'
+                                      ? 'bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 cursor-pointer'
                                       : 'bg-slate-800/50 border border-slate-700/50'
                                 } ${isToday ? 'ring-2 ring-white/50' : ''}`}
                               >
@@ -10360,11 +10488,11 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                         <div className="flex items-center justify-center gap-6 mt-4 text-xs text-slate-400">
                           <div className="flex items-center gap-1">
                             <div className="w-3 h-3 rounded bg-cyan-500/20 border border-cyan-500/30" />
-                            <span>Sales data</span>
+                            <span>Sales data (click to view)</span>
                           </div>
                           <div className="flex items-center gap-1">
                             <div className="w-3 h-3 rounded bg-amber-500/10 border border-amber-500/20" />
-                            <span>Ads only</span>
+                            <span>Ads only (click to add sales)</span>
                           </div>
                           <div className="flex items-center gap-1">
                             <div className="w-3 h-3 rounded bg-slate-800/50 border border-slate-700/50" />
