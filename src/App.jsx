@@ -7402,6 +7402,50 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               </div>
             </div>
             <div className="flex items-center gap-3 flex-wrap">
+              {/* Store Selector Dropdown */}
+              {session && stores.length > 0 && (
+                <div className="relative">
+                  <button 
+                    onClick={() => setShowStoreSelector(!showStoreSelector)}
+                    className="px-3 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2"
+                  >
+                    <Store className="w-4 h-4" />
+                    <span className="max-w-[100px] truncate">{storeName || 'Select Store'}</span>
+                    <ChevronRight className={`w-4 h-4 transition-transform ${showStoreSelector ? 'rotate-90' : ''}`} />
+                  </button>
+                  {showStoreSelector && (
+                    <div className="absolute top-full mt-2 right-0 w-64 bg-slate-800 border border-slate-600 rounded-xl shadow-xl z-50 overflow-hidden">
+                      <div className="p-2">
+                        <p className="text-slate-400 text-xs uppercase px-2 py-1">Your Stores</p>
+                        {stores.map(store => (
+                          <button
+                            key={store.id}
+                            onClick={() => {
+                              if (store.id !== activeStoreId) {
+                                switchStore(store.id);
+                              }
+                              setShowStoreSelector(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2 ${store.id === activeStoreId ? 'bg-violet-600/30 text-violet-300' : 'hover:bg-slate-700 text-white'}`}
+                          >
+                            <Store className="w-4 h-4" />
+                            <span className="flex-1 truncate">{store.name}</span>
+                            {store.id === activeStoreId && <Check className="w-4 h-4 text-violet-400" />}
+                          </button>
+                        ))}
+                        <div className="border-t border-slate-700 mt-2 pt-2">
+                          <button
+                            onClick={() => { setShowStoreSelector(false); setView('settings'); }}
+                            className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-400 flex items-center gap-2 text-sm"
+                          >
+                            <Plus className="w-4 h-4" />Add New Store
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               <input value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="Store name"
                 className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white w-40" />
               <button onClick={() => setShowGoalsModal(true)} className="px-3 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-1"><Target className="w-4 h-4" />Goals</button>
@@ -10734,9 +10778,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const sortedWeeks = Object.keys(allWeeksData).sort();
     const weekYears = [...new Set(sortedWeeks.map(w => w.substring(0, 4)))].sort();
     
-    // Also check for annual periods (labeled as "2024", "2025", etc.)
+    // Check for annual periods (labeled as "2024", "2025", etc.)
     const periodYears = Object.keys(allPeriodsData).filter(k => /^\d{4}$/.test(k)).sort();
-    const allYears = [...new Set([...weekYears, ...periodYears])].sort();
+    
+    // Also extract years from monthly periods like "January 2025", "Feb 2024", etc.
+    const monthlyPeriodYears = [];
+    Object.keys(allPeriodsData).forEach(k => {
+      const match = k.match(/\b(20\d{2})\b/); // Find any 4-digit year starting with 20
+      if (match) monthlyPeriodYears.push(match[1]);
+    });
+    
+    const allYears = [...new Set([...weekYears, ...periodYears, ...monthlyPeriodYears])].sort();
     
     const currentYear = allYears[allYears.length - 1];
     const previousYear = allYears.length > 1 ? allYears[allYears.length - 2] : null;
@@ -13135,40 +13187,37 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             </div>
           </div>
           
-          {/* Profit Waterfall */}
+          {/* Profit Waterfall - Compact Horizontal View */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
             <h3 className="text-lg font-semibold text-white mb-4">Profit Waterfall</h3>
-            <div className="relative h-72">
-              <div className="flex items-end justify-around h-56 px-4">
-                {waterfall.map((item, i) => {
-                  const height = maxVal > 0 ? (Math.abs(item.value) / maxVal) * 100 : 0;
-                  return (
-                    <div key={item.label} className="flex-1 flex flex-col items-center group relative mx-1">
-                      <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-900 border border-slate-600 text-white text-xs px-3 py-2 rounded-lg whitespace-nowrap z-20 shadow-xl">
-                        <p className="font-semibold">{item.label}</p>
-                        <p className={item.value >= 0 && item.label !== 'COGS' && item.label !== 'Amazon Fees' && item.label !== '3PL Costs' && item.label !== 'Ad Spend' ? 'text-emerald-400' : 'text-rose-400'}>
-                          {formatCurrency(item.value)}
-                        </p>
-                        {totals.revenue > 0 && <p className="text-slate-400 text-[10px]">{((Math.abs(item.value) / totals.revenue) * 100).toFixed(1)}% of revenue</p>}
-                      </div>
+            {/* Horizontal Bar Waterfall */}
+            <div className="space-y-2">
+              {waterfall.map((item, i) => {
+                const widthPct = totals.revenue > 0 ? (Math.abs(item.value) / totals.revenue) * 100 : 0;
+                const isExpense = item.value < 0;
+                return (
+                  <div key={item.label} className="flex items-center gap-3">
+                    <div className="w-24 text-sm text-slate-400 text-right">{item.label}</div>
+                    <div className="flex-1 h-8 bg-slate-900/50 rounded-lg overflow-hidden relative">
                       <div 
-                        className={`w-full max-w-[70px] rounded-t ${item.color} transition-all hover:opacity-80 shadow-lg`}
-                        style={{ height: `${Math.max(height, 4)}%` }}
+                        className={`h-full ${item.color} transition-all`}
+                        style={{ width: `${Math.min(widthPct, 100)}%` }}
                       />
+                      <span className="absolute inset-0 flex items-center px-3 text-sm font-medium text-white">
+                        {isExpense ? '-' : ''}{formatCurrency(Math.abs(item.value))}
+                        <span className="text-slate-400 text-xs ml-2">({widthPct.toFixed(1)}%)</span>
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
-              <div className="flex justify-around px-4 mt-3">
-                {waterfall.map(item => (
-                  <div key={item.label + '-label'} className="flex-1 text-center mx-1">
-                    <p className="text-slate-400 text-xs truncate">{item.label}</p>
-                    <p className={`text-sm font-bold ${item.value >= 0 && (item.label === 'Revenue' || item.label === 'Net Profit') ? 'text-white' : 'text-rose-400'}`}>
-                      {item.label === 'Revenue' ? '' : item.label === 'Net Profit' && item.value >= 0 ? '' : '-'}{formatCurrency(Math.abs(item.value))}
-                    </p>
                   </div>
-                ))}
-              </div>
+                );
+              })}
+            </div>
+            {/* Summary */}
+            <div className="mt-4 pt-4 border-t border-slate-700 flex items-center justify-between">
+              <p className="text-slate-400 text-sm">For every <span className="text-white font-semibold">$1,000</span> in revenue:</p>
+              <p className="text-lg font-bold">
+                You keep <span className={pcts.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{formatCurrency(pcts.profit * 10)}</span>
+              </p>
             </div>
           </div>
           
@@ -13297,9 +13346,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   </tr>
                 </thead>
                 <tbody>
-                  {weeklyBreakdown.map(w => (
+                  {weeklyBreakdown.map(w => {
+                    // Format the week label - handle both date strings and period labels
+                    const formatWeekLabel = (weekKey) => {
+                      // Check if it's a date format (YYYY-MM-DD)
+                      if (/^\d{4}-\d{2}-\d{2}$/.test(weekKey)) {
+                        return new Date(weekKey + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                      }
+                      // Otherwise return as-is (it's a period label like "January 2025")
+                      return weekKey;
+                    };
+                    return (
                     <tr key={w.week} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                      <td className="py-2 text-white">{new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                      <td className="py-2 text-white">{formatWeekLabel(w.week)}</td>
                       <td className="py-2 text-right text-white">{formatCurrency(w.revenue)}</td>
                       <td className="py-2 text-right text-rose-400">{formatCurrency(w.cogs)}</td>
                       <td className="py-2 text-right text-orange-400">{formatCurrency(w.amazonFees)}</td>
@@ -13308,7 +13367,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       <td className={`py-2 text-right font-semibold ${w.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(w.profit)}</td>
                       <td className={`py-2 text-right ${w.margin >= 20 ? 'text-emerald-400' : w.margin >= 10 ? 'text-amber-400' : 'text-rose-400'}`}>{w.margin.toFixed(1)}%</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
                 <tfoot className="border-t-2 border-slate-600">
                   <tr className="font-semibold">
@@ -14387,17 +14447,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   <Store className="w-8 h-8 text-violet-400" />
                   <div className="flex-1">
                     <input 
-                      value={stores.find(s => s.id === activeStoreId)?.name || storeName || 'My Store'} 
+                      value={storeName || ''} 
                       onChange={(e) => {
-                        const updated = stores.map(s => s.id === activeStoreId ? { ...s, name: e.target.value } : s);
-                        setStores(updated);
                         setStoreName(e.target.value);
+                        // Also update in stores array if it exists
+                        if (stores.length > 0 && activeStoreId) {
+                          const updated = stores.map(s => s.id === activeStoreId ? { ...s, name: e.target.value } : s);
+                          setStores(updated);
+                        }
                       }}
-                      className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white w-full"
-                      placeholder="Store name"
+                      className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white w-full focus:outline-none focus:ring-2 focus:ring-violet-500"
+                      placeholder="Enter store name"
                     />
                   </div>
                 </div>
+                <p className="text-slate-500 text-xs mt-2">This name appears in exports and reports</p>
               </div>
               
               {/* All Stores */}
@@ -14428,8 +14492,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               <div className="flex gap-2">
                 <input 
                   placeholder="New store name..."
-                  className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                  className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
                   id="new-store-name"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && e.target.value.trim()) {
+                      createStore(e.target.value.trim());
+                      e.target.value = '';
+                    }
+                  }}
                 />
                 <button 
                   onClick={() => {
