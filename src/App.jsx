@@ -1758,10 +1758,18 @@ const handleUnlock = async (e) => {
 };
 
 // Whenever session changes: load cloud if present, else fall back to local.
+const hasInitializedRef = useRef(false);
 useEffect(() => {
+  // Only run once per session change
+  if (hasInitializedRef.current && session?.user?.id) return;
+  
   const run = async () => {
     if (!isAuthReady) return;
+    if (isLoadingDataRef.current) return; // Prevent concurrent loads
+    
     isLoadingDataRef.current = true;
+    hasInitializedRef.current = true;
+    
     try {
       if (session?.user?.id && supabase) {
         const ok = await loadFromCloud();
@@ -1808,7 +1816,8 @@ useEffect(() => {
   };
 
   run();
-}, [session, isAuthReady, loadFromCloud, loadFromLocal, pushToCloudNow]);
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [session, isAuthReady]);
 
 const save = async (d) => {
   try {
