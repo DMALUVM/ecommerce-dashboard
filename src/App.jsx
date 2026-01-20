@@ -755,6 +755,11 @@ const handleLogout = async () => {
   const [lastBackupDate, setLastBackupDate] = useState(() => localStorage.getItem('ecommerce_last_backup') || null);
   const [lastSyncDate, setLastSyncDate] = useState(null);
   
+  // Bulk Ad Upload state
+  const [bulkAdPlatform, setBulkAdPlatform] = useState('google'); // 'google' | 'meta'
+  const [bulkAdFile, setBulkAdFile] = useState(null); // { name, content }
+  const [bulkAdParsed, setBulkAdParsed] = useState(null); // { dailyData, weeklyData, totalSpend, error, dateRange }
+  
   const [showReprocess, setShowReprocess] = useState(false);
   const [reprocessFiles, setReprocessFiles] = useState({ amazon: null, shopify: null, threepl: null });
   const [reprocessFileNames, setReprocessFileNames] = useState({ amazon: '', shopify: '', threepl: '' });
@@ -2946,6 +2951,299 @@ const savePeriods = async (d) => {
     setShowEdit3PL(false);
     setToast({ message: '3PL costs updated', type: 'success' });
   }, [allWeeksData]);
+
+  // Parse bulk ad file (Google Ads or Meta Ads CSV)
+  const parseBulkAdFile = useCallback((content, platform) => {
+    try {
+      const lines = content.trim().split('\n');
+      if (lines.length < 2) return { error: 'File is empty or has no data rows' };
+      
+      const header = lines[0].toLowerCase();
+      const dailyData = [];
+      let totalSpend = 0;
+      let totalImpressions = 0;
+      let totalClicks = 0;
+      let totalConversions = 0;
+      
+      // Detect format based on headers
+      const isGoogleAds = header.includes('date') && (header.includes('cost') || header.includes('spend'));
+      const isMetaAds = header.includes('date') && (header.includes('amount spent') || header.includes('spend') || header.includes('cost'));
+      
+      if (!isGoogleAds && !isMetaAds) {
+        return { error: 'Could not detect file format. Expected columns: Date and Cost/Spend' };
+      }
+      
+      // Parse headers to find all columns
+      const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase());
+      const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h.includes('date'));
+      const costCol = headers.findIndex(h => h === 'cost' || h === 'spend' || h === 'amount spent' || (h.includes('cost') && !h.includes('/')));
+      const impressionsCol = headers.findIndex(h => h === 'impressions' || h === 'impr' || h.includes('impression'));
+      const cpcCol = headers.findIndex(h => h === 'avg. cpc' || h === 'cpc' || h.includes('cost per click'));
+      const cpaCol = headers.findIndex(h => h === 'cost / conv.' || h === 'cpa' || h.includes('cost per') || h.includes('/ conv'));
+      
+      if (dateCol === -1 || costCol === -1) {
+        return { error: `Could not find required columns. Found headers: ${headers.join(', ')}` };
+      }
+      
+      // Parse data rows
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        // Handle CSV with quoted fields
+        const cols = [];
+        let current = '';
+        let inQuotes = false;
+        for (const char of line) {
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            cols.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        cols.push(current.trim());
+        
+        // Parse date - handle formats like "Sun, Dec 21, 2025" or "2025-12-21" or "12/21/2025"
+        let dateStr = cols[dateCol]?.replace(/"/g, '').trim();
+        let parsedDate = null;
+        
+        // Try "Day, Mon DD, YYYY" format (Google Ads)
+        const googleMatch = dateStr.match(/\w+,\s*(\w+)\s+(\d+),\s*(\d{4})/);
+        if (googleMatch) {
+          const monthNames = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+          const month = monthNames[googleMatch[1].toLowerCase().substring(0, 3)];
+          if (month !== undefined) {
+            parsedDate = new Date(parseInt(googleMatch[3]), month, parseInt(googleMatch[2]));
+          }
+        }
+        
+        // Try ISO format "YYYY-MM-DD"
+        if (!parsedDate && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+          parsedDate = new Date(dateStr + 'T00:00:00');
+        }
+        
+        // Try US format "MM/DD/YYYY"
+        if (!parsedDate && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(dateStr)) {
+          const parts = dateStr.split('/');
+          parsedDate = new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
+        }
+        
+        if (!parsedDate || isNaN(parsedDate)) continue;
+        
+        // Parse cost - remove $, commas, quotes
+        let costStr = cols[costCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '').trim();
+        const cost = parseFloat(costStr) || 0;
+        
+        // Parse impressions
+        let impressionsStr = impressionsCol >= 0 ? cols[impressionsCol]?.replace(/"/g, '').replace(/,/g, '').trim() : '0';
+        const impressions = parseInt(impressionsStr) || 0;
+        
+        // Parse CPC
+        let cpcStr = cpcCol >= 0 ? cols[cpcCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '').trim() : '0';
+        const cpc = parseFloat(cpcStr) || 0;
+        
+        // Parse CPA (cost per conversion)
+        let cpaStr = cpaCol >= 0 ? cols[cpaCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '').trim() : '0';
+        const cpa = parseFloat(cpaStr) || 0;
+        
+        // Calculate clicks from cost/CPC
+        const clicks = cpc > 0 ? Math.round(cost / cpc) : 0;
+        
+        // Calculate conversions from cost/CPA
+        const conversions = cpa > 0 ? Math.round(cost / cpa) : 0;
+        
+        if (cost > 0 || impressions > 0) {
+          dailyData.push({
+            date: parsedDate.toISOString().split('T')[0],
+            spend: cost,
+            impressions,
+            clicks,
+            cpc,
+            cpa,
+            conversions,
+          });
+          totalSpend += cost;
+          totalImpressions += impressions;
+          totalClicks += clicks;
+          totalConversions += conversions;
+        }
+      }
+      
+      if (dailyData.length === 0) {
+        return { error: 'No valid data rows found' };
+      }
+      
+      // Sort by date
+      dailyData.sort((a, b) => a.date.localeCompare(b.date));
+      
+      // Aggregate into weeks (ending Sunday)
+      const weeklyMap = {};
+      dailyData.forEach(d => {
+        const date = new Date(d.date + 'T00:00:00');
+        const dayOfWeek = date.getDay(); // 0 = Sunday
+        const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+        const weekEndDate = new Date(date);
+        weekEndDate.setDate(weekEndDate.getDate() + daysUntilSunday);
+        const weekEnding = weekEndDate.toISOString().split('T')[0];
+        
+        if (!weeklyMap[weekEnding]) {
+          weeklyMap[weekEnding] = { 
+            weekEnding, spend: 0, impressions: 0, clicks: 0, conversions: 0, days: [] 
+          };
+        }
+        weeklyMap[weekEnding].spend += d.spend;
+        weeklyMap[weekEnding].impressions += d.impressions;
+        weeklyMap[weekEnding].clicks += d.clicks;
+        weeklyMap[weekEnding].conversions += d.conversions;
+        weeklyMap[weekEnding].days.push(d.date);
+      });
+      
+      // Calculate averages for weekly data
+      Object.values(weeklyMap).forEach(w => {
+        w.cpc = w.clicks > 0 ? w.spend / w.clicks : 0;
+        w.cpa = w.conversions > 0 ? w.spend / w.conversions : 0;
+        w.ctr = w.impressions > 0 ? (w.clicks / w.impressions) * 100 : 0;
+      });
+      
+      const weeklyData = Object.values(weeklyMap).sort((a, b) => a.weekEnding.localeCompare(b.weekEnding));
+      
+      // Count weeks with existing data
+      let weeksWithExistingData = 0;
+      weeklyData.forEach(w => {
+        if (allWeeksData[w.weekEnding]) weeksWithExistingData++;
+      });
+      
+      const dateRange = dailyData.length > 0 
+        ? `${new Date(dailyData[0].date + 'T00:00:00').toLocaleDateString()} - ${new Date(dailyData[dailyData.length - 1].date + 'T00:00:00').toLocaleDateString()}`
+        : '';
+      
+      // Calculate overall averages
+      const avgCpc = totalClicks > 0 ? totalSpend / totalClicks : 0;
+      const avgCpa = totalConversions > 0 ? totalSpend / totalConversions : 0;
+      const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+      
+      return {
+        dailyData,
+        weeklyData,
+        totalSpend,
+        totalImpressions,
+        totalClicks,
+        totalConversions,
+        avgCpc,
+        avgCpa,
+        avgCtr,
+        dateRange,
+        weeksWithExistingData,
+      };
+    } catch (e) {
+      return { error: `Parse error: ${e.message}` };
+    }
+  }, [allWeeksData]);
+  
+  // Process bulk ad upload - update weeks with ad spend
+  const processBulkAdUpload = useCallback((parsed, platform) => {
+    if (!parsed?.weeklyData?.length) return;
+    
+    setIsProcessing(true);
+    
+    try {
+      const updated = { ...allWeeksData };
+      let updatedCount = 0;
+      let createdCount = 0;
+      
+      parsed.weeklyData.forEach(w => {
+        const weekKey = w.weekEnding;
+        
+        if (updated[weekKey]) {
+          // Week exists - update ad spend
+          const week = updated[weekKey];
+          const oldMetaSpend = week.shopify?.metaSpend || 0;
+          const oldGoogleSpend = week.shopify?.googleSpend || 0;
+          
+          let newMetaSpend = oldMetaSpend;
+          let newGoogleSpend = oldGoogleSpend;
+          
+          if (platform === 'google') {
+            newGoogleSpend = w.spend;
+          } else {
+            newMetaSpend = w.spend;
+          }
+          
+          const totalShopAds = newMetaSpend + newGoogleSpend;
+          const oldShopAds = week.shopify?.adSpend || 0;
+          const shopProfit = (week.shopify?.netProfit || 0) + oldShopAds - totalShopAds;
+          
+          updated[weekKey] = {
+            ...week,
+            shopify: {
+              ...week.shopify,
+              adSpend: totalShopAds,
+              metaSpend: newMetaSpend,
+              metaAds: newMetaSpend,
+              googleSpend: newGoogleSpend,
+              googleAds: newGoogleSpend,
+              netProfit: shopProfit,
+              netMargin: week.shopify?.revenue > 0 ? (shopProfit / week.shopify.revenue) * 100 : 0,
+              roas: totalShopAds > 0 ? week.shopify.revenue / totalShopAds : 0,
+            },
+            total: {
+              ...week.total,
+              adSpend: (week.amazon?.adSpend || 0) + totalShopAds,
+              netProfit: (week.amazon?.netProfit || 0) + shopProfit,
+              netMargin: week.total?.revenue > 0 ? (((week.amazon?.netProfit || 0) + shopProfit) / week.total.revenue) * 100 : 0,
+              roas: ((week.amazon?.adSpend || 0) + totalShopAds) > 0 ? week.total.revenue / ((week.amazon?.adSpend || 0) + totalShopAds) : 0,
+            },
+          };
+          updatedCount++;
+        } else {
+          // Week doesn't exist - create a placeholder with just ad data
+          // This allows ad data to be stored even before weekly sales data is uploaded
+          const metaSpend = platform === 'meta' ? w.spend : 0;
+          const googleSpend = platform === 'google' ? w.spend : 0;
+          const totalAds = metaSpend + googleSpend;
+          
+          updated[weekKey] = {
+            amazon: { revenue: 0, units: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, returns: 0, skuData: [] },
+            shopify: { 
+              revenue: 0, units: 0, cogs: 0, threeplCosts: 0, 
+              adSpend: totalAds, metaSpend, metaAds: metaSpend, googleSpend, googleAds: googleSpend,
+              netProfit: -totalAds, netMargin: 0, roas: 0, skuData: [] 
+            },
+            total: { revenue: 0, units: 0, cogs: 0, adSpend: totalAds, netProfit: -totalAds, netMargin: 0, roas: 0 },
+            _adDataOnly: true, // Flag to indicate this is placeholder ad data
+          };
+          createdCount++;
+        }
+      });
+      
+      setAllWeeksData(updated);
+      save(updated);
+      
+      // Clear upload state
+      setBulkAdFile(null);
+      setBulkAdParsed(null);
+      
+      const platformName = platform === 'google' ? 'Google' : 'Meta';
+      if (createdCount > 0) {
+        setToast({ 
+          message: `${platformName} ads updated for ${updatedCount} week(s), ${createdCount} placeholder week(s) created`, 
+          type: 'success' 
+        });
+      } else {
+        setToast({ 
+          message: `${platformName} ads updated for ${updatedCount} week(s)`, 
+          type: 'success' 
+        });
+      }
+    } catch (e) {
+      setToast({ message: `Error: ${e.message}`, type: 'error' });
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [allWeeksData, save]);
 
   const getMonths = () => { const m = new Set(); Object.keys(allWeeksData).forEach(w => { const d = new Date(w+'T00:00:00'); m.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`); }); return Array.from(m).sort().reverse(); };
   const getYears = () => { const y = new Set(); Object.keys(allWeeksData).forEach(w => { y.add(new Date(w+'T00:00:00').getFullYear()); }); return Array.from(y).sort().reverse(); };
@@ -7906,6 +8204,50 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                 </div>
               </div>
               
+              {/* Quick Uploads Shortcuts */}
+              <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-4 mb-6">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
+                    <Upload className="w-4 h-4" />Quick Uploads
+                  </h3>
+                  <button onClick={() => setView('upload')} className="text-xs text-slate-400 hover:text-white">View all →</button>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <button 
+                    onClick={() => { setUploadTab('weekly'); setView('upload'); }}
+                    className="p-3 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 rounded-xl text-left transition-all"
+                  >
+                    <Calendar className="w-5 h-5 text-violet-400 mb-1" />
+                    <p className="text-violet-300 text-sm font-medium">Weekly Data</p>
+                    <p className="text-slate-500 text-xs">Amazon + Shopify</p>
+                  </button>
+                  <button 
+                    onClick={() => { setUploadTab('bulk-ads'); setView('upload'); }}
+                    className="p-3 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 rounded-xl text-left transition-all"
+                  >
+                    <DollarSign className="w-5 h-5 text-blue-400 mb-1" />
+                    <p className="text-blue-300 text-sm font-medium">Bulk Ads</p>
+                    <p className="text-slate-500 text-xs">Google / Meta</p>
+                  </button>
+                  <button 
+                    onClick={() => { setUploadTab('inventory'); setView('upload'); }}
+                    className="p-3 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-xl text-left transition-all"
+                  >
+                    <Boxes className="w-5 h-5 text-emerald-400 mb-1" />
+                    <p className="text-emerald-300 text-sm font-medium">Inventory</p>
+                    <p className="text-slate-500 text-xs">Stock levels</p>
+                  </button>
+                  <button 
+                    onClick={() => { setUploadTab('forecast'); setView('upload'); }}
+                    className="p-3 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/30 rounded-xl text-left transition-all"
+                  >
+                    <TrendingUp className="w-5 h-5 text-amber-400 mb-1" />
+                    <p className="text-amber-300 text-sm font-medium">Forecast</p>
+                    <p className="text-slate-500 text-xs">Amazon projections</p>
+                  </button>
+                </div>
+              </div>
+              
               {/* Quick Upload - Show if most recent week is missing */}
               {(() => {
                 const today = new Date();
@@ -8352,6 +8694,9 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
             <button onClick={() => setUploadTab('period')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'period' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <CalendarRange className="w-5 h-5" />Period
             </button>
+            <button onClick={() => setUploadTab('bulk-ads')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'bulk-ads' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <DollarSign className="w-5 h-5" />Bulk Ads
+            </button>
             <button onClick={() => setUploadTab('inventory')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Boxes className="w-5 h-5" />Inventory
             </button>
@@ -8642,6 +8987,213 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               {!hasCogs && <div className="bg-amber-900/30 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" /><div><p className="text-amber-300 font-medium">COGS not set up</p><p className="text-amber-200/70 text-sm">Upload a COGS file or configure in settings for profit tracking</p></div></div>}
               
               <button onClick={processPeriod} disabled={isProcessing || !periodFiles.amazon || !periodFiles.shopify || !periodLabel.trim() || !hasCogs} className="w-full bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Save Period Data'}</button>
+            </div>
+          )}
+          
+          {/* Bulk Ads Upload */}
+          {uploadTab === 'bulk-ads' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-white mb-1">📊 Bulk Ad Spend Upload</h2>
+              <p className="text-slate-400 text-sm mb-6">Upload Google Ads or Meta Ads exports to bulk update ad spend across multiple weeks</p>
+              
+              {/* Platform Selection */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-slate-300 mb-2">Ad Platform</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button 
+                    onClick={() => setBulkAdPlatform('google')}
+                    className={`p-4 rounded-xl border-2 flex items-center gap-3 transition-all ${bulkAdPlatform === 'google' ? 'bg-red-900/30 border-red-500' : 'bg-slate-900/50 border-slate-700 hover:border-slate-500'}`}
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-red-600/20 flex items-center justify-center">
+                      <span className="text-xl">🔴</span>
+                    </div>
+                    <div className="text-left">
+                      <p className={`font-medium ${bulkAdPlatform === 'google' ? 'text-red-400' : 'text-white'}`}>Google Ads</p>
+                      <p className="text-xs text-slate-500">Time series export</p>
+                    </div>
+                  </button>
+                  <button 
+                    onClick={() => setBulkAdPlatform('meta')}
+                    className={`p-4 rounded-xl border-2 flex items-center gap-3 transition-all ${bulkAdPlatform === 'meta' ? 'bg-blue-900/30 border-blue-500' : 'bg-slate-900/50 border-slate-700 hover:border-slate-500'}`}
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-blue-600/20 flex items-center justify-center">
+                      <span className="text-xl">🔵</span>
+                    </div>
+                    <div className="text-left">
+                      <p className={`font-medium ${bulkAdPlatform === 'meta' ? 'text-blue-400' : 'text-white'}`}>Meta Ads</p>
+                      <p className="text-xs text-slate-500">Facebook/Instagram</p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+              
+              {/* File Upload */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-slate-300 mb-2">Upload CSV File</label>
+                <div 
+                  className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${bulkAdFile ? 'border-emerald-500/50 bg-emerald-900/20' : 'border-slate-600 hover:border-slate-500'}`}
+                  onClick={() => document.getElementById('bulk-ad-file')?.click()}
+                >
+                  <input 
+                    type="file" 
+                    id="bulk-ad-file" 
+                    accept=".csv" 
+                    className="hidden" 
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                          const text = ev.target?.result;
+                          if (typeof text === 'string') {
+                            setBulkAdFile({ name: file.name, content: text });
+                            // Auto-parse to show preview
+                            const parsed = parseBulkAdFile(text, bulkAdPlatform);
+                            setBulkAdParsed(parsed);
+                          }
+                        };
+                        reader.readAsText(file);
+                      }
+                    }}
+                  />
+                  {bulkAdFile ? (
+                    <div>
+                      <Check className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
+                      <p className="text-emerald-400 font-medium">{bulkAdFile.name}</p>
+                      <p className="text-slate-500 text-sm mt-1">Click to change file</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <Upload className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+                      <p className="text-slate-400">Click to upload {bulkAdPlatform === 'google' ? 'Google' : 'Meta'} Ads CSV</p>
+                      <p className="text-slate-500 text-sm mt-1">Daily time series data</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              {/* Parse Preview */}
+              {bulkAdParsed && (
+                <div className="mb-6">
+                  <div className={`rounded-xl p-4 ${bulkAdParsed.error ? 'bg-rose-900/30 border border-rose-500/50' : 'bg-emerald-900/20 border border-emerald-500/30'}`}>
+                    {bulkAdParsed.error ? (
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0" />
+                        <div>
+                          <p className="text-rose-400 font-medium">Parse Error</p>
+                          <p className="text-rose-300/70 text-sm">{bulkAdParsed.error}</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <Check className="w-5 h-5 text-emerald-400" />
+                            <span className="text-emerald-400 font-medium">Parsed Successfully</span>
+                          </div>
+                          <span className="text-slate-400 text-sm">{bulkAdParsed.dailyData?.length || 0} days</span>
+                        </div>
+                        
+                        {/* KPI Summary Cards */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+                          <div className="bg-slate-800/50 rounded-lg p-2 text-center">
+                            <p className="text-slate-500 text-xs">Total Spend</p>
+                            <p className="text-white font-bold">{formatCurrency(bulkAdParsed.totalSpend || 0)}</p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-2 text-center">
+                            <p className="text-slate-500 text-xs">Impressions</p>
+                            <p className="text-white font-bold">{formatNumber(bulkAdParsed.totalImpressions || 0)}</p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-2 text-center">
+                            <p className="text-slate-500 text-xs">Clicks</p>
+                            <p className="text-white font-bold">{formatNumber(bulkAdParsed.totalClicks || 0)}</p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-2 text-center">
+                            <p className="text-slate-500 text-xs">Conversions</p>
+                            <p className="text-white font-bold">{formatNumber(bulkAdParsed.totalConversions || 0)}</p>
+                          </div>
+                        </div>
+                        
+                        {/* Performance Metrics */}
+                        <div className="grid grid-cols-3 gap-2 mb-3">
+                          <div className="bg-slate-800/50 rounded-lg p-2 text-center">
+                            <p className="text-slate-500 text-xs">Avg CPC</p>
+                            <p className={`font-bold ${(bulkAdParsed.avgCpc || 0) < 2 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                              {formatCurrency(bulkAdParsed.avgCpc || 0)}
+                            </p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-2 text-center">
+                            <p className="text-slate-500 text-xs">Avg CPA</p>
+                            <p className={`font-bold ${(bulkAdParsed.avgCpa || 0) < 30 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                              {formatCurrency(bulkAdParsed.avgCpa || 0)}
+                            </p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-2 text-center">
+                            <p className="text-slate-500 text-xs">CTR</p>
+                            <p className={`font-bold ${(bulkAdParsed.avgCtr || 0) > 2 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                              {(bulkAdParsed.avgCtr || 0).toFixed(2)}%
+                            </p>
+                          </div>
+                        </div>
+                        
+                        {/* Summary by week */}
+                        <div className="bg-slate-900/50 rounded-lg p-3 mb-3">
+                          <p className="text-slate-400 text-xs uppercase mb-2">Weekly Aggregation Preview</p>
+                          <div className="space-y-1 max-h-48 overflow-y-auto">
+                            {bulkAdParsed.weeklyData?.map(w => (
+                              <div key={w.weekEnding} className="flex items-center justify-between text-sm">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-white">Week ending {new Date(w.weekEnding + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                                  {allWeeksData[w.weekEnding] && (
+                                    <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">exists</span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className="text-slate-400 text-xs">{formatNumber(w.clicks || 0)} clicks</span>
+                                  <span className={`font-medium ${bulkAdPlatform === 'google' ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(w.spend)}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center justify-between text-sm mt-1">
+                          <span className="text-slate-400">Date range:</span>
+                          <span className="text-slate-300">{bulkAdParsed.dateRange}</span>
+                        </div>
+                        
+                        {bulkAdParsed.weeksWithExistingData > 0 && (
+                          <p className="text-amber-400 text-xs mt-3 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3" />
+                            {bulkAdParsed.weeksWithExistingData} week(s) have existing data — will be updated
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {/* How it works */}
+              <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
+                <h3 className="text-slate-300 font-medium mb-2 flex items-center gap-2">
+                  <HelpCircle className="w-4 h-4" />How it works
+                </h3>
+                <ul className="text-slate-400 text-sm space-y-1">
+                  <li>• Daily ad spend is aggregated into weeks (ending Sunday)</li>
+                  <li>• Weeks are matched to your existing weekly data</li>
+                  <li>• Existing {bulkAdPlatform === 'google' ? 'Google' : 'Meta'} ad spend will be overwritten (not duplicated)</li>
+                  <li>• If no weekly data exists, ad spend is stored for when you upload it</li>
+                </ul>
+              </div>
+              
+              <button 
+                onClick={() => processBulkAdUpload(bulkAdParsed, bulkAdPlatform)} 
+                disabled={isProcessing || !bulkAdParsed || bulkAdParsed.error || !bulkAdParsed.weeklyData?.length} 
+                className="w-full bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl"
+              >
+                {isProcessing ? 'Processing...' : `Update ${bulkAdParsed?.weeklyData?.length || 0} Week(s) with ${bulkAdPlatform === 'google' ? 'Google' : 'Meta'} Ad Spend`}
+              </button>
             </div>
           )}
           
@@ -13697,16 +14249,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       const week = allWeeksData[w];
       const amzAds = week.amazon?.adSpend || 0;
       const amzRev = week.amazon?.revenue || 0;
-      const metaAds = week.shopify?.metaSpend || 0;
-      const googleAds = week.shopify?.googleSpend || 0;
+      // Support both field naming conventions
+      const metaAds = week.shopify?.metaAds || week.shopify?.metaSpend || 0;
+      const googleAds = week.shopify?.googleAds || week.shopify?.googleSpend || 0;
+      const shopifyAdSpend = week.shopify?.adSpend || 0;
+      // Use individual breakdowns if available, otherwise use total shopify adSpend
+      const shopAds = (metaAds + googleAds) > 0 ? (metaAds + googleAds) : shopifyAdSpend;
       const shopRev = week.shopify?.revenue || 0;
-      const totalAds = amzAds + metaAds + googleAds;
-      const totalRev = amzRev + shopRev;
+      const totalAds = amzAds + shopAds;
+      const totalRev = week.total?.revenue || (amzRev + shopRev);
       
       return {
         week: w,
         amzAds, amzRev, amzRoas: amzAds > 0 ? amzRev / amzAds : 0,
-        metaAds, googleAds, shopRev, shopRoas: (metaAds + googleAds) > 0 ? shopRev / (metaAds + googleAds) : 0,
+        metaAds, googleAds, shopAds, shopRev, shopRoas: shopAds > 0 ? shopRev / shopAds : 0,
         totalAds, totalRev, totalRoas: totalAds > 0 ? totalRev / totalAds : 0,
         adPct: totalRev > 0 ? (totalAds / totalRev) * 100 : 0,
       };
@@ -13745,8 +14301,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           {dataBar}
           
           <div className="mb-6">
-            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">⚡ Ad Performance Analytics</h1>
-            <p className="text-slate-400">Track TACOS (Total Ad Cost of Sale = Ad Spend ÷ Total Revenue), ad spend efficiency, and channel performance</p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">⚡ Ad Performance Analytics</h1>
+                <p className="text-slate-400">Track TACOS (Total Ad Cost of Sale = Ad Spend ÷ Total Revenue), ad spend efficiency, and channel performance</p>
+              </div>
+              <button 
+                onClick={() => { setUploadTab('bulk-ads'); setView('upload'); }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white flex items-center gap-2"
+              >
+                <Upload className="w-4 h-4" />
+                Bulk Upload Ads
+              </button>
+            </div>
           </div>
           
           {/* Summary Cards */}
@@ -13811,29 +14378,70 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           
           {/* TACOS Trend Chart */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">TACOS Trend (Lower is Better)</h3>
-            <div className="flex items-end gap-2 h-48">
-              {adData.slice(-12).map((d, i) => {
-                const tacos = d.adPct;
-                const height = Math.min(tacos * 3, 100); // Scale for display
-                return (
-                  <div key={d.week} className="flex-1 flex flex-col items-center group relative">
-                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                      {new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}<br/>
-                      TACOS: {tacos.toFixed(1)}%<br/>
-                      Spend: {formatCurrency(d.totalAds)}
-                    </div>
-                    <div className={`w-full rounded-t transition-all hover:opacity-80 ${tacos <= 10 ? 'bg-emerald-500' : tacos <= 20 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ height: `${Math.max(height, 3)}%` }} />
-                    <span className="text-[10px] text-slate-500 mt-1">{new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+            <h3 className="text-lg font-semibold text-white mb-2">TACOS Trend (Lower is Better)</h3>
+            <p className="text-slate-500 text-sm mb-4">Target: Below 15% | Warning: 15-25% | High: Above 25%</p>
+            
+            {adData.filter(d => d.totalAds > 0).length > 0 ? (
+              <>
+                {/* Chart with target lines */}
+                <div className="relative">
+                  {/* Target line at 15% */}
+                  <div className="absolute left-0 right-0 border-t-2 border-dashed border-emerald-500/50" style={{ bottom: `${(15/40) * 100}%` }}>
+                    <span className="absolute -top-3 right-0 text-xs text-emerald-400">15% target</span>
                   </div>
-                );
-              })}
-            </div>
-            <div className="flex gap-4 mt-3 text-xs justify-center">
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great (&lt;10%)</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />OK (10-20%)</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />High (&gt;20%)</span>
-            </div>
+                  {/* Warning line at 25% */}
+                  <div className="absolute left-0 right-0 border-t border-dashed border-amber-500/30" style={{ bottom: `${(25/40) * 100}%` }}>
+                    <span className="absolute -top-3 right-0 text-xs text-amber-400/70">25%</span>
+                  </div>
+                  
+                  <div className="flex items-end gap-2 h-48">
+                    {adData.slice(-12).map((d, i) => {
+                      const tacos = d.adPct;
+                      const maxTacos = 40; // Scale chart to 40% max
+                      const height = Math.min((tacos / maxTacos) * 100, 100);
+                      const hasData = d.totalAds > 0;
+                      
+                      return (
+                        <div key={d.week} className="flex-1 flex flex-col items-center group relative">
+                          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-900 border border-slate-600 text-white text-xs px-3 py-2 rounded-lg whitespace-nowrap z-20 shadow-xl">
+                            <p className="font-semibold mb-1">{new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                            <p>TACOS: <span className={tacosColor(tacos)}>{tacos.toFixed(1)}%</span></p>
+                            <p>Ad Spend: {formatCurrency(d.totalAds)}</p>
+                            <p>Revenue: {formatCurrency(d.totalRev)}</p>
+                            {d.amzAds > 0 && <p className="text-orange-400">Amazon: {formatCurrency(d.amzAds)}</p>}
+                            {d.shopAds > 0 && <p className="text-blue-400">Shopify: {formatCurrency(d.shopAds)}</p>}
+                          </div>
+                          {hasData ? (
+                            <div 
+                              className={`w-full rounded-t transition-all hover:opacity-80 ${tacos <= 15 ? 'bg-emerald-500' : tacos <= 25 ? 'bg-amber-500' : 'bg-rose-500'}`} 
+                              style={{ height: `${Math.max(height, 3)}%` }} 
+                            />
+                          ) : (
+                            <div className="w-full h-1 bg-slate-700 rounded" />
+                          )}
+                          <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                
+                {/* Legend */}
+                <div className="flex items-center justify-center gap-6 mt-4 text-xs">
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />≤15% Optimal</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />15-25% Warning</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />&gt;25% High</span>
+                </div>
+              </>
+            ) : (
+              <div className="h-48 flex items-center justify-center bg-slate-900/30 rounded-xl border border-dashed border-slate-600">
+                <div className="text-center">
+                  <BarChart3 className="w-10 h-10 text-slate-600 mx-auto mb-2" />
+                  <p className="text-slate-500">No ad spend data available</p>
+                  <p className="text-slate-600 text-sm mt-1">Upload weekly data with ad spend to see TACOS trends</p>
+                </div>
+              </div>
+            )}
           </div>
           
           {/* Weekly Ad Performance Table */}
@@ -14674,13 +15282,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   <Store className="w-8 h-8 text-violet-400" />
                   <div className="flex-1">
                     <input 
-                      value={storeName || ''} 
-                      onChange={(e) => {
-                        setStoreName(e.target.value);
+                      defaultValue={storeName || ''} 
+                      onBlur={(e) => {
+                        const newName = e.target.value;
+                        setStoreName(newName);
                         // Also update in stores array if it exists
                         if (stores.length > 0 && activeStoreId) {
-                          const updated = stores.map(s => s.id === activeStoreId ? { ...s, name: e.target.value } : s);
+                          const updated = stores.map(s => s.id === activeStoreId ? { ...s, name: newName } : s);
                           setStores(updated);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.target.blur();
                         }
                       }}
                       className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white w-full focus:outline-none focus:ring-2 focus:ring-violet-500"
@@ -14688,7 +15302,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     />
                   </div>
                 </div>
-                <p className="text-slate-500 text-xs mt-2">This name appears in exports and reports</p>
+                <p className="text-slate-500 text-xs mt-2">Press Enter or click outside to save. This name appears in exports and reports.</p>
               </div>
               
               {/* All Stores */}
