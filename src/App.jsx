@@ -874,6 +874,7 @@ const handleLogout = async () => {
   const [analyticsTab, setAnalyticsTab] = useState('forecast');
   const [selectedSkusToCompare, setSelectedSkusToCompare] = useState([]);
   const [selectedWeeksToCompare, setSelectedWeeksToCompare] = useState([]);
+  const [adsTimeTab, setAdsTimeTab] = useState('weekly'); // 'yesterday' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'
   
   // 3. Mobile view detection
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -14491,56 +14492,193 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
   // ==================== ADS PERFORMANCE VIEW ====================
   if (view === 'ads') {
     const sortedWeeks = Object.keys(allWeeksData).sort();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
     
-    // Aggregate ad data
-    const adData = sortedWeeks.map(w => {
-      const week = allWeeksData[w];
-      const amzAds = week.amazon?.adSpend || 0;
-      const amzRev = week.amazon?.revenue || 0;
-      // Support both field naming conventions
-      const metaAds = week.shopify?.metaAds || week.shopify?.metaSpend || 0;
-      const googleAds = week.shopify?.googleAds || week.shopify?.googleSpend || 0;
-      const shopifyAdSpend = week.shopify?.adSpend || 0;
-      // Use individual breakdowns if available, otherwise use total shopify adSpend
-      const shopAds = (metaAds + googleAds) > 0 ? (metaAds + googleAds) : shopifyAdSpend;
-      const shopRev = week.shopify?.revenue || 0;
-      const totalAds = amzAds + shopAds;
-      const totalRev = week.total?.revenue || (amzRev + shopRev);
-      
-      return {
-        week: w,
-        amzAds, amzRev, amzRoas: amzAds > 0 ? amzRev / amzAds : 0,
-        metaAds, googleAds, shopAds, shopRev, shopRoas: shopAds > 0 ? shopRev / shopAds : 0,
-        totalAds, totalRev, totalRoas: totalAds > 0 ? totalRev / totalAds : 0,
-        adPct: totalRev > 0 ? (totalAds / totalRev) * 100 : 0,
+    // Get yesterday's daily data if available
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayKey = yesterday.toISOString().split('T')[0];
+    const yesterdayData = dailyData[yesterdayKey];
+    
+    // Helper to aggregate ad data from weeks
+    const aggregateAdData = (weeks) => {
+      return weeks.reduce((acc, w) => {
+        const week = allWeeksData[w];
+        if (!week) return acc;
+        const amzAds = week.amazon?.adSpend || 0;
+        const amzRev = week.amazon?.revenue || 0;
+        const metaAds = week.shopify?.metaAds || week.shopify?.metaSpend || 0;
+        const googleAds = week.shopify?.googleAds || week.shopify?.googleSpend || 0;
+        const shopifyAdSpend = week.shopify?.adSpend || 0;
+        const shopAds = (metaAds + googleAds) > 0 ? (metaAds + googleAds) : shopifyAdSpend;
+        const shopRev = week.shopify?.revenue || 0;
+        const totalRev = week.total?.revenue || (amzRev + shopRev);
+        return {
+          amzAds: acc.amzAds + amzAds,
+          amzRev: acc.amzRev + amzRev,
+          metaAds: acc.metaAds + metaAds,
+          googleAds: acc.googleAds + googleAds,
+          shopAds: acc.shopAds + shopAds,
+          shopRev: acc.shopRev + shopRev,
+          totalAds: acc.totalAds + amzAds + shopAds,
+          totalRev: acc.totalRev + totalRev,
+        };
+      }, { amzAds: 0, amzRev: 0, metaAds: 0, googleAds: 0, shopAds: 0, shopRev: 0, totalAds: 0, totalRev: 0 });
+    };
+    
+    // Get current week (week containing today)
+    const dayOfWeek = today.getDay();
+    const currentWeekStart = new Date(today);
+    currentWeekStart.setDate(today.getDate() - dayOfWeek - 6); // Start of current week (Monday before last Sunday)
+    const currentWeekEnd = new Date(currentWeekStart);
+    currentWeekEnd.setDate(currentWeekStart.getDate() + 6);
+    
+    // Filter weeks by time period
+    const getWeeksForPeriod = (period) => {
+      const now = new Date();
+      switch (period) {
+        case 'weekly': {
+          // Last 4 complete weeks
+          return sortedWeeks.slice(-4);
+        }
+        case 'monthly': {
+          // Current month
+          const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+          return sortedWeeks.filter(w => new Date(w + 'T00:00:00') >= monthStart);
+        }
+        case 'quarterly': {
+          // Current quarter
+          const quarterMonth = Math.floor(now.getMonth() / 3) * 3;
+          const quarterStart = new Date(now.getFullYear(), quarterMonth, 1);
+          return sortedWeeks.filter(w => new Date(w + 'T00:00:00') >= quarterStart);
+        }
+        case 'yearly': {
+          // Current year
+          const yearStart = new Date(now.getFullYear(), 0, 1);
+          return sortedWeeks.filter(w => new Date(w + 'T00:00:00') >= yearStart);
+        }
+        default:
+          return sortedWeeks.slice(-4);
+      }
+    };
+    
+    // Get period label
+    const getPeriodLabel = (period) => {
+      const now = new Date();
+      switch (period) {
+        case 'yesterday': return `Yesterday (${yesterday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`;
+        case 'weekly': return 'Last 4 Weeks';
+        case 'monthly': return now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        case 'quarterly': {
+          const q = Math.floor(now.getMonth() / 3) + 1;
+          return `Q${q} ${now.getFullYear()}`;
+        }
+        case 'yearly': return `${now.getFullYear()} YTD`;
+        default: return '';
+      }
+    };
+    
+    // Calculate totals based on selected period
+    let totals, periodWeeks, adDataForTable;
+    
+    if (adsTimeTab === 'yesterday' && yesterdayData) {
+      // Use daily data
+      const metaAds = yesterdayData.metaSpend || yesterdayData.metaAds || 0;
+      const googleAds = yesterdayData.googleSpend || yesterdayData.googleAds || 0;
+      const amzAds = yesterdayData.amazonAdSpend || 0;
+      const shopAds = metaAds + googleAds;
+      totals = {
+        amzAds,
+        amzRev: yesterdayData.amazonRevenue || 0,
+        metaAds,
+        googleAds,
+        shopAds,
+        shopRev: yesterdayData.shopifyRevenue || 0,
+        totalAds: amzAds + shopAds,
+        totalRev: (yesterdayData.amazonRevenue || 0) + (yesterdayData.shopifyRevenue || 0),
       };
-    });
+      periodWeeks = [];
+      adDataForTable = [];
+    } else {
+      periodWeeks = getWeeksForPeriod(adsTimeTab);
+      totals = aggregateAdData(periodWeeks);
+      
+      // Build table data
+      adDataForTable = periodWeeks.map(w => {
+        const week = allWeeksData[w];
+        const amzAds = week.amazon?.adSpend || 0;
+        const amzRev = week.amazon?.revenue || 0;
+        const metaAds = week.shopify?.metaAds || week.shopify?.metaSpend || 0;
+        const googleAds = week.shopify?.googleAds || week.shopify?.googleSpend || 0;
+        const shopifyAdSpend = week.shopify?.adSpend || 0;
+        const shopAds = (metaAds + googleAds) > 0 ? (metaAds + googleAds) : shopifyAdSpend;
+        const shopRev = week.shopify?.revenue || 0;
+        const totalAds = amzAds + shopAds;
+        const totalRev = week.total?.revenue || (amzRev + shopRev);
+        return {
+          week: w,
+          amzAds, amzRev, metaAds, googleAds, shopAds, shopRev, totalAds, totalRev,
+          adPct: totalRev > 0 ? (totalAds / totalRev) * 100 : 0,
+        };
+      });
+    }
     
-    const recentData = adData.slice(-4);
-    const totals = recentData.reduce((acc, d) => ({
-      amzAds: acc.amzAds + d.amzAds,
-      amzRev: acc.amzRev + d.amzRev,
-      metaAds: acc.metaAds + d.metaAds,
-      googleAds: acc.googleAds + d.googleAds,
-      shopRev: acc.shopRev + d.shopRev,
-      totalAds: acc.totalAds + d.totalAds,
-      totalRev: acc.totalRev + d.totalRev,
-    }), { amzAds: 0, amzRev: 0, metaAds: 0, googleAds: 0, shopRev: 0, totalAds: 0, totalRev: 0 });
-    
-    const avgRoas = totals.totalAds > 0 ? totals.totalRev / totals.totalAds : 0;
-    const amzRoas = totals.amzAds > 0 ? totals.amzRev / totals.amzAds : 0;
+    // Calculate metrics
     const shopifyAds = totals.metaAds + totals.googleAds;
-    const shopRoas = shopifyAds > 0 ? totals.shopRev / shopifyAds : 0;
-    
-    // TACOS = Ad Spend / Total Revenue (as percentage)
     const totalTacos = totals.totalRev > 0 ? (totals.totalAds / totals.totalRev) * 100 : 0;
     const amzTacos = totals.amzRev > 0 ? (totals.amzAds / totals.amzRev) * 100 : 0;
     const shopTacos = totals.shopRev > 0 ? (shopifyAds / totals.shopRev) * 100 : 0;
-    
-    // Find optimal ad spend (week with lowest TACOS that has sales)
-    const bestWeek = [...adData].filter(d => d.totalAds > 0 && d.totalRev > 0).sort((a, b) => a.adPct - b.adPct)[0];
+    const amzRoas = totals.amzAds > 0 ? totals.amzRev / totals.amzAds : 0;
+    const shopRoas = shopifyAds > 0 ? totals.shopRev / shopifyAds : 0;
     
     const tacosColor = (tacos) => tacos <= 10 ? 'text-emerald-400' : tacos <= 20 ? 'text-amber-400' : 'text-rose-400';
+    const tacosColorBg = (tacos) => tacos <= 10 ? 'bg-emerald-500' : tacos <= 20 ? 'bg-amber-500' : 'bg-rose-500';
+    
+    // Get comparison data (previous period)
+    const getPreviousPeriodData = () => {
+      const now = new Date();
+      let prevWeeks = [];
+      switch (adsTimeTab) {
+        case 'weekly':
+          prevWeeks = sortedWeeks.slice(-8, -4);
+          break;
+        case 'monthly': {
+          const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+          const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+          prevWeeks = sortedWeeks.filter(w => {
+            const d = new Date(w + 'T00:00:00');
+            return d >= prevMonthStart && d <= prevMonthEnd;
+          });
+          break;
+        }
+        case 'quarterly': {
+          const quarterMonth = Math.floor(now.getMonth() / 3) * 3;
+          const prevQuarterStart = new Date(now.getFullYear(), quarterMonth - 3, 1);
+          const prevQuarterEnd = new Date(now.getFullYear(), quarterMonth, 0);
+          prevWeeks = sortedWeeks.filter(w => {
+            const d = new Date(w + 'T00:00:00');
+            return d >= prevQuarterStart && d <= prevQuarterEnd;
+          });
+          break;
+        }
+        case 'yearly': {
+          const prevYearStart = new Date(now.getFullYear() - 1, 0, 1);
+          const prevYearEnd = new Date(now.getFullYear() - 1, 11, 31);
+          prevWeeks = sortedWeeks.filter(w => {
+            const d = new Date(w + 'T00:00:00');
+            return d >= prevYearStart && d <= prevYearEnd;
+          });
+          break;
+        }
+      }
+      return aggregateAdData(prevWeeks);
+    };
+    
+    const prevTotals = adsTimeTab !== 'yesterday' ? getPreviousPeriodData() : null;
+    const spendChange = prevTotals && prevTotals.totalAds > 0 ? ((totals.totalAds - prevTotals.totalAds) / prevTotals.totalAds) * 100 : null;
+    const prevTacos = prevTotals && prevTotals.totalRev > 0 ? (prevTotals.totalAds / prevTotals.totalRev) * 100 : null;
+    const tacosChange = prevTacos !== null ? totalTacos - prevTacos : null;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
@@ -14549,10 +14687,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           {dataBar}
           
           <div className="mb-6">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-4">
               <div>
                 <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">⚡ Ad Performance Analytics</h1>
-                <p className="text-slate-400">Track TACOS (Total Ad Cost of Sale = Ad Spend ÷ Total Revenue), ad spend efficiency, and channel performance</p>
+                <p className="text-slate-400">Track TACOS, ad spend efficiency, and channel performance</p>
               </div>
               <button 
                 onClick={() => { setUploadTab('bulk-ads'); setView('upload'); }}
@@ -14564,166 +14702,244 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             </div>
           </div>
           
-          {/* Summary Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-gradient-to-br from-purple-900/30 to-slate-800/50 rounded-xl border border-purple-500/30 p-4">
-              <p className="text-slate-400 text-sm">Total Ad Spend (4wk)</p>
-              <p className="text-2xl font-bold text-white">{formatCurrency(totals.totalAds)}</p>
-              <p className="text-purple-400 text-sm">{totalTacos.toFixed(1)}% of revenue</p>
-            </div>
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-              <p className="text-slate-400 text-sm">Overall TACOS</p>
-              <p className={`text-2xl font-bold ${tacosColor(totalTacos)}`}>{totalTacos.toFixed(1)}%</p>
-              <p className="text-slate-500 text-sm">Target: &lt;15%</p>
-            </div>
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-              <p className="text-slate-400 text-sm">Amazon TACOS</p>
-              <p className={`text-2xl font-bold ${tacosColor(amzTacos)}`}>{amzTacos.toFixed(1)}%</p>
-              <p className="text-orange-400 text-sm">{formatCurrency(totals.amzAds)} spent</p>
-            </div>
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-              <p className="text-slate-400 text-sm">Shopify TACOS</p>
-              <p className={`text-2xl font-bold ${tacosColor(shopTacos)}`}>{shopTacos.toFixed(1)}%</p>
-              <p className="text-blue-400 text-sm">{formatCurrency(shopifyAds)} spent</p>
-            </div>
+          {/* Time Period Tabs */}
+          <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
+            <button 
+              onClick={() => setAdsTimeTab('yesterday')} 
+              disabled={!yesterdayData}
+              className={`flex-1 min-w-fit px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${adsTimeTab === 'yesterday' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed'}`}
+            >
+              Yesterday
+            </button>
+            <button 
+              onClick={() => setAdsTimeTab('weekly')} 
+              className={`flex-1 min-w-fit px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${adsTimeTab === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}
+            >
+              Weekly
+            </button>
+            <button 
+              onClick={() => setAdsTimeTab('monthly')} 
+              className={`flex-1 min-w-fit px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${adsTimeTab === 'monthly' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}
+            >
+              Monthly
+            </button>
+            <button 
+              onClick={() => setAdsTimeTab('quarterly')} 
+              className={`flex-1 min-w-fit px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${adsTimeTab === 'quarterly' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}
+            >
+              Quarterly
+            </button>
+            <button 
+              onClick={() => setAdsTimeTab('yearly')} 
+              className={`flex-1 min-w-fit px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${adsTimeTab === 'yearly' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}
+            >
+              Yearly
+            </button>
           </div>
           
-          {/* Meta vs Google breakdown */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-              <h3 className="text-lg font-semibold text-white mb-4">Shopify Ad Breakdown</h3>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Meta Ads</span>
-                  <span className="text-white font-semibold">{formatCurrency(totals.metaAds)}</span>
-                </div>
-                <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
-                  <div className="bg-blue-500 h-full" style={{ width: shopifyAds > 0 ? `${(totals.metaAds / shopifyAds) * 100}%` : '0%' }} />
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Google Ads</span>
-                  <span className="text-white font-semibold">{formatCurrency(totals.googleAds)}</span>
-                </div>
-                <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
-                  <div className="bg-red-500 h-full" style={{ width: shopifyAds > 0 ? `${(totals.googleAds / shopifyAds) * 100}%` : '0%' }} />
-                </div>
-              </div>
-            </div>
-            
-            {bestWeek && (
-              <div className="bg-gradient-to-br from-emerald-900/30 to-slate-800/50 rounded-xl border border-emerald-500/30 p-5">
-                <h3 className="text-lg font-semibold text-emerald-400 mb-4 flex items-center gap-2"><Star className="w-5 h-5" />Best Performing Week (Lowest TACOS)</h3>
-                <p className="text-white text-xl font-bold mb-2">{new Date(bestWeek.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div><span className="text-slate-400">Ad Spend:</span> <span className="text-white">{formatCurrency(bestWeek.totalAds)}</span></div>
-                  <div><span className="text-slate-400">Revenue:</span> <span className="text-white">{formatCurrency(bestWeek.totalRev)}</span></div>
-                  <div><span className="text-slate-400">TACOS:</span> <span className="text-emerald-400 font-bold">{bestWeek.adPct.toFixed(1)}%</span></div>
-                  <div><span className="text-slate-400">Efficiency:</span> <span className="text-white">${(bestWeek.totalRev / bestWeek.totalAds).toFixed(2)} per $1</span></div>
-                </div>
-              </div>
+          {/* Period Label */}
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-white">{getPeriodLabel(adsTimeTab)}</h2>
+            {periodWeeks.length > 0 && (
+              <span className="text-slate-400 text-sm">{periodWeeks.length} week{periodWeeks.length !== 1 ? 's' : ''}</span>
             )}
           </div>
           
-          {/* TACOS Trend Chart */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-2">TACOS Trend (Lower is Better)</h3>
-            <p className="text-slate-500 text-sm mb-4">Target: Below 15% | Warning: 15-25% | High: Above 25%</p>
-            
-            {adData.filter(d => d.totalAds > 0).length > 0 ? (
-              <>
-                {/* Chart with target lines */}
-                <div className="relative">
-                  {/* Target line at 15% */}
-                  <div className="absolute left-0 right-0 border-t-2 border-dashed border-emerald-500/50" style={{ bottom: `${(15/40) * 100}%` }}>
-                    <span className="absolute -top-3 right-0 text-xs text-emerald-400">15% target</span>
-                  </div>
-                  {/* Warning line at 25% */}
-                  <div className="absolute left-0 right-0 border-t border-dashed border-amber-500/30" style={{ bottom: `${(25/40) * 100}%` }}>
-                    <span className="absolute -top-3 right-0 text-xs text-amber-400/70">25%</span>
-                  </div>
-                  
-                  <div className="flex items-end gap-2 h-48">
-                    {adData.slice(-12).map((d, i) => {
-                      const tacos = d.adPct;
-                      const maxTacos = 40; // Scale chart to 40% max
-                      const height = Math.min((tacos / maxTacos) * 100, 100);
-                      const hasData = d.totalAds > 0;
-                      
-                      return (
-                        <div key={d.week} className="flex-1 flex flex-col items-center group relative">
-                          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-900 border border-slate-600 text-white text-xs px-3 py-2 rounded-lg whitespace-nowrap z-20 shadow-xl">
-                            <p className="font-semibold mb-1">{new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
-                            <p>TACOS: <span className={tacosColor(tacos)}>{tacos.toFixed(1)}%</span></p>
-                            <p>Ad Spend: {formatCurrency(d.totalAds)}</p>
-                            <p>Revenue: {formatCurrency(d.totalRev)}</p>
-                            {d.amzAds > 0 && <p className="text-orange-400">Amazon: {formatCurrency(d.amzAds)}</p>}
-                            {d.shopAds > 0 && <p className="text-blue-400">Shopify: {formatCurrency(d.shopAds)}</p>}
-                          </div>
-                          {hasData ? (
-                            <div 
-                              className={`w-full rounded-t transition-all hover:opacity-80 ${tacos <= 15 ? 'bg-emerald-500' : tacos <= 25 ? 'bg-amber-500' : 'bg-rose-500'}`} 
-                              style={{ height: `${Math.max(height, 3)}%` }} 
-                            />
-                          ) : (
-                            <div className="w-full h-1 bg-slate-700 rounded" />
-                          )}
-                          <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                        </div>
-                      );
-                    })}
+          {/* No Data State */}
+          {totals.totalAds === 0 && totals.totalRev === 0 ? (
+            <div className="text-center py-12 bg-slate-800/30 rounded-2xl border border-slate-700">
+              <DollarSign className="w-12 h-12 text-slate-600 mx-auto mb-4" />
+              <p className="text-slate-400 mb-2">No ad data for {getPeriodLabel(adsTimeTab)}</p>
+              <button 
+                onClick={() => { setUploadTab('bulk-ads'); setView('upload'); }}
+                className="text-blue-400 hover:text-blue-300 text-sm"
+              >
+                Upload ad spend data →
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Summary Cards */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="bg-gradient-to-br from-purple-900/30 to-slate-800/50 rounded-xl border border-purple-500/30 p-4">
+                  <p className="text-slate-400 text-sm">Total Ad Spend</p>
+                  <p className="text-2xl font-bold text-white">{formatCurrency(totals.totalAds)}</p>
+                  {spendChange !== null && (
+                    <p className={`text-sm flex items-center gap-1 ${spendChange >= 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                      {spendChange >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                      {Math.abs(spendChange).toFixed(1)}% vs prev
+                    </p>
+                  )}
+                </div>
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                  <p className="text-slate-400 text-sm">Overall TACOS</p>
+                  <p className={`text-2xl font-bold ${tacosColor(totalTacos)}`}>{totalTacos.toFixed(1)}%</p>
+                  {tacosChange !== null && (
+                    <p className={`text-sm flex items-center gap-1 ${tacosChange <= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {tacosChange <= 0 ? <ArrowDownRight className="w-3 h-3" /> : <ArrowUpRight className="w-3 h-3" />}
+                      {Math.abs(tacosChange).toFixed(1)}pp vs prev
+                    </p>
+                  )}
+                </div>
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                  <p className="text-slate-400 text-sm">Amazon TACOS</p>
+                  <p className={`text-2xl font-bold ${tacosColor(amzTacos)}`}>{amzTacos.toFixed(1)}%</p>
+                  <p className="text-orange-400 text-sm">{formatCurrency(totals.amzAds)} spent</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                  <p className="text-slate-400 text-sm">Shopify TACOS</p>
+                  <p className={`text-2xl font-bold ${tacosColor(shopTacos)}`}>{shopTacos.toFixed(1)}%</p>
+                  <p className="text-blue-400 text-sm">{formatCurrency(shopifyAds)} spent</p>
+                </div>
+              </div>
+              
+              {/* Channel Breakdown */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                {/* Shopify Ad Breakdown */}
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                  <h3 className="text-lg font-semibold text-white mb-4">Shopify Ad Breakdown</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Meta Ads</span>
+                      <span className="text-white font-semibold">{formatCurrency(totals.metaAds)}</span>
+                    </div>
+                    <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-blue-500 rounded-full" style={{ width: `${shopifyAds > 0 ? (totals.metaAds / shopifyAds) * 100 : 0}%` }} />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Google Ads</span>
+                      <span className="text-white font-semibold">{formatCurrency(totals.googleAds)}</span>
+                    </div>
+                    <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-red-500 rounded-full" style={{ width: `${shopifyAds > 0 ? (totals.googleAds / shopifyAds) * 100 : 0}%` }} />
+                    </div>
+                    <div className="pt-2 border-t border-slate-700">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-slate-400">Total Shopify Ads</span>
+                        <span className="text-white font-bold">{formatCurrency(shopifyAds)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm mt-1">
+                        <span className="text-slate-400">Shopify Revenue</span>
+                        <span className="text-white">{formatCurrency(totals.shopRev)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm mt-1">
+                        <span className="text-slate-400">Shopify ROAS</span>
+                        <span className={shopRoas >= 3 ? 'text-emerald-400' : shopRoas >= 2 ? 'text-amber-400' : 'text-rose-400'}>
+                          {shopRoas.toFixed(2)}x
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 
-                {/* Legend */}
-                <div className="flex items-center justify-center gap-6 mt-4 text-xs">
-                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />≤15% Optimal</span>
-                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />15-25% Warning</span>
-                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />&gt;25% High</span>
-                </div>
-              </>
-            ) : (
-              <div className="h-48 flex items-center justify-center bg-slate-900/30 rounded-xl border border-dashed border-slate-600">
-                <div className="text-center">
-                  <BarChart3 className="w-10 h-10 text-slate-600 mx-auto mb-2" />
-                  <p className="text-slate-500">No ad spend data available</p>
-                  <p className="text-slate-600 text-sm mt-1">Upload weekly data with ad spend to see TACOS trends</p>
+                {/* Amazon Ads Summary */}
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                  <h3 className="text-lg font-semibold text-white mb-4">Amazon Ads</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">PPC Spend</span>
+                      <span className="text-orange-400 font-semibold">{formatCurrency(totals.amzAds)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Amazon Revenue</span>
+                      <span className="text-white">{formatCurrency(totals.amzRev)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Amazon ROAS</span>
+                      <span className={amzRoas >= 3 ? 'text-emerald-400' : amzRoas >= 2 ? 'text-amber-400' : 'text-rose-400'}>
+                        {amzRoas.toFixed(2)}x
+                      </span>
+                    </div>
+                    <div className="pt-4 border-t border-slate-700">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Share of Total Ad Spend</span>
+                        <span className="text-white">{totals.totalAds > 0 ? ((totals.amzAds / totals.totalAds) * 100).toFixed(0) : 0}%</span>
+                      </div>
+                      <div className="h-3 bg-slate-700 rounded-full overflow-hidden mt-2">
+                        <div className="h-full bg-orange-500 rounded-full" style={{ width: `${totals.totalAds > 0 ? (totals.amzAds / totals.totalAds) * 100 : 0}%` }} />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
-            )}
-          </div>
-          
-          {/* Weekly Ad Performance Table */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-            <h3 className="text-lg font-semibold text-white mb-4">Weekly Breakdown</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-700">
-                    <th className="text-left text-slate-400 py-2">Week</th>
-                    <th className="text-right text-slate-400 py-2">Amazon Ads</th>
-                    <th className="text-right text-slate-400 py-2">Meta</th>
-                    <th className="text-right text-slate-400 py-2">Google</th>
-                    <th className="text-right text-slate-400 py-2">Total Ads</th>
-                    <th className="text-right text-slate-400 py-2">Revenue</th>
-                    <th className="text-right text-slate-400 py-2">TACOS</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {adData.slice(-8).reverse().map(d => (
-                    <tr key={d.week} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                      <td className="py-2 text-white">{new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
-                      <td className="py-2 text-right text-orange-400">{formatCurrency(d.amzAds)}</td>
-                      <td className="py-2 text-right text-blue-400">{formatCurrency(d.metaAds)}</td>
-                      <td className="py-2 text-right text-red-400">{formatCurrency(d.googleAds)}</td>
-                      <td className="py-2 text-right text-white">{formatCurrency(d.totalAds)}</td>
-                      <td className="py-2 text-right text-white">{formatCurrency(d.totalRev)}</td>
-                      <td className={`py-2 text-right font-semibold ${tacosColor(d.adPct)}`}>{d.adPct.toFixed(1)}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+              
+              {/* TACOS Gauge */}
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+                <h3 className="text-lg font-semibold text-white mb-4">TACOS Health</h3>
+                <div className="relative h-8 bg-slate-700 rounded-full overflow-hidden">
+                  <div className="absolute inset-0 flex">
+                    <div className="bg-emerald-500/30 h-full" style={{ width: '15%' }} />
+                    <div className="bg-amber-500/30 h-full" style={{ width: '10%' }} />
+                    <div className="bg-rose-500/30 h-full flex-1" />
+                  </div>
+                  <div 
+                    className={`absolute top-0 h-full w-1 ${tacosColorBg(totalTacos)}`}
+                    style={{ left: `${Math.min(totalTacos, 40)}%`, transform: 'translateX(-50%)' }}
+                  />
+                  <div 
+                    className={`absolute top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-xs font-bold text-white ${tacosColorBg(totalTacos)}`}
+                    style={{ left: `${Math.min(Math.max(totalTacos, 5), 35)}%`, transform: 'translateX(-50%)' }}
+                  >
+                    {totalTacos.toFixed(1)}%
+                  </div>
+                </div>
+                <div className="flex justify-between text-xs text-slate-400 mt-2">
+                  <span>0%</span>
+                  <span className="text-emerald-400">15% (target)</span>
+                  <span className="text-amber-400">25% (warning)</span>
+                  <span>40%+</span>
+                </div>
+              </div>
+              
+              {/* Weekly/Period Breakdown Table */}
+              {adDataForTable.length > 0 && (
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                  <h3 className="text-lg font-semibold text-white mb-4">
+                    {adsTimeTab === 'weekly' ? 'Weekly' : adsTimeTab === 'monthly' ? 'Weeks in Month' : 'Period'} Breakdown
+                  </h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-700">
+                          <th className="text-left text-slate-400 py-2">Week</th>
+                          <th className="text-right text-slate-400 py-2">Amazon</th>
+                          <th className="text-right text-slate-400 py-2">Meta</th>
+                          <th className="text-right text-slate-400 py-2">Google</th>
+                          <th className="text-right text-slate-400 py-2">Total Ads</th>
+                          <th className="text-right text-slate-400 py-2">Revenue</th>
+                          <th className="text-right text-slate-400 py-2">TACOS</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adDataForTable.slice().reverse().map(d => (
+                          <tr key={d.week} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                            <td className="py-2 text-white">{new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                            <td className="py-2 text-right text-orange-400">{formatCurrency(d.amzAds)}</td>
+                            <td className="py-2 text-right text-blue-400">{formatCurrency(d.metaAds)}</td>
+                            <td className="py-2 text-right text-red-400">{formatCurrency(d.googleAds)}</td>
+                            <td className="py-2 text-right text-white font-medium">{formatCurrency(d.totalAds)}</td>
+                            <td className="py-2 text-right text-white">{formatCurrency(d.totalRev)}</td>
+                            <td className={`py-2 text-right font-semibold ${tacosColor(d.adPct)}`}>{d.adPct.toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-slate-600 font-semibold">
+                          <td className="py-2 text-white">Total</td>
+                          <td className="py-2 text-right text-orange-400">{formatCurrency(totals.amzAds)}</td>
+                          <td className="py-2 text-right text-blue-400">{formatCurrency(totals.metaAds)}</td>
+                          <td className="py-2 text-right text-red-400">{formatCurrency(totals.googleAds)}</td>
+                          <td className="py-2 text-right text-white">{formatCurrency(totals.totalAds)}</td>
+                          <td className="py-2 text-right text-white">{formatCurrency(totals.totalRev)}</td>
+                          <td className={`py-2 text-right ${tacosColor(totalTacos)}`}>{totalTacos.toFixed(1)}%</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
     );
