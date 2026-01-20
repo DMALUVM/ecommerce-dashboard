@@ -7454,7 +7454,7 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
         
         if (!response.ok) throw new Error('API error');
         const data = await response.json();
-        const text = data.content?.[0]?.text || '';
+        const text = data.content?.[0]?.text || data.content || '';
         
         // Parse the JSON response
         const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -8566,7 +8566,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
       
       if (!response.ok) throw new Error(`API error: ${response.status}`);
       const data = await response.json();
-      setAiMessages(prev => [...prev, { role: 'assistant', content: data.content?.[0]?.text || 'Sorry, I could not process that.' }]);
+      setAiMessages(prev => [...prev, { role: 'assistant', content: data.content?.[0]?.text || data.content || 'Sorry, I could not process that.' }]);
     } catch (error) {
       console.error('AI Chat error:', error);
       setAiMessages(prev => [...prev, { role: 'assistant', content: 'Error processing request. Check /api/chat endpoint.' }]);
@@ -8643,7 +8643,7 @@ Be specific with numbers and suggest actionable improvements.`;
       
       if (!response.ok) throw new Error(`API error: ${response.status}`);
       const data = await response.json();
-      setAdsAiMessages(prev => [...prev, { role: 'assistant', content: data.content?.[0]?.text || 'Sorry, I could not process that.' }]);
+      setAdsAiMessages(prev => [...prev, { role: 'assistant', content: data.content?.[0]?.text || data.content || 'Sorry, I could not process that.' }]);
     } catch (error) {
       console.error('Ads AI Chat error:', error);
       setAdsAiMessages(prev => [...prev, { role: 'assistant', content: `Error: ${error.message}. Try a simpler question.` }]);
@@ -8966,7 +8966,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
 
       if (!response.ok) throw new Error(`API error: ${response.status}`);
       const data = await response.json();
-      const reportContent = data.content?.[0]?.text || '';
+      const reportContent = data.content?.[0]?.text || data.content || '';
       if (!reportContent) throw new Error('No report content generated');
 
       const newReport = {
@@ -13154,7 +13154,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     const result = await response.json();
                     setAiMessages(prev => [...prev, { 
                       role: 'assistant', 
-                      content: result.content?.[0]?.text || result.choices?.[0]?.message?.content || 'Unable to generate forecast analysis.'
+                      content: result.content?.[0]?.text || result.content || result.choices?.[0]?.message?.content || 'Unable to generate forecast analysis.'
                     }]);
                   } catch (err) {
                     console.error('AI Forecast Analysis error:', err);
