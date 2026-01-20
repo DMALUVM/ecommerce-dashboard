@@ -1276,9 +1276,53 @@ const handleLogout = async () => {
       });
     }
     
+    // === AGGREGATION STATUS ===
+    // Group daily data by week and check completeness
+    const weekGroups = {};
+    dailyDates.forEach(dayKey => {
+      const date = new Date(dayKey + 'T12:00:00');
+      const dayOfWeek = date.getDay();
+      const weekEnd = new Date(date);
+      weekEnd.setDate(date.getDate() + (dayOfWeek === 0 ? 0 : 7 - dayOfWeek));
+      const weekKey = formatDateKey(weekEnd);
+      
+      if (!weekGroups[weekKey]) {
+        weekGroups[weekKey] = { weekEnding: weekKey, days: [], missingDays: [] };
+      }
+      weekGroups[weekKey].days.push(dayKey);
+    });
+    
+    // Calculate missing days for each week
+    Object.values(weekGroups).forEach(week => {
+      const weekEndDate = new Date(week.weekEnding + 'T12:00:00');
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(weekEndDate);
+        d.setDate(weekEndDate.getDate() - i);
+        const dayKey = formatDateKey(d);
+        if (!week.days.includes(dayKey)) {
+          week.missingDays.push({
+            date: dayKey,
+            dayName: d.toLocaleDateString('en-US', { weekday: 'short' }),
+            display: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+          });
+        }
+      }
+      week.isComplete = week.missingDays.length === 0;
+    });
+    
+    const completeWeeks = Object.values(weekGroups).filter(w => w.isComplete && !allWeeksData[w.weekEnding]);
+    const incompleteWeeks = Object.values(weekGroups).filter(w => !w.isComplete);
+    
+    const aggregationStatus = {
+      completeWeeks: completeWeeks.length,
+      incompleteWeeks: incompleteWeeks.length,
+      weekDetails: Object.values(weekGroups).sort((a, b) => b.weekEnding.localeCompare(a.weekEnding)),
+    };
+    
     return {
       forecastStatus,
       forecastWeeks,
+      aggregationStatus,
       dailyStatus: {
         totalDays: dailyDates.length,
         last14Days,
@@ -2907,12 +2951,54 @@ const savePeriods = async (d) => {
       }
     });
     
+    // Filter to only include complete weeks (7 days, Mon-Sun)
+    // Also track incomplete weeks for user feedback
+    const completeWeeks = {};
+    const incompleteWeeks = [];
+    
+    Object.entries(weeklyAgg).forEach(([weekKey, agg]) => {
+      // Calculate which days should be in this week
+      const weekEndDate = new Date(weekKey + 'T12:00:00');
+      const expectedDays = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(weekEndDate);
+        d.setDate(weekEndDate.getDate() - i);
+        expectedDays.push(formatDateKey(d));
+      }
+      
+      const missingDays = expectedDays.filter(d => !agg.days.includes(d));
+      
+      if (missingDays.length === 0) {
+        // Complete week - include in aggregation
+        completeWeeks[weekKey] = agg;
+      } else {
+        // Incomplete week - track for feedback
+        incompleteWeeks.push({
+          weekEnding: weekKey,
+          daysPresent: agg.days.length,
+          missingDays: missingDays.map(d => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }))
+        });
+      }
+    });
+    
+    if (Object.keys(completeWeeks).length === 0) {
+      const incompleteInfo = incompleteWeeks.map(w => 
+        `Week ending ${new Date(w.weekEnding + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}: missing ${w.missingDays.join(', ')}`
+      ).join('\n');
+      setToast({ 
+        message: `No complete weeks to aggregate. ${incompleteWeeks.length > 0 ? `Incomplete weeks need all 7 days (Mon-Sun).` : ''}`, 
+        type: 'error' 
+      });
+      console.log('Incomplete weeks:', incompleteInfo);
+      return;
+    }
+    
     // Convert to weekly data format and merge with existing
     const newWeeksData = { ...allWeeksData };
     let weeksCreated = 0;
     let weeksUpdated = 0;
     
-    Object.entries(weeklyAgg).forEach(([weekKey, agg]) => {
+    Object.entries(completeWeeks).forEach(([weekKey, agg]) => {
       const amz = agg.amazon;
       const shop = agg.shopify;
       const totalRev = amz.revenue + shop.revenue;
@@ -2975,7 +3061,15 @@ const savePeriods = async (d) => {
     
     setAllWeeksData(newWeeksData);
     save(newWeeksData);
-    setToast({ message: `Aggregated ${sortedDays.length} days into ${weeksCreated + weeksUpdated} weeks (${weeksCreated} new, ${weeksUpdated} updated)`, type: 'success' });
+    
+    // Calculate days aggregated from complete weeks
+    const daysAggregated = Object.values(completeWeeks).reduce((sum, w) => sum + w.days.length, 0);
+    
+    let message = `Aggregated ${daysAggregated} days into ${weeksCreated + weeksUpdated} week${weeksCreated + weeksUpdated !== 1 ? 's' : ''} (${weeksCreated} new, ${weeksUpdated} updated)`;
+    if (incompleteWeeks.length > 0) {
+      message += `. ${incompleteWeeks.length} incomplete week${incompleteWeeks.length !== 1 ? 's' : ''} skipped (need all 7 days Mon-Sun)`;
+    }
+    setToast({ message, type: 'success' });
   }, [allDaysData, allWeeksData, save]);
 
   const processBulkImport = useCallback(() => {
@@ -10673,12 +10767,60 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     <h3 className="text-sm font-medium text-slate-300">Recent Daily Data ({Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length} days with sales)</h3>
                     <button 
                       onClick={aggregateDailyToWeekly}
-                      className="px-3 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2"
+                      disabled={dataStatus.aggregationStatus.completeWeeks === 0}
+                      className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 ${
+                        dataStatus.aggregationStatus.completeWeeks > 0 
+                          ? 'bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 text-violet-300'
+                          : 'bg-slate-700/50 border border-slate-600/50 text-slate-500 cursor-not-allowed'
+                      }`}
                     >
                       <RefreshCw className="w-4 h-4" />
-                      Aggregate to Weekly
+                      Aggregate to Weekly {dataStatus.aggregationStatus.completeWeeks > 0 && `(${dataStatus.aggregationStatus.completeWeeks} ready)`}
                     </button>
                   </div>
+                  
+                  {/* Week completion status */}
+                  {dataStatus.aggregationStatus.weekDetails.length > 0 && (
+                    <div className="mb-4 space-y-2">
+                      {dataStatus.aggregationStatus.weekDetails.slice(0, 3).map(week => (
+                        <div key={week.weekEnding} className={`p-3 rounded-lg border ${
+                          week.isComplete 
+                            ? allWeeksData[week.weekEnding] 
+                              ? 'bg-slate-700/30 border-slate-600/30'
+                              : 'bg-emerald-900/20 border-emerald-500/30'
+                            : 'bg-amber-900/20 border-amber-500/30'
+                        }`}>
+                          <div className="flex items-center justify-between">
+                            <span className={`text-sm font-medium ${
+                              week.isComplete 
+                                ? allWeeksData[week.weekEnding] ? 'text-slate-400' : 'text-emerald-300'
+                                : 'text-amber-300'
+                            }`}>
+                              Week ending {new Date(week.weekEnding + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            </span>
+                            <span className={`text-xs px-2 py-0.5 rounded ${
+                              week.isComplete 
+                                ? allWeeksData[week.weekEnding]
+                                  ? 'bg-slate-600/50 text-slate-400'
+                                  : 'bg-emerald-500/20 text-emerald-300'
+                                : 'bg-amber-500/20 text-amber-300'
+                            }`}>
+                              {week.isComplete 
+                                ? allWeeksData[week.weekEnding] ? 'Already aggregated' : `✓ Complete (${week.days.length}/7 days)`
+                                : `${week.days.length}/7 days`
+                              }
+                            </span>
+                          </div>
+                          {!week.isComplete && week.missingDays.length > 0 && (
+                            <p className="text-xs text-amber-400/80 mt-1">
+                              Missing: {week.missingDays.map(d => d.display).join(', ')}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  
                   <div className="flex flex-wrap gap-2 mb-3">
                     {Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort().reverse().slice(0, 14).map(day => (
                       <div key={day} className="px-3 py-1.5 bg-slate-700/50 rounded-lg text-sm text-slate-300 flex items-center gap-2">
@@ -10687,7 +10829,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                       </div>
                     ))}
                   </div>
-                  <p className="text-slate-500 text-xs">💡 Tip: Use "Aggregate to Weekly" to combine daily data into weekly summaries for trend analysis</p>
+                  <p className="text-slate-500 text-xs">💡 Weeks require all 7 days (Mon-Sun) to aggregate</p>
                 </div>
               )}
             </div>
