@@ -5789,8 +5789,25 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
   // AI Chat - Prepare data context function
   const prepareDataContext = () => {
     const weeksCount = Object.keys(allWeeksData).length;
+    const daysCount = Object.keys(allDaysData).length;
     const periodsCount = Object.keys(allPeriodsData).length;
     const sortedWeeks = Object.keys(allWeeksData).sort();
+    const sortedDays = Object.keys(allDaysData).sort();
+    
+    // Daily data summary
+    const dailySummary = sortedDays.slice(-14).map(day => {
+      const data = allDaysData[day];
+      return {
+        date: day,
+        totalRevenue: data.total?.revenue || 0,
+        totalProfit: data.total?.netProfit || 0,
+        totalUnits: data.total?.units || 0,
+        amazonRevenue: data.amazon?.revenue || 0,
+        amazonProfit: data.amazon?.netProfit || 0,
+        shopifyRevenue: data.shopify?.revenue || 0,
+        shopifyProfit: data.shopify?.netProfit || 0,
+      };
+    });
     
     const weeksSummary = sortedWeeks.map(week => {
       const data = allWeeksData[week];
@@ -5973,9 +5990,45 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
     const recentProfit = recentWeeksData.reduce((s, w) => s + w.totalProfit, 0);
     const priorProfit = priorWeeksData.reduce((s, w) => s + w.totalProfit, 0);
     
+    // Calculate daily trends for AI learning
+    const recentDailyData = dailySummary.slice(-7);
+    const priorDailyData = dailySummary.slice(-14, -7);
+    const recentDailyRevenue = recentDailyData.reduce((s, d) => s + d.totalRevenue, 0);
+    const priorDailyRevenue = priorDailyData.reduce((s, d) => s + d.totalRevenue, 0);
+    const dailyTrend = priorDailyRevenue > 0 ? ((recentDailyRevenue - priorDailyRevenue) / priorDailyRevenue * 100) : 0;
+    
+    // Calculate day-of-week patterns for AI learning
+    const dayOfWeekPatterns = {};
+    sortedDays.forEach(day => {
+      const data = allDaysData[day];
+      const dayName = new Date(day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' });
+      if (!dayOfWeekPatterns[dayName]) {
+        dayOfWeekPatterns[dayName] = { count: 0, totalRevenue: 0, totalProfit: 0 };
+      }
+      dayOfWeekPatterns[dayName].count++;
+      dayOfWeekPatterns[dayName].totalRevenue += data.total?.revenue || 0;
+      dayOfWeekPatterns[dayName].totalProfit += data.total?.netProfit || 0;
+    });
+    Object.keys(dayOfWeekPatterns).forEach(day => {
+      const p = dayOfWeekPatterns[day];
+      p.avgRevenue = p.count > 0 ? p.totalRevenue / p.count : 0;
+      p.avgProfit = p.count > 0 ? p.totalProfit / p.count : 0;
+    });
+    
     return {
       storeName: storeName || 'E-Commerce Store',
-      dataRange: { weeksTracked: weeksCount, periodsTracked: periodsCount, oldestWeek: sortedWeeks[0], newestWeek: sortedWeeks[sortedWeeks.length - 1] },
+      dataRange: { 
+        weeksTracked: weeksCount, 
+        daysTracked: daysCount,
+        periodsTracked: periodsCount, 
+        oldestWeek: sortedWeeks[0], 
+        newestWeek: sortedWeeks[sortedWeeks.length - 1],
+        oldestDay: sortedDays[0],
+        newestDay: sortedDays[sortedDays.length - 1],
+      },
+      dailyData: dailySummary,
+      dailyTrend,
+      dayOfWeekPatterns,
       weeklyData: weeksSummary,
       periodData: periodsSummary,
       yoyInsights,
@@ -5993,6 +6046,8 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
         allTimeRevenue, allTimeProfit, allTimeUnits,
         avgWeeklyRevenue: weeksCount > 0 ? allTimeRevenue / weeksCount : 0,
         avgWeeklyProfit: weeksCount > 0 ? allTimeProfit / weeksCount : 0,
+        avgDailyRevenue: daysCount > 0 ? dailySummary.reduce((s, d) => s + d.totalRevenue, 0) / daysCount : 0,
+        avgDailyProfit: daysCount > 0 ? dailySummary.reduce((s, d) => s + d.totalProfit, 0) / daysCount : 0,
         overallMargin: allTimeRevenue > 0 ? (allTimeProfit / allTimeRevenue * 100) : 0,
         overallProfitPerUnit: allTimeUnits > 0 ? allTimeProfit / allTimeUnits : 0,
         recentVsPrior: {
@@ -6075,6 +6130,22 @@ DATA RANGE: ${ctx.dataRange.weeksTracked} weeks tracked (${ctx.dataRange.oldestW
 - Avg Profit/Unit: $${ctx.insights.overallProfitPerUnit.toFixed(2)}
 - Avg Weekly Revenue: $${ctx.insights.avgWeeklyRevenue.toFixed(2)}
 - Avg Weekly Profit: $${ctx.insights.avgWeeklyProfit.toFixed(2)}
+- Avg Daily Revenue: $${ctx.insights.avgDailyRevenue?.toFixed(2) || 0}
+- Avg Daily Profit: $${ctx.insights.avgDailyProfit?.toFixed(2) || 0}
+
+=== DAILY DATA (Last 14 days for granular analysis) ===
+${ctx.dailyData?.length > 0 ? `
+Days tracked: ${ctx.dataRange.daysTracked}
+Recent daily trend (last 7 days vs prior 7 days): ${ctx.dailyTrend?.toFixed(1) || 0}%
+${JSON.stringify(ctx.dailyData)}
+` : 'No daily data uploaded yet'}
+
+=== DAY-OF-WEEK PATTERNS (AI Learning) ===
+${ctx.dayOfWeekPatterns && Object.keys(ctx.dayOfWeekPatterns).length > 0 ? `
+Best performing days and average revenue/profit by day of week:
+${JSON.stringify(ctx.dayOfWeekPatterns)}
+Use this to identify optimal days for promotions, ad spend, and inventory planning.
+` : 'Not enough daily data for day-of-week analysis'}
 
 === RECENT TREND (Last 4 weeks vs Prior 4 weeks) ===
 - Recent Revenue: $${ctx.insights.recentVsPrior.recentRevenue.toFixed(2)}
@@ -9871,7 +9942,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           units: data.total?.units || 0,
           margin: data.total?.netMargin || 0,
           amazonRev: data.amazon?.revenue || 0,
+          amazonProfit: data.amazon?.netProfit || 0,
+          amazonUnits: data.amazon?.units || 0,
           shopifyRev: data.shopify?.revenue || 0,
+          shopifyProfit: data.shopify?.netProfit || 0,
+          shopifyUnits: data.shopify?.units || 0,
           adSpend: data.total?.adSpend || 0,
           roas: data.total?.roas || 0,
           skuData: [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])],
@@ -9889,7 +9964,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             label: dateForLabel.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
             source: 'weekly',
             revenue: 0, profit: 0, units: 0, margin: 0,
-            amazonRev: 0, shopifyRev: 0, adSpend: 0, roas: 0,
+            amazonRev: 0, amazonProfit: 0, amazonUnits: 0,
+            shopifyRev: 0, shopifyProfit: 0, shopifyUnits: 0,
+            adSpend: 0, roas: 0,
             skuData: [], weekCount: 0,
           };
         }
@@ -9899,7 +9976,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           monthData[monthKey].profit += week.total?.netProfit || 0;
           monthData[monthKey].units += week.total?.units || 0;
           monthData[monthKey].amazonRev += week.amazon?.revenue || 0;
+          monthData[monthKey].amazonProfit += week.amazon?.netProfit || 0;
+          monthData[monthKey].amazonUnits += week.amazon?.units || 0;
           monthData[monthKey].shopifyRev += week.shopify?.revenue || 0;
+          monthData[monthKey].shopifyProfit += week.shopify?.netProfit || 0;
+          monthData[monthKey].shopifyUnits += week.shopify?.units || 0;
           monthData[monthKey].adSpend += week.total?.adSpend || 0;
           monthData[monthKey].weekCount = (monthData[monthKey].weekCount || 0) + 1;
           // Aggregate SKU data
@@ -9935,7 +10016,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           units: data.total?.units || 0,
           margin: data.total?.netMargin || 0,
           amazonRev: data.amazon?.revenue || 0,
+          amazonProfit: data.amazon?.netProfit || 0,
+          amazonUnits: data.amazon?.units || 0,
           shopifyRev: data.shopify?.revenue || 0,
+          shopifyProfit: data.shopify?.netProfit || 0,
+          shopifyUnits: data.shopify?.units || 0,
           adSpend: data.total?.adSpend || 0,
           roas: data.total?.roas || 0,
           skuData: [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])],
@@ -9952,8 +10037,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         if (!yearData[year]) {
           yearData[year] = {
             key: year, label: year, source: 'quarterly',
-            revenue: 0, profit: 0, units: 0, amazonRev: 0, shopifyRev: 0, adSpend: 0,
-            skuData: [], quarterCount: 0,
+            revenue: 0, profit: 0, units: 0, 
+            amazonRev: 0, amazonProfit: 0, amazonUnits: 0,
+            shopifyRev: 0, shopifyProfit: 0, shopifyUnits: 0,
+            adSpend: 0, skuData: [], quarterCount: 0,
           };
         }
         const data = allPeriodsData[p];
@@ -9961,7 +10048,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         yearData[year].profit += data.total?.netProfit || 0;
         yearData[year].units += data.total?.units || 0;
         yearData[year].amazonRev += data.amazon?.revenue || 0;
+        yearData[year].amazonProfit += data.amazon?.netProfit || 0;
+        yearData[year].amazonUnits += data.amazon?.units || 0;
         yearData[year].shopifyRev += data.shopify?.revenue || 0;
+        yearData[year].shopifyProfit += data.shopify?.netProfit || 0;
+        yearData[year].shopifyUnits += data.shopify?.units || 0;
         yearData[year].adSpend += data.total?.adSpend || 0;
         yearData[year].quarterCount++;
         yearData[year].skuData.push(...(data.amazon?.skuData || []), ...(data.shopify?.skuData || []));
@@ -10249,87 +10340,89 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   </div>
                 </div>
               </div>
-                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-                  <p className="text-slate-400 text-sm mb-1">Units Sold</p>
-                  <p className="text-2xl font-bold text-white">{formatNumber(latestPeriod?.units)}</p>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-slate-500 text-xs">vs previous</span>
-                    <ChangeIndicator current={latestPeriod?.units} previous={prevPeriod?.units} />
-                  </div>
-                </div>
-                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-                  <p className="text-slate-400 text-sm mb-1">Profit Margin</p>
-                  <p className={`text-2xl font-bold ${(latestPeriod?.margin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(latestPeriod?.margin)}</p>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-slate-500 text-xs">vs previous</span>
-                    {prevPeriod && <span className={`text-sm ${(latestPeriod?.margin - prevPeriod?.margin) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {(latestPeriod?.margin - prevPeriod?.margin) >= 0 ? '+' : ''}{(latestPeriod?.margin - prevPeriod?.margin).toFixed(1)}pt
-                    </span>}
-                  </div>
-                </div>
-              </div>
               
               {/* Revenue Trend Chart */}
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-                <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Revenue Trend</h3>
-                <div className="flex items-end gap-2 h-52 bg-slate-900/30 rounded-lg p-3">
-                  {currentData.length === 0 ? (
-                    <p className="text-slate-500 text-center w-full self-center">No data available</p>
-                  ) : currentData.map((d, i) => {
-                    // Scale relative to max, with bars starting from bottom
-                    const height = maxRevenue > 0 ? ((d.revenue || 0) / maxRevenue) * 100 : 0;
-                    const isLatest = i === currentData.length - 1;
-                    return (
-                      <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[30px]">
-                        <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                          {d.label}<br/>{formatCurrency(d.revenue)}
-                          {d.source && <span className="text-slate-400"> ({d.source})</span>}
-                        </div>
-                        <div 
-                          className={`w-full rounded-t transition-all ${isLatest ? 'bg-violet-500' : 'bg-violet-500/70'} hover:bg-violet-400`}
-                          style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
-                        />
+                <h3 className="text-lg font-semibold text-white mb-4">
+                  {periodLabel}ly Revenue Trend
+                  {trendsChannel !== 'combined' && <span className="text-sm font-normal text-slate-400 ml-2">({trendsChannel === 'amazon' ? 'Amazon' : 'Shopify'})</span>}
+                </h3>
+                {(() => {
+                  const chartMaxRevenue = Math.max(...currentData.map(d => getFilteredValue(d, 'revenue')), 1);
+                  return (
+                    <>
+                      <div className="flex items-end gap-2 h-52 bg-slate-900/30 rounded-lg p-3">
+                        {currentData.length === 0 ? (
+                          <p className="text-slate-500 text-center w-full self-center">No data available</p>
+                        ) : currentData.map((d, i) => {
+                          const value = getFilteredValue(d, 'revenue');
+                          const height = chartMaxRevenue > 0 ? (value / chartMaxRevenue) * 100 : 0;
+                          const isLatest = i === currentData.length - 1;
+                          return (
+                            <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[30px]">
+                              <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                                {d.label}<br/>{formatCurrency(value)}
+                                {d.source && <span className="text-slate-400"> ({d.source})</span>}
+                              </div>
+                              <div 
+                                className={`w-full rounded-t transition-all ${isLatest ? 'bg-violet-500' : 'bg-violet-500/70'} hover:bg-violet-400`}
+                                style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
+                              />
+                            </div>
+                          );
+                        })}
                       </div>
-                    );
-                  })}
-                </div>
-                <div className="flex justify-between px-3 mt-1">
-                  {currentData.map((d, i) => (
-                    <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
-                  ))}
-                </div>
+                      <div className="flex justify-between px-3 mt-1">
+                        {currentData.map((d, i) => (
+                          <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
+                        ))}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
               
               {/* Profit & Margin Charts */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
                 {/* Profit Trend */}
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-                  <h3 className="text-lg font-semibold text-white mb-4">{periodLabel}ly Profit Trend</h3>
-                  <div className="flex items-end gap-2 h-44 bg-slate-900/30 rounded-lg p-3">
-                    {currentData.length === 0 ? (
-                      <p className="text-slate-500 text-center w-full self-center">No data</p>
-                    ) : currentData.map((d, i) => {
-                      const height = maxProfit > 0 ? (Math.abs(d.profit) / maxProfit) * 100 : 0;
-                      const isPositive = d.profit >= 0;
-                      const isLatest = i === currentData.length - 1;
-                      return (
-                        <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[20px]">
-                          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                            {d.label}<br/>{formatCurrency(d.profit)}
-                          </div>
-                          <div 
-                            className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
-                            style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
-                          />
+                  <h3 className="text-lg font-semibold text-white mb-4">
+                    {periodLabel}ly Profit Trend
+                    {trendsChannel !== 'combined' && <span className="text-sm font-normal text-slate-400 ml-2">({trendsChannel === 'amazon' ? 'Amazon' : 'Shopify'})</span>}
+                  </h3>
+                  {(() => {
+                    const chartMaxProfit = Math.max(...currentData.map(d => Math.abs(getFilteredValue(d, 'profit'))), 1);
+                    return (
+                      <>
+                        <div className="flex items-end gap-2 h-44 bg-slate-900/30 rounded-lg p-3">
+                          {currentData.length === 0 ? (
+                            <p className="text-slate-500 text-center w-full self-center">No data</p>
+                          ) : currentData.map((d, i) => {
+                            const value = getFilteredValue(d, 'profit');
+                            const height = chartMaxProfit > 0 ? (Math.abs(value) / chartMaxProfit) * 100 : 0;
+                            const isPositive = value >= 0;
+                            const isLatest = i === currentData.length - 1;
+                            return (
+                              <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[20px]">
+                                <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                                  {d.label}<br/>{formatCurrency(value)}
+                                </div>
+                                <div 
+                                  className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
+                                  style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
+                                />
+                              </div>
+                            );
+                          })}
                         </div>
-                      );
-                    })}
-                  </div>
-                  <div className="flex justify-between px-3 mt-1">
-                    {currentData.map((d, i) => (
-                      <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
-                    ))}
-                  </div>
+                        <div className="flex justify-between px-3 mt-1">
+                          {currentData.map((d, i) => (
+                            <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
+                          ))}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
                 
                 {/* Margin Trend */}
