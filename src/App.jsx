@@ -7315,12 +7315,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     // Get alerts
     const alerts = [];
     if (!hasCogs) alerts.push({ type: 'warning', text: 'Set up COGS to track profitability accurately' });
-    if (appSettings.alertGoalsEnabled && goals.weeklyRevenue > 0 && sortedWeeks.length > 0) {
-      const lastWeekRevenue = allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.revenue || 0;
-      if (lastWeekRevenue < goals.weeklyRevenue) {
-        alerts.push({ type: 'warning', text: `Below weekly revenue target of ${formatCurrency(goals.weeklyRevenue)}` });
-      }
-    }
+    // Weekly goal tracking is now handled by the progress bar widget instead of alerts
     
     // Check inventory alerts
     const latestInv = Object.keys(invHistory).sort().reverse()[0];
@@ -7386,6 +7381,125 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     // Calculate total upcoming bills for display
     const totalUpcomingBills = upcomingBills.reduce((s, i) => s + i.amount, 0);
     
+    // Calculate weekly progress with AI projection
+    const getWeeklyProgress = () => {
+      if (goals.weeklyRevenue <= 0) return null;
+      
+      const now = new Date();
+      const dayOfWeek = now.getDay(); // 0 = Sunday
+      const daysIntoWeek = dayOfWeek === 0 ? 7 : dayOfWeek; // Sunday is end of week
+      const daysRemaining = 7 - daysIntoWeek;
+      
+      // Get current week's data from daily data
+      const today = now.toISOString().split('T')[0];
+      const weekStart = new Date(now);
+      weekStart.setDate(weekStart.getDate() - daysIntoWeek + 1); // Monday
+      
+      let currentWeekRevenue = 0;
+      let daysWithData = 0;
+      const dailyRevenues = [];
+      
+      // Sum up daily revenue for this week
+      for (let i = 0; i < daysIntoWeek; i++) {
+        const d = new Date(weekStart);
+        d.setDate(d.getDate() + i);
+        const dateKey = d.toISOString().split('T')[0];
+        const dayData = allDaysData[dateKey];
+        if (dayData?.total?.revenue) {
+          currentWeekRevenue += dayData.total.revenue;
+          dailyRevenues.push(dayData.total.revenue);
+          daysWithData++;
+        }
+      }
+      
+      // Calculate projection
+      let projectedTotal = currentWeekRevenue;
+      let projectionMethod = 'none';
+      
+      if (daysWithData > 0 && daysRemaining > 0) {
+        // Use average daily revenue to project remaining days
+        const avgDailyRevenue = currentWeekRevenue / daysWithData;
+        projectedTotal = currentWeekRevenue + (avgDailyRevenue * daysRemaining);
+        projectionMethod = 'daily-avg';
+      } else if (daysWithData === 0 && sortedWeeks.length > 0) {
+        // No daily data - use last week's total as projection
+        const lastWeekData = allWeeksData[sortedWeeks[sortedWeeks.length - 1]];
+        projectedTotal = lastWeekData?.total?.revenue || 0;
+        projectionMethod = 'last-week';
+      }
+      
+      const progressPct = (currentWeekRevenue / goals.weeklyRevenue) * 100;
+      const projectedPct = (projectedTotal / goals.weeklyRevenue) * 100;
+      const onTrack = projectedTotal >= goals.weeklyRevenue;
+      const shortfall = goals.weeklyRevenue - projectedTotal;
+      
+      return {
+        currentRevenue: currentWeekRevenue,
+        projectedTotal,
+        goal: goals.weeklyRevenue,
+        progressPct: Math.min(progressPct, 100),
+        projectedPct: Math.min(projectedPct, 150),
+        onTrack,
+        shortfall,
+        daysRemaining,
+        daysWithData,
+        projectionMethod,
+      };
+    };
+    
+    const weeklyProgress = getWeeklyProgress();
+    
+    // Calculate sales tax due this month
+    const getSalesTaxDueThisMonth = () => {
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+      const endOfMonth = new Date(currentYear, currentMonth + 1, 0);
+      
+      const statesDue = [];
+      
+      Object.entries(salesTaxConfig.nexusStates || {}).forEach(([stateCode, config]) => {
+        if (!config.hasNexus) return;
+        
+        const stateName = US_STATES_TAX_INFO[stateCode]?.name || stateCode;
+        const nextDue = getNextDueDate(config.frequency || 'monthly', stateCode);
+        
+        // Check if due this month
+        if (nextDue.getMonth() === currentMonth && nextDue.getFullYear() === currentYear) {
+          const daysUntil = Math.ceil((nextDue - now) / (1000 * 60 * 60 * 24));
+          statesDue.push({
+            stateCode,
+            stateName,
+            dueDate: nextDue,
+            daysUntil,
+            frequency: config.frequency || 'monthly',
+            isOverdue: daysUntil < 0,
+          });
+        }
+        
+        // Also check custom filings (LLC, annual reports, etc.)
+        (config.customFilings || []).forEach(filing => {
+          const filingDue = new Date(currentYear, filing.dueMonth - 1, filing.dueDay);
+          if (filingDue.getMonth() === currentMonth) {
+            const daysUntil = Math.ceil((filingDue - now) / (1000 * 60 * 60 * 24));
+            statesDue.push({
+              stateCode,
+              stateName,
+              dueDate: filingDue,
+              daysUntil,
+              filingName: filing.name,
+              isCustom: true,
+              isOverdue: daysUntil < 0,
+            });
+          }
+        });
+      });
+      
+      return statesDue.sort((a, b) => a.daysUntil - b.daysUntil);
+    };
+    
+    const salesTaxDueThisMonth = getSalesTaxDueThisMonth();
+    
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
@@ -7446,8 +7560,6 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                   )}
                 </div>
               )}
-              <input value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="Store name"
-                className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white w-40" />
               <button onClick={() => setShowGoalsModal(true)} className="px-3 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-1"><Target className="w-4 h-4" />Goals</button>
               <button onClick={() => setShowCogsManager(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Settings className="w-4 h-4" />COGS</button>
               <button onClick={() => setShowProductCatalog(true)} className="px-3 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-1"><Package className="w-4 h-4" />Catalog{Object.keys(savedProductNames).length > 0 && <span className="ml-1">✓</span>}</button>
@@ -7567,8 +7679,116 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                 </div>
               )}
               
+              {/* Weekly Progress Bar */}
+              {weeklyProgress && (
+                <div className={`mb-6 rounded-2xl border p-4 ${
+                  weeklyProgress.onTrack 
+                    ? 'bg-gradient-to-r from-emerald-900/30 to-teal-900/20 border-emerald-500/30' 
+                    : weeklyProgress.projectedPct >= 80 
+                      ? 'bg-gradient-to-r from-amber-900/30 to-yellow-900/20 border-amber-500/30'
+                      : 'bg-gradient-to-r from-rose-900/30 to-red-900/20 border-rose-500/30'
+                }`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className={`text-sm font-semibold flex items-center gap-2 ${
+                      weeklyProgress.onTrack ? 'text-emerald-400' : weeklyProgress.projectedPct >= 80 ? 'text-amber-400' : 'text-rose-400'
+                    }`}>
+                      <Target className="w-4 h-4" />
+                      Weekly Goal Progress
+                    </h3>
+                    <span className="text-white font-bold">
+                      {formatCurrency(weeklyProgress.currentRevenue)} / {formatCurrency(weeklyProgress.goal)}
+                    </span>
+                  </div>
+                  
+                  {/* Progress Bar */}
+                  <div className="relative h-4 bg-slate-800 rounded-full overflow-hidden mb-2">
+                    {/* Current progress */}
+                    <div 
+                      className={`absolute left-0 top-0 h-full transition-all rounded-full ${
+                        weeklyProgress.onTrack ? 'bg-emerald-500' : weeklyProgress.projectedPct >= 80 ? 'bg-amber-500' : 'bg-rose-500'
+                      }`}
+                      style={{ width: `${Math.min(weeklyProgress.progressPct, 100)}%` }}
+                    />
+                    {/* Projected endpoint marker */}
+                    {weeklyProgress.daysRemaining > 0 && weeklyProgress.projectionMethod !== 'none' && (
+                      <div 
+                        className={`absolute top-0 h-full w-1 ${weeklyProgress.onTrack ? 'bg-emerald-300' : 'bg-amber-300'}`}
+                        style={{ left: `${Math.min(weeklyProgress.projectedPct, 100)}%` }}
+                        title={`Projected: ${formatCurrency(weeklyProgress.projectedTotal)}`}
+                      />
+                    )}
+                    {/* Goal line at 100% */}
+                    <div className="absolute right-0 top-0 h-full w-0.5 bg-white/50" />
+                  </div>
+                  
+                  <div className="flex items-center justify-between text-sm">
+                    <div className="flex items-center gap-4">
+                      <span className="text-slate-400">{weeklyProgress.progressPct.toFixed(0)}% achieved</span>
+                      {weeklyProgress.daysRemaining > 0 && (
+                        <span className="text-slate-500">{weeklyProgress.daysRemaining} days left</span>
+                      )}
+                    </div>
+                    <div className={`font-medium ${weeklyProgress.onTrack ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {weeklyProgress.projectionMethod !== 'none' ? (
+                        weeklyProgress.onTrack 
+                          ? `✓ On track (${formatCurrency(weeklyProgress.projectedTotal)} projected)`
+                          : `${formatCurrency(Math.abs(weeklyProgress.shortfall))} ${weeklyProgress.shortfall > 0 ? 'short' : 'over'} projected`
+                      ) : (
+                        weeklyProgress.daysWithData === 0 ? 'Upload daily data for projection' : ''
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+              
               {/* Quick Action Widgets */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                {/* Sales Tax Due This Month Card */}
+                <div 
+                  className={`rounded-2xl border p-4 cursor-pointer hover:opacity-90 ${
+                    salesTaxDueThisMonth.some(s => s.isOverdue) 
+                      ? 'bg-gradient-to-br from-rose-900/30 to-red-900/20 border-rose-500/30'
+                      : salesTaxDueThisMonth.length > 0
+                        ? 'bg-gradient-to-br from-violet-900/30 to-purple-900/20 border-violet-500/30'
+                        : 'bg-slate-800/30 border-slate-700'
+                  }`}
+                  onClick={() => setView('sales-tax')}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className={`text-sm font-semibold flex items-center gap-2 ${
+                      salesTaxDueThisMonth.some(s => s.isOverdue) ? 'text-rose-400' : salesTaxDueThisMonth.length > 0 ? 'text-violet-400' : 'text-slate-400'
+                    }`}>
+                      <DollarSign className="w-4 h-4" />Sales Tax
+                    </h3>
+                    <span className="text-xs text-slate-400">This month</span>
+                  </div>
+                  {salesTaxDueThisMonth.length > 0 ? (
+                    <>
+                      <p className="text-lg font-bold text-white mb-1">{salesTaxDueThisMonth.length} filing{salesTaxDueThisMonth.length > 1 ? 's' : ''} due</p>
+                      <div className="space-y-1">
+                        {salesTaxDueThisMonth.slice(0, 3).map((st, i) => (
+                          <p key={i} className={`text-xs ${st.isOverdue ? 'text-rose-400' : st.daysUntil <= 7 ? 'text-amber-400' : 'text-slate-400'}`}>
+                            {st.stateName}{st.filingName ? ` (${st.filingName})` : ''}: {st.isOverdue ? 'OVERDUE' : `${st.daysUntil} days`}
+                          </p>
+                        ))}
+                        {salesTaxDueThisMonth.length > 3 && (
+                          <p className="text-xs text-slate-500">+{salesTaxDueThisMonth.length - 3} more</p>
+                        )}
+                      </div>
+                    </>
+                  ) : Object.keys(salesTaxConfig.nexusStates || {}).length > 0 ? (
+                    <>
+                      <p className="text-emerald-400 text-sm mb-1 flex items-center gap-1"><Check className="w-4 h-4" />All clear</p>
+                      <p className="text-slate-500 text-xs">No filings due this month</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-slate-500 text-sm mb-1">No nexus configured</p>
+                      <p className="text-xs text-violet-400">Setup states →</p>
+                    </>
+                  )}
+                </div>
+                
                 {/* Amazon Forecast Widget */}
                 {upcomingAmazonForecasts.length > 0 ? (
                   <div className="bg-gradient-to-br from-orange-900/30 to-amber-900/20 rounded-2xl border border-orange-500/30 p-4">
@@ -12645,28 +12865,35 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     {/* Debug info */}
                     <div className="bg-slate-900/50 rounded-xl p-4 text-left max-w-lg mx-auto mb-4">
                       <p className="text-slate-500 text-xs uppercase mb-3">Data Matching Status</p>
+                      <p className="text-slate-400 text-xs mb-3">Your 7-day, 30-day, and 60-day forecasts are automatically split into weekly buckets for tracking accuracy.</p>
                       <div className="grid grid-cols-2 gap-4 text-sm">
                         <div>
-                          <p className="text-orange-400 font-medium mb-2">Forecast Weeks:</p>
+                          <p className="text-orange-400 font-medium mb-2">Forecast Weeks (from uploads):</p>
                           {Object.keys(amazonForecasts).length > 0 ? (
                             <ul className="text-slate-400 space-y-1">
-                              {Object.keys(amazonForecasts).sort().map(k => (
-                                <li key={k}>{k}</li>
+                              {Object.keys(amazonForecasts).sort().slice(0, 6).map(k => (
+                                <li key={k} className="text-xs">{k}</li>
                               ))}
+                              {Object.keys(amazonForecasts).length > 6 && (
+                                <li className="text-slate-500 text-xs">+{Object.keys(amazonForecasts).length - 6} more</li>
+                              )}
                             </ul>
-                          ) : <p className="text-slate-500">None</p>}
+                          ) : <p className="text-slate-500">None - upload 7/30/60 day forecast</p>}
                         </div>
                         <div>
-                          <p className="text-blue-400 font-medium mb-2">Actual Weeks:</p>
+                          <p className="text-blue-400 font-medium mb-2">Actual Weeks (uploaded):</p>
                           {Object.keys(allWeeksData).length > 0 ? (
                             <ul className="text-slate-400 space-y-1">
                               {Object.keys(allWeeksData).sort().reverse().slice(0, 6).map(k => (
-                                <li key={k}>{k}</li>
+                                <li key={k} className="text-xs">{k}</li>
                               ))}
                             </ul>
                           ) : <p className="text-slate-500">None</p>}
                         </div>
                       </div>
+                      <p className="text-slate-500 text-xs mt-3 border-t border-slate-700 pt-3">
+                        💡 When a forecast week matches an actual week, accuracy is calculated automatically.
+                      </p>
                     </div>
                   
                     <div className="flex gap-3 justify-center">
