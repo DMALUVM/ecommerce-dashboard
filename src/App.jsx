@@ -10013,32 +10013,57 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     const dateBounds = getDateBoundaries();
     
-    // Aggregate 3PL data by week
+    // Aggregate 3PL data by week - check BOTH weekly data AND ledger
     let weeklyData = sortedWeeks.map(w => {
       const week = allWeeksData[w];
-      const metrics = week.shopify?.threeplMetrics || {};
-      const breakdown = week.shopify?.threeplBreakdown || {};
+      const weekMetrics = week.shopify?.threeplMetrics || {};
+      const weekBreakdown = week.shopify?.threeplBreakdown || {};
+      const weekCost = week.shopify?.threeplCosts || 0;
       
       // Also check ledger for this week's data
       const ledgerData = get3PLForWeek(threeplLedger, w);
       
-      // Merge: prefer ledger data if available, fall back to week data
-      const finalMetrics = ledgerData?.metrics || metrics;
-      const finalBreakdown = ledgerData?.breakdown || breakdown;
-      const finalCost = ledgerData?.metrics?.totalCost || week.shopify?.threeplCosts || 0;
+      // Calculate values from weekly data
+      const weekOrderCount = weekMetrics.orderCount || weekMetrics.firstPickCount || weekMetrics.shippingCount || 0;
+      const weekAvgCost = weekMetrics.avgCostPerOrder || 
+        (weekOrderCount > 0 ? (weekCost - (weekBreakdown.storage || 0)) / weekOrderCount : 0);
+      
+      // Calculate values from ledger data
+      const ledgerOrderCount = ledgerData?.metrics?.orderCount || 0;
+      const ledgerCost = ledgerData?.metrics?.totalCost || 0;
+      const ledgerAvgCost = ledgerData?.metrics?.avgCostPerOrder || 0;
+      
+      // Use whichever source has data (prefer ledger if both have data)
+      const hasLedgerData = ledgerCost > 0;
+      const hasWeekData = weekCost > 0;
+      
+      const finalCost = hasLedgerData ? ledgerCost : weekCost;
+      const finalOrderCount = hasLedgerData ? ledgerOrderCount : weekOrderCount;
+      const finalAvgCost = hasLedgerData ? ledgerAvgCost : weekAvgCost;
+      const finalBreakdown = hasLedgerData ? (ledgerData?.breakdown || {}) : weekBreakdown;
+      const finalMetrics = hasLedgerData ? (ledgerData?.metrics || {}) : weekMetrics;
+      
+      // If we have cost but no avgCost, try to calculate from Shopify units as fallback
+      let calculatedAvgCost = finalAvgCost;
+      if (calculatedAvgCost === 0 && finalCost > 0) {
+        const storage = finalBreakdown.storage || 0;
+        const fulfillmentCost = finalCost - storage;
+        if (finalOrderCount > 0) {
+          calculatedAvgCost = fulfillmentCost / finalOrderCount;
+        } else if (week.shopify?.units > 0) {
+          // Last resort: use Shopify units as proxy for orders
+          calculatedAvgCost = fulfillmentCost / week.shopify.units;
+        }
+      }
       
       return {
         week: w,
         type: 'week',
         label: new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         totalCost: finalCost,
-        orderCount: finalMetrics.orderCount || finalMetrics.shippingCount || 0,
+        orderCount: finalOrderCount,
         totalUnits: finalMetrics.totalUnits || finalMetrics.firstPickCount || 0,
-        // Calculate avgCostPerOrder with multiple fallbacks
-        avgCostPerOrder: finalMetrics.avgCostPerOrder || 
-          ((finalMetrics.orderCount || finalMetrics.shippingCount) > 0 
-            ? (finalCost - (finalBreakdown.storage || 0)) / (finalMetrics.orderCount || finalMetrics.shippingCount) 
-            : (finalCost > 0 && week.shopify?.units > 0 ? finalCost / week.shopify.units : 0)),
+        avgCostPerOrder: calculatedAvgCost,
         avgShippingCost: finalMetrics.avgShippingCost || 0,
         avgPickCost: finalMetrics.avgPickCost || 0,
         avgPackagingCost: finalMetrics.avgPackagingCost || 0,
@@ -10049,11 +10074,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         boxCharges: finalBreakdown.boxCharges || 0,
         receiving: finalBreakdown.receiving || 0,
         revenue: week.shopify?.revenue || 0,
-        fromLedger: !!ledgerData,
+        fromLedger: hasLedgerData,
         carrierBreakdown: finalMetrics.carrierBreakdown || {},
         stateBreakdown: finalMetrics.stateBreakdown || {},
       };
     }).filter(d => d.totalCost > 0 || d.shipping > 0 || d.pickFees > 0 || d.storage > 0);
+    
+    // Debug: log what we found
+    console.log('3PL weeklyData:', weeklyData.length, 'weeks with data');
+    console.log('Sample week:', weeklyData[0]);
     
     // Get weeks from ledger that aren't in allWeeksData
     const ledgerWeeks = new Set(Object.values(threeplLedger.orders || {}).map(o => o.weekKey));
