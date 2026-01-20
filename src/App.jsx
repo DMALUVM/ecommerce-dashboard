@@ -1294,6 +1294,10 @@ const handleLogout = async () => {
   // Save invoices to localStorage and cloud
   useEffect(() => {
     localStorage.setItem(INVOICES_KEY, JSON.stringify(invoices));
+    // Sync to cloud when invoices change
+    if (invoices.length > 0 || localStorage.getItem(INVOICES_KEY)) {
+      queueCloudSave({ ...combinedData, invoices });
+    }
   }, [invoices]);
   
   // Save notes to localStorage and cloud
@@ -5907,6 +5911,26 @@ Keep insights brief and actionable. Format as numbered list.`;
         </button>
       )}
       <div className="flex items-center gap-2 text-slate-400 text-sm"><Database className="w-4 h-4" /><span>{Object.keys(allDaysData).length} days | {Object.keys(allWeeksData).length} weeks | {Object.keys(allPeriodsData).length} periods</span></div>
+      
+      {/* Forecast Status Indicators */}
+      <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-900/50 rounded-lg border border-slate-700">
+        <Target className="w-3 h-3 text-amber-400" />
+        {['7day', '30day', '60day'].map(type => {
+          const status = dataStatus.forecastStatus[type];
+          const label = type === '7day' ? '7d' : type === '30day' ? '30d' : '60d';
+          return (
+            <span key={type} className={`text-xs px-1.5 py-0.5 rounded ${
+              status.status === 'active' ? 'bg-emerald-500/20 text-emerald-400' :
+              status.status === 'expiring' ? 'bg-amber-500/20 text-amber-400' :
+              status.status === 'expired' ? 'bg-rose-500/20 text-rose-400' :
+              'bg-slate-700 text-slate-500'
+            }`} title={status.status === 'active' ? `${status.daysUntilExpiry} days left` : status.status}>
+              {label}
+            </span>
+          );
+        })}
+      </div>
+      
       <div className="flex items-center gap-2">
         {Object.keys(savedCogs).length > 0 ? <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />{Object.keys(savedCogs).length} SKUs</span> : <span className="text-amber-400 text-xs">No COGS</span>}
         <button onClick={() => setShowCogsManager(true)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white flex items-center gap-1"><Settings className="w-3 h-3" />COGS</button>
@@ -5922,7 +5946,7 @@ Keep insights brief and actionable. Format as numbered list.`;
       <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" />Export</button>
       <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" />Import<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
     </div>
-  ), [allWeeksData, allDaysData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session, stores, activeStoreId]);
+  ), [allWeeksData, allDaysData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session, stores, activeStoreId, dataStatus]);
 
   // Toast notification component
   const Toast = () => {
@@ -9700,13 +9724,15 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               })()}
               
               {/* ============ DATA HUB - Complete Data Status ============ */}
-              <div className="bg-gradient-to-r from-slate-800/70 to-slate-900/70 rounded-2xl border border-slate-700 p-5 mb-6">
+              <div className="bg-gradient-to-r from-slate-800/70 to-slate-900/70 rounded-2xl border border-purple-500/30 p-5 mb-6">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-white font-semibold flex items-center gap-2">
                     <Database className="w-5 h-5 text-purple-400" />
-                    Data Hub - What's Feeding Your Predictions
+                    Data Hub - What's Powering Your Predictions
                   </h3>
-                  <button onClick={() => setView('upload')} className="text-xs text-slate-400 hover:text-white">Manage Data →</button>
+                  <button onClick={() => setView('analytics')} className="text-xs text-purple-400 hover:text-purple-300 flex items-center gap-1">
+                    View Forecast Accuracy →
+                  </button>
                 </div>
                 
                 {/* Data Actions Required */}
@@ -9737,21 +9763,23 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                           }}
                           className="px-3 py-1 bg-slate-600/50 hover:bg-slate-500/50 rounded text-xs text-white"
                         >
-                          {action.action === 'aggregate-daily' ? 'Aggregate' : 'Upload'}
+                          {action.action === 'aggregate-daily' ? 'Aggregate' : 'Upload Now'}
                         </button>
                       </div>
                     ))}
                   </div>
                 )}
                 
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                  {/* Forecasts Status */}
-                  <div className="bg-slate-800/50 rounded-xl p-3">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Target className="w-4 h-4 text-amber-400" />
-                      <span className="text-xs font-medium text-slate-300 uppercase">Forecasts</span>
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                  {/* Amazon Forecasts Status - NEW PROMINENT CARD */}
+                  <div className="bg-gradient-to-br from-amber-900/30 to-orange-900/20 rounded-xl p-3 border border-amber-500/30">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <Target className="w-4 h-4 text-amber-400" />
+                        <span className="text-xs font-medium text-amber-300 uppercase">Amazon Forecasts</span>
+                      </div>
                     </div>
-                    <div className="space-y-1.5">
+                    <div className="space-y-1 mb-2">
                       {['7day', '30day', '60day'].map(type => {
                         const status = dataStatus.forecastStatus[type];
                         return (
@@ -9759,62 +9787,91 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                             <span className="text-slate-400">{status.type}</span>
                             {status.status === 'active' ? (
                               <span className="text-emerald-400 flex items-center gap-1">
-                                <Check className="w-3 h-3" />{status.daysUntilExpiry}d left
+                                <Check className="w-3 h-3" />{status.daysUntilExpiry}d
                               </span>
                             ) : status.status === 'expiring' ? (
                               <span className="text-amber-400">⚠️ {status.daysUntilExpiry}d</span>
                             ) : status.status === 'expired' ? (
                               <span className="text-rose-400">Expired</span>
                             ) : (
-                              <span className="text-slate-500">Not set</span>
+                              <span className="text-slate-500">—</span>
                             )}
                           </div>
                         );
                       })}
                     </div>
+                    <button 
+                      onClick={() => { setUploadTab('forecast'); setView('upload'); }}
+                      className="w-full py-1.5 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-xs text-amber-300 flex items-center justify-center gap-1"
+                    >
+                      <Upload className="w-3 h-3" /> Update
+                    </button>
                   </div>
                   
                   {/* Daily Data Status */}
-                  <div className="bg-slate-800/50 rounded-xl p-3">
+                  <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700">
                     <div className="flex items-center gap-2 mb-2">
                       <Calendar className="w-4 h-4 text-cyan-400" />
                       <span className="text-xs font-medium text-slate-300 uppercase">Daily Data</span>
                     </div>
                     <p className="text-lg font-semibold text-white">{dataStatus.dailyStatus.totalDays} days</p>
-                    <p className="text-xs text-slate-400">
-                      Last 14d: {dataStatus.dailyStatus.last14Days.filter(d => d.hasData).length}/14 uploaded
+                    <p className="text-xs text-slate-400 mb-2">
+                      {dataStatus.dailyStatus.streak > 0 ? (
+                        <span className="text-emerald-400">🔥 {dataStatus.dailyStatus.streak}-day streak</span>
+                      ) : dataStatus.dailyStatus.newestDate ? (
+                        `Latest: ${new Date(dataStatus.dailyStatus.newestDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+                      ) : 'No data yet'}
                     </p>
-                    {dataStatus.dailyStatus.streak > 0 && (
-                      <p className="text-xs text-emerald-400 mt-1">
-                        🔥 {dataStatus.dailyStatus.streak}-day streak
-                      </p>
-                    )}
-                    {!dataStatus.dailyStatus.streak && dataStatus.dailyStatus.newestDate && (
-                      <p className="text-xs text-slate-500 mt-1">
-                        Latest: {new Date(dataStatus.dailyStatus.newestDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                      </p>
-                    )}
+                    <button 
+                      onClick={() => { setUploadTab('daily'); setView('upload'); }}
+                      className="w-full py-1.5 bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/50 rounded-lg text-xs text-cyan-300 flex items-center justify-center gap-1"
+                    >
+                      <Upload className="w-3 h-3" /> Upload
+                    </button>
                   </div>
                   
                   {/* Weekly Data Status */}
-                  <div className="bg-slate-800/50 rounded-xl p-3">
+                  <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700">
                     <div className="flex items-center gap-2 mb-2">
                       <CalendarRange className="w-4 h-4 text-violet-400" />
                       <span className="text-xs font-medium text-slate-300 uppercase">Weekly Data</span>
                     </div>
                     <p className="text-lg font-semibold text-white">{dataStatus.weeklyStatus.totalWeeks} weeks</p>
-                    <p className="text-xs text-slate-400">
-                      {dataStatus.dataFlow.weeksForVelocity} used for velocity
+                    <p className="text-xs text-slate-400 mb-2">
+                      {dataStatus.weeklyStatus.newestWeek ? (
+                        `Latest: ${new Date(dataStatus.weeklyStatus.newestWeek + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+                      ) : 'No data yet'}
                     </p>
-                    {dataStatus.weeklyStatus.newestWeek && (
-                      <p className="text-xs text-slate-500 mt-1">
-                        Latest: {new Date(dataStatus.weeklyStatus.newestWeek + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                      </p>
-                    )}
+                    <button 
+                      onClick={() => { setUploadTab('weekly'); setView('upload'); }}
+                      className="w-full py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-xs text-violet-300 flex items-center justify-center gap-1"
+                    >
+                      <Upload className="w-3 h-3" /> Upload
+                    </button>
                   </div>
                   
-                  {/* Learning Status */}
-                  <div className="bg-slate-800/50 rounded-xl p-3">
+                  {/* Inventory Status */}
+                  <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Boxes className="w-4 h-4 text-emerald-400" />
+                      <span className="text-xs font-medium text-slate-300 uppercase">Inventory</span>
+                    </div>
+                    <p className="text-lg font-semibold text-white">{Object.keys(invHistory).length} snapshots</p>
+                    <p className="text-xs text-slate-400 mb-2">
+                      {Object.keys(invHistory).length > 0 ? (
+                        `Latest: ${new Date(Object.keys(invHistory).sort().reverse()[0] + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+                      ) : 'No data yet'}
+                    </p>
+                    <button 
+                      onClick={() => { setUploadTab('inventory'); setView('upload'); }}
+                      className="w-full py-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-xs text-emerald-300 flex items-center justify-center gap-1"
+                    >
+                      <Upload className="w-3 h-3" /> Upload
+                    </button>
+                  </div>
+                  
+                  {/* AI Learning Status */}
+                  <div className={`rounded-xl p-3 border ${dataStatus.learningStatus.active ? 'bg-gradient-to-br from-purple-900/30 to-indigo-900/20 border-purple-500/30' : 'bg-slate-800/50 border-slate-700'}`}>
                     <div className="flex items-center gap-2 mb-2">
                       <Brain className="w-4 h-4 text-purple-400" />
                       <span className="text-xs font-medium text-slate-300 uppercase">AI Learning</span>
@@ -9822,16 +9879,52 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     <p className={`text-lg font-semibold ${dataStatus.learningStatus.active ? 'text-emerald-400' : 'text-amber-400'}`}>
                       {dataStatus.learningStatus.active ? 'Active' : 'Training'}
                     </p>
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-slate-400 mb-2">
                       {dataStatus.learningStatus.samples} samples • {dataStatus.learningStatus.confidence.toFixed(0)}% conf
                     </p>
-                    {dataStatus.learningStatus.pendingComparisons > 0 && (
-                      <p className="text-xs text-amber-400 mt-1">
-                        {dataStatus.learningStatus.pendingComparisons} awaiting actuals
-                      </p>
-                    )}
+                    <button 
+                      onClick={() => { setAnalyticsTab('amazon-accuracy'); setView('analytics'); }}
+                      className="w-full py-1.5 bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/50 rounded-lg text-xs text-purple-300 flex items-center justify-center gap-1"
+                    >
+                      <Eye className="w-3 h-3" /> View Accuracy
+                    </button>
                   </div>
                 </div>
+                
+                {/* Forecast vs Actuals Quick Summary */}
+                {getAmazonForecastComparison.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-slate-700/50">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400">Forecast Accuracy:</span>
+                          <span className={`text-sm font-semibold ${
+                            forecastAccuracyMetrics?.avgAccuracy >= 90 ? 'text-emerald-400' :
+                            forecastAccuracyMetrics?.avgAccuracy >= 80 ? 'text-amber-400' : 'text-rose-400'
+                          }`}>
+                            {forecastAccuracyMetrics?.avgAccuracy?.toFixed(1) || 0}%
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400">Beat/Miss:</span>
+                          <span className="text-emerald-400 text-sm font-semibold">{forecastAccuracyMetrics?.beatCount || 0}</span>
+                          <span className="text-slate-500">/</span>
+                          <span className="text-rose-400 text-sm font-semibold">{forecastAccuracyMetrics?.missedCount || 0}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400">Samples:</span>
+                          <span className="text-white text-sm">{getAmazonForecastComparison.length} weeks</span>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => { setAnalyticsTab('amazon-accuracy'); setView('analytics'); }}
+                        className="text-xs text-purple-400 hover:text-purple-300"
+                      >
+                        View Details →
+                      </button>
+                    </div>
+                  </div>
+                )}
                 
                 {/* Data Flow Visualization */}
                 <div className="mt-4 pt-4 border-t border-slate-700/50">
