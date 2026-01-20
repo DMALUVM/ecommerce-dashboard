@@ -48,6 +48,14 @@ const formatCurrency = (num) => {
 const formatPercent = (num) => (num === null || num === undefined || isNaN(num)) ? '0.0%' : num.toFixed(1) + '%';
 const formatNumber = (num) => (num === null || num === undefined || isNaN(num)) ? '0' : Math.round(num).toLocaleString('en-US');
 
+// Helper: Check if a day has REAL sales data (not just Google/Meta Ads data)
+// Real daily data has: total, amazon, shopify objects from Shopify/Amazon CSV uploads
+// Ads-only data just has: googleAds, googleSpend, metaSpend, etc.
+const hasDailySalesData = (dayData) => {
+  if (!dayData) return false;
+  return !!(dayData.total || dayData.amazon || dayData.shopify || dayData.orders || dayData.totalSales);
+};
+
 const getSunday = (date) => {
   const d = new Date(date);
   d.setDate(d.getDate() + (7 - d.getDay()) % 7);
@@ -1112,15 +1120,6 @@ const handleLogout = async () => {
     const forecastWeeks = Object.keys(amazonForecasts).sort();
     
     // === DAILY DATA STATUS ===
-    // Helper: Check if a day has REAL sales data (not just Google Ads data)
-    // Real daily data has: total, amazon, shopify objects from Shopify/Amazon CSV uploads
-    // Google Ads-only data just has: googleAds, googleSpend, googleCpc, etc.
-    const hasDailySalesData = (dayData) => {
-      if (!dayData) return false;
-      // Check for real sales data structure (from daily CSV uploads)
-      return !!(dayData.total || dayData.amazon || dayData.shopify || dayData.orders || dayData.totalSales);
-    };
-    
     const dailyDates = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
     const last14Days = [];
     for (let i = 0; i < 14; i++) {
@@ -2820,7 +2819,7 @@ const savePeriods = async (d) => {
 
   // Auto-aggregate daily data into weekly summaries
   const aggregateDailyToWeekly = useCallback(() => {
-    const sortedDays = Object.keys(allDaysData).sort();
+    const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
     if (sortedDays.length === 0) {
       setToast({ message: 'No daily data to aggregate', type: 'error' });
       return;
@@ -7410,10 +7409,10 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
   // AI Chat - Prepare data context function
   const prepareDataContext = () => {
     const weeksCount = Object.keys(allWeeksData).length;
-    const daysCount = Object.keys(allDaysData).length;
-    const periodsCount = Object.keys(allPeriodsData).length;
     const sortedWeeks = Object.keys(allWeeksData).sort();
-    const sortedDays = Object.keys(allDaysData).sort();
+    const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
+    const daysCount = sortedDays.length;
+    const periodsCount = Object.keys(allPeriodsData).length;
     
     // Daily data summary
     const dailySummary = sortedDays.slice(-14).map(day => {
@@ -8842,9 +8841,9 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     let usingPeriodData = false;
     let usingDailyData = false;
     
-    // Handle "yesterday" - use daily data
+    // Handle "yesterday" - use daily data (only days with real sales data)
     if (dashboardRange === 'yesterday') {
-      const sortedDays = Object.keys(allDaysData).sort();
+      const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
       if (sortedDays.length > 0) {
         const yesterday = sortedDays[sortedDays.length - 1];
         const dayData = allDaysData[yesterday];
@@ -10652,10 +10651,10 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               </button>
               
               {/* Existing Days */}
-              {Object.keys(allDaysData).length > 0 && (
+              {Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length > 0 && (
                 <div className="mt-6 pt-6 border-t border-slate-700">
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-medium text-slate-300">Recent Daily Data ({Object.keys(allDaysData).length} days)</h3>
+                    <h3 className="text-sm font-medium text-slate-300">Recent Daily Data ({Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length} days with sales)</h3>
                     <button 
                       onClick={aggregateDailyToWeekly}
                       className="px-3 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2"
@@ -10665,7 +10664,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     </button>
                   </div>
                   <div className="flex flex-wrap gap-2 mb-3">
-                    {Object.keys(allDaysData).sort().reverse().slice(0, 14).map(day => (
+                    {Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort().reverse().slice(0, 14).map(day => (
                       <div key={day} className="px-3 py-1.5 bg-slate-700/50 rounded-lg text-sm text-slate-300 flex items-center gap-2">
                         <span>{new Date(day + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
                         <span className="text-emerald-400 text-xs">{formatCurrency(allDaysData[day].total?.revenue || 0)}</span>
@@ -13171,8 +13170,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       };
     });
     
-    // Get daily data (last 30 days)
-    const sortedDays = Object.keys(allDaysData).sort();
+    // Get daily data (last 30 days with real sales data, not just ads)
+    const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
     const dailyData = sortedDays.slice(-30).map(d => {
       const day = allDaysData[d];
       return {
@@ -19017,11 +19016,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Daily Data */}
               {Object.keys(allDaysData).length > 0 && (
                 <div className="mb-4">
-                  <p className="text-slate-300 text-sm mb-2">Daily Data ({Object.keys(allDaysData).length} days)</p>
+                  <p className="text-slate-300 text-sm mb-2">Daily Data ({Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length} with sales, {Object.keys(allDaysData).filter(d => !hasDailySalesData(allDaysData[d])).length} ads-only)</p>
                   <div className="flex flex-wrap gap-2">
-                    {Object.keys(allDaysData).sort().reverse().slice(0, 14).map(dayKey => (
-                      <div key={dayKey} className="flex items-center gap-1 bg-cyan-900/30 border border-cyan-500/30 rounded-lg px-2 py-1">
-                        <span className="text-cyan-300 text-xs">{new Date(dayKey + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                    {Object.keys(allDaysData).sort().reverse().slice(0, 14).map(dayKey => {
+                      const hasRealData = hasDailySalesData(allDaysData[dayKey]);
+                      return (
+                      <div key={dayKey} className={`flex items-center gap-1 rounded-lg px-2 py-1 ${hasRealData ? 'bg-cyan-900/30 border border-cyan-500/30' : 'bg-amber-900/20 border border-amber-500/20'}`}>
+                        <span className={`text-xs ${hasRealData ? 'text-cyan-300' : 'text-amber-400/70'}`}>{new Date(dayKey + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}{!hasRealData && ' (ads)'}</span>
                         <button
                           onClick={() => {
                             if (confirm(`Delete ${dayKey}? This cannot be undone.`)) {
@@ -19039,7 +19040,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           <X className="w-3 h-3" />
                         </button>
                       </div>
-                    ))}
+                    );})}
                     {Object.keys(allDaysData).length > 14 && <span className="text-slate-500 text-xs self-center">+{Object.keys(allDaysData).length - 14} more</span>}
                   </div>
                 </div>
