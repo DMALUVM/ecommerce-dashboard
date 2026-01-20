@@ -10080,10 +10080,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       };
     }).filter(d => d.totalCost > 0 || d.shipping > 0 || d.pickFees > 0 || d.storage > 0);
     
-    // Debug: log what we found
-    console.log('3PL weeklyData:', weeklyData.length, 'weeks with data');
-    console.log('Sample week:', weeklyData[0]);
-    
     // Get weeks from ledger that aren't in allWeeksData
     const ledgerWeeks = new Set(Object.values(threeplLedger.orders || {}).map(o => o.weekKey));
     const existingWeeks = new Set(sortedWeeks);
@@ -10485,46 +10481,154 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           {/* Cost Per Order Trend */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
             <h3 className="text-lg font-semibold text-white mb-4">Average Cost Per Order Trend</h3>
-            {((timeView === 'weekly' ? weeklyData : months).length === 0) ? (
-              <div className="h-40 flex items-center justify-center text-slate-500">
-                <div className="text-center">
-                  <Truck className="w-10 h-10 mx-auto mb-2 opacity-50" />
-                  <p>No 3PL data available for this period</p>
-                  <p className="text-xs mt-1">Upload 3PL files with your weekly data or use the bulk upload feature</p>
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-end gap-1 h-40">
-                  {(timeView === 'weekly' ? weeklyData.slice(-12) : months.slice(-12)).map((d) => {
-                    const dataArr = timeView === 'weekly' ? weeklyData : months;
-                    const maxAvg = Math.max(...dataArr.map(x => x.avgCostPerOrder || 0), 1);
-                    const height = maxAvg > 0 ? ((d.avgCostPerOrder || 0) / maxAvg) * 100 : 0;
-                    const label = timeView === 'weekly' 
-                      ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                      : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-                    const avgCost = d.avgCostPerOrder || 0;
-                    const color = avgCost <= 0 ? 'bg-slate-600' : avgCost <= 10 ? 'bg-emerald-500' : avgCost <= 15 ? 'bg-amber-500' : 'bg-rose-500';
-                    return (
-                      <div key={timeView === 'weekly' ? d.week : d.month} className="flex-1 flex flex-col items-center group relative">
-                        <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                          {label}: {avgCost > 0 ? `${formatCurrency(avgCost)}/order` : 'No data'}
-                          {d.totalCost > 0 && avgCost === 0 && <><br/><span className="text-amber-300">Total: {formatCurrency(d.totalCost)} (no order count)</span></>}
+            {(() => {
+              // Only show weeks/months that have avgCostPerOrder > 0
+              const dataToShow = (timeView === 'weekly' ? weeklyData : months)
+                .filter(d => d.avgCostPerOrder > 0)
+                .slice(-12);
+              
+              if (dataToShow.length === 0) {
+                return (
+                  <div className="h-40 flex items-center justify-center text-slate-500">
+                    <div className="text-center">
+                      <Truck className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                      <p>No cost per order data available</p>
+                      <p className="text-xs mt-1">3PL data needs order count to calculate avg cost</p>
+                    </div>
+                  </div>
+                );
+              }
+              
+              const maxAvg = Math.max(...dataToShow.map(x => x.avgCostPerOrder || 0), 1);
+              
+              return (
+                <>
+                  <div className="flex items-end gap-2 h-40">
+                    {dataToShow.map((d) => {
+                      const height = maxAvg > 0 ? (d.avgCostPerOrder / maxAvg) * 100 : 0;
+                      const label = timeView === 'weekly' 
+                        ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                        : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+                      const avgCost = d.avgCostPerOrder || 0;
+                      const color = avgCost <= 10 ? 'bg-emerald-500' : avgCost <= 15 ? 'bg-amber-500' : 'bg-rose-500';
+                      return (
+                        <div key={timeView === 'weekly' ? d.week : d.month} className="flex-1 flex flex-col items-center group relative" style={{ maxWidth: '80px' }}>
+                          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                            {label}: {formatCurrency(avgCost)}/order<br/>
+                            <span className="text-slate-400">Total: {formatCurrency(d.totalCost)} | Orders: {d.orderCount}</span>
+                          </div>
+                          <div className={`w-full rounded-t transition-all hover:opacity-80 ${color}`} style={{ height: `${Math.max(height, 5)}%` }} />
+                          <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{label}</span>
                         </div>
-                        <div className={`w-full rounded-t transition-all hover:opacity-80 ${color}`} style={{ height: `${Math.max(height, 3)}%` }} />
-                        <span className="text-[9px] text-slate-500 mt-1 truncate w-full text-center">{label}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="flex gap-4 mt-3 text-xs justify-center">
-                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great ($10 or less)</span>
-                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />OK ($10-15)</span>
-                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />High ($15+)</span>
-                </div>
-              </>
-            )}
+                      );
+                    })}
+                  </div>
+                  <div className="flex gap-4 mt-3 text-xs justify-center">
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great ($10 or less)</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />OK ($10-15)</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />High ($15+)</span>
+                  </div>
+                  <p className="text-slate-500 text-xs text-center mt-2">{dataToShow.length} {timeView === 'weekly' ? 'weeks' : 'months'} with data</p>
+                </>
+              );
+            })()}
           </div>
+          
+          {/* 3PL Trend Charts */}
+          {(() => {
+            const chartData = (timeView === 'weekly' ? weeklyData : months).slice(-12);
+            if (chartData.length < 2) return null;
+            
+            const getLabel = (d) => timeView === 'weekly' 
+              ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+              : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+            
+            const TrendChart = ({ data, getValue, title, format = 'currency', colorFn = null, goodDirection = 'down' }) => {
+              const values = data.map(d => getValue(d) || 0);
+              const maxVal = Math.max(...values, 1);
+              const minVal = Math.min(...values);
+              const latestVal = values[values.length - 1];
+              const prevVal = values[values.length - 2];
+              const change = prevVal > 0 ? ((latestVal - prevVal) / prevVal) * 100 : 0;
+              const isGood = goodDirection === 'down' ? change <= 0 : change >= 0;
+              
+              return (
+                <div className="bg-slate-900/50 rounded-lg p-3">
+                  <div className="flex justify-between items-start mb-2">
+                    <p className="text-slate-400 text-xs">{title}</p>
+                    <div className="text-right">
+                      <p className="text-white font-semibold text-sm">
+                        {format === 'currency' ? formatCurrency(latestVal) : format === 'percent' ? `${latestVal.toFixed(1)}%` : latestVal.toFixed(1)}
+                      </p>
+                      {change !== 0 && (
+                        <p className={`text-xs ${isGood ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {change > 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}%
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-end gap-0.5 h-16">
+                    {data.map((d, i) => {
+                      const val = getValue(d) || 0;
+                      const height = maxVal > 0 ? (val / maxVal) * 100 : 0;
+                      const defaultColor = 'bg-slate-500';
+                      const color = colorFn ? colorFn(val) : defaultColor;
+                      return (
+                        <div key={i} className="flex-1 flex flex-col items-center group relative">
+                          <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-700 text-white text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap z-10">
+                            {getLabel(d)}: {format === 'currency' ? formatCurrency(val) : format === 'percent' ? `${val.toFixed(1)}%` : val.toFixed(0)}
+                          </div>
+                          <div className={`w-full rounded-t transition-all hover:opacity-80 ${color}`} style={{ height: `${Math.max(height, 3)}%` }} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            };
+            
+            return (
+              <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 mb-6">
+                <TrendChart 
+                  data={chartData} 
+                  getValue={d => d.totalCost} 
+                  title="Total 3PL Cost"
+                  colorFn={v => 'bg-violet-500'}
+                />
+                <TrendChart 
+                  data={chartData} 
+                  getValue={d => d.avgCostPerOrder} 
+                  title="Avg Cost/Order"
+                  colorFn={v => v <= 10 ? 'bg-emerald-500' : v <= 15 ? 'bg-amber-500' : 'bg-rose-500'}
+                />
+                <TrendChart 
+                  data={chartData} 
+                  getValue={d => d.shipping} 
+                  title="Shipping"
+                  colorFn={v => 'bg-blue-500'}
+                />
+                <TrendChart 
+                  data={chartData} 
+                  getValue={d => d.pickFees} 
+                  title="Pick Fees"
+                  colorFn={v => 'bg-emerald-500'}
+                />
+                <TrendChart 
+                  data={chartData} 
+                  getValue={d => d.storage} 
+                  title="Storage"
+                  colorFn={v => 'bg-amber-500'}
+                />
+                <TrendChart 
+                  data={chartData} 
+                  getValue={d => d.revenue > 0 ? (d.totalCost / d.revenue) * 100 : 0} 
+                  title="% of Revenue"
+                  format="percent"
+                  colorFn={v => v <= 10 ? 'bg-emerald-500' : v <= 15 ? 'bg-amber-500' : 'bg-rose-500'}
+                />
+              </div>
+            );
+          })()}
           
           {/* Detailed Table */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
@@ -10550,6 +10654,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     const pctOfRev = d.revenue > 0 ? (d.totalCost / d.revenue) * 100 : 0;
                     const label = timeView === 'weekly' 
                       ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+
                       : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
                     return (
                       <tr key={timeView === 'weekly' ? d.week : d.month} className="border-b border-slate-700/50 hover:bg-slate-700/30">
