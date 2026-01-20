@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2 } from 'lucide-react';
 
 // Dynamically load SheetJS from CDN (avoids npm vulnerability)
 let XLSX = null;
@@ -615,7 +615,9 @@ export default function Dashboard() {
   const [fileNames, setFileNames] = useState({ amazon: '', shopify: '', cogs: '', threepl: [] }); // threepl names array
   const [adSpend, setAdSpend] = useState({ meta: '', google: '' });
   const [allWeeksData, setAllWeeksData] = useState({});
+  const [allDaysData, setAllDaysData] = useState({}); // Daily data keyed by date YYYY-MM-DD
   const [selectedWeek, setSelectedWeek] = useState(null);
+  const [selectedDay, setSelectedDay] = useState(null); // For daily view
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [selectedYear, setSelectedYear] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -626,9 +628,12 @@ export default function Dashboard() {
   const [threeplDateRange, setThreeplDateRange] = useState('all'); // 'week' | '4weeks' | 'month' | 'quarter' | 'year' | 'all' | 'custom'
   const [threeplCustomStart, setThreeplCustomStart] = useState('');
   const [threeplCustomEnd, setThreeplCustomEnd] = useState('');
-  const [uploadTab, setUploadTab] = useState('weekly'); // For upload view tabs
+  const [uploadTab, setUploadTab] = useState('weekly'); // For upload view tabs: 'daily' | 'weekly' | 'period'
   const [dashboardRange, setDashboardRange] = useState('month'); // 'week' | 'month' | 'quarter' | 'year'
-  const [trendsTab, setTrendsTab] = useState('monthly'); // 'weekly' | 'monthly' | 'yearly' for trends view
+  const [trendsTab, setTrendsTab] = useState('monthly'); // 'daily' | 'weekly' | 'monthly' | 'yearly' for trends view
+  const [trendsChannel, setTrendsChannel] = useState('combined'); // 'amazon' | 'shopify' | 'combined' for trends filtering
+  const [dailyFiles, setDailyFiles] = useState({ amazon: null, shopify: null }); // Daily upload files
+  const [dailyAdSpend, setDailyAdSpend] = useState({ meta: '', google: '' }); // Daily ad spend inputs
 
   // Weekly Intelligence Reports
   const [weeklyReports, setWeeklyReports] = useState(() => {
@@ -675,6 +680,13 @@ const [isAuthReady, setIsAuthReady] = useState(false);
 const lastSavedRef = useRef(0);
 const saveTimerRef = useRef(null);
 const isLoadingDataRef = useRef(false);
+
+// Multi-store support
+const [stores, setStores] = useState([]); // List of { id, name, createdAt }
+const [activeStoreId, setActiveStoreId] = useState(null);
+const [showStoreSelector, setShowStoreSelector] = useState(false);
+const [newStoreName, setNewStoreName] = useState('');
+
 // Auto-lock (idle timeout)
 const LOCK_MS = 10 * 60 * 1000; // 10 minutes
 const ACTIVITY_KEY = "ecomm_last_activity_v1";
@@ -1231,6 +1243,7 @@ const parseShopifyTaxReport = (csvData, stateCode) => {
 
 const combinedData = useMemo(() => ({
   sales: allWeeksData,
+  dailySales: allDaysData, // Daily data
   inventory: invHistory,
   cogs: { lookup: savedCogs, updatedAt: cogsLastUpdated },
   periods: allPeriodsData,
@@ -1249,7 +1262,7 @@ const combinedData = useMemo(() => ({
   widgetConfig,
   productionPipeline,
   threeplLedger,
-}), [allWeeksData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger]);
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -1260,6 +1273,12 @@ const loadFromLocal = useCallback(() => {
       const w = Object.keys(d).sort().reverse();
       if (w.length) { setSelectedWeek(w[0]); }
     }
+  } catch {}
+
+  // Load daily data
+  try {
+    const r = lsGet('ecommerce_daily_sales_v1');
+    if (r) setAllDaysData(JSON.parse(r));
   } catch {}
 
   try {
@@ -1338,9 +1357,31 @@ const pushToCloudNow = useCallback(async (dataObj) => {
   setCloudStatus('Saving…');
   const payload = {
     user_id: session.user.id,
-    data: dataObj,
+    data: { 
+      stores: stores,
+      activeStoreId: activeStoreId,
+      storeData: {
+        [activeStoreId || 'default']: dataObj
+      }
+    },
     updated_at: new Date().toISOString(),
   };
+  
+  // Merge with existing stores data to preserve other stores
+  const { data: existingData } = await supabase
+    .from('app_data')
+    .select('data')
+    .eq('user_id', session.user.id)
+    .maybeSingle();
+  
+  if (existingData?.data?.storeData) {
+    payload.data.storeData = {
+      ...existingData.data.storeData,
+      [activeStoreId || 'default']: dataObj
+    };
+    payload.data.stores = existingData.data.stores || stores;
+  }
+  
   const { error } = await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
   if (error) {
     setCloudStatus('Save failed (offline?)');
@@ -1350,7 +1391,7 @@ const pushToCloudNow = useCallback(async (dataObj) => {
   setLastSyncDate(new Date().toISOString());
   setCloudStatus('Saved');
   setTimeout(() => setCloudStatus(''), 1500);
-}, [session]);
+}, [session, stores, activeStoreId]);
 
 const queueCloudSave = useCallback((nextDataObj) => {
   if (!session?.user?.id || !supabase) return;
@@ -1382,7 +1423,7 @@ useEffect(() => {
   queueCloudSave(combinedData);
 }, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline]);
 
-const loadFromCloud = useCallback(async () => {
+const loadFromCloud = useCallback(async (storeId = null) => {
   if (!supabase || !session?.user?.id) return false;
   setCloudStatus('Loading…');
   const { data, error } = await supabase
@@ -1400,11 +1441,33 @@ const loadFromCloud = useCallback(async () => {
     return false;
   }
 
+  const cloudData = data.data || {};
+  
+  // Handle multi-store structure
+  if (cloudData.stores) {
+    setStores(cloudData.stores);
+  }
+  
+  // Determine which store to load
+  const targetStoreId = storeId || cloudData.activeStoreId || (cloudData.stores?.[0]?.id) || 'default';
+  setActiveStoreId(targetStoreId);
+  
+  // Get store-specific data (support both old and new format)
+  let cloud;
+  if (cloudData.storeData && cloudData.storeData[targetStoreId]) {
+    cloud = cloudData.storeData[targetStoreId];
+  } else if (cloudData.storeData?.default) {
+    cloud = cloudData.storeData.default;
+  } else {
+    // Legacy format - data is directly in cloudData
+    cloud = cloudData;
+  }
+
   // Apply cloud data to state
-  const cloud = data.data || {};
   isLoadingDataRef.current = true
   try {
     setAllWeeksData(cloud.sales || {});
+    setAllDaysData(cloud.dailySales || {}); // Load daily data
     const w = Object.keys(cloud.sales || {}).sort().reverse();
     if (w.length) { setSelectedWeek(w[0]); }
     setInvHistory(cloud.inventory || {});
@@ -1428,6 +1491,7 @@ const loadFromCloud = useCallback(async () => {
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
+    writeToLocal('ecommerce_daily_sales_v1', JSON.stringify(cloud.dailySales || {})); // Daily data localStorage
     writeToLocal(INVENTORY_KEY, JSON.stringify(cloud.inventory || {}));
     writeToLocal(COGS_KEY, JSON.stringify({ lookup: cloud.cogs?.lookup || {}, updatedAt: cloud.cogs?.updatedAt || null }));
     writeToLocal(PERIODS_KEY, JSON.stringify(cloud.periods || {}));
@@ -1450,6 +1514,165 @@ const loadFromCloud = useCallback(async () => {
   setCloudStatus('');
   return true;
 }, [session, writeToLocal]);
+
+// Store management functions
+const createStore = useCallback(async (name) => {
+  if (!name.trim()) return;
+  const newStore = {
+    id: `store_${Date.now()}`,
+    name: name.trim(),
+    createdAt: new Date().toISOString(),
+  };
+  const updatedStores = [...stores, newStore];
+  setStores(updatedStores);
+  setActiveStoreId(newStore.id);
+  setNewStoreName('');
+  
+  // Clear current data for new store
+  setAllWeeksData({});
+  setAllDaysData({});
+  setAllPeriodsData({});
+  setInvHistory({});
+  setStoreName(name.trim());
+  setInvoices([]);
+  setAmazonForecasts({});
+  setThreeplLedger({ orders: [], importedFiles: [], summaryCharges: {} });
+  
+  setToast({ message: `Created store "${name}"`, type: 'success' });
+  setShowStoreSelector(false);
+}, [stores]);
+
+const switchStore = useCallback(async (storeId) => {
+  if (storeId === activeStoreId) {
+    setShowStoreSelector(false);
+    return;
+  }
+  
+  // Save current store first
+  await pushToCloudNow(combinedData);
+  
+  // Load new store
+  setActiveStoreId(storeId);
+  await loadFromCloud(storeId);
+  
+  const store = stores.find(s => s.id === storeId);
+  setToast({ message: `Switched to "${store?.name || 'store'}"`, type: 'success' });
+  setShowStoreSelector(false);
+}, [activeStoreId, stores, combinedData, pushToCloudNow, loadFromCloud]);
+
+const deleteStore = useCallback(async (storeId) => {
+  if (stores.length <= 1) {
+    setToast({ message: 'Cannot delete the only store', type: 'error' });
+    return;
+  }
+  
+  const store = stores.find(s => s.id === storeId);
+  if (!confirm(`Delete store "${store?.name}"? All data will be permanently lost.`)) return;
+  
+  const updatedStores = stores.filter(s => s.id !== storeId);
+  setStores(updatedStores);
+  
+  // If deleting active store, switch to another
+  if (storeId === activeStoreId) {
+    const newActive = updatedStores[0].id;
+    setActiveStoreId(newActive);
+    await loadFromCloud(newActive);
+  }
+  
+  setToast({ message: `Deleted store "${store?.name}"`, type: 'success' });
+}, [stores, activeStoreId, loadFromCloud]);
+
+// Store Selector Modal
+const StoreSelectorModal = () => {
+  if (!showStoreSelector || !session) return null;
+  
+  const currentStore = stores.find(s => s.id === activeStoreId);
+  
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+      <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-md">
+        <div className="p-6 border-b border-slate-700">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <Store className="w-5 h-5" />
+              My Stores
+            </h2>
+            <button onClick={() => setShowStoreSelector(false)} className="text-slate-400 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <p className="text-slate-400 text-sm mt-1">Switch between stores or create a new one</p>
+        </div>
+        
+        <div className="p-4 max-h-[50vh] overflow-y-auto">
+          {/* Existing Stores */}
+          {stores.length === 0 ? (
+            <div className="text-center py-6 text-slate-500">
+              <Store className="w-12 h-12 mx-auto mb-2 opacity-50" />
+              <p>No stores yet. Create your first store below.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {stores.map(store => (
+                <div 
+                  key={store.id}
+                  className={`flex items-center justify-between p-3 rounded-xl border ${store.id === activeStoreId ? 'bg-violet-900/30 border-violet-500/50' : 'bg-slate-700/30 border-slate-600 hover:bg-slate-700/50'} cursor-pointer`}
+                  onClick={() => switchStore(store.id)}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${store.id === activeStoreId ? 'bg-violet-600' : 'bg-slate-600'}`}>
+                      <Store className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-white font-medium">{store.name}</p>
+                      <p className="text-slate-400 text-xs">Created {new Date(store.createdAt).toLocaleDateString()}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {store.id === activeStoreId && (
+                      <span className="px-2 py-0.5 bg-violet-500 rounded text-xs text-white">Active</span>
+                    )}
+                    {stores.length > 1 && (
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); deleteStore(store.id); }}
+                        className="p-1 text-slate-400 hover:text-rose-400"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        
+        {/* Create New Store */}
+        <div className="p-4 border-t border-slate-700">
+          <p className="text-slate-300 text-sm mb-2">Create New Store</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newStoreName}
+              onChange={(e) => setNewStoreName(e.target.value)}
+              placeholder="Store name..."
+              className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+              onKeyDown={(e) => e.key === 'Enter' && createStore(newStoreName)}
+            />
+            <button
+              onClick={() => createStore(newStoreName)}
+              disabled={!newStoreName.trim()}
+              className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-lg text-white text-sm flex items-center gap-1"
+            >
+              <Plus className="w-4 h-4" />
+              Create
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // Set up auth + initial load
 useEffect(() => {
@@ -1538,14 +1761,36 @@ useEffect(() => {
         if (!ok) {
           // No cloud data yet: load local and push it up once.
           loadFromLocal();
+          // Create default store if none exists
+          if (stores.length === 0) {
+            const defaultStore = {
+              id: `store_${Date.now()}`,
+              name: storeName || 'My Store',
+              createdAt: new Date().toISOString(),
+            };
+            setStores([defaultStore]);
+            setActiveStoreId(defaultStore.id);
+          }
           const localCombined = {
             sales: (() => { try { return JSON.parse(lsGet(STORAGE_KEY) || '{}'); } catch { return {}; } })(),
+            dailySales: (() => { try { return JSON.parse(lsGet('ecommerce_daily_sales_v1') || '{}'); } catch { return {}; } })(),
             inventory: (() => { try { return JSON.parse(lsGet(INVENTORY_KEY) || '{}'); } catch { return {}; } })(),
             cogs: (() => { try { return JSON.parse(lsGet(COGS_KEY) || '{"lookup":{},"updatedAt":null}'); } catch { return { lookup: {}, updatedAt: null }; } })(),
             periods: (() => { try { return JSON.parse(lsGet(PERIODS_KEY) || '{}'); } catch { return {}; } })(),
             storeName: (() => { try { return (lsGet(STORE_KEY) || ''); } catch { return ''; } })(),
           };
           await pushToCloudNow(localCombined);
+        } else {
+          // Create default store if loaded data has none
+          if (stores.length === 0) {
+            const defaultStore = {
+              id: 'default',
+              name: storeName || 'My Store',
+              createdAt: new Date().toISOString(),
+            };
+            setStores([defaultStore]);
+            setActiveStoreId(defaultStore.id);
+          }
         }
       } else {
         loadFromLocal();
@@ -2062,6 +2307,271 @@ const savePeriods = async (d) => {
     setToast({ message: 'Week data saved successfully!', type: 'success' });
   }, [files, adSpend, weekEnding, allWeeksData, getCogsLookup, save]);
 
+  // Process daily upload
+  const processDailyUpload = useCallback(async () => {
+    if (!selectedDay) { alert('Please select a date'); return; }
+    if (!dailyFiles.amazon && !dailyFiles.shopify) { alert('Upload at least one data file'); return; }
+    
+    const cogsLookup = getCogsLookup();
+    setIsProcessing(true);
+    
+    try {
+      let amzRev = 0, amzUnits = 0, amzRet = 0, amzProfit = 0, amzCogs = 0, amzFees = 0, amzAds = 0;
+      const amazonSkuData = {};
+      
+      // Parse Amazon data if provided
+      if (dailyFiles.amazon) {
+        const amzData = await new Promise((resolve) => {
+          Papa.parse(dailyFiles.amazon, { header: true, complete: (r) => resolve(r.data) });
+        });
+        
+        amzData.forEach(r => {
+          const net = parseInt(r['Net units sold'] || 0), sold = parseInt(r['Units sold'] || 0), ret = parseInt(r['Units returned'] || 0);
+          const sales = parseFloat(r['Net sales'] || 0), proceeds = parseFloat(r['Net proceeds total'] || 0), sku = r['MSKU'] || '';
+          const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
+          const ads = parseFloat(r['Sponsored Products charge total'] || 0);
+          const name = r['Product title'] || r['product-name'] || sku;
+          if (net > 0 || sold > 0) { 
+            amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += (cogsLookup[sku] || 0) * net;
+            if (sku) {
+              if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+              amazonSkuData[sku].unitsSold += sold;
+              amazonSkuData[sku].returns += ret;
+              amazonSkuData[sku].netSales += sales;
+              amazonSkuData[sku].netProceeds += proceeds;
+              amazonSkuData[sku].adSpend += ads;
+              amazonSkuData[sku].cogs += (cogsLookup[sku] || 0) * net;
+            }
+          }
+        });
+      }
+      
+      let shopRev = 0, shopUnits = 0, shopCogs = 0, shopDisc = 0;
+      const shopifySkuData = {};
+      
+      // Parse Shopify data if provided
+      if (dailyFiles.shopify) {
+        const shopData = await new Promise((resolve) => {
+          Papa.parse(dailyFiles.shopify, { header: true, complete: (r) => resolve(r.data) });
+        });
+        
+        shopData.forEach(r => {
+          const units = parseInt(r['Net items sold'] || 0), sales = parseFloat(r['Net sales'] || 0), sku = r['Product variant SKU'] || '';
+          const name = r['Product title'] || r['Product'] || sku;
+          const disc = Math.abs(parseFloat(r['Discounts'] || 0));
+          shopRev += sales; shopUnits += units; shopCogs += (cogsLookup[sku] || 0) * units; shopDisc += disc;
+          if (sku && units > 0) {
+            if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+            shopifySkuData[sku].unitsSold += units;
+            shopifySkuData[sku].netSales += sales;
+            shopifySkuData[sku].discounts += disc;
+            shopifySkuData[sku].cogs += (cogsLookup[sku] || 0) * units;
+          }
+        });
+      }
+      
+      const metaS = parseFloat(dailyAdSpend.meta) || 0;
+      const googleS = parseFloat(dailyAdSpend.google) || 0;
+      const shopAds = metaS + googleS;
+      const shopProfit = shopRev - shopCogs - shopAds;
+      const totalRev = amzRev + shopRev;
+      const totalProfit = amzProfit + shopProfit;
+      const totalCogs = amzCogs + shopCogs;
+      
+      const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
+      const shopifySkus = Object.values(shopifySkuData).sort((a, b) => b.netSales - a.netSales);
+      
+      const dayData = {
+        date: selectedDay,
+        createdAt: new Date().toISOString(),
+        amazon: dailyFiles.amazon ? {
+          revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, netProfit: amzProfit,
+          margin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
+          returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus
+        } : null,
+        shopify: dailyFiles.shopify ? {
+          revenue: shopRev, units: shopUnits, cogs: shopCogs, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS,
+          discounts: shopDisc, netProfit: shopProfit, netMargin: shopRev > 0 ? (shopProfit/shopRev)*100 : 0,
+          aov: shopUnits > 0 ? shopRev/shopUnits : 0, roas: shopAds > 0 ? shopRev/shopAds : 0, skuData: shopifySkus
+        } : null,
+        total: {
+          revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds,
+          netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0,
+          roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0,
+          amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0,
+          shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0
+        }
+      };
+      
+      // Save to state
+      const updatedDays = { ...allDaysData, [selectedDay]: dayData };
+      setAllDaysData(updatedDays);
+      lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays));
+      
+      // Reset form
+      setDailyFiles({ amazon: null, shopify: null });
+      setDailyAdSpend({ meta: '', google: '' });
+      setSelectedDay(null);
+      setIsProcessing(false);
+      setToast({ message: `Daily data for ${new Date(selectedDay + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} saved!`, type: 'success' });
+      
+    } catch (err) {
+      console.error('Daily upload error:', err);
+      setIsProcessing(false);
+      setToast({ message: 'Error processing daily data', type: 'error' });
+    }
+  }, [selectedDay, dailyFiles, dailyAdSpend, allDaysData, getCogsLookup]);
+
+  // Auto-aggregate daily data into weekly summaries
+  const aggregateDailyToWeekly = useCallback(() => {
+    const sortedDays = Object.keys(allDaysData).sort();
+    if (sortedDays.length === 0) {
+      setToast({ message: 'No daily data to aggregate', type: 'error' });
+      return;
+    }
+    
+    // Group days by week (Sunday to Saturday)
+    const weeklyAgg = {};
+    
+    sortedDays.forEach(dayKey => {
+      const dayData = allDaysData[dayKey];
+      const date = new Date(dayKey + 'T12:00:00');
+      // Get the Sunday of this week (week ending date)
+      const dayOfWeek = date.getDay();
+      const weekEnd = new Date(date);
+      weekEnd.setDate(date.getDate() + (6 - dayOfWeek)); // Move to Saturday
+      const weekKey = weekEnd.toISOString().split('T')[0];
+      
+      if (!weeklyAgg[weekKey]) {
+        weeklyAgg[weekKey] = {
+          weekEnding: weekKey,
+          days: [],
+          amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, skuData: {} },
+          shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, skuData: {} },
+        };
+      }
+      
+      weeklyAgg[weekKey].days.push(dayKey);
+      
+      // Aggregate Amazon data
+      if (dayData.amazon) {
+        weeklyAgg[weekKey].amazon.revenue += dayData.amazon.revenue || 0;
+        weeklyAgg[weekKey].amazon.units += dayData.amazon.units || 0;
+        weeklyAgg[weekKey].amazon.returns += dayData.amazon.returns || 0;
+        weeklyAgg[weekKey].amazon.cogs += dayData.amazon.cogs || 0;
+        weeklyAgg[weekKey].amazon.fees += dayData.amazon.fees || 0;
+        weeklyAgg[weekKey].amazon.adSpend += dayData.amazon.adSpend || 0;
+        weeklyAgg[weekKey].amazon.netProfit += dayData.amazon.netProfit || 0;
+        
+        // Aggregate SKU data
+        (dayData.amazon.skuData || []).forEach(sku => {
+          if (!weeklyAgg[weekKey].amazon.skuData[sku.sku]) {
+            weeklyAgg[weekKey].amazon.skuData[sku.sku] = { ...sku, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+          }
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].unitsSold += sku.unitsSold || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].returns += sku.returns || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].netSales += sku.netSales || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].netProceeds += sku.netProceeds || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].adSpend += sku.adSpend || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].cogs += sku.cogs || 0;
+        });
+      }
+      
+      // Aggregate Shopify data
+      if (dayData.shopify) {
+        weeklyAgg[weekKey].shopify.revenue += dayData.shopify.revenue || 0;
+        weeklyAgg[weekKey].shopify.units += dayData.shopify.units || 0;
+        weeklyAgg[weekKey].shopify.cogs += dayData.shopify.cogs || 0;
+        weeklyAgg[weekKey].shopify.adSpend += dayData.shopify.adSpend || 0;
+        weeklyAgg[weekKey].shopify.metaSpend += dayData.shopify.metaSpend || 0;
+        weeklyAgg[weekKey].shopify.googleSpend += dayData.shopify.googleSpend || 0;
+        weeklyAgg[weekKey].shopify.discounts += dayData.shopify.discounts || 0;
+        weeklyAgg[weekKey].shopify.netProfit += dayData.shopify.netProfit || 0;
+        
+        // Aggregate SKU data
+        (dayData.shopify.skuData || []).forEach(sku => {
+          if (!weeklyAgg[weekKey].shopify.skuData[sku.sku]) {
+            weeklyAgg[weekKey].shopify.skuData[sku.sku] = { ...sku, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+          }
+          weeklyAgg[weekKey].shopify.skuData[sku.sku].unitsSold += sku.unitsSold || 0;
+          weeklyAgg[weekKey].shopify.skuData[sku.sku].netSales += sku.netSales || 0;
+          weeklyAgg[weekKey].shopify.skuData[sku.sku].discounts += sku.discounts || 0;
+          weeklyAgg[weekKey].shopify.skuData[sku.sku].cogs += sku.cogs || 0;
+        });
+      }
+    });
+    
+    // Convert to weekly data format and merge with existing
+    const newWeeksData = { ...allWeeksData };
+    let weeksCreated = 0;
+    let weeksUpdated = 0;
+    
+    Object.entries(weeklyAgg).forEach(([weekKey, agg]) => {
+      const amz = agg.amazon;
+      const shop = agg.shopify;
+      const totalRev = amz.revenue + shop.revenue;
+      const totalProfit = amz.netProfit + shop.netProfit;
+      const totalCogs = amz.cogs + shop.cogs;
+      const totalAds = amz.adSpend + shop.adSpend;
+      
+      const weekData = {
+        weekEnding: weekKey,
+        createdAt: new Date().toISOString(),
+        aggregatedFrom: agg.days, // Track which days were aggregated
+        amazon: {
+          revenue: amz.revenue,
+          units: amz.units,
+          returns: amz.returns,
+          cogs: amz.cogs,
+          fees: amz.fees,
+          adSpend: amz.adSpend,
+          netProfit: amz.netProfit,
+          margin: amz.revenue > 0 ? (amz.netProfit / amz.revenue) * 100 : 0,
+          aov: amz.units > 0 ? amz.revenue / amz.units : 0,
+          roas: amz.adSpend > 0 ? amz.revenue / amz.adSpend : 0,
+          returnRate: amz.units > 0 ? (amz.returns / amz.units) * 100 : 0,
+          skuData: Object.values(amz.skuData).sort((a, b) => b.netSales - a.netSales),
+        },
+        shopify: {
+          revenue: shop.revenue,
+          units: shop.units,
+          cogs: shop.cogs,
+          adSpend: shop.adSpend,
+          metaSpend: shop.metaSpend,
+          googleSpend: shop.googleSpend,
+          discounts: shop.discounts,
+          netProfit: shop.netProfit,
+          netMargin: shop.revenue > 0 ? (shop.netProfit / shop.revenue) * 100 : 0,
+          aov: shop.units > 0 ? shop.revenue / shop.units : 0,
+          roas: shop.adSpend > 0 ? shop.revenue / shop.adSpend : 0,
+          skuData: Object.values(shop.skuData).sort((a, b) => b.netSales - a.netSales),
+        },
+        total: {
+          revenue: totalRev,
+          units: amz.units + shop.units,
+          cogs: totalCogs,
+          adSpend: totalAds,
+          netProfit: totalProfit,
+          netMargin: totalRev > 0 ? (totalProfit / totalRev) * 100 : 0,
+          roas: totalAds > 0 ? totalRev / totalAds : 0,
+          amazonShare: totalRev > 0 ? (amz.revenue / totalRev) * 100 : 0,
+          shopifyShare: totalRev > 0 ? (shop.revenue / totalRev) * 100 : 0,
+        },
+      };
+      
+      if (newWeeksData[weekKey]) {
+        weeksUpdated++;
+      } else {
+        weeksCreated++;
+      }
+      newWeeksData[weekKey] = weekData;
+    });
+    
+    setAllWeeksData(newWeeksData);
+    save(newWeeksData);
+    setToast({ message: `Aggregated ${sortedDays.length} days into ${weeksCreated + weeksUpdated} weeks (${weeksCreated} new, ${weeksUpdated} updated)`, type: 'success' });
+  }, [allDaysData, allWeeksData, save]);
+
   const processBulkImport = useCallback(() => {
     const cogsLookup = getCogsLookup();
     if (!files.amazon || !files.shopify) { alert('Upload Amazon & Shopify files'); return; }
@@ -2534,12 +3044,13 @@ const savePeriods = async (d) => {
   // COMPLETE BACKUP - includes ALL dashboard data
   const exportAll = () => { 
     const fullBackup = {
-      version: '2.4',
+      version: '2.5',
       exportedAt: new Date().toISOString(),
       storeName,
       storeLogo,
       // Core sales data
-      sales: allWeeksData, 
+      sales: allWeeksData,
+      dailySales: allDaysData, // Daily data export
       periods: allPeriodsData,
       inventory: invHistory, 
       cogs: savedCogs,
@@ -2583,7 +3094,13 @@ const savePeriods = async (d) => {
           setAllWeeksData(prev => ({...prev, ...d.sales})); 
           await save({...allWeeksData, ...d.sales}); 
           restored.push(`${Object.keys(d.sales).length} weeks`);
-        } 
+        }
+        // Daily data
+        if (d.dailySales && Object.keys(d.dailySales).length > 0) {
+          setAllDaysData(prev => ({...prev, ...d.dailySales}));
+          lsSet('ecommerce_daily_sales_v1', JSON.stringify({...allDaysData, ...d.dailySales}));
+          restored.push(`${Object.keys(d.dailySales).length} days`);
+        }
         if (d.inventory && Object.keys(d.inventory).length > 0) { 
           setInvHistory(prev => ({...prev, ...d.inventory})); 
           await saveInv({...invHistory, ...d.inventory}); 
@@ -3819,7 +4336,18 @@ const savePeriods = async (d) => {
 
   const dataBar = useMemo(() => (
     <div className="flex flex-wrap items-center gap-3 mb-6 p-4 bg-slate-800/50 rounded-xl border border-slate-700">
-      <div className="flex items-center gap-2 text-slate-400 text-sm"><Database className="w-4 h-4" /><span>{Object.keys(allWeeksData).length} weeks | {Object.keys(allPeriodsData).length} periods</span></div>
+      {/* Store Selector */}
+      {session && stores.length > 0 && (
+        <button 
+          onClick={() => setShowStoreSelector(true)}
+          className="flex items-center gap-2 px-3 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300"
+        >
+          <Store className="w-4 h-4" />
+          <span className="max-w-[120px] truncate">{stores.find(s => s.id === activeStoreId)?.name || storeName || 'My Store'}</span>
+          <ChevronRight className="w-3 h-3" />
+        </button>
+      )}
+      <div className="flex items-center gap-2 text-slate-400 text-sm"><Database className="w-4 h-4" /><span>{Object.keys(allDaysData).length} days | {Object.keys(allWeeksData).length} weeks | {Object.keys(allPeriodsData).length} periods</span></div>
       <div className="flex items-center gap-2">
         {Object.keys(savedCogs).length > 0 ? <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />{Object.keys(savedCogs).length} SKUs</span> : <span className="text-amber-400 text-xs">No COGS</span>}
         <button onClick={() => setShowCogsManager(true)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white flex items-center gap-1"><Settings className="w-3 h-3" />COGS</button>
@@ -6727,7 +7255,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -7356,7 +7884,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -7372,20 +7900,132 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
           <NavTabs />
           
           {/* Upload Type Tabs */}
-          <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl">
-            <button onClick={() => setUploadTab('weekly')} className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+          <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
+            <button onClick={() => setUploadTab('daily')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'daily' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Clock className="w-5 h-5" />Daily
+            </button>
+            <button onClick={() => setUploadTab('weekly')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Calendar className="w-5 h-5" />Weekly
             </button>
-            <button onClick={() => setUploadTab('period')} className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'period' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setUploadTab('period')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'period' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <CalendarRange className="w-5 h-5" />Period
             </button>
-            <button onClick={() => setUploadTab('inventory')} className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setUploadTab('inventory')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Boxes className="w-5 h-5" />Inventory
             </button>
-            <button onClick={() => setUploadTab('forecast')} className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'forecast' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setUploadTab('forecast')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'forecast' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <TrendingUp className="w-5 h-5" />Forecast
             </button>
           </div>
+          
+          {/* Daily Upload */}
+          {uploadTab === 'daily' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-white mb-1">📅 Daily Sales Upload</h2>
+              <p className="text-slate-400 text-sm mb-6">Upload yesterday's Amazon, Shopify, and ad data for daily tracking</p>
+              
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-slate-300 mb-2">Date <span className="text-rose-400">*</span></label>
+                <input 
+                  type="date" 
+                  value={selectedDay || ''} 
+                  onChange={(e) => setSelectedDay(e.target.value)} 
+                  max={new Date().toISOString().split('T')[0]}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" 
+                />
+                {selectedDay && (
+                  <p className="text-slate-500 text-sm mt-2">
+                    Uploading data for: {new Date(selectedDay + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                  </p>
+                )}
+              </div>
+              
+              {/* File uploads for daily data */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div className={`relative border-2 border-dashed rounded-xl p-4 transition-all ${dailyFiles.amazon ? 'border-orange-500/50 bg-orange-950/20' : 'border-slate-600 hover:border-slate-500 bg-slate-800/30'}`}>
+                  <input type="file" accept=".csv" onChange={(e) => setDailyFiles(prev => ({ ...prev, amazon: e.target.files[0] }))} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                  <div className="flex items-start gap-3">
+                    {dailyFiles.amazon ? <Check className="w-5 h-5 text-orange-400 mt-0.5" /> : <FileSpreadsheet className="w-5 h-5 text-slate-400 mt-0.5" />}
+                    <div className="flex-1 min-w-0">
+                      <p className={`font-medium ${dailyFiles.amazon ? 'text-orange-400' : 'text-white'}`}>Amazon Daily Report</p>
+                      <p className="text-slate-500 text-sm truncate">{dailyFiles.amazon ? dailyFiles.amazon.name : 'SKU Economics for single day'}</p>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className={`relative border-2 border-dashed rounded-xl p-4 transition-all ${dailyFiles.shopify ? 'border-blue-500/50 bg-blue-950/20' : 'border-slate-600 hover:border-slate-500 bg-slate-800/30'}`}>
+                  <input type="file" accept=".csv" onChange={(e) => setDailyFiles(prev => ({ ...prev, shopify: e.target.files[0] }))} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                  <div className="flex items-start gap-3">
+                    {dailyFiles.shopify ? <Check className="w-5 h-5 text-blue-400 mt-0.5" /> : <FileSpreadsheet className="w-5 h-5 text-slate-400 mt-0.5" />}
+                    <div className="flex-1 min-w-0">
+                      <p className={`font-medium ${dailyFiles.shopify ? 'text-blue-400' : 'text-white'}`}>Shopify Daily Report</p>
+                      <p className="text-slate-500 text-sm truncate">{dailyFiles.shopify ? dailyFiles.shopify.name : 'Sales by product for single day'}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Ad Spend Inputs */}
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Meta Ad Spend ($)</label>
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    value={dailyAdSpend.meta} 
+                    onChange={(e) => setDailyAdSpend(prev => ({ ...prev, meta: e.target.value }))} 
+                    placeholder="0.00" 
+                    className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Google Ad Spend ($)</label>
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    value={dailyAdSpend.google} 
+                    onChange={(e) => setDailyAdSpend(prev => ({ ...prev, google: e.target.value }))} 
+                    placeholder="0.00" 
+                    className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" 
+                  />
+                </div>
+              </div>
+              
+              {/* Process Button */}
+              <button 
+                onClick={processDailyUpload} 
+                disabled={!selectedDay || (!dailyFiles.amazon && !dailyFiles.shopify) || isProcessing}
+                className="w-full py-4 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:from-slate-700 disabled:to-slate-700 disabled:cursor-not-allowed rounded-xl font-semibold text-lg flex items-center justify-center gap-2"
+              >
+                {isProcessing ? <><Loader2 className="w-5 h-5 animate-spin" />Processing...</> : <><Upload className="w-5 h-5" />Process Daily Data</>}
+              </button>
+              
+              {/* Existing Days */}
+              {Object.keys(allDaysData).length > 0 && (
+                <div className="mt-6 pt-6 border-t border-slate-700">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-medium text-slate-300">Recent Daily Data ({Object.keys(allDaysData).length} days)</h3>
+                    <button 
+                      onClick={aggregateDailyToWeekly}
+                      className="px-3 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Aggregate to Weekly
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {Object.keys(allDaysData).sort().reverse().slice(0, 14).map(day => (
+                      <div key={day} className="px-3 py-1.5 bg-slate-700/50 rounded-lg text-sm text-slate-300 flex items-center gap-2">
+                        <span>{new Date(day + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                        <span className="text-emerald-400 text-xs">{formatCurrency(allDaysData[day].total?.revenue || 0)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-slate-500 text-xs">💡 Tip: Use "Aggregate to Weekly" to combine daily data into weekly summaries for trend analysis</p>
+                </div>
+              )}
+            </div>
+          )}
           
           {/* Weekly Upload */}
           {uploadTab === 'weekly' && (
@@ -7589,38 +8229,56 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               <h2 className="text-lg font-semibold text-white mb-1">Amazon Forecast Upload</h2>
               <p className="text-slate-400 text-sm mb-4">Upload Amazon's projected sales to compare against actual results</p>
               
-              {/* Upcoming Week Date Range */}
+              {/* Forecast Date Ranges for each type */}
               {(() => {
                 const today = new Date();
-                const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+                today.setHours(0, 0, 0, 0);
                 
-                // For forecasts, we want FUTURE dates starting TOMORROW
-                // Calculate the upcoming Sunday (end of this forecast period)
-                const tomorrow = new Date(today);
-                tomorrow.setDate(today.getDate() + 1);
-                const tomorrowDay = tomorrow.getDay();
-                
-                // Find the Sunday that ends the week containing tomorrow
-                const upcomingSunday = new Date(tomorrow);
-                if (tomorrowDay === 0) {
-                  // Tomorrow is Sunday - that's the end of this week
-                  // Keep it as is
-                } else {
-                  // Find the Sunday after tomorrow
-                  upcomingSunday.setDate(tomorrow.getDate() + (7 - tomorrowDay));
-                }
-                
-                // The start of the forecast period is tomorrow
-                const forecastStart = new Date(tomorrow);
-                
-                const formatDate = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                const formatDate = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
                 const formatShort = (d) => d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
                 
-                // Also show next full week for users who want to plan ahead
-                const nextWeekMonday = new Date(upcomingSunday);
-                nextWeekMonday.setDate(upcomingSunday.getDate() + 1);
-                const nextWeekSunday = new Date(nextWeekMonday);
-                nextWeekSunday.setDate(nextWeekMonday.getDate() + 6);
+                // Calculate date ranges for each forecast type
+                const get7DayRange = () => {
+                  const start = new Date(today);
+                  start.setDate(start.getDate() + 1); // Tomorrow
+                  const end = new Date(start);
+                  end.setDate(end.getDate() + 6); // 7 days from tomorrow
+                  return { start, end, days: 7 };
+                };
+                
+                const get30DayRange = () => {
+                  const start = new Date(today);
+                  start.setDate(start.getDate() + 1); // Tomorrow
+                  const end = new Date(start);
+                  end.setDate(end.getDate() + 29); // 30 days from tomorrow
+                  return { start, end, days: 30 };
+                };
+                
+                const get60DayRange = () => {
+                  const start = new Date(today);
+                  start.setDate(start.getDate() + 1); // Tomorrow
+                  const end = new Date(start);
+                  end.setDate(end.getDate() + 59); // 60 days from tomorrow
+                  return { start, end, days: 60 };
+                };
+                
+                const ranges = {
+                  '7day': get7DayRange(),
+                  '30day': get30DayRange(),
+                  '60day': get60DayRange(),
+                };
+                
+                // Calculate days until each forecast needs refresh
+                const getDaysUntilRefresh = (type) => {
+                  const lastUpload = forecastMeta.lastUploads?.[type];
+                  if (!lastUpload) return null;
+                  const uploadDate = new Date(lastUpload);
+                  const daysSince = Math.floor((today - uploadDate) / (1000 * 60 * 60 * 24));
+                  const refreshDays = type === '7day' ? 7 : type === '30day' ? 30 : 60;
+                  return refreshDays - daysSince;
+                };
+                
+                const selectedRange = files.forecastType ? ranges[files.forecastType] : null;
                 
                 return (
                   <div className="bg-orange-900/20 border border-orange-500/30 rounded-xl p-4 mb-6">
@@ -7628,26 +8286,72 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                       <TrendingUp className="w-4 h-4" />
                       Amazon Forecast Date Ranges
                     </h3>
-                    <p className="text-slate-400 text-sm mb-3">Forecasts are for <span className="text-orange-300">future dates</span> — today ({formatDate(today)}) is excluded</p>
+                    <p className="text-slate-400 text-sm mb-4">Select a forecast type below, then use these date ranges in Amazon Seller Central</p>
                     
-                    {/* Rest of This Week (starting tomorrow) */}
-                    <div className="bg-slate-800/50 rounded-lg p-3 mb-3">
-                      <p className="text-orange-400 font-medium mb-1">📦 This Week's Forecast (ending {formatDate(upcomingSunday)})</p>
-                      <p className="text-white font-mono text-lg">{formatShort(forecastStart)} → {formatShort(upcomingSunday)}</p>
-                      <p className="text-slate-400 text-xs mt-1">{formatDate(forecastStart)} through {formatDate(upcomingSunday)}</p>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                      {/* 7-Day Forecast */}
+                      <div className={`rounded-lg p-3 cursor-pointer transition-all ${files.forecastType === '7day' ? 'bg-amber-600/30 border-2 border-amber-500' : 'bg-slate-800/50 border border-slate-700 hover:border-slate-500'}`}
+                        onClick={() => files.amazonForecast && setFiles(p => ({ ...p, forecastType: '7day' }))}>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-amber-400 font-medium">📅 7-Day Forecast</p>
+                          {forecastMeta.lastUploads?.['7day'] && (
+                            <span className={`text-xs px-2 py-0.5 rounded ${getDaysUntilRefresh('7day') <= 0 ? 'bg-rose-500/30 text-rose-300' : getDaysUntilRefresh('7day') <= 2 ? 'bg-amber-500/30 text-amber-300' : 'bg-emerald-500/30 text-emerald-300'}`}>
+                              {getDaysUntilRefresh('7day') <= 0 ? 'Due now!' : `${getDaysUntilRefresh('7day')}d left`}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-white font-mono text-sm">{formatShort(ranges['7day'].start)}</p>
+                        <p className="text-white font-mono text-sm">→ {formatShort(ranges['7day'].end)}</p>
+                        <p className="text-slate-500 text-xs mt-1">Refresh every 7 days</p>
+                      </div>
+                      
+                      {/* 30-Day Forecast */}
+                      <div className={`rounded-lg p-3 cursor-pointer transition-all ${files.forecastType === '30day' ? 'bg-amber-600/30 border-2 border-amber-500' : 'bg-slate-800/50 border border-slate-700 hover:border-slate-500'}`}
+                        onClick={() => files.amazonForecast && setFiles(p => ({ ...p, forecastType: '30day' }))}>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-orange-400 font-medium">📊 30-Day Forecast</p>
+                          {forecastMeta.lastUploads?.['30day'] && (
+                            <span className={`text-xs px-2 py-0.5 rounded ${getDaysUntilRefresh('30day') <= 0 ? 'bg-rose-500/30 text-rose-300' : getDaysUntilRefresh('30day') <= 2 ? 'bg-amber-500/30 text-amber-300' : 'bg-emerald-500/30 text-emerald-300'}`}>
+                              {getDaysUntilRefresh('30day') <= 0 ? 'Due now!' : `${getDaysUntilRefresh('30day')}d left`}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-white font-mono text-sm">{formatShort(ranges['30day'].start)}</p>
+                        <p className="text-white font-mono text-sm">→ {formatShort(ranges['30day'].end)}</p>
+                        <p className="text-slate-500 text-xs mt-1">Refresh every 30 days</p>
+                      </div>
+                      
+                      {/* 60-Day Forecast */}
+                      <div className={`rounded-lg p-3 cursor-pointer transition-all ${files.forecastType === '60day' ? 'bg-amber-600/30 border-2 border-amber-500' : 'bg-slate-800/50 border border-slate-700 hover:border-slate-500'}`}
+                        onClick={() => files.amazonForecast && setFiles(p => ({ ...p, forecastType: '60day' }))}>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-red-400 font-medium">📈 60-Day Forecast</p>
+                          {forecastMeta.lastUploads?.['60day'] && (
+                            <span className={`text-xs px-2 py-0.5 rounded ${getDaysUntilRefresh('60day') <= 0 ? 'bg-rose-500/30 text-rose-300' : getDaysUntilRefresh('60day') <= 2 ? 'bg-amber-500/30 text-amber-300' : 'bg-emerald-500/30 text-emerald-300'}`}>
+                              {getDaysUntilRefresh('60day') <= 0 ? 'Due now!' : `${getDaysUntilRefresh('60day')}d left`}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-white font-mono text-sm">{formatShort(ranges['60day'].start)}</p>
+                        <p className="text-white font-mono text-sm">→ {formatShort(ranges['60day'].end)}</p>
+                        <p className="text-slate-500 text-xs mt-1">Refresh every 60 days</p>
+                      </div>
                     </div>
                     
-                    {/* Next Full Week */}
-                    <div className="bg-slate-800/30 rounded-lg p-3 mb-3">
-                      <p className="text-amber-400/70 font-medium mb-1">📅 Next Week's Forecast (full week)</p>
-                      <p className="text-white/70 font-mono">{formatShort(nextWeekMonday)} → {formatShort(nextWeekSunday)}</p>
-                      <p className="text-slate-500 text-xs mt-1">{formatDate(nextWeekMonday)} through {formatDate(nextWeekSunday)}</p>
-                    </div>
+                    {/* Selected forecast instructions */}
+                    {selectedRange && (
+                      <div className="bg-slate-900/50 rounded-lg p-3 mb-3">
+                        <p className="text-emerald-400 font-medium mb-2">✓ Selected: {files.forecastType === '7day' ? '7-Day' : files.forecastType === '30day' ? '30-Day' : '60-Day'} Forecast</p>
+                        <p className="text-white text-sm">
+                          In Amazon Seller Central, set date range: <span className="font-mono text-amber-300">{formatShort(selectedRange.start)}</span> to <span className="font-mono text-amber-300">{formatShort(selectedRange.end)}</span>
+                        </p>
+                      </div>
+                    )}
                     
                     <ol className="text-slate-300 text-sm space-y-1 list-decimal list-inside">
-                      <li>Seller Central → Reports → Business Reports → <span className="text-orange-300">SKU Economics</span></li>
-                      <li>Set date range to a <span className="text-orange-300 font-medium">future week</span> (dates shown above)</li>
-                      <li>Amazon shows <span className="text-orange-300 font-medium">projected</span> sales for future dates</li>
+                      <li>Go to Seller Central → Reports → Business Reports → <span className="text-orange-300">SKU Economics</span></li>
+                      <li>Set the date range to the <span className="text-orange-300 font-medium">future dates</span> shown above</li>
+                      <li>Amazon will show <span className="text-orange-300 font-medium">projected/forecasted</span> sales for those dates</li>
                       <li>Export as CSV and upload below</li>
                     </ol>
                   </div>
@@ -7687,35 +8391,24 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                 </div>
               </div>
               
-              {/* Forecast Type Selection */}
-              {files.amazonForecast && (
-                <div className="mb-4">
-                  <label className="text-slate-400 text-sm block mb-2">Forecast Type: <span className="text-slate-500">(select which Amazon forecast period this is)</span></label>
-                  <div className="flex gap-2 flex-wrap">
-                    {['7day', '30day', '60day'].map(type => {
-                      const isSelected = files.forecastType === type;
-                      const isUploaded = forecastMeta.lastUploads?.[type];
-                      return (
-                        <button
-                          key={type}
-                          onClick={() => setFiles(p => ({ ...p, forecastType: type }))}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
-                            isSelected
-                              ? 'bg-amber-600 text-white'
-                              : isUploaded
-                                ? 'bg-emerald-900/30 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-900/50'
-                                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                          }`}
-                        >
-                          {type === '7day' ? '7-Day' : type === '30day' ? '30-Day' : '60-Day'}
-                          {isUploaded && !isSelected && <Check className="w-3 h-3" />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {!files.forecastType && (
-                    <p className="text-amber-400 text-xs mt-2">⚠️ Please select which forecast period this file represents</p>
-                  )}
+              {/* Forecast Type Selection - shown if file uploaded but no type selected */}
+              {files.amazonForecast && !files.forecastType && (
+                <div className="mb-4 p-3 bg-amber-900/30 border border-amber-500/50 rounded-lg">
+                  <p className="text-amber-300 text-sm flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4" />
+                    Click one of the forecast cards above to select which type this is (7-Day, 30-Day, or 60-Day)
+                  </p>
+                </div>
+              )}
+              
+              {/* Selected forecast confirmation */}
+              {files.amazonForecast && files.forecastType && (
+                <div className="mb-4 p-3 bg-emerald-900/30 border border-emerald-500/50 rounded-lg flex items-center justify-between">
+                  <p className="text-emerald-300 text-sm flex items-center gap-2">
+                    <Check className="w-4 h-4" />
+                    Ready to upload: <span className="font-semibold">{files.forecastType === '7day' ? '7-Day' : files.forecastType === '30day' ? '30-Day' : '60-Day'}</span> forecast ({files.amazonForecast.length} SKUs)
+                  </p>
+                  <button onClick={() => setFiles(p => ({ ...p, forecastType: null }))} className="text-slate-400 hover:text-white text-xs">Change</button>
                 </div>
               )}
               
@@ -7902,7 +8595,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -7920,7 +8613,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-3xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -7945,7 +8638,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -8010,7 +8703,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -8217,7 +8910,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -8243,7 +8936,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -8280,7 +8973,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -8496,7 +9189,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -9189,9 +9882,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       sortedWeeks.forEach(w => {
         const monthKey = w.substring(0, 7);
         if (!monthData[monthKey]) {
+          // Use T12:00:00 to avoid timezone issues
+          const dateForLabel = new Date(monthKey + '-15T12:00:00');
           monthData[monthKey] = {
             key: monthKey,
-            label: new Date(monthKey + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+            label: dateForLabel.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
             source: 'weekly',
             revenue: 0, profit: 0, units: 0, margin: 0,
             amazonRev: 0, shopifyRev: 0, adSpend: 0, roas: 0,
@@ -9293,22 +9988,49 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         units: week.total?.units || 0,
         margin: week.total?.netMargin || 0,
         amazonRev: week.amazon?.revenue || 0,
+        amazonProfit: week.amazon?.netProfit || 0,
+        amazonUnits: week.amazon?.units || 0,
         shopifyRev: week.shopify?.revenue || 0,
+        shopifyProfit: week.shopify?.netProfit || 0,
+        shopifyUnits: week.shopify?.units || 0,
         adSpend: week.total?.adSpend || 0,
         roas: week.total?.roas || 0,
         skuData: [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])],
       };
     });
     
+    // Get daily data (last 30 days)
+    const sortedDays = Object.keys(allDaysData).sort();
+    const dailyData = sortedDays.slice(-30).map(d => {
+      const day = allDaysData[d];
+      return {
+        key: d,
+        label: new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        source: 'daily',
+        revenue: day.total?.revenue || 0,
+        profit: day.total?.netProfit || 0,
+        units: day.total?.units || 0,
+        margin: day.total?.netMargin || 0,
+        amazonRev: day.amazon?.revenue || 0,
+        amazonProfit: day.amazon?.netProfit || 0,
+        amazonUnits: day.amazon?.units || 0,
+        shopifyRev: day.shopify?.revenue || 0,
+        shopifyProfit: day.shopify?.netProfit || 0,
+        shopifyUnits: day.shopify?.units || 0,
+        adSpend: day.total?.adSpend || 0,
+        roas: day.total?.roas || 0,
+        skuData: [...(day.amazon?.skuData || []), ...(day.shopify?.skuData || [])],
+      };
+    });
+    
     const monthlyTrends = getMonthlyTrends();
     const yearlyTrends = getYearlyTrends();
     
-    // Debug: check for duplicates
-    console.log('Monthly trends:', monthlyTrends.map(([k, v]) => `${k}: ${v.label} ($${v.revenue})`));
-    
     // Select data based on active tab with fallbacks
     let currentData = [];
-    if (trendsTab === 'weekly' && weeklyData.length > 0) {
+    if (trendsTab === 'daily' && dailyData.length > 0) {
+      currentData = dailyData;
+    } else if (trendsTab === 'weekly' && weeklyData.length > 0) {
       currentData = weeklyData;
     } else if (trendsTab === 'monthly' && monthlyTrends.length > 0) {
       currentData = monthlyTrends.map(([k, v]) => v);
@@ -9316,7 +10038,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       currentData = yearlyTrends.map(([k, v]) => v);
     } else {
       // Fallback: use whatever data is available
-      if (monthlyTrends.length > 0) {
+      if (dailyData.length > 0) {
+        currentData = dailyData;
+      } else if (monthlyTrends.length > 0) {
         currentData = monthlyTrends.map(([k, v]) => v);
       } else if (weeklyData.length > 0) {
         currentData = weeklyData;
@@ -9388,12 +10112,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const decliningSkus = skuTrends.filter(s => s.trend < -10).slice(0, 8);
     const improvingSkus = skuTrends.filter(s => s.trend > 10).sort((a, b) => b.trend - a.trend).slice(0, 8);
     
-    const periodLabel = trendsTab === 'weekly' ? 'Week' : trendsTab === 'monthly' ? 'Month' : 'Year';
+    const periodLabel = trendsTab === 'daily' ? 'Day' : trendsTab === 'weekly' ? 'Week' : trendsTab === 'monthly' ? 'Month' : 'Year';
     const dataAvailable = currentData.length > 0;
+    
+    // Apply channel filter to data
+    const getFilteredValue = (d, field) => {
+      if (trendsChannel === 'amazon') {
+        if (field === 'revenue') return d.amazonRev || 0;
+        if (field === 'profit') return d.amazonProfit || 0;
+        if (field === 'units') return d.amazonUnits || 0;
+      } else if (trendsChannel === 'shopify') {
+        if (field === 'revenue') return d.shopifyRev || 0;
+        if (field === 'profit') return d.shopifyProfit || 0;
+        if (field === 'units') return d.shopifyUnits || 0;
+      }
+      return d[field] || 0;
+    };
 
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -9403,7 +10141,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           </div>
           
           {/* Time Period Tabs */}
-          <div className="flex gap-2 mb-6">
+          <div className="flex flex-wrap gap-2 mb-4">
+            <button 
+              onClick={() => setTrendsTab('daily')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'daily' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              🕐 Daily ({sortedDays.length})
+            </button>
             <button 
               onClick={() => setTrendsTab('weekly')}
               className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'weekly' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
@@ -9424,32 +10168,87 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             </button>
           </div>
           
+          {/* Channel Filter */}
+          <div className="flex gap-2 mb-6">
+            <span className="text-slate-400 text-sm self-center mr-2">Channel:</span>
+            <button 
+              onClick={() => setTrendsChannel('combined')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsChannel === 'combined' ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              All Channels
+            </button>
+            <button 
+              onClick={() => setTrendsChannel('amazon')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsChannel === 'amazon' ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              🛒 Amazon
+            </button>
+            <button 
+              onClick={() => setTrendsChannel('shopify')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsChannel === 'shopify' ? 'bg-green-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              🛍️ Shopify
+            </button>
+          </div>
+          
           {!dataAvailable ? (
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-12 text-center">
               <Database className="w-16 h-16 text-slate-600 mx-auto mb-4" />
               <h3 className="text-xl font-semibold text-white mb-2">No {periodLabel} Data Available</h3>
-              <p className="text-slate-400">Upload {trendsTab} data to see trends</p>
+              <p className="text-slate-400 mb-4">Upload {trendsTab} data to see trends</p>
+              {trendsTab === 'daily' && (
+                <button onClick={() => { setUploadTab('daily'); setView('upload'); }} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white">
+                  Upload Daily Data
+                </button>
+              )}
             </div>
           ) : (
             <>
+              {/* Channel indicator */}
+              {trendsChannel !== 'combined' && (
+                <div className={`mb-4 px-4 py-2 rounded-lg inline-flex items-center gap-2 ${trendsChannel === 'amazon' ? 'bg-orange-900/30 border border-orange-500/30 text-orange-300' : 'bg-green-900/30 border border-green-500/30 text-green-300'}`}>
+                  <span className="text-sm">Showing {trendsChannel === 'amazon' ? 'Amazon' : 'Shopify'} data only</span>
+                  <button onClick={() => setTrendsChannel('combined')} className="text-xs underline opacity-70 hover:opacity-100">Show all</button>
+                </div>
+              )}
+              
               {/* Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                   <p className="text-slate-400 text-sm mb-1">Revenue (Latest {periodLabel})</p>
-                  <p className="text-2xl font-bold text-white">{formatCurrency(latestPeriod?.revenue)}</p>
+                  <p className="text-2xl font-bold text-white">{formatCurrency(getFilteredValue(latestPeriod || {}, 'revenue'))}</p>
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-slate-500 text-xs">vs previous</span>
-                    <ChangeIndicator current={latestPeriod?.revenue} previous={prevPeriod?.revenue} />
+                    <ChangeIndicator current={getFilteredValue(latestPeriod || {}, 'revenue')} previous={getFilteredValue(prevPeriod || {}, 'revenue')} />
                   </div>
                 </div>
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                   <p className="text-slate-400 text-sm mb-1">Net Profit</p>
-                  <p className={`text-2xl font-bold ${(latestPeriod?.profit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(latestPeriod?.profit)}</p>
+                  <p className={`text-2xl font-bold ${(getFilteredValue(latestPeriod || {}, 'profit')) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(getFilteredValue(latestPeriod || {}, 'profit'))}</p>
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-slate-500 text-xs">vs previous</span>
-                    <ChangeIndicator current={latestPeriod?.profit} previous={prevPeriod?.profit} />
+                    <ChangeIndicator current={getFilteredValue(latestPeriod || {}, 'profit')} previous={getFilteredValue(prevPeriod || {}, 'profit')} />
                   </div>
                 </div>
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                  <p className="text-slate-400 text-sm mb-1">Units Sold</p>
+                  <p className="text-2xl font-bold text-white">{formatNumber(getFilteredValue(latestPeriod || {}, 'units'))}</p>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-slate-500 text-xs">vs previous</span>
+                    <ChangeIndicator current={getFilteredValue(latestPeriod || {}, 'units')} previous={getFilteredValue(prevPeriod || {}, 'units')} />
+                  </div>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                  <p className="text-slate-400 text-sm mb-1">Profit Margin</p>
+                  <p className={`text-2xl font-bold ${(latestPeriod?.margin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(latestPeriod?.margin)}</p>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-slate-500 text-xs">vs previous</span>
+                    {prevPeriod && <span className={`text-sm ${(latestPeriod?.margin - prevPeriod?.margin) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {(latestPeriod?.margin - prevPeriod?.margin) >= 0 ? '+' : ''}{(latestPeriod?.margin - prevPeriod?.margin).toFixed(1)}pt
+                    </span>}
+                  </div>
+                </div>
+              </div>
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                   <p className="text-slate-400 text-sm mb-1">Units Sold</p>
                   <p className="text-2xl font-bold text-white">{formatNumber(latestPeriod?.units)}</p>
@@ -9824,7 +10623,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -10286,7 +11085,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     if (!hasWeeklyData && !hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -10313,7 +11112,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     if (!hasWeeklyData && hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+          <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -10384,7 +11183,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -10931,7 +11730,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -11336,7 +12135,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white">Analytics & Forecasting</h1>
@@ -12027,7 +12826,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -12398,7 +13197,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -12934,7 +13733,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -13308,7 +14107,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal />
+        <div className="max-w-4xl mx-auto"><Toast /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
@@ -13580,13 +14379,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             <div className="mt-4 p-3 bg-slate-900/50 rounded-lg">
               <p className="text-slate-400 text-xs mb-2">Backup includes:</p>
               <div className="grid grid-cols-2 gap-1 text-xs">
+                <span className="text-slate-500">• {Object.keys(allDaysData).length} days of daily data</span>
                 <span className="text-slate-500">• {Object.keys(allWeeksData).length} weeks of sales data</span>
                 <span className="text-slate-500">• {Object.keys(allPeriodsData).length} period reports</span>
                 <span className="text-slate-500">• {Object.keys(invHistory).length} inventory snapshots</span>
                 <span className="text-slate-500">• {Object.keys(savedCogs).length} COGS entries</span>
                 <span className="text-slate-500">• {Object.keys(amazonForecasts).length} Amazon forecasts</span>
                 <span className="text-slate-500">• {invoices.length} invoices/bills</span>
-                <span className="text-slate-500">• {Object.keys(weekNotes).length} week notes</span>
                 <span className="text-slate-500">• All settings & goals</span>
               </div>
             </div>
@@ -13594,7 +14393,38 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             {/* Delete Individual Data */}
             <div className="mt-6 pt-6 border-t border-slate-700">
               <h4 className="text-white font-medium mb-3 flex items-center gap-2"><Trash2 className="w-4 h-4 text-rose-400" />Delete Individual Records</h4>
-              <p className="text-slate-400 text-sm mb-4">Remove specific weeks or periods from your data.</p>
+              <p className="text-slate-400 text-sm mb-4">Remove specific days, weeks or periods from your data.</p>
+              
+              {/* Daily Data */}
+              {Object.keys(allDaysData).length > 0 && (
+                <div className="mb-4">
+                  <p className="text-slate-300 text-sm mb-2">Daily Data ({Object.keys(allDaysData).length} days)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.keys(allDaysData).sort().reverse().slice(0, 14).map(dayKey => (
+                      <div key={dayKey} className="flex items-center gap-1 bg-cyan-900/30 border border-cyan-500/30 rounded-lg px-2 py-1">
+                        <span className="text-cyan-300 text-xs">{new Date(dayKey + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Delete ${dayKey}? This cannot be undone.`)) {
+                              setAllDaysData(prev => {
+                                const updated = { ...prev };
+                                delete updated[dayKey];
+                                lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated));
+                                return updated;
+                              });
+                              setToast({ message: 'Day deleted', type: 'success' });
+                            }
+                          }}
+                          className="text-rose-400 hover:text-rose-300 p-0.5"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                    {Object.keys(allDaysData).length > 14 && <span className="text-slate-500 text-xs self-center">+{Object.keys(allDaysData).length - 14} more</span>}
+                  </div>
+                </div>
+              )}
               
               {/* Weekly Data */}
               {Object.keys(allWeeksData).length > 0 && (
@@ -13612,7 +14442,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                 delete updated[weekKey];
                                 return updated;
                               });
-                              toast('Week deleted', 'success');
+                              setToast({ message: 'Week deleted', type: 'success' });
                             }
                           }}
                           className="text-rose-400 hover:text-rose-300 p-0.5"
