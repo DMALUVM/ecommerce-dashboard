@@ -10478,62 +10478,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             </div>
           </div>
           
-          {/* Cost Per Order Trend */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">Average Cost Per Order Trend</h3>
-            {(() => {
-              // Only show weeks/months that have avgCostPerOrder > 0
-              const dataToShow = (timeView === 'weekly' ? weeklyData : months)
-                .filter(d => d.avgCostPerOrder > 0)
-                .slice(-12);
-              
-              if (dataToShow.length === 0) {
-                return (
-                  <div className="h-40 flex items-center justify-center text-slate-500">
-                    <div className="text-center">
-                      <Truck className="w-10 h-10 mx-auto mb-2 opacity-50" />
-                      <p>No cost per order data available</p>
-                      <p className="text-xs mt-1">3PL data needs order count to calculate avg cost</p>
-                    </div>
-                  </div>
-                );
-              }
-              
-              const maxAvg = Math.max(...dataToShow.map(x => x.avgCostPerOrder || 0), 1);
-              
-              return (
-                <>
-                  <div className="flex items-end gap-2 h-40">
-                    {dataToShow.map((d) => {
-                      const height = maxAvg > 0 ? (d.avgCostPerOrder / maxAvg) * 100 : 0;
-                      const label = timeView === 'weekly' 
-                        ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                        : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-                      const avgCost = d.avgCostPerOrder || 0;
-                      const color = avgCost <= 10 ? 'bg-emerald-500' : avgCost <= 15 ? 'bg-amber-500' : 'bg-rose-500';
-                      return (
-                        <div key={timeView === 'weekly' ? d.week : d.month} className="flex-1 flex flex-col items-center group relative" style={{ maxWidth: '80px' }}>
-                          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                            {label}: {formatCurrency(avgCost)}/order<br/>
-                            <span className="text-slate-400">Total: {formatCurrency(d.totalCost)} | Orders: {d.orderCount}</span>
-                          </div>
-                          <div className={`w-full rounded-t transition-all hover:opacity-80 ${color}`} style={{ height: `${Math.max(height, 5)}%` }} />
-                          <span className="text-[10px] text-slate-500 mt-1 truncate w-full text-center">{label}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="flex gap-4 mt-3 text-xs justify-center">
-                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded" />Great ($10 or less)</span>
-                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded" />OK ($10-15)</span>
-                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-500 rounded" />High ($15+)</span>
-                  </div>
-                  <p className="text-slate-500 text-xs text-center mt-2">{dataToShow.length} {timeView === 'weekly' ? 'weeks' : 'months'} with data</p>
-                </>
-              );
-            })()}
-          </div>
-          
           {/* 3PL Trend Charts */}
           {(() => {
             const chartData = (timeView === 'weekly' ? weeklyData : months).slice(-12);
@@ -10543,89 +10487,107 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
               : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
             
-            const TrendChart = ({ data, getValue, title, format = 'currency', colorFn = null, goodDirection = 'down' }) => {
+            const TrendChart = ({ data, getValue, title, format = 'currency', colorFn = null, goodDirection = 'down', icon }) => {
               const values = data.map(d => getValue(d) || 0);
               const maxVal = Math.max(...values, 1);
-              const minVal = Math.min(...values);
+              const avgVal = values.reduce((a, b) => a + b, 0) / values.length;
               const latestVal = values[values.length - 1];
               const prevVal = values[values.length - 2];
               const change = prevVal > 0 ? ((latestVal - prevVal) / prevVal) * 100 : 0;
               const isGood = goodDirection === 'down' ? change <= 0 : change >= 0;
               
               return (
-                <div className="bg-slate-900/50 rounded-lg p-3">
-                  <div className="flex justify-between items-start mb-2">
-                    <p className="text-slate-400 text-xs">{title}</p>
-                    <div className="text-right">
-                      <p className="text-white font-semibold text-sm">
-                        {format === 'currency' ? formatCurrency(latestVal) : format === 'percent' ? `${latestVal.toFixed(1)}%` : latestVal.toFixed(1)}
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <p className="text-slate-400 text-sm">{title}</p>
+                      <p className="text-white font-bold text-xl">
+                        {format === 'currency' ? formatCurrency(latestVal) : format === 'percent' ? `${latestVal.toFixed(1)}%` : latestVal.toFixed(0)}
                       </p>
+                    </div>
+                    <div className="text-right">
                       {change !== 0 && (
-                        <p className={`text-xs ${isGood ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        <div className={`px-2 py-1 rounded text-xs font-medium ${isGood ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
                           {change > 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}%
-                        </p>
+                        </div>
                       )}
+                      <p className="text-slate-500 text-xs mt-1">vs last {timeView === 'weekly' ? 'week' : 'month'}</p>
                     </div>
                   </div>
-                  <div className="flex items-end gap-0.5 h-16">
+                  <div className="flex items-end gap-1 h-20">
                     {data.map((d, i) => {
                       const val = getValue(d) || 0;
                       const height = maxVal > 0 ? (val / maxVal) * 100 : 0;
+                      const isLatest = i === data.length - 1;
                       const defaultColor = 'bg-slate-500';
                       const color = colorFn ? colorFn(val) : defaultColor;
                       return (
                         <div key={i} className="flex-1 flex flex-col items-center group relative">
-                          <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-700 text-white text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap z-10">
-                            {getLabel(d)}: {format === 'currency' ? formatCurrency(val) : format === 'percent' ? `${val.toFixed(1)}%` : val.toFixed(0)}
+                          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-900 border border-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 shadow-lg">
+                            <p className="font-medium">{getLabel(d)}</p>
+                            <p className="text-slate-300">{format === 'currency' ? formatCurrency(val) : format === 'percent' ? `${val.toFixed(1)}%` : val.toFixed(0)}</p>
                           </div>
-                          <div className={`w-full rounded-t transition-all hover:opacity-80 ${color}`} style={{ height: `${Math.max(height, 3)}%` }} />
+                          <div 
+                            className={`w-full rounded-t transition-all hover:opacity-80 ${isLatest ? color : color + '/60'}`} 
+                            style={{ height: `${Math.max(height, 4)}%` }} 
+                          />
                         </div>
                       );
                     })}
+                  </div>
+                  <div className="flex justify-between text-[10px] text-slate-500 mt-1 px-1">
+                    <span>{getLabel(data[0])}</span>
+                    <span>{getLabel(data[data.length - 1])}</span>
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-slate-700/50 text-xs text-slate-500">
+                    Avg: {format === 'currency' ? formatCurrency(avgVal) : format === 'percent' ? `${avgVal.toFixed(1)}%` : avgVal.toFixed(0)}
                   </div>
                 </div>
               );
             };
             
             return (
-              <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 mb-6">
-                <TrendChart 
-                  data={chartData} 
-                  getValue={d => d.totalCost} 
-                  title="Total 3PL Cost"
-                  colorFn={v => 'bg-violet-500'}
-                />
-                <TrendChart 
-                  data={chartData} 
-                  getValue={d => d.avgCostPerOrder} 
-                  title="Avg Cost/Order"
-                  colorFn={v => v <= 10 ? 'bg-emerald-500' : v <= 15 ? 'bg-amber-500' : 'bg-rose-500'}
-                />
-                <TrendChart 
-                  data={chartData} 
-                  getValue={d => d.shipping} 
-                  title="Shipping"
-                  colorFn={v => 'bg-blue-500'}
-                />
-                <TrendChart 
-                  data={chartData} 
-                  getValue={d => d.pickFees} 
-                  title="Pick Fees"
-                  colorFn={v => 'bg-emerald-500'}
-                />
-                <TrendChart 
-                  data={chartData} 
-                  getValue={d => d.storage} 
-                  title="Storage"
-                  colorFn={v => 'bg-amber-500'}
-                />
-                <TrendChart 
-                  data={chartData} 
-                  getValue={d => d.revenue > 0 ? (d.totalCost / d.revenue) * 100 : 0} 
-                  title="% of Revenue"
-                  format="percent"
-                  colorFn={v => v <= 10 ? 'bg-emerald-500' : v <= 15 ? 'bg-amber-500' : 'bg-rose-500'}
-                />
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-white mb-4">📈 Cost Trends</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <TrendChart 
+                    data={chartData} 
+                    getValue={d => d.totalCost} 
+                    title="Total 3PL Cost"
+                    colorFn={v => 'bg-violet-500'}
+                  />
+                  <TrendChart 
+                    data={chartData} 
+                    getValue={d => d.avgCostPerOrder} 
+                    title="Avg Cost Per Order"
+                    colorFn={v => v <= 10 ? 'bg-emerald-500' : v <= 15 ? 'bg-amber-500' : 'bg-rose-500'}
+                  />
+                  <TrendChart 
+                    data={chartData} 
+                    getValue={d => d.revenue > 0 ? (d.totalCost / d.revenue) * 100 : 0} 
+                    title="3PL as % of Revenue"
+                    format="percent"
+                    colorFn={v => v <= 10 ? 'bg-emerald-500' : v <= 15 ? 'bg-amber-500' : 'bg-rose-500'}
+                  />
+                  <TrendChart 
+                    data={chartData} 
+                    getValue={d => d.shipping} 
+                    title="Shipping Costs"
+                    colorFn={v => 'bg-blue-500'}
+                  />
+                  <TrendChart 
+                    data={chartData} 
+                    getValue={d => d.pickFees} 
+                    title="Pick Fees"
+                    colorFn={v => 'bg-cyan-500'}
+                  />
+                  <TrendChart 
+                    data={chartData} 
+                    getValue={d => d.storage} 
+                    title="Storage Costs"
+                    colorFn={v => 'bg-amber-500'}
+                  />
+                </div>
               </div>
             );
           })()}
@@ -11840,24 +11802,64 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
 
   // ==================== PROFITABILITY VIEW ====================
   if (view === 'profitability') {
-    const sortedWeeks = Object.keys(allWeeksData).sort();
-    const recentWeeks = sortedWeeks.slice(-4);
-    const olderWeeks = sortedWeeks.slice(-8, -4);
+    // Use trendsTab for period selection (reusing existing state)
+    const profitPeriod = trendsTab; // 'weekly' | 'monthly' | 'yearly'
     
-    // Aggregate data for recent 4 weeks
+    const sortedWeeks = Object.keys(allWeeksData).sort();
+    const sortedPeriods = Object.keys(allPeriodsData).sort();
+    
+    // Categorize periods
+    const monthlyPeriods = sortedPeriods.filter(p => 
+      /^(january|february|march|april|may|june|july|august|september|october|november|december)/i.test(p) ||
+      /^\d{4}-\d{2}$/.test(p)
+    );
+    const quarterlyPeriods = sortedPeriods.filter(p => /q[1-4]/i.test(p));
+    const yearlyPeriods = sortedPeriods.filter(p => /^\d{4}$/.test(p));
+    
+    // Get data based on selected period type
+    let recentWeeks = [];
+    let olderWeeks = [];
+    let periodLabel = '';
+    
+    if (profitPeriod === 'monthly' && monthlyPeriods.length > 0) {
+      // Use monthly period data
+      recentWeeks = monthlyPeriods.slice(-4);
+      olderWeeks = monthlyPeriods.slice(-8, -4);
+      periodLabel = `Last ${recentWeeks.length} months`;
+    } else if (profitPeriod === 'yearly' && (yearlyPeriods.length > 0 || quarterlyPeriods.length > 0)) {
+      recentWeeks = yearlyPeriods.length > 0 ? yearlyPeriods : quarterlyPeriods.slice(-4);
+      periodLabel = yearlyPeriods.length > 0 ? `${recentWeeks.length} year(s)` : `${recentWeeks.length} quarters`;
+    } else {
+      // Default to weekly
+      recentWeeks = sortedWeeks.slice(-4);
+      olderWeeks = sortedWeeks.slice(-8, -4);
+      periodLabel = recentWeeks.length > 0 
+        ? `Last ${recentWeeks.length} weeks: ${new Date(recentWeeks[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(recentWeeks[recentWeeks.length-1] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+        : 'No data';
+    }
+    
+    // Helper to get data from either weekly or period source
+    const getData = (key) => {
+      if (allWeeksData[key]) return allWeeksData[key];
+      if (allPeriodsData[key]) return allPeriodsData[key];
+      return null;
+    };
+    
+    // Aggregate data for recent period
     const totals = { revenue: 0, cogs: 0, amazonFees: 0, threeplCosts: 0, adSpend: 0, profit: 0, units: 0, returns: 0 };
     const weeklyBreakdown = [];
     
     recentWeeks.forEach(w => {
-      const week = allWeeksData[w];
-      const rev = week.total?.revenue || 0;
-      const cogs = week.total?.cogs || 0;
-      const amzFees = week.amazon?.fees || 0;
-      const threepl = week.shopify?.threeplCosts || 0;
-      const ads = week.total?.adSpend || 0;
-      const profit = week.total?.netProfit || 0;
-      const units = week.total?.units || 0;
-      const returns = week.amazon?.returns || 0;
+      const data = getData(w);
+      if (!data) return;
+      const rev = data.total?.revenue || 0;
+      const cogs = data.total?.cogs || 0;
+      const amzFees = data.amazon?.fees || 0;
+      const threepl = data.shopify?.threeplCosts || 0;
+      const ads = data.total?.adSpend || 0;
+      const profit = data.total?.netProfit || 0;
+      const units = data.total?.units || 0;
+      const returns = data.amazon?.returns || 0;
       
       totals.revenue += rev;
       totals.cogs += cogs;
@@ -11874,11 +11876,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     // Calculate prior period for comparison
     const priorTotals = { revenue: 0, profit: 0, cogs: 0, adSpend: 0 };
     olderWeeks.forEach(w => {
-      const week = allWeeksData[w];
-      priorTotals.revenue += week.total?.revenue || 0;
-      priorTotals.profit += week.total?.netProfit || 0;
-      priorTotals.cogs += week.total?.cogs || 0;
-      priorTotals.adSpend += week.total?.adSpend || 0;
+      const data = getData(w);
+      if (!data) return;
+      priorTotals.revenue += data.total?.revenue || 0;
+      priorTotals.profit += data.total?.netProfit || 0;
+      priorTotals.cogs += data.total?.cogs || 0;
+      priorTotals.adSpend += data.total?.adSpend || 0;
     });
     
     // Calculate percentages
@@ -11975,7 +11978,29 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">💰 Profitability Deep Dive</h1>
-            <p className="text-slate-400">Understand where your money goes (Last {recentWeeks.length} weeks: {recentWeeks.length > 0 ? new Date(recentWeeks[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''} - {recentWeeks.length > 0 ? new Date(recentWeeks[recentWeeks.length-1] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''})</p>
+            <p className="text-slate-400">Understand where your money goes ({periodLabel})</p>
+          </div>
+          
+          {/* Time Period Tabs */}
+          <div className="flex gap-2 mb-6">
+            <button 
+              onClick={() => setTrendsTab('weekly')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'weekly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              📅 Weekly ({sortedWeeks.length})
+            </button>
+            <button 
+              onClick={() => setTrendsTab('monthly')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'monthly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              📊 Monthly ({monthlyPeriods.length})
+            </button>
+            <button 
+              onClick={() => setTrendsTab('yearly')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'yearly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              📆 Yearly ({yearlyPeriods.length || quarterlyPeriods.length})
+            </button>
           </div>
           
           {/* Key Insights Alert */}
@@ -12003,20 +12028,37 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           {/* Profit Waterfall */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
             <h3 className="text-lg font-semibold text-white mb-4">Profit Waterfall</h3>
-            <div className="flex items-end gap-2 h-64 mb-4">
-              {waterfall.map((item, i) => {
-                const height = maxVal > 0 ? (Math.abs(item.value) / maxVal) * 100 : 0;
-                return (
-                  <div key={item.label} className="flex-1 flex flex-col items-center group relative">
-                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
-                      {item.label}: {formatCurrency(item.value)}
+            <div className="relative h-72">
+              <div className="flex items-end justify-around h-56 px-4">
+                {waterfall.map((item, i) => {
+                  const height = maxVal > 0 ? (Math.abs(item.value) / maxVal) * 100 : 0;
+                  return (
+                    <div key={item.label} className="flex-1 flex flex-col items-center group relative mx-1">
+                      <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-900 border border-slate-600 text-white text-xs px-3 py-2 rounded-lg whitespace-nowrap z-20 shadow-xl">
+                        <p className="font-semibold">{item.label}</p>
+                        <p className={item.value >= 0 && item.label !== 'COGS' && item.label !== 'Amazon Fees' && item.label !== '3PL Costs' && item.label !== 'Ad Spend' ? 'text-emerald-400' : 'text-rose-400'}>
+                          {formatCurrency(item.value)}
+                        </p>
+                        {totals.revenue > 0 && <p className="text-slate-400 text-[10px]">{((Math.abs(item.value) / totals.revenue) * 100).toFixed(1)}% of revenue</p>}
+                      </div>
+                      <div 
+                        className={`w-full max-w-[70px] rounded-t ${item.color} transition-all hover:opacity-80 shadow-lg`}
+                        style={{ height: `${Math.max(height, 4)}%` }}
+                      />
                     </div>
-                    <div className={`w-full rounded-t ${item.color} transition-all hover:opacity-80`} style={{ height: `${Math.max(height, 3)}%` }} />
-                    <span className="text-xs text-slate-400 mt-2 text-center">{item.label}</span>
-                    <span className={`text-sm font-semibold ${item.value >= 0 ? 'text-white' : 'text-rose-400'}`}>{formatCurrency(item.value)}</span>
+                  );
+                })}
+              </div>
+              <div className="flex justify-around px-4 mt-3">
+                {waterfall.map(item => (
+                  <div key={item.label + '-label'} className="flex-1 text-center mx-1">
+                    <p className="text-slate-400 text-xs truncate">{item.label}</p>
+                    <p className={`text-sm font-bold ${item.value >= 0 && (item.label === 'Revenue' || item.label === 'Net Profit') ? 'text-white' : 'text-rose-400'}`}>
+                      {item.label === 'Revenue' ? '' : item.label === 'Net Profit' && item.value >= 0 ? '' : '-'}{formatCurrency(Math.abs(item.value))}
+                    </p>
                   </div>
-                );
-              })}
+                ))}
+              </div>
             </div>
           </div>
           
