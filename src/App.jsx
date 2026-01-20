@@ -629,7 +629,7 @@ export default function Dashboard() {
   const [threeplCustomStart, setThreeplCustomStart] = useState('');
   const [threeplCustomEnd, setThreeplCustomEnd] = useState('');
   const [uploadTab, setUploadTab] = useState('weekly'); // For upload view tabs: 'daily' | 'weekly' | 'period'
-  const [dashboardRange, setDashboardRange] = useState('month'); // 'week' | 'month' | 'quarter' | 'year'
+  const [dashboardRange, setDashboardRange] = useState('month'); // 'yesterday' | 'week' | 'month' | 'quarter' | 'year'
   const [trendsTab, setTrendsTab] = useState('monthly'); // 'daily' | 'weekly' | 'monthly' | 'yearly' for trends view
   const [trendsChannel, setTrendsChannel] = useState('combined'); // 'amazon' | 'shopify' | 'combined' for trends filtering
   const [dailyFiles, setDailyFiles] = useState({ amazon: null, shopify: null }); // Daily upload files
@@ -3967,7 +3967,7 @@ const savePeriods = async (d) => {
     const SortHeader = ({ field, label, align = 'right' }) => (
       <th 
         onClick={() => handleSort(field)}
-        className={`text-${align} text-xs font-medium text-slate-400 uppercase px-2 py-2 cursor-pointer hover:text-white transition-colors ${skuSort.field === field ? 'text-violet-400' : ''}`}
+        className={`text-${align} text-xs font-medium text-slate-400 uppercase px-2 py-2 cursor-pointer hover:text-white transition-all ${skuSort.field === field ? 'text-violet-400' : ''}`}
       >
         {label} {skuSort.field === field && (skuSort.dir === 'desc' ? '↓' : '↑')}
       </th>
@@ -5474,7 +5474,7 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
             
             {/* PDF Upload */}
             <div className="mb-4">
-              <label className={`flex items-center justify-center gap-2 p-3 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${processingPdf ? 'border-violet-500 bg-violet-950/30' : 'border-slate-600 hover:border-slate-500'}`}>
+              <label className={`flex items-center justify-center gap-2 p-3 border-2 border-dashed rounded-xl cursor-pointer transition-all ${processingPdf ? 'border-violet-500 bg-violet-950/30' : 'border-slate-600 hover:border-slate-500'}`}>
                 <input type="file" accept=".pdf" onChange={(e) => e.target.files[0] && handlePdfUpload(e.target.files[0])} className="hidden" disabled={processingPdf} />
                 {processingPdf ? (
                   <>
@@ -7061,8 +7061,38 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     let current = { revenue: 0, profit: 0, units: 0, adSpend: 0, cogs: 0, orders: 0 };
     let previous = { revenue: 0, profit: 0 };
     let usingPeriodData = false;
+    let usingDailyData = false;
     
-    if (dashboardRange === 'year' && allPeriodsData[currentYear]) {
+    // Handle "yesterday" - use daily data
+    if (dashboardRange === 'yesterday') {
+      const sortedDays = Object.keys(allDaysData).sort();
+      if (sortedDays.length > 0) {
+        const yesterday = sortedDays[sortedDays.length - 1];
+        const dayData = allDaysData[yesterday];
+        current = {
+          revenue: dayData.total?.revenue || 0,
+          profit: dayData.total?.netProfit || 0,
+          units: dayData.total?.units || 0,
+          adSpend: dayData.total?.adSpend || 0,
+          cogs: dayData.total?.cogs || 0,
+          orders: (dayData.amazon?.units || 0) + (dayData.shopify?.units || 0),
+          date: yesterday,
+          amazonRev: dayData.amazon?.revenue || 0,
+          shopifyRev: dayData.shopify?.revenue || 0,
+        };
+        usingDailyData = true;
+        
+        // Compare to day before
+        if (sortedDays.length > 1) {
+          const priorDay = sortedDays[sortedDays.length - 2];
+          const priorData = allDaysData[priorDay];
+          previous = {
+            revenue: priorData.total?.revenue || 0,
+            profit: priorData.total?.netProfit || 0,
+          };
+        }
+      }
+    } else if (dashboardRange === 'year' && allPeriodsData[currentYear]) {
       // Use period data for current year
       const period = allPeriodsData[currentYear];
       current = {
@@ -7121,6 +7151,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     
     // Range label
     const rangeLabels = {
+      'yesterday': 'Yesterday',
       'week': 'This Week',
       'month': 'Last 30 Days',
       'quarter': 'Last 90 Days',
@@ -7136,10 +7167,11 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
       sortedWeeks,
       sortedPeriods,
       usingPeriodData,
+      usingDailyData,
       rangeLabel: rangeLabels[dashboardRange] || 'Last 30 Days',
-      comparisonLabel: dashboardRange === 'year' ? `vs ${lastYear}` : 'vs Prior Period'
+      comparisonLabel: dashboardRange === 'yesterday' ? 'vs Prior Day' : dashboardRange === 'year' ? `vs ${lastYear}` : 'vs Prior Period'
     };
-  }, [allWeeksData, allPeriodsData, dashboardRange]);
+  }, [allWeeksData, allPeriodsData, allDaysData, dashboardRange]);
 
   // ==================== AUTH SCREENS (must come after all hooks) ====================
   
@@ -7247,8 +7279,8 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
   
   // ==================== DASHBOARD VIEW ====================
   if (view === 'dashboard') {
-    const hasData = Object.keys(allWeeksData).length > 0 || Object.keys(allPeriodsData).length > 0;
-    const { current, revenueChange, profitChange, rangeWeeks, sortedWeeks, sortedPeriods, usingPeriodData, rangeLabel, comparisonLabel } = dashboardMetrics;
+    const hasData = Object.keys(allWeeksData).length > 0 || Object.keys(allPeriodsData).length > 0 || Object.keys(allDaysData).length > 0;
+    const { current, revenueChange, profitChange, rangeWeeks, sortedWeeks, sortedPeriods, usingPeriodData, usingDailyData, rangeLabel, comparisonLabel } = dashboardMetrics;
     
     // Get alerts
     const alerts = [];
@@ -7687,6 +7719,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               <div className="flex flex-wrap items-center gap-2 mb-4">
                 <span className="text-slate-400 text-sm mr-2">View:</span>
                 {[
+                  { key: 'yesterday', label: 'Yesterday' },
                   { key: 'week', label: 'Week' },
                   { key: 'month', label: 'Month' },
                   { key: 'quarter', label: 'Quarter' },
@@ -7707,8 +7740,51 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                 {usingPeriodData && (
                   <span className="text-xs text-teal-400 ml-2">(from period data)</span>
                 )}
+                {usingDailyData && (
+                  <span className="text-xs text-cyan-400 ml-2">(from daily data)</span>
+                )}
               </div>
               
+              {/* No Daily Data Message */}
+              {dashboardRange === 'yesterday' && !usingDailyData && (
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-8 mb-6 text-center">
+                  <Clock className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                  <h3 className="text-lg font-semibold text-white mb-2">No Daily Data Available</h3>
+                  <p className="text-slate-400 mb-4">Upload yesterday's sales data to see daily metrics</p>
+                  <button 
+                    onClick={() => { setUploadTab('daily'); setView('upload'); }}
+                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-medium"
+                  >
+                    Upload Daily Data
+                  </button>
+                </div>
+              )}
+              
+              {/* Daily Channel Breakdown (only for yesterday view) */}
+              {dashboardRange === 'yesterday' && usingDailyData && current.date && (
+                <div className="bg-slate-800/50 rounded-2xl border border-cyan-500/30 p-5 mb-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-semibold text-cyan-400 uppercase flex items-center gap-2">
+                      <Clock className="w-4 h-4" />
+                      {new Date(current.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                    </h3>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-orange-900/20 rounded-xl border border-orange-500/30 p-4">
+                      <p className="text-orange-400 text-sm font-medium mb-1">🛒 Amazon</p>
+                      <p className="text-xl font-bold text-white">{formatCurrency(current.amazonRev || 0)}</p>
+                      <p className="text-slate-500 text-xs mt-1">{current.revenue > 0 ? ((current.amazonRev / current.revenue) * 100).toFixed(0) : 0}% of total</p>
+                    </div>
+                    <div className="bg-green-900/20 rounded-xl border border-green-500/30 p-4">
+                      <p className="text-green-400 text-sm font-medium mb-1">🛍️ Shopify</p>
+                      <p className="text-xl font-bold text-white">{formatCurrency(current.shopifyRev || 0)}</p>
+                      <p className="text-slate-500 text-xs mt-1">{current.revenue > 0 ? ((current.shopifyRev / current.revenue) * 100).toFixed(0) : 0}% of total</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {(dashboardRange !== 'yesterday' || usingDailyData) && (
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
                 <div className="bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 rounded-2xl border border-emerald-500/30 p-5">
                   <p className="text-emerald-400 text-sm font-medium mb-1">Revenue</p>
@@ -7745,7 +7821,9 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     {current.revenue > 0 ? ((current.profit / current.revenue) * 100).toFixed(1) : 0}%
                   </p>
                 </div>
+                </div>
               </div>
+              )}
               
               {/* Goals Progress */}
               {(goals.weeklyRevenue > 0 || goals.weeklyProfit > 0 || goals.monthlyRevenue > 0 || goals.monthlyProfit > 0) && sortedWeeks.length > 0 ? (
@@ -7848,7 +7926,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                                 {isSelected && <Check className="w-4 h-4 text-white" />}
                               </button>
                             )}
-                            <button onClick={() => { if (!compareMode) { setSelectedWeek(w); setView('weekly'); }}} className={`flex-1 flex items-center justify-between p-3 bg-slate-900/50 hover:bg-slate-700/50 rounded-xl transition-colors ${isSelected ? 'ring-2 ring-violet-500' : ''}`}>
+                            <button onClick={() => { if (!compareMode) { setSelectedWeek(w); setView('weekly'); }}} className={`flex-1 flex items-center justify-between p-3 bg-slate-900/50 hover:bg-slate-700/50 rounded-xl transition-all ${isSelected ? 'ring-2 ring-violet-500' : ''}`}>
                               <div className="flex items-center gap-3">
                                 <Calendar className="w-5 h-5 text-violet-400" />
                                 <div className="text-left">
@@ -7915,7 +7993,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     {Object.keys(allPeriodsData).sort().reverse().map(p => {
                       const period = allPeriodsData[p];
                       return (
-                        <button key={p} onClick={() => { setSelectedPeriod(p); setView('period-view'); }} className="p-3 bg-slate-900/50 hover:bg-slate-700/50 rounded-xl text-left transition-colors">
+                        <button key={p} onClick={() => { setSelectedPeriod(p); setView('period-view'); }} className="p-3 bg-slate-900/50 hover:bg-slate-700/50 rounded-xl text-left transition-all">
                           <p className="text-white font-medium text-sm">{period.label}</p>
                           <p className="text-emerald-400 font-semibold">{formatCurrency(period.total?.revenue || 0)}</p>
                           <p className={`text-xs ${(period.total?.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(period.total?.netProfit || 0)}</p>
@@ -13549,7 +13627,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             <div className="space-y-4 mb-6">
               <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-xl">
                 <span className="text-white">Nexus Established</span>
-                <button onClick={() => toggleNexus(taxConfigState)} className={`w-12 h-6 rounded-full transition-colors ${config.hasNexus ? 'bg-emerald-500' : 'bg-slate-600'}`}>
+                <button onClick={() => toggleNexus(taxConfigState)} className={`w-12 h-6 rounded-full transition-all ${config.hasNexus ? 'bg-emerald-500' : 'bg-slate-600'}`}>
                   <div className={`w-5 h-5 bg-white rounded-full transition-transform ${config.hasNexus ? 'translate-x-6' : 'translate-x-0.5'}`} />
                 </button>
               </div>
@@ -13911,7 +13989,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       const isOverdue = state.nextDue < now;
                       const isDueSoon = state.nextDue >= now && state.nextDue <= sevenDays;
                       return (
-                        <div key={state.code} className={`flex items-center justify-between p-4 rounded-xl transition-colors ${isOverdue ? 'bg-rose-900/20 border border-rose-500/30' : isDueSoon ? 'bg-amber-900/20 border border-amber-500/30' : 'bg-slate-900/50 hover:bg-slate-700/50'}`}>
+                        <div key={state.code} className={`flex items-center justify-between p-4 rounded-xl transition-all ${isOverdue ? 'bg-rose-900/20 border border-rose-500/30' : isDueSoon ? 'bg-amber-900/20 border border-amber-500/30' : 'bg-slate-900/50 hover:bg-slate-700/50'}`}>
                           <div className="flex items-center gap-4">
                             <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-sm font-bold ${isOverdue ? 'bg-rose-600' : isDueSoon ? 'bg-amber-600' : 'bg-slate-700'}`}>{state.code}</div>
                             <div>
@@ -14186,7 +14264,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     );
     
     const Toggle = ({ checked, onChange }) => (
-      <button onClick={() => onChange(!checked)} className={`w-12 h-6 rounded-full transition-colors ${checked ? 'bg-emerald-500' : 'bg-slate-600'}`}>
+      <button onClick={() => onChange(!checked)} className={`w-12 h-6 rounded-full transition-all ${checked ? 'bg-emerald-500' : 'bg-slate-600'}`}>
         <div className={`w-5 h-5 bg-white rounded-full transition-transform ${checked ? 'translate-x-6' : 'translate-x-0.5'}`} />
       </button>
     );
