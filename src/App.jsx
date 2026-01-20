@@ -627,6 +627,7 @@ export default function Dashboard() {
   const [selectedYear, setSelectedYear] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [toast, setToast] = useState(null); // { message: string, type: 'success' | 'error' }
   const [reprocessPeriod, setReprocessPeriod] = useState(null); // For period reprocessing
   const [threeplTimeView, setThreeplTimeView] = useState('weekly'); // For 3PL analytics view
   const [threeplDateRange, setThreeplDateRange] = useState('all'); // 'week' | '4weeks' | 'month' | 'quarter' | 'year' | 'all' | 'custom'
@@ -3904,7 +3905,33 @@ const savePeriods = async (d) => {
     </div>
   ), [allWeeksData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session]);
 
-  const Toast = () => showSaveConfirm && <div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50"><Check className="w-4 h-4" />Saved!</div>;
+  // Toast notification component
+  const Toast = () => {
+    // Auto-clear toast after 3 seconds
+    useEffect(() => {
+      if (toast) {
+        const timer = setTimeout(() => setToast(null), 3000);
+        return () => clearTimeout(timer);
+      }
+    }, [toast]);
+    
+    if (showSaveConfirm) {
+      return <div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50"><Check className="w-4 h-4" />Saved!</div>;
+    }
+    
+    if (toast) {
+      return (
+        <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 z-50 ${
+          toast.type === 'error' ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
+        }`}>
+          {toast.type === 'error' ? <AlertTriangle className="w-4 h-4" /> : <Check className="w-4 h-4" />}
+          {toast.message}
+        </div>
+      );
+    }
+    
+    return null;
+  };
 
   const CogsManager = () => showCogsManager && (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
