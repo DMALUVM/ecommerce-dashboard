@@ -2965,21 +2965,26 @@ const savePeriods = async (d) => {
       let totalClicks = 0;
       let totalConversions = 0;
       
-      // Detect format based on headers
-      const isGoogleAds = header.includes('date') && (header.includes('cost') || header.includes('spend'));
-      const isMetaAds = header.includes('date') && (header.includes('amount spent') || header.includes('spend') || header.includes('cost'));
+      // Detect format based on headers - support both daily (Date) and monthly (Month) formats
+      const hasDateCol = header.includes('date') || header.includes('month') || header.includes('day');
+      const hasCostCol = header.includes('cost') || header.includes('spend');
+      const isGoogleAds = hasDateCol && hasCostCol;
+      const isMetaAds = hasDateCol && (header.includes('amount spent') || hasCostCol);
       
       if (!isGoogleAds && !isMetaAds) {
-        return { error: 'Could not detect file format. Expected columns: Date and Cost/Spend' };
+        return { error: 'Could not detect file format. Expected columns: Date/Month and Cost/Spend' };
       }
       
       // Parse headers to find all columns
       const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase());
-      const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h.includes('date'));
+      const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h === 'month' || h.includes('date'));
       const costCol = headers.findIndex(h => h === 'cost' || h === 'spend' || h === 'amount spent' || (h.includes('cost') && !h.includes('/')));
       const impressionsCol = headers.findIndex(h => h === 'impressions' || h === 'impr' || h.includes('impression'));
       const cpcCol = headers.findIndex(h => h === 'avg. cpc' || h === 'cpc' || h.includes('cost per click'));
       const cpaCol = headers.findIndex(h => h === 'cost / conv.' || h === 'cpa' || h.includes('cost per') || h.includes('/ conv'));
+      
+      // Detect if this is monthly data
+      const isMonthlyData = headers[dateCol] === 'month';
       
       if (dateCol === -1 || costCol === -1) {
         return { error: `Could not find required columns. Found headers: ${headers.join(', ')}` };
@@ -3006,17 +3011,34 @@ const savePeriods = async (d) => {
         }
         cols.push(current.trim());
         
-        // Parse date - handle formats like "Sun, Dec 21, 2025" or "2025-12-21" or "12/21/2025"
+        // Parse date - handle formats like "Sun, Dec 21, 2025" or "2025-12-21" or "12/21/2025" or "Apr 2024"
         let dateStr = cols[dateCol]?.replace(/"/g, '').trim();
         let parsedDate = null;
+        let isMonthlyRecord = false;
         
-        // Try "Day, Mon DD, YYYY" format (Google Ads)
-        const googleMatch = dateStr.match(/\w+,\s*(\w+)\s+(\d+),\s*(\d{4})/);
-        if (googleMatch) {
-          const monthNames = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
-          const month = monthNames[googleMatch[1].toLowerCase().substring(0, 3)];
+        const monthNames = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+        
+        // Try "Mon YYYY" format (Monthly Google Ads like "Apr 2024")
+        const monthlyMatch = dateStr.match(/^(\w{3})\s+(\d{4})$/);
+        if (monthlyMatch) {
+          const month = monthNames[monthlyMatch[1].toLowerCase()];
           if (month !== undefined) {
-            parsedDate = new Date(parseInt(googleMatch[3]), month, parseInt(googleMatch[2]));
+            // For monthly data, use the last day of the month
+            const year = parseInt(monthlyMatch[2]);
+            // Get last day of the month
+            parsedDate = new Date(year, month + 1, 0); // Day 0 of next month = last day of this month
+            isMonthlyRecord = true;
+          }
+        }
+        
+        // Try "Day, Mon DD, YYYY" format (Daily Google Ads)
+        if (!parsedDate) {
+          const googleMatch = dateStr.match(/\w+,\s*(\w+)\s+(\d+),\s*(\d{4})/);
+          if (googleMatch) {
+            const month = monthNames[googleMatch[1].toLowerCase().substring(0, 3)];
+            if (month !== undefined) {
+              parsedDate = new Date(parseInt(googleMatch[3]), month, parseInt(googleMatch[2]));
+            }
           }
         }
         
@@ -3064,6 +3086,8 @@ const savePeriods = async (d) => {
             cpc,
             cpa,
             conversions,
+            isMonthly: isMonthlyRecord,
+            monthLabel: isMonthlyRecord ? dateStr : null, // Store original month label like "Apr 2024"
           });
           totalSpend += cost;
           totalImpressions += impressions;
@@ -3079,45 +3103,77 @@ const savePeriods = async (d) => {
       // Sort by date
       dailyData.sort((a, b) => a.date.localeCompare(b.date));
       
-      // Aggregate into weeks (ending Sunday)
-      const weeklyMap = {};
-      dailyData.forEach(d => {
-        const date = new Date(d.date + 'T00:00:00');
-        const dayOfWeek = date.getDay(); // 0 = Sunday
-        const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
-        const weekEndDate = new Date(date);
-        weekEndDate.setDate(weekEndDate.getDate() + daysUntilSunday);
-        const weekEnding = weekEndDate.toISOString().split('T')[0];
+      // Check if this is all monthly data
+      const isAllMonthly = dailyData.every(d => d.isMonthly);
+      
+      // For monthly data, create monthly periods instead of weekly
+      let weeklyData = [];
+      let monthlyData = [];
+      
+      if (isAllMonthly) {
+        // Store as monthly periods
+        monthlyData = dailyData.map(d => ({
+          periodLabel: d.monthLabel, // "Apr 2024"
+          date: d.date,
+          spend: d.spend,
+          impressions: d.impressions,
+          clicks: d.clicks,
+          conversions: d.conversions,
+          cpc: d.cpc,
+          cpa: d.cpa,
+          ctr: d.impressions > 0 ? (d.clicks / d.impressions) * 100 : 0,
+        }));
+      } else {
+        // Aggregate into weeks (ending Sunday)
+        const weeklyMap = {};
+        dailyData.forEach(d => {
+          const date = new Date(d.date + 'T00:00:00');
+          const dayOfWeek = date.getDay(); // 0 = Sunday
+          const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+          const weekEndDate = new Date(date);
+          weekEndDate.setDate(weekEndDate.getDate() + daysUntilSunday);
+          const weekEnding = weekEndDate.toISOString().split('T')[0];
+          
+          if (!weeklyMap[weekEnding]) {
+            weeklyMap[weekEnding] = { 
+              weekEnding, spend: 0, impressions: 0, clicks: 0, conversions: 0, days: [] 
+            };
+          }
+          weeklyMap[weekEnding].spend += d.spend;
+          weeklyMap[weekEnding].impressions += d.impressions;
+          weeklyMap[weekEnding].clicks += d.clicks;
+          weeklyMap[weekEnding].conversions += d.conversions;
+          weeklyMap[weekEnding].days.push(d.date);
+        });
         
-        if (!weeklyMap[weekEnding]) {
-          weeklyMap[weekEnding] = { 
-            weekEnding, spend: 0, impressions: 0, clicks: 0, conversions: 0, days: [] 
-          };
-        }
-        weeklyMap[weekEnding].spend += d.spend;
-        weeklyMap[weekEnding].impressions += d.impressions;
-        weeklyMap[weekEnding].clicks += d.clicks;
-        weeklyMap[weekEnding].conversions += d.conversions;
-        weeklyMap[weekEnding].days.push(d.date);
-      });
+        // Calculate averages for weekly data
+        Object.values(weeklyMap).forEach(w => {
+          w.cpc = w.clicks > 0 ? w.spend / w.clicks : 0;
+          w.cpa = w.conversions > 0 ? w.spend / w.conversions : 0;
+          w.ctr = w.impressions > 0 ? (w.clicks / w.impressions) * 100 : 0;
+        });
+        
+        weeklyData = Object.values(weeklyMap).sort((a, b) => a.weekEnding.localeCompare(b.weekEnding));
+      }
       
-      // Calculate averages for weekly data
-      Object.values(weeklyMap).forEach(w => {
-        w.cpc = w.clicks > 0 ? w.spend / w.clicks : 0;
-        w.cpa = w.conversions > 0 ? w.spend / w.conversions : 0;
-        w.ctr = w.impressions > 0 ? (w.clicks / w.impressions) * 100 : 0;
-      });
-      
-      const weeklyData = Object.values(weeklyMap).sort((a, b) => a.weekEnding.localeCompare(b.weekEnding));
-      
-      // Count weeks with existing data
+      // Count weeks/months with existing data
       let weeksWithExistingData = 0;
-      weeklyData.forEach(w => {
-        if (allWeeksData[w.weekEnding]) weeksWithExistingData++;
-      });
+      let monthsWithExistingData = 0;
+      
+      if (isAllMonthly) {
+        monthlyData.forEach(m => {
+          if (allPeriodsData[m.periodLabel]) monthsWithExistingData++;
+        });
+      } else {
+        weeklyData.forEach(w => {
+          if (allWeeksData[w.weekEnding]) weeksWithExistingData++;
+        });
+      }
       
       const dateRange = dailyData.length > 0 
-        ? `${new Date(dailyData[0].date + 'T00:00:00').toLocaleDateString()} - ${new Date(dailyData[dailyData.length - 1].date + 'T00:00:00').toLocaleDateString()}`
+        ? isAllMonthly 
+          ? `${dailyData[0].monthLabel} - ${dailyData[dailyData.length - 1].monthLabel}`
+          : `${new Date(dailyData[0].date + 'T00:00:00').toLocaleDateString()} - ${new Date(dailyData[dailyData.length - 1].date + 'T00:00:00').toLocaleDateString()}`
         : '';
       
       // Calculate overall averages
@@ -3128,6 +3184,8 @@ const savePeriods = async (d) => {
       return {
         dailyData,
         weeklyData,
+        monthlyData,
+        isMonthlyData: isAllMonthly,
         totalSpend,
         totalImpressions,
         totalClicks,
@@ -3137,14 +3195,160 @@ const savePeriods = async (d) => {
         avgCtr,
         dateRange,
         weeksWithExistingData,
+        monthsWithExistingData,
       };
     } catch (e) {
       return { error: `Parse error: ${e.message}` };
     }
-  }, [allWeeksData]);
+  }, [allWeeksData, allPeriodsData]);
   
-  // Process bulk ad upload - update weeks with ad spend
+  // Process bulk ad upload - update weeks or periods with ad spend
   const processBulkAdUpload = useCallback((parsed, platform) => {
+    if (!parsed) return;
+    
+    // Handle monthly data
+    if (parsed.isMonthlyData && parsed.monthlyData?.length > 0) {
+      setIsProcessing(true);
+      
+      try {
+        const updatedPeriods = { ...allPeriodsData };
+        let updatedCount = 0;
+        let createdCount = 0;
+        let skippedCount = 0;
+        const skippedMonths = [];
+        
+        parsed.monthlyData.forEach(m => {
+          const periodKey = m.periodLabel; // "Apr 2024"
+          
+          // Check if we have weekly data for this month (weekly data takes precedence)
+          // Parse "Apr 2024" to check for weekly data
+          const monthMatch = periodKey.match(/^(\w{3})\s+(\d{4})$/);
+          if (monthMatch) {
+            const monthNames = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+            const monthNum = monthNames[monthMatch[1].toLowerCase()];
+            const year = parseInt(monthMatch[2]);
+            
+            if (monthNum && year) {
+              // Check if any weeks exist in this month
+              const hasWeeklyData = Object.keys(allWeeksData).some(weekKey => {
+                const weekDate = new Date(weekKey + 'T00:00:00');
+                return weekDate.getFullYear() === year && weekDate.getMonth() + 1 === monthNum;
+              });
+              
+              if (hasWeeklyData) {
+                // Skip this month - weekly data takes precedence
+                skippedCount++;
+                skippedMonths.push(periodKey);
+                return;
+              }
+            }
+          }
+          
+          if (updatedPeriods[periodKey]) {
+            // Period exists - update ad spend
+            const period = updatedPeriods[periodKey];
+            const oldGoogleSpend = period.shopify?.googleSpend || period.shopify?.googleAds || 0;
+            const oldMetaSpend = period.shopify?.metaSpend || period.shopify?.metaAds || 0;
+            
+            let newMetaSpend = oldMetaSpend;
+            let newGoogleSpend = oldGoogleSpend;
+            
+            if (platform === 'google') {
+              newGoogleSpend = m.spend;
+            } else {
+              newMetaSpend = m.spend;
+            }
+            
+            const totalShopAds = newMetaSpend + newGoogleSpend;
+            const oldShopAds = period.shopify?.adSpend || 0;
+            const shopProfit = (period.shopify?.netProfit || 0) + oldShopAds - totalShopAds;
+            
+            updatedPeriods[periodKey] = {
+              ...period,
+              shopify: {
+                ...period.shopify,
+                adSpend: totalShopAds,
+                metaSpend: newMetaSpend,
+                metaAds: newMetaSpend,
+                googleSpend: newGoogleSpend,
+                googleAds: newGoogleSpend,
+                netProfit: shopProfit,
+              },
+              total: {
+                ...period.total,
+                adSpend: (period.amazon?.adSpend || 0) + totalShopAds,
+                netProfit: (period.amazon?.netProfit || 0) + shopProfit,
+              },
+              // Store ad KPIs
+              adKPIs: {
+                ...(period.adKPIs || {}),
+                [platform]: {
+                  spend: m.spend,
+                  impressions: m.impressions,
+                  clicks: m.clicks,
+                  conversions: m.conversions,
+                  cpc: m.cpc,
+                  cpa: m.cpa,
+                  ctr: m.ctr,
+                }
+              }
+            };
+            updatedCount++;
+          } else {
+            // Period doesn't exist - create it with ad data
+            const metaSpend = platform === 'meta' ? m.spend : 0;
+            const googleSpend = platform === 'google' ? m.spend : 0;
+            const totalAds = metaSpend + googleSpend;
+            
+            updatedPeriods[periodKey] = {
+              amazon: { revenue: 0, units: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0 },
+              shopify: { 
+                revenue: 0, units: 0, cogs: 0, threeplCosts: 0, 
+                adSpend: totalAds, metaSpend, metaAds: metaSpend, googleSpend, googleAds: googleSpend,
+                netProfit: -totalAds
+              },
+              total: { revenue: 0, units: 0, cogs: 0, adSpend: totalAds, netProfit: -totalAds },
+              adKPIs: {
+                [platform]: {
+                  spend: m.spend,
+                  impressions: m.impressions,
+                  clicks: m.clicks,
+                  conversions: m.conversions,
+                  cpc: m.cpc,
+                  cpa: m.cpa,
+                  ctr: m.ctr,
+                }
+              },
+              _adDataOnly: true,
+            };
+            createdCount++;
+          }
+        });
+        
+        setAllPeriodsData(updatedPeriods);
+        savePeriods(updatedPeriods);
+        
+        setBulkAdFile(null);
+        setBulkAdParsed(null);
+        
+        const platformName = platform === 'google' ? 'Google' : 'Meta';
+        let message = `${platformName} ads updated for ${updatedCount + createdCount} month(s)`;
+        if (skippedCount > 0) {
+          message += `. Skipped ${skippedCount} month(s) with weekly data: ${skippedMonths.slice(0, 3).join(', ')}${skippedMonths.length > 3 ? '...' : ''}`;
+        }
+        setToast({ 
+          message, 
+          type: 'success' 
+        });
+      } catch (e) {
+        setToast({ message: `Error: ${e.message}`, type: 'error' });
+      } finally {
+        setIsProcessing(false);
+      }
+      return;
+    }
+    
+    // Handle weekly data
     if (!parsed?.weeklyData?.length) return;
     
     setIsProcessing(true);
@@ -9136,24 +9340,59 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                           </div>
                         </div>
                         
-                        {/* Summary by week */}
+                        {/* Summary by week or month */}
                         <div className="bg-slate-900/50 rounded-lg p-3 mb-3">
-                          <p className="text-slate-400 text-xs uppercase mb-2">Weekly Aggregation Preview</p>
+                          <p className="text-slate-400 text-xs uppercase mb-2">
+                            {bulkAdParsed.isMonthlyData ? 'Monthly Data Preview' : 'Weekly Aggregation Preview'}
+                          </p>
                           <div className="space-y-1 max-h-48 overflow-y-auto">
-                            {bulkAdParsed.weeklyData?.map(w => (
-                              <div key={w.weekEnding} className="flex items-center justify-between text-sm">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-white">Week ending {new Date(w.weekEnding + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                                  {allWeeksData[w.weekEnding] && (
-                                    <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">exists</span>
-                                  )}
+                            {bulkAdParsed.isMonthlyData ? (
+                              bulkAdParsed.monthlyData?.map(m => {
+                                // Check if weekly data exists for this month
+                                const monthMatch = m.periodLabel.match(/^(\w{3})\s+(\d{4})$/);
+                                let hasWeeklyData = false;
+                                if (monthMatch) {
+                                  const monthNames = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+                                  const monthNum = monthNames[monthMatch[1].toLowerCase()];
+                                  const year = parseInt(monthMatch[2]);
+                                  hasWeeklyData = Object.keys(allWeeksData).some(weekKey => {
+                                    const weekDate = new Date(weekKey + 'T00:00:00');
+                                    return weekDate.getFullYear() === year && weekDate.getMonth() + 1 === monthNum;
+                                  });
+                                }
+                                return (
+                                  <div key={m.periodLabel} className={`flex items-center justify-between text-sm ${hasWeeklyData ? 'opacity-50' : ''}`}>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-white">{m.periodLabel}</span>
+                                      {hasWeeklyData ? (
+                                        <span className="text-xs px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-400">has weekly data</span>
+                                      ) : allPeriodsData[m.periodLabel] ? (
+                                        <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">exists</span>
+                                      ) : null}
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                      <span className="text-slate-400 text-xs">{formatNumber(m.clicks || 0)} clicks</span>
+                                      <span className={`font-medium ${hasWeeklyData ? 'text-slate-500 line-through' : bulkAdPlatform === 'google' ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(m.spend)}</span>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              bulkAdParsed.weeklyData?.map(w => (
+                                <div key={w.weekEnding} className="flex items-center justify-between text-sm">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-white">Week ending {new Date(w.weekEnding + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                                    {allWeeksData[w.weekEnding] && (
+                                      <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">exists</span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-slate-400 text-xs">{formatNumber(w.clicks || 0)} clicks</span>
+                                    <span className={`font-medium ${bulkAdPlatform === 'google' ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(w.spend)}</span>
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-3">
-                                  <span className="text-slate-400 text-xs">{formatNumber(w.clicks || 0)} clicks</span>
-                                  <span className={`font-medium ${bulkAdPlatform === 'google' ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(w.spend)}</span>
-                                </div>
-                              </div>
-                            ))}
+                              ))
+                            )}
                           </div>
                         </div>
                         
@@ -9162,7 +9401,13 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                           <span className="text-slate-300">{bulkAdParsed.dateRange}</span>
                         </div>
                         
-                        {bulkAdParsed.weeksWithExistingData > 0 && (
+                        {bulkAdParsed.isMonthlyData && bulkAdParsed.monthsWithExistingData > 0 && (
+                          <p className="text-amber-400 text-xs mt-3 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3" />
+                            {bulkAdParsed.monthsWithExistingData} month(s) have existing data — will be updated
+                          </p>
+                        )}
+                        {!bulkAdParsed.isMonthlyData && bulkAdParsed.weeksWithExistingData > 0 && (
                           <p className="text-amber-400 text-xs mt-3 flex items-center gap-1">
                             <AlertTriangle className="w-3 h-3" />
                             {bulkAdParsed.weeksWithExistingData} week(s) have existing data — will be updated
@@ -9181,18 +9426,21 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                 </h3>
                 <ul className="text-slate-400 text-sm space-y-1">
                   <li>• Daily ad spend is aggregated into weeks (ending Sunday)</li>
-                  <li>• Weeks are matched to your existing weekly data</li>
+                  <li>• Monthly ad data is stored by period (e.g., "Apr 2024")</li>
                   <li>• Existing {bulkAdPlatform === 'google' ? 'Google' : 'Meta'} ad spend will be overwritten (not duplicated)</li>
-                  <li>• If no weekly data exists, ad spend is stored for when you upload it</li>
+                  <li>• If no data exists for that period, it will be created</li>
                 </ul>
               </div>
               
               <button 
                 onClick={() => processBulkAdUpload(bulkAdParsed, bulkAdPlatform)} 
-                disabled={isProcessing || !bulkAdParsed || bulkAdParsed.error || !bulkAdParsed.weeklyData?.length} 
+                disabled={isProcessing || !bulkAdParsed || bulkAdParsed.error || (!bulkAdParsed.weeklyData?.length && !bulkAdParsed.monthlyData?.length)} 
                 className="w-full bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl"
               >
-                {isProcessing ? 'Processing...' : `Update ${bulkAdParsed?.weeklyData?.length || 0} Week(s) with ${bulkAdPlatform === 'google' ? 'Google' : 'Meta'} Ad Spend`}
+                {isProcessing ? 'Processing...' : bulkAdParsed?.isMonthlyData 
+                  ? `Update ${bulkAdParsed?.monthlyData?.length || 0} Month(s) with ${bulkAdPlatform === 'google' ? 'Google' : 'Meta'} Ad Spend`
+                  : `Update ${bulkAdParsed?.weeklyData?.length || 0} Week(s) with ${bulkAdPlatform === 'google' ? 'Google' : 'Meta'} Ad Spend`
+                }
               </button>
             </div>
           )}
