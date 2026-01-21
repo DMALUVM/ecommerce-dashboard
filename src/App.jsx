@@ -48,12 +48,26 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
   const accounts = {};
   const categories = {};
   let currentAccount = null;
-  let currentAccountType = 'checking'; // 'checking' | 'credit_card'
+  let currentAccountType = 'checking';
   
-  // Track last balance for each account
-  const accountBalances = {};
+  // First pass: Find account totals from "Total for [Account]" lines
+  const accountTotals = {};
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('Total for ')) {
+      const cols = parseCSVLine(line);
+      const match = cols[0].match(/Total for (.+)/);
+      if (match) {
+        const accountName = match[1].trim();
+        // Parse the total amount (usually in column 8 or 9)
+        let totalStr = (cols[8] || cols[7] || '').replace(/[$,"\s]/g, '');
+        const total = parseFloat(totalStr) || 0;
+        accountTotals[accountName] = total;
+      }
+    }
+  }
   
-  // Skip header rows (first 5 lines typically)
+  // Skip header rows
   let dataStartIndex = 0;
   for (let i = 0; i < Math.min(10, lines.length); i++) {
     if (lines[i].includes('Transaction date') || lines[i].includes('transaction date')) {
@@ -62,154 +76,147 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
     }
   }
   
+  // Bank account patterns (only real bank/credit card accounts)
+  const isBankAccount = (name) => {
+    const lower = name.toLowerCase();
+    return (
+      lower.includes('checking') ||
+      lower.includes('savings') ||
+      lower.includes('operations') ||
+      lower.includes('card') ||
+      lower.includes('credit') ||
+      lower.includes('amex') ||
+      lower.includes('visa') ||
+      lower.includes('mastercard') ||
+      lower.includes('(5983)') || // Checking account number pattern
+      lower.includes('(1003)') || // Credit card pattern
+      lower.includes('(1009)')    // Credit card pattern
+    );
+  };
+  
+  // Non-cash/asset patterns to skip
+  const isNonCashAccount = (name) => {
+    const lower = name.toLowerCase();
+    return (
+      lower.includes('depreciation') ||
+      lower.includes('accumulated') ||
+      lower.includes('asset') ||
+      lower.includes('vehicle') ||
+      lower.includes('equipment') ||
+      lower.includes('tundra') ||
+      lower.includes('furniture') ||
+      lower.includes('inventory asset')
+    );
+  };
+  
   for (let i = dataStartIndex; i < lines.length; i++) {
     const line = lines[i];
     if (!line.trim()) continue;
     
     const cols = parseCSVLine(line);
     
-    // Check for section headers (account names like "General Operations (5983) - 1")
-    // These have content in first column but nothing in second column (date)
+    // Check for account section headers
     if (cols[0] && cols[0].trim() && !cols[1]?.trim() && !cols[0].startsWith('Total for') && !cols[0].includes(',TOTAL')) {
-      currentAccount = cols[0].trim();
-      // Detect if this is a credit card account
-      const lowerName = currentAccount.toLowerCase();
-      currentAccountType = (lowerName.includes('card') || 
-                           lowerName.includes('credit') ||
-                           lowerName.includes('amex') ||
-                           lowerName.includes('visa') ||
-                           lowerName.includes('mastercard') ||
-                           lowerName.includes('platinum') ||
-                           lowerName.includes('1003') ||
-                           lowerName.includes('1009')) ? 'credit_card' : 'checking';
-      if (!accounts[currentAccount]) {
-        accounts[currentAccount] = { 
-          name: currentAccount, 
-          type: currentAccountType, 
-          transactions: 0, 
-          totalIn: 0, 
-          totalOut: 0,
-          balance: 0
-        };
+      const potentialAccount = cols[0].trim();
+      
+      // Skip non-bank accounts
+      if (isNonCashAccount(potentialAccount)) {
+        currentAccount = null;
+        continue;
+      }
+      
+      // Only track real bank accounts
+      if (isBankAccount(potentialAccount)) {
+        currentAccount = potentialAccount;
+        const lowerName = potentialAccount.toLowerCase();
+        currentAccountType = (lowerName.includes('card') || 
+                             lowerName.includes('credit') ||
+                             lowerName.includes('amex') ||
+                             lowerName.includes('platinum') ||
+                             lowerName.includes('1003') ||
+                             lowerName.includes('1009')) ? 'credit_card' : 'checking';
+        
+        if (!accounts[currentAccount]) {
+          // Get balance from totals we found earlier
+          const balance = accountTotals[currentAccount] || 0;
+          accounts[currentAccount] = { 
+            name: currentAccount, 
+            type: currentAccountType, 
+            transactions: 0, 
+            totalIn: 0, 
+            totalOut: 0,
+            balance: balance
+          };
+        }
+      } else {
+        currentAccount = null;
       }
       continue;
     }
+    
+    // Skip if we're not in a valid bank account
+    if (!currentAccount) continue;
     
     // Skip total rows and metadata rows
     if (cols[0]?.startsWith('Total for') || cols[0]?.includes(',TOTAL') || cols[0]?.includes('Cash Basis')) continue;
     
-    // Parse transaction row - format: empty, date, type, num, name, store, memo, category, amount, balance
+    // Parse transaction row
     const dateStr = cols[1]?.trim();
     if (!dateStr || !dateStr.match(/^\d{1,2}\/\d{1,2}\/\d{4}$/)) continue;
     
     const txnType = cols[2]?.trim() || '';
-    const num = cols[3]?.trim() || '';
     const vendorName = cols[4]?.trim() || '';
-    const storeName = cols[5]?.trim() || '';
     const memo = cols[6]?.trim() || '';
     const category = cols[7]?.trim() || 'Uncategorized';
     
-    // Parse amount - remove commas, quotes, handle negatives
     let amountStr = cols[8]?.trim().replace(/,/g, '').replace(/"/g, '') || '0';
     const amount = parseFloat(amountStr) || 0;
     
-    // Parse balance - this is the running balance after this transaction
-    let balanceStr = cols[9]?.trim().replace(/,/g, '').replace(/"/g, '') || '0';
-    const balance = parseFloat(balanceStr) || 0;
-    
-    // Update account balance (last transaction's balance is current balance)
-    if (currentAccount) {
-      accountBalances[currentAccount] = balance;
-    }
-    
-    // Parse date (MM/DD/YYYY to YYYY-MM-DD)
+    // Parse date
     const dateParts = dateStr.split('/');
     const dateKey = `${dateParts[2]}-${dateParts[0].padStart(2, '0')}-${dateParts[1].padStart(2, '0')}`;
     
-    // Generate unique transaction ID for category overrides
-    const txnId = `${dateKey}-${currentAccount}-${amount}-${memo.slice(0,20)}`.replace(/[^a-zA-Z0-9-]/g, '');
+    const txnId = `${dateKey}-${currentAccount?.slice(0,10)}-${amount}-${memo.slice(0,15)}`.replace(/[^a-zA-Z0-9-]/g, '');
     
-    // SKIP Credit Card Payment transactions - they are transfers between accounts
-    // On checking: "Credit Card Payment" with negative amount = paying the card
-    // On credit card: "Credit Card Payment" with negative amount = receiving payment from checking
-    if (txnType === 'Credit Card Payment') {
-      continue;
-    }
+    // Skip transfers and non-cash items
+    if (txnType === 'Credit Card Payment') continue;
+    if (txnType === 'Journal Entry') continue;
     
-    // SKIP non-cash items (depreciation, amortization, etc.)
     const categoryLower = category.toLowerCase();
     const memoLower = memo.toLowerCase();
-    if (
-      categoryLower.includes('depreciation') ||
-      categoryLower.includes('amortization') ||
-      categoryLower.includes('accumulated') ||
-      categoryLower.includes('unrealized') ||
-      categoryLower.includes('allowance for') ||
-      categoryLower.includes('bad debt') ||
-      categoryLower.includes('write-off') ||
-      categoryLower.includes('accrued') ||
-      memoLower.includes('depreciation') ||
-      memoLower.includes('amortization')
-    ) {
+    if (categoryLower.includes('depreciation') || categoryLower.includes('amortization') ||
+        categoryLower.includes('accumulated') || categoryLower.includes('unrealized') ||
+        memoLower.includes('depreciation') || memoLower.includes('amortization')) {
       continue;
     }
     
-    // Determine if income or expense based on account type and transaction
+    // Determine income vs expense
     let isIncome = false;
     let isExpense = false;
     
     if (currentAccountType === 'credit_card') {
-      // On credit cards: Expense with POSITIVE amount = real business expense
-      if (txnType === 'Expense' && amount > 0) {
-        isExpense = true;
-      }
-      // Skip everything else on credit cards (payments, adjustments)
+      if (txnType === 'Expense' && amount > 0) isExpense = true;
     } else {
-      // On checking accounts:
-      if (txnType === 'Deposit' && amount > 0) {
-        isIncome = true;
-      } else if (txnType === 'Expense' && amount < 0) {
-        isExpense = true;
-      } else if (txnType === 'Check' && amount < 0) {
-        isExpense = true;
-      } else if (txnType === 'Transfer' && amount > 0) {
-        // Incoming transfer (not from credit card) = income
-        isIncome = true;
-      } else if (txnType === 'Transfer' && amount < 0) {
-        // Outgoing transfer - check if it's to a credit card (skip) or real expense
-        if (!category.toLowerCase().includes('card') && !category.includes('1003') && !category.includes('1009')) {
-          isExpense = true;
-        }
-      } else if (txnType === 'Journal Entry') {
-        // Skip most journal entries - they're usually non-cash adjustments
-        // Only include if clearly payroll related AND has a real cash impact
-        continue;
-      } else if (txnType === 'Payroll Check') {
-        isExpense = true;
-      }
+      if (txnType === 'Deposit' && amount > 0) isIncome = true;
+      else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) isExpense = true;
+      else if (txnType === 'Transfer' && amount > 0) isIncome = true;
+      else if (txnType === 'Payroll Check') isExpense = true;
     }
     
-    // Skip if we couldn't classify it
     if (!isIncome && !isExpense) continue;
     
-    // Apply category override if exists
     const finalCategory = categoryOverrides[txnId] || category;
-    
-    // Extract top-level category (before the colon)
     const topCategory = finalCategory.split(':')[0].trim();
     const subCategory = finalCategory.includes(':') ? finalCategory.split(':').slice(1).join(':').trim() : '';
     
-    // Get vendor name from various sources
+    // Extract vendor
     let vendor = vendorName;
     if (!vendor && memo) {
-      // Try to extract vendor from memo
       const memoUpper = memo.toUpperCase();
       if (memoUpper.includes('AMAZON')) vendor = 'Amazon';
       else if (memoUpper.includes('SHOPIFY')) vendor = 'Shopify';
       else if (memoUpper.includes('GOOGLE')) vendor = 'Google';
       else if (memoUpper.includes('META') || memoUpper.includes('FACEBOOK')) vendor = 'Meta';
-      else if (memo.includes('Credit ')) vendor = memo.split('Credit ')[1]?.split(' ')[0] || '';
-      else if (memo.includes('Debit to ')) vendor = memo.split('Debit to ')[1]?.split(' - ')[0] || '';
       else vendor = memo.split(' ')[0] || 'Unknown';
     }
     if (!vendor) vendor = 'Unknown';
@@ -230,19 +237,17 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
       isExpense,
       account: currentAccount,
       accountType: currentAccountType,
-      num,
     };
     
     transactions.push(txn);
     
-    // Update account stats
-    if (currentAccount && accounts[currentAccount]) {
+    if (accounts[currentAccount]) {
       accounts[currentAccount].transactions++;
       if (txn.isIncome) accounts[currentAccount].totalIn += txn.amount;
       if (txn.isExpense) accounts[currentAccount].totalOut += txn.amount;
     }
     
-    // Update category stats
+    // Category stats
     if (!categories[topCategory]) {
       categories[topCategory] = { name: topCategory, count: 0, totalIn: 0, totalOut: 0, subCategories: {} };
     }
@@ -260,20 +265,13 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
     }
   }
   
-  // Update account balances
-  Object.keys(accountBalances).forEach(acct => {
-    if (accounts[acct]) {
-      accounts[acct].balance = accountBalances[acct];
-    }
-  });
-  
   // Sort by date
   transactions.sort((a, b) => a.date.localeCompare(b.date));
   
   // Generate monthly snapshots
   const monthlySnapshots = {};
   transactions.forEach(txn => {
-    const monthKey = txn.date.substring(0, 7); // YYYY-MM
+    const monthKey = txn.date.substring(0, 7);
     if (!monthlySnapshots[monthKey]) {
       monthlySnapshots[monthKey] = { income: 0, expenses: 0, transactions: 0, byCategory: {} };
     }
@@ -288,7 +286,6 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
     if (txn.isExpense) monthlySnapshots[monthKey].byCategory[txn.topCategory].expenses += txn.amount;
   });
   
-  // Calculate net for each month
   Object.keys(monthlySnapshots).forEach(m => {
     monthlySnapshots[m].net = monthlySnapshots[m].income - monthlySnapshots[m].expenses;
   });
@@ -22646,43 +22643,59 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 </div>
               </div>
               
-              {/* Account Balances */}
-              {Object.keys(bankingData.accounts || {}).length > 0 && (
-                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-                  <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                    <Building className="w-5 h-5 text-green-400" />
-                    Account Balances <span className="text-sm font-normal text-slate-400">(as of last upload)</span>
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {Object.entries(bankingData.accounts).map(([name, acct]) => {
-                      const isCard = acct.type === 'credit_card';
-                      const balance = acct.balance || 0;
-                      return (
-                        <div 
-                          key={name} 
-                          className={`p-4 rounded-lg border ${isCard ? 'bg-rose-900/20 border-rose-500/30' : 'bg-emerald-900/20 border-emerald-500/30'}`}
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              {isCard ? <CreditCard className="w-4 h-4 text-rose-400 flex-shrink-0" /> : <Wallet className="w-4 h-4 text-emerald-400 flex-shrink-0" />}
-                              <span className="text-white font-medium text-sm truncate">{name.split(' - ')[0]}</span>
+              {/* Account Balances - CFO Summary */}
+              {Object.keys(bankingData.accounts || {}).length > 0 && (() => {
+                const accts = Object.entries(bankingData.accounts);
+                const checkingAccts = accts.filter(([_, a]) => a.type !== 'credit_card');
+                const creditAccts = accts.filter(([_, a]) => a.type === 'credit_card');
+                const totalCash = checkingAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
+                const totalDebt = creditAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
+                const netPosition = totalCash - totalDebt;
+                
+                return (
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+                    {/* Summary Row */}
+                    <div className="grid grid-cols-3 gap-4 mb-4 pb-4 border-b border-slate-700">
+                      <div className="text-center">
+                        <p className="text-emerald-400 text-xs font-medium mb-1">💵 Cash Available</p>
+                        <p className="text-2xl font-bold text-emerald-400">{formatCurrency(totalCash)}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-rose-400 text-xs font-medium mb-1">💳 Credit Card Debt</p>
+                        <p className="text-2xl font-bold text-rose-400">{formatCurrency(totalDebt)}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-slate-400 text-xs font-medium mb-1">📊 Net Position</p>
+                        <p className={`text-2xl font-bold ${netPosition >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(netPosition)}</p>
+                      </div>
+                    </div>
+                    
+                    {/* Individual Accounts */}
+                    <div className="space-y-2">
+                      {accts.map(([name, acct]) => {
+                        const isCard = acct.type === 'credit_card';
+                        const balance = acct.balance || 0;
+                        const shortName = name.split('(')[0].trim();
+                        return (
+                          <div key={name} className="flex items-center justify-between py-2 border-b border-slate-700/50 last:border-0">
+                            <div className="flex items-center gap-2">
+                              {isCard ? <CreditCard className="w-4 h-4 text-rose-400" /> : <Wallet className="w-4 h-4 text-emerald-400" />}
+                              <span className="text-white text-sm">{shortName}</span>
+                              <span className="text-slate-500 text-xs">({acct.transactions} txns)</span>
                             </div>
-                            <span className={`text-lg font-bold ${isCard ? 'text-rose-400' : 'text-emerald-400'}`}>
-                              {isCard ? '-' : ''}{formatCurrency(Math.abs(balance))}
+                            <span className={`font-bold ${isCard ? 'text-rose-400' : 'text-emerald-400'}`}>
+                              {formatCurrency(balance)}
                             </span>
                           </div>
-                          <div className="text-xs text-slate-500 mt-2">
-                            {acct.transactions} transactions • {isCard ? 'Credit Card' : 'Checking'}
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-slate-500 mt-3 text-center">
+                      Balances as of QBO export • Re-upload for latest
+                    </p>
                   </div>
-                  <p className="text-xs text-slate-500 mt-3">
-                    💡 Balances shown are from the last transaction in each account from your QBO export.
-                  </p>
-                </div>
-              )}
+                );
+              })()}
               
               {/* Tabs */}
               <div className="flex gap-2 mb-6 border-b border-slate-700 pb-2">
