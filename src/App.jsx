@@ -48,6 +48,7 @@ const parseQBOTransactions = (content) => {
   const accounts = {};
   const categories = {};
   let currentAccount = null;
+  let currentAccountType = 'checking'; // 'checking' | 'credit_card'
   
   // Skip header rows (first 5 lines typically)
   let dataStartIndex = 0;
@@ -67,8 +68,14 @@ const parseQBOTransactions = (content) => {
     // Check for section headers (account names like "General Operations (5983) - 1")
     if (cols[0] && !cols[1] && !cols[0].startsWith('Total for') && !cols[0].startsWith(',TOTAL')) {
       currentAccount = cols[0].trim();
+      // Detect if this is a credit card account
+      currentAccountType = (currentAccount.toLowerCase().includes('card') || 
+                           currentAccount.toLowerCase().includes('credit') ||
+                           currentAccount.toLowerCase().includes('amex') ||
+                           currentAccount.toLowerCase().includes('visa') ||
+                           currentAccount.toLowerCase().includes('mastercard')) ? 'credit_card' : 'checking';
       if (!accounts[currentAccount]) {
-        accounts[currentAccount] = { name: currentAccount, transactions: 0, totalIn: 0, totalOut: 0 };
+        accounts[currentAccount] = { name: currentAccount, type: currentAccountType, transactions: 0, totalIn: 0, totalOut: 0 };
       }
       continue;
     }
@@ -95,27 +102,84 @@ const parseQBOTransactions = (content) => {
     const dateParts = dateStr.split('/');
     const dateKey = `${dateParts[2]}-${dateParts[0].padStart(2, '0')}-${dateParts[1].padStart(2, '0')}`;
     
-    // Determine if income or expense
-    const isIncome = amount > 0 && (txnType === 'Deposit' || txnType === 'Transfer' && amount > 0);
-    const isExpense = amount < 0 || (txnType === 'Expense' || txnType === 'Credit Card Payment');
+    // CRITICAL: Skip Credit Card Payment transactions - they are transfers, not income/expense
+    // The actual expenses are recorded on the credit card itself
+    if (txnType === 'Credit Card Payment') {
+      continue; // Skip entirely to avoid double-counting
+    }
+    
+    // Also skip transfers between accounts (not income/expense)
+    if (txnType === 'Transfer' && category.includes('Card')) {
+      continue;
+    }
+    
+    // Determine if income or expense based on account type and transaction
+    let isIncome = false;
+    let isExpense = false;
+    
+    if (currentAccountType === 'credit_card') {
+      // On credit cards: Expense type = real expense, positive amount
+      // Payments to the card are already filtered out above
+      if (txnType === 'Expense' || txnType === 'Check') {
+        isExpense = true;
+      }
+    } else {
+      // On checking accounts:
+      // Deposits with positive amounts = income
+      // Expenses with negative amounts = expense (but NOT credit card payments)
+      if (txnType === 'Deposit' && amount > 0) {
+        isIncome = true;
+      } else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) {
+        isExpense = true;
+      } else if (txnType === 'Transfer' && amount > 0 && !category.includes('Card')) {
+        // Transfer in (not from credit card) could be income like partner investment
+        isIncome = true;
+      }
+    }
+    
+    // Skip if neither income nor expense (e.g., interest, adjustments we don't care about)
+    if (!isIncome && !isExpense) {
+      // Allow interest earned as income
+      if (memo.includes('Interest') && amount > 0) {
+        isIncome = true;
+      } else if (txnType === 'Journal Entry' || txnType === 'Payroll Check') {
+        // Payroll is an expense
+        if (category.includes('Payroll') || category.includes('Wages')) {
+          isExpense = true;
+        }
+      } else {
+        continue; // Skip transactions we can't classify
+      }
+    }
     
     // Extract top-level category (before the colon)
     const topCategory = category.split(':')[0].trim();
     const subCategory = category.includes(':') ? category.split(':').slice(1).join(':').trim() : '';
     
+    // Get vendor name from various sources
+    let vendor = vendorName;
+    if (!vendor && memo) {
+      // Try to extract vendor from memo
+      if (memo.includes('Credit ')) vendor = memo.split('Credit ')[1]?.split(' ')[0] || '';
+      else if (memo.includes('Debit ')) vendor = memo.split('Debit ')[1]?.split(' ')[0] || '';
+      else if (memo.includes('to ')) vendor = memo.split('to ')[1]?.split(' - ')[0] || '';
+    }
+    if (!vendor) vendor = 'Unknown';
+    
     const txn = {
       date: dateKey,
       dateDisplay: dateStr,
       type: txnType,
-      vendor: vendorName || (memo.includes('Credit ') ? memo.split('Credit ')[1]?.split(' ')[0] : '') || 'Unknown',
+      vendor,
       memo,
       category,
       topCategory,
       subCategory,
       amount: Math.abs(amount),
-      isIncome: amount > 0 && !isExpense,
-      isExpense: amount < 0 || isExpense,
+      isIncome,
+      isExpense,
       account: currentAccount,
+      accountType: currentAccountType,
       num,
     };
     
@@ -16759,10 +16823,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   </h3>
                   {(() => {
                     const chartMaxProfit = Math.max(...currentData.map(d => Math.abs(getFilteredValue(d, 'profit'))), 1);
-                    const barMinWidth = currentData.length > 31 ? '2px' : '8px';
+                    const barMinWidth = currentData.length > 30 ? '4px' : currentData.length > 20 ? '8px' : '16px';
                     return (
                       <>
-                        <div className="relative flex items-end gap-0.5 h-40 bg-slate-900/30 rounded-lg p-3">
+                        <div className="relative flex items-end gap-1 h-48 bg-slate-900/30 rounded-lg p-3">
                           {currentData.length === 0 ? (
                             <p className="text-slate-500 text-center w-full self-center">No data</p>
                           ) : currentData.map((d, i) => {
@@ -16775,15 +16839,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               <div 
                                 key={d.key || i} 
                                 className={`flex-1 flex items-end justify-center group relative h-full ${isClickable ? 'cursor-pointer' : ''}`}
-                                style={{ minWidth: barMinWidth, maxWidth: '40px' }}
+                                style={{ minWidth: barMinWidth, maxWidth: '60px' }}
                                 onClick={() => isClickable && setViewingDayDetails(d.key)}
                               >
-                                <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
+                                <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                                   {d.label}<br/>{formatCurrency(value)}
                                   {isClickable && <span className="text-cyan-400 block text-center mt-1">Click for details</span>}
                                 </div>
                                 <div 
-                                  className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
+                                  className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')} hover:bg-emerald-400`}
                                   style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
                                 />
                               </div>
@@ -16791,17 +16855,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           })}
                         </div>
                         {/* X-axis labels */}
-                        <div className="flex gap-0.5 mt-1 px-3">
-                          {currentData.length === 0 ? null : currentData.length <= 14 ? (
+                        <div className="flex gap-1 mt-1 px-3">
+                          {currentData.length === 0 ? null : currentData.length <= 12 ? (
                             currentData.map((d, i) => (
-                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '60px' }}>
                                 <span className="text-[10px] text-slate-500 truncate block">{d.label}</span>
                               </div>
                             ))
                           ) : (
                             /* Show all flex items but only first/last labels for alignment */
                             currentData.map((d, i) => (
-                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '60px' }}>
                                 {(i === 0 || i === currentData.length - 1) && (
                                   <span className="text-[10px] text-slate-500">{d.label}</span>
                                 )}
@@ -16825,10 +16889,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       return rev > 0 ? (prof / rev) * 100 : 0;
                     });
                     const maxMargin = Math.max(...marginData.map(Math.abs), 1);
-                    const barMinWidth = currentData.length > 31 ? '2px' : '8px';
+                    const barMinWidth = currentData.length > 30 ? '4px' : currentData.length > 20 ? '8px' : '16px';
                     return (
                       <>
-                        <div className="relative flex items-end gap-0.5 h-40 bg-slate-900/30 rounded-lg p-3">
+                        <div className="relative flex items-end gap-1 h-48 bg-slate-900/30 rounded-lg p-3">
                           {currentData.length === 0 ? (
                             <p className="text-slate-500 text-center w-full self-center">No data</p>
                           ) : currentData.map((d, i) => {
@@ -16836,17 +16900,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             const height = (Math.abs(margin) / maxMargin) * 100;
                             const isPositive = margin >= 0;
                             const isLatest = i === currentData.length - 1;
+                            const isClickable = trendsTab === 'daily' && d.key;
                             return (
                               <div 
                                 key={d.key || i} 
-                                className="flex-1 flex items-end justify-center group relative h-full"
-                                style={{ minWidth: barMinWidth, maxWidth: '40px' }}
+                                className={`flex-1 flex items-end justify-center group relative h-full ${isClickable ? 'cursor-pointer' : ''}`}
+                                style={{ minWidth: barMinWidth, maxWidth: '60px' }}
+                                onClick={() => isClickable && setViewingDayDetails(d.key)}
                               >
-                                <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
+                                <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                                   {d.label}<br/>{formatPercent(margin)}
+                                  {isClickable && <span className="text-cyan-400 block text-center mt-1">Click for details</span>}
                                 </div>
                                 <div 
-                                  className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-cyan-500' : 'bg-cyan-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
+                                  className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-cyan-500' : 'bg-cyan-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')} hover:bg-cyan-400`}
                                   style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
                                 />
                               </div>
@@ -16854,17 +16921,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           })}
                         </div>
                         {/* X-axis labels */}
-                        <div className="flex gap-0.5 mt-1 px-3">
-                          {currentData.length === 0 ? null : currentData.length <= 14 ? (
+                        <div className="flex gap-1 mt-1 px-3">
+                          {currentData.length === 0 ? null : currentData.length <= 12 ? (
                             currentData.map((d, i) => (
-                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '60px' }}>
                                 <span className="text-[10px] text-slate-500 truncate block">{d.label}</span>
                               </div>
                             ))
                           ) : (
                             /* Show all flex items but only first/last labels for alignment */
                             currentData.map((d, i) => (
-                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '60px' }}>
                                 {(i === 0 || i === currentData.length - 1) && (
                                   <span className="text-[10px] text-slate-500">{d.label}</span>
                                 )}
@@ -16889,10 +16956,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     return units > 0 ? profit / units : 0;
                   });
                   const maxPPU = Math.max(...ppuData.map(Math.abs), 1);
-                  const barMinWidth = currentData.length > 31 ? '2px' : '8px';
+                  // Match Revenue Trend sizing
+                  const barMinWidth = currentData.length > 30 ? '4px' : currentData.length > 20 ? '8px' : '16px';
                   return (
                     <>
-                      <div className="relative flex items-end gap-0.5 h-40 bg-slate-900/30 rounded-lg p-3">
+                      <div className="relative flex items-end gap-1 h-48 bg-slate-900/30 rounded-lg p-3">
                         {currentData.length === 0 ? (
                           <p className="text-slate-500 text-center w-full self-center">No data</p>
                         ) : currentData.map((d, i) => {
@@ -16900,17 +16968,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           const height = maxPPU > 0 ? (Math.abs(ppu) / maxPPU) * 100 : 0;
                           const isPositive = ppu >= 0;
                           const isLatest = i === currentData.length - 1;
+                          const isClickable = trendsTab === 'daily' && d.key;
                           return (
                             <div 
                               key={d.key || i} 
-                              className="flex-1 flex items-end justify-center group relative h-full"
-                              style={{ minWidth: barMinWidth, maxWidth: '40px' }}
+                              className={`flex-1 flex items-end justify-center group relative h-full ${isClickable ? 'cursor-pointer' : ''}`}
+                              style={{ minWidth: barMinWidth, maxWidth: '60px' }}
+                              onClick={() => isClickable && setViewingDayDetails(d.key)}
                             >
-                              <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
+                              <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                                 {d.label}<br/>{formatCurrency(ppu)}/unit
+                                {isClickable && <span className="text-cyan-400 block text-center mt-1">Click for details</span>}
                               </div>
                               <div 
-                                className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-amber-500' : 'bg-amber-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
+                                className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-amber-500' : 'bg-amber-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')} hover:bg-amber-400`}
                                 style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
                               />
                             </div>
@@ -16918,17 +16989,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         })}
                       </div>
                       {/* X-axis labels */}
-                      <div className="flex gap-0.5 mt-1 px-3">
-                        {currentData.length === 0 ? null : currentData.length <= 14 ? (
+                      <div className="flex gap-1 mt-1 px-3">
+                        {currentData.length === 0 ? null : currentData.length <= 12 ? (
                           currentData.map((d, i) => (
-                            <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                            <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '60px' }}>
                               <span className="text-[10px] text-slate-500 truncate block">{d.label}</span>
                             </div>
                           ))
                         ) : (
                           /* Show all flex items but only first/last labels for alignment */
                           currentData.map((d, i) => (
-                            <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                            <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '60px' }}>
                               {(i === 0 || i === currentData.length - 1) && (
                                 <span className="text-[10px] text-slate-500">{d.label}</span>
                               )}
