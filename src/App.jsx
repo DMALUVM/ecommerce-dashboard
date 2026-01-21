@@ -16661,13 +16661,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 </div>
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                   <p className="text-slate-400 text-sm mb-1">Profit Margin</p>
-                  <p className={`text-2xl font-bold ${(latestPeriod?.margin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(latestPeriod?.margin)}</p>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-slate-500 text-xs">vs previous</span>
-                    {prevPeriod && <span className={`text-sm ${(latestPeriod?.margin - prevPeriod?.margin) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {(latestPeriod?.margin - prevPeriod?.margin) >= 0 ? '+' : ''}{(latestPeriod?.margin - prevPeriod?.margin).toFixed(1)}pt
-                    </span>}
-                  </div>
+                  {(() => {
+                    const latestRev = getFilteredValue(latestPeriod || {}, 'revenue');
+                    const latestProfit = getFilteredValue(latestPeriod || {}, 'profit');
+                    const latestMargin = latestRev > 0 ? (latestProfit / latestRev) * 100 : 0;
+                    const prevRev = getFilteredValue(prevPeriod || {}, 'revenue');
+                    const prevProfit = getFilteredValue(prevPeriod || {}, 'profit');
+                    const prevMargin = prevRev > 0 ? (prevProfit / prevRev) * 100 : 0;
+                    const marginChange = latestMargin - prevMargin;
+                    return (
+                      <>
+                        <p className={`text-2xl font-bold ${latestMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(latestMargin)}</p>
+                        <div className="flex items-center justify-between mt-2">
+                          <span className="text-slate-500 text-xs">vs previous</span>
+                          {prevPeriod && <span className={`text-sm ${marginChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {marginChange >= 0 ? '+' : ''}{marginChange.toFixed(1)}pt
+                          </span>}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
               
@@ -16721,11 +16734,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             </div>
                           ))
                         ) : (
-                          <>
-                            <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
-                            <span className="flex-1" />
-                            <span className="text-[10px] text-slate-500">{currentData[currentData.length - 1]?.label}</span>
-                          </>
+                          /* Show all flex items but only first/last labels for alignment */
+                          currentData.map((d, i) => (
+                            <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '60px' }}>
+                              {(i === 0 || i === currentData.length - 1) && (
+                                <span className="text-[10px] text-slate-500">{d.label}</span>
+                              )}
+                            </div>
+                          ))
                         )}
                       </div>
                     </>
@@ -16783,11 +16799,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               </div>
                             ))
                           ) : (
-                            <>
-                              <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
-                              <span className="flex-1" />
-                              <span className="text-[10px] text-slate-500">{currentData[currentData.length - 1]?.label}</span>
-                            </>
+                            /* Show all flex items but only first/last labels for alignment */
+                            currentData.map((d, i) => (
+                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                                {(i === 0 || i === currentData.length - 1) && (
+                                  <span className="text-[10px] text-slate-500">{d.label}</span>
+                                )}
+                              </div>
+                            ))
                           )}
                         </div>
                       </>
@@ -16799,7 +16818,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 overflow-hidden">
                   <h3 className="text-lg font-semibold text-white mb-4">{periodLabel} Margin Trend</h3>
                   {(() => {
-                    const maxMargin = Math.max(...currentData.map(x => Math.abs(x.margin || 0)), 1);
+                    // Calculate margin from filtered values
+                    const marginData = currentData.map(d => {
+                      const rev = getFilteredValue(d, 'revenue');
+                      const prof = getFilteredValue(d, 'profit');
+                      return rev > 0 ? (prof / rev) * 100 : 0;
+                    });
+                    const maxMargin = Math.max(...marginData.map(Math.abs), 1);
                     const barMinWidth = currentData.length > 31 ? '2px' : '8px';
                     return (
                       <>
@@ -16807,8 +16832,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           {currentData.length === 0 ? (
                             <p className="text-slate-500 text-center w-full self-center">No data</p>
                           ) : currentData.map((d, i) => {
-                            const height = (Math.abs(d.margin) / maxMargin) * 100;
-                            const isPositive = d.margin >= 0;
+                            const margin = marginData[i];
+                            const height = (Math.abs(margin) / maxMargin) * 100;
+                            const isPositive = margin >= 0;
                             const isLatest = i === currentData.length - 1;
                             return (
                               <div 
@@ -16817,7 +16843,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                 style={{ minWidth: barMinWidth, maxWidth: '40px' }}
                               >
                                 <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
-                                  {d.label}<br/>{formatPercent(d.margin)}
+                                  {d.label}<br/>{formatPercent(margin)}
                                 </div>
                                 <div 
                                   className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-cyan-500' : 'bg-cyan-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')}`}
@@ -16836,11 +16862,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               </div>
                             ))
                           ) : (
-                            <>
-                              <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
-                              <span className="flex-1" />
-                              <span className="text-[10px] text-slate-500">{currentData[currentData.length - 1]?.label}</span>
-                            </>
+                            /* Show all flex items but only first/last labels for alignment */
+                            currentData.map((d, i) => (
+                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                                {(i === 0 || i === currentData.length - 1) && (
+                                  <span className="text-[10px] text-slate-500">{d.label}</span>
+                                )}
+                              </div>
+                            ))
                           )}
                         </div>
                       </>
@@ -16853,7 +16882,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6 overflow-hidden">
                 <h3 className="text-lg font-semibold text-white mb-4">💵 Profit Per Unit Trend</h3>
                 {(() => {
-                  const ppuData = currentData.map(d => d.units > 0 ? d.profit / d.units : 0);
+                  // Calculate profit per unit from filtered values
+                  const ppuData = currentData.map(d => {
+                    const units = getFilteredValue(d, 'units');
+                    const profit = getFilteredValue(d, 'profit');
+                    return units > 0 ? profit / units : 0;
+                  });
                   const maxPPU = Math.max(...ppuData.map(Math.abs), 1);
                   const barMinWidth = currentData.length > 31 ? '2px' : '8px';
                   return (
@@ -16892,11 +16926,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             </div>
                           ))
                         ) : (
-                          <>
-                            <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
-                            <span className="flex-1" />
-                            <span className="text-[10px] text-slate-500">{currentData[currentData.length - 1]?.label}</span>
-                          </>
+                          /* Show all flex items but only first/last labels for alignment */
+                          currentData.map((d, i) => (
+                            <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                              {(i === 0 || i === currentData.length - 1) && (
+                                <span className="text-[10px] text-slate-500">{d.label}</span>
+                              )}
+                            </div>
+                          ))
                         )}
                       </div>
                       <div className="flex justify-between text-xs text-slate-500 mt-2 px-2">
@@ -16927,18 +16964,29 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     <tbody>
                       {currentData.slice().reverse().map((d, idx) => {
                         const prev = currentData[currentData.length - idx - 2];
-                        const ppu = d.units > 0 ? d.profit / d.units : 0;
-                        const prevPPU = prev?.units > 0 ? prev.profit / prev.units : null;
-                        const marginChange = prev ? d.margin - prev.margin : null;
+                        // Use filtered values
+                        const rev = getFilteredValue(d, 'revenue');
+                        const profit = getFilteredValue(d, 'profit');
+                        const units = getFilteredValue(d, 'units');
+                        const margin = rev > 0 ? (profit / rev) * 100 : 0;
+                        const ppu = units > 0 ? profit / units : 0;
+                        
+                        const prevRev = prev ? getFilteredValue(prev, 'revenue') : 0;
+                        const prevProfit = prev ? getFilteredValue(prev, 'profit') : 0;
+                        const prevUnits = prev ? getFilteredValue(prev, 'units') : 0;
+                        const prevMargin = prevRev > 0 ? (prevProfit / prevRev) * 100 : 0;
+                        const prevPPU = prevUnits > 0 ? prevProfit / prevUnits : null;
+                        
+                        const marginChange = prev ? margin - prevMargin : null;
                         const ppuChange = prevPPU !== null && prevPPU !== 0 ? ((ppu - prevPPU) / Math.abs(prevPPU)) * 100 : null;
                         return (
                           <tr key={d.key} className="border-b border-slate-700/50 hover:bg-slate-700/30">
                             <td className="py-2 text-white font-medium">{d.label}</td>
-                            <td className="py-2 text-right text-white">{formatCurrency(d.revenue)}</td>
-                            <td className={`py-2 text-right ${d.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(d.profit)}</td>
-                            <td className="py-2 text-right text-white">{formatNumber(d.units)}</td>
-                            <td className={`py-2 text-right ${d.margin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {formatPercent(d.margin)}
+                            <td className="py-2 text-right text-white">{formatCurrency(rev)}</td>
+                            <td className={`py-2 text-right ${profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(profit)}</td>
+                            <td className="py-2 text-right text-white">{formatNumber(units)}</td>
+                            <td className={`py-2 text-right ${margin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {formatPercent(margin)}
                               {marginChange !== null && <span className={`ml-1 text-xs ${marginChange >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>({marginChange >= 0 ? '+' : ''}{marginChange.toFixed(1)}pt)</span>}
                             </td>
                             <td className={`py-2 text-right ${ppu >= 0 ? 'text-amber-400' : 'text-rose-400'}`}>
@@ -22246,8 +22294,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className={`min-h-screen ${theme === 'light' ? 'bg-gray-100' : 'bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900'}`}>
-        {nav}
+        <NavTabs />
         <div className="max-w-7xl mx-auto px-4 py-6">
+          <Toast />{aiChatUI}{aiChatButton}
           {/* Header */}
           <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
             <div>
