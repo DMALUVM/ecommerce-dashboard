@@ -24529,10 +24529,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 const lastMonthData = monthlySnapshots[lastMonth] || { income: 0, expenses: 0, net: 0 };
                 const twoMonthsAgoData = monthlySnapshots[twoMonthsAgo] || { income: 0, expenses: 0, net: 0 };
                 
+                // Get COGS for this month
+                const monthCOGS = expensesByCategory['Cost of goods sold'] || 0;
+                const monthOpEx = currentMonthData.expenses - monthCOGS;
+                
                 // Operating metrics
-                const grossMargin = currentMonthData.income > 0 
-                  ? ((currentMonthData.income - (expensesByCategory['Cost of goods sold'] || 0)) / currentMonthData.income * 100) 
-                  : 0;
                 const operatingMargin = currentMonthData.income > 0 
                   ? (currentMonthData.net / currentMonthData.income * 100) 
                   : 0;
@@ -24560,106 +24561,161 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 
                 // Expense efficiency (operating expenses / revenue)
                 const opexRatio = currentMonthData.income > 0 
-                  ? ((currentMonthData.expenses - (expensesByCategory['Cost of goods sold'] || 0)) / currentMonthData.income * 100) 
+                  ? (monthOpEx / currentMonthData.income * 100) 
                   : 0;
                 
-                // YTD calculations
+                // YTD calculations from banking
                 const currentYear = now.getFullYear();
                 const ytdMonths = monthKeys.filter(m => m.startsWith(String(currentYear)));
                 const ytdIncome = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.income || 0), 0);
                 const ytdExpenses = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.expenses || 0), 0);
-                const ytdNet = ytdIncome - ytdExpenses;
+                const ytdCashFlow = ytdIncome - ytdExpenses;
                 
-                // AI Profit Forecast - project year-end based on current trends
-                const monthsRemaining = 12 - (now.getMonth() + 1);
-                const avgMonthlyNet = ytdMonths.length > 0 ? ytdNet / ytdMonths.length : 0;
-                const projectedYearEndProfit = ytdNet + (avgMonthlyNet * monthsRemaining);
+                // Get actual sales profit data if available
+                const sortedWeeks2026 = Object.keys(allWeeksData).filter(w => w.startsWith('2026')).sort();
+                const actualYTDProfit = sortedWeeks2026.reduce((s, w) => s + (allWeeksData[w]?.total?.netProfit || 0), 0);
+                const actualYTDRevenue = sortedWeeks2026.reduce((s, w) => s + (allWeeksData[w]?.total?.revenue || 0), 0);
+                const weeksWithData = sortedWeeks2026.filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0).length;
                 
-                // Trend-adjusted forecast (weighted more recent months higher)
-                const recentMonths = ytdMonths.slice(-3);
-                const recentAvgNet = recentMonths.length > 0 
-                  ? recentMonths.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0) / recentMonths.length 
-                  : avgMonthlyNet;
-                const trendAdjustedForecast = ytdNet + (recentAvgNet * monthsRemaining);
+                // Use sales data for forecast if available, otherwise banking
+                const hasActualSalesData = weeksWithData > 0;
+                const monthsCompleted = ytdMonths.length || (weeksWithData > 0 ? Math.ceil(weeksWithData / 4.33) : 0);
+                const monthsRemaining = 12 - Math.max(monthsCompleted, now.getMonth() + 1);
+                
+                // Calculate forecast based on best available data
+                let forecastBasis, avgMonthlyProfit, linearProjection, trendProjection;
+                
+                if (hasActualSalesData && actualYTDRevenue > 0) {
+                  // Use actual sales profit data
+                  forecastBasis = 'sales';
+                  const avgWeeklyProfit = actualYTDProfit / Math.max(weeksWithData, 1);
+                  avgMonthlyProfit = avgWeeklyProfit * 4.33;
+                  linearProjection = actualYTDProfit + (avgMonthlyProfit * monthsRemaining);
+                  
+                  // For trend, use last 4 weeks if available
+                  const recentWeeks = sortedWeeks2026.slice(-4);
+                  const recentProfit = recentWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.netProfit || 0), 0);
+                  const recentAvgWeekly = recentProfit / Math.max(recentWeeks.length, 1);
+                  const recentAvgMonthly = recentAvgWeekly * 4.33;
+                  trendProjection = actualYTDProfit + (recentAvgMonthly * monthsRemaining);
+                } else {
+                  // Fall back to banking cash flow
+                  forecastBasis = 'cashflow';
+                  avgMonthlyProfit = ytdMonths.length > 0 ? ytdCashFlow / ytdMonths.length : 0;
+                  linearProjection = ytdCashFlow + (avgMonthlyProfit * monthsRemaining);
+                  
+                  // Trend using last 3 months
+                  const recentMonths = ytdMonths.slice(-3);
+                  const recentAvgNet = recentMonths.length > 0 
+                    ? recentMonths.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0) / recentMonths.length 
+                    : avgMonthlyProfit;
+                  trendProjection = ytdCashFlow + (recentAvgNet * monthsRemaining);
+                }
+                
+                // Tooltip component
+                const KPICard = ({ label, value, subLabel, color, tooltip }) => (
+                  <div className="bg-slate-700/50 rounded-lg p-4 relative group cursor-help">
+                    <p className="text-slate-400 text-xs mb-1">{label}</p>
+                    <p className={`text-2xl font-bold ${color}`}>{value}</p>
+                    <p className="text-slate-500 text-xs">{subLabel}</p>
+                    {tooltip && (
+                      <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-72 p-3 bg-slate-900 border border-slate-600 rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
+                        <p className="text-sm text-slate-200">{tooltip}</p>
+                      </div>
+                    )}
+                  </div>
+                );
                 
                 return (
                   <div className="space-y-6">
                     {/* Key Performance Indicators */}
                     <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-                      <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
                         <Target className="w-5 h-5 text-violet-400" />
                         Key Performance Indicators — {new Date(currentMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
                       </h3>
+                      <p className="text-slate-500 text-xs mb-4">Hover over each metric for detailed explanation</p>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="bg-slate-700/50 rounded-lg p-4">
-                          <p className="text-slate-400 text-xs mb-1">Operating Margin</p>
-                          <p className={`text-2xl font-bold ${operatingMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {operatingMargin.toFixed(1)}%
-                          </p>
-                          <p className="text-slate-500 text-xs">Net / Revenue</p>
-                        </div>
-                        <div className="bg-slate-700/50 rounded-lg p-4">
-                          <p className="text-slate-400 text-xs mb-1">OpEx Ratio</p>
-                          <p className={`text-2xl font-bold ${opexRatio <= 50 ? 'text-emerald-400' : opexRatio <= 70 ? 'text-amber-400' : 'text-rose-400'}`}>
-                            {opexRatio.toFixed(1)}%
-                          </p>
-                          <p className="text-slate-500 text-xs">Operating Exp / Revenue</p>
-                        </div>
-                        <div className="bg-slate-700/50 rounded-lg p-4">
-                          <p className="text-slate-400 text-xs mb-1">Revenue MoM</p>
-                          <p className={`text-2xl font-bold flex items-center gap-1 ${revenueMoM >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {revenueMoM >= 0 ? '+' : ''}{revenueMoM.toFixed(1)}%
-                            {revenueMoM >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                          </p>
-                          <p className="text-slate-500 text-xs">vs Last Month</p>
-                        </div>
-                        <div className="bg-slate-700/50 rounded-lg p-4">
-                          <p className="text-slate-400 text-xs mb-1">Cash Runway</p>
-                          <p className={`text-2xl font-bold ${runwayMonths >= 6 ? 'text-emerald-400' : runwayMonths >= 3 ? 'text-amber-400' : 'text-rose-400'}`}>
-                            {runwayMonths === Infinity ? '∞' : `${runwayMonths.toFixed(1)}mo`}
-                          </p>
-                          <p className="text-slate-500 text-xs">At current burn rate</p>
-                        </div>
+                        <KPICard 
+                          label="Operating Margin"
+                          value={`${operatingMargin.toFixed(1)}%`}
+                          subLabel="Net / Revenue"
+                          color={operatingMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}
+                          tooltip={`Your net cash flow (${formatCurrency(currentMonthData.net)}) divided by income (${formatCurrency(currentMonthData.income)}) = ${operatingMargin.toFixed(1)}%. This shows what percentage of revenue you keep after all expenses. A healthy e-commerce business typically aims for 15-30%.`}
+                        />
+                        <KPICard 
+                          label="OpEx Ratio"
+                          value={`${opexRatio.toFixed(1)}%`}
+                          subLabel="Operating Exp / Revenue"
+                          color={opexRatio <= 50 ? 'text-emerald-400' : opexRatio <= 70 ? 'text-amber-400' : 'text-rose-400'}
+                          tooltip={`Operating expenses (${formatCurrency(monthOpEx)}) excluding COGS, divided by revenue (${formatCurrency(currentMonthData.income)}) = ${opexRatio.toFixed(1)}%. This measures operational efficiency. Lower is better — under 50% is excellent, 50-70% is acceptable, over 70% needs attention.`}
+                        />
+                        <KPICard 
+                          label="Revenue MoM"
+                          value={`${revenueMoM >= 0 ? '+' : ''}${revenueMoM.toFixed(1)}%`}
+                          subLabel="vs Last Month"
+                          color={revenueMoM >= 0 ? 'text-emerald-400' : 'text-rose-400'}
+                          tooltip={`Revenue changed from ${formatCurrency(lastMonthData.income)} last month to ${formatCurrency(currentMonthData.income)} this month = ${revenueMoM >= 0 ? '+' : ''}${revenueMoM.toFixed(1)}% change. Consistent positive MoM growth indicates healthy business expansion.`}
+                        />
+                        <KPICard 
+                          label="Cash Runway"
+                          value={runwayMonths === Infinity ? '∞' : `${runwayMonths.toFixed(1)}mo`}
+                          subLabel="At current burn rate"
+                          color={runwayMonths >= 6 ? 'text-emerald-400' : runwayMonths >= 3 ? 'text-amber-400' : 'text-rose-400'}
+                          tooltip={`With ${formatCurrency(totalCash)} cash and avg monthly expenses of ${formatCurrency(avgMonthlyExpenses)}, you have ${runwayMonths === Infinity ? 'unlimited' : runwayMonths.toFixed(1) + ' months'} of runway. 6+ months is comfortable, 3-6 months needs monitoring, under 3 months is critical.`}
+                        />
                       </div>
                     </div>
                     
                     {/* AI Profit Forecast */}
                     <div className="bg-gradient-to-r from-violet-900/30 to-indigo-900/30 rounded-xl border border-violet-500/30 p-5">
-                      <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
                         <Brain className="w-5 h-5 text-violet-400" />
-                        AI Year-End Profit Forecast — {currentYear}
+                        AI Year-End {forecastBasis === 'sales' ? 'Profit' : 'Cash Flow'} Forecast — {currentYear}
                       </h3>
+                      <p className="text-slate-400 text-xs mb-4">
+                        {forecastBasis === 'sales' 
+                          ? `Based on ${weeksWithData} weeks of actual sales data with ${formatCurrency(actualYTDRevenue)} revenue`
+                          : `Based on banking cash flow data (${ytdMonths.length} months). Upload sales data for profit-based forecasting.`}
+                      </p>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                         <div className="bg-slate-800/50 rounded-lg p-4">
-                          <p className="text-slate-400 text-xs mb-1">YTD Actual</p>
-                          <p className={`text-2xl font-bold ${ytdNet >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {formatCurrency(ytdNet)}
+                          <p className="text-slate-400 text-xs mb-1">YTD Actual {forecastBasis === 'sales' ? 'Profit' : 'Cash Flow'}</p>
+                          <p className={`text-2xl font-bold ${(forecastBasis === 'sales' ? actualYTDProfit : ytdCashFlow) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {formatCurrency(forecastBasis === 'sales' ? actualYTDProfit : ytdCashFlow)}
                           </p>
-                          <p className="text-slate-500 text-xs">{ytdMonths.length} months completed</p>
+                          <p className="text-slate-500 text-xs">
+                            {forecastBasis === 'sales' ? `${weeksWithData} weeks` : `${ytdMonths.length} months`} completed
+                          </p>
                         </div>
                         <div className="bg-slate-800/50 rounded-lg p-4">
                           <p className="text-slate-400 text-xs mb-1">Linear Projection</p>
-                          <p className={`text-2xl font-bold ${projectedYearEndProfit >= 0 ? 'text-cyan-400' : 'text-rose-400'}`}>
-                            {formatCurrency(projectedYearEndProfit)}
+                          <p className={`text-2xl font-bold ${linearProjection >= 0 ? 'text-cyan-400' : 'text-rose-400'}`}>
+                            {formatCurrency(linearProjection)}
                           </p>
-                          <p className="text-slate-500 text-xs">Based on avg monthly</p>
+                          <p className="text-slate-500 text-xs">
+                            Avg {formatCurrency(avgMonthlyProfit)}/mo × {12 - (forecastBasis === 'sales' ? Math.ceil(weeksWithData / 4.33) : ytdMonths.length)} remaining
+                          </p>
                         </div>
                         <div className="bg-slate-800/50 rounded-lg p-4 border border-violet-500/30">
                           <p className="text-violet-400 text-xs mb-1">🤖 AI Trend Forecast</p>
-                          <p className={`text-2xl font-bold ${trendAdjustedForecast >= 0 ? 'text-violet-400' : 'text-rose-400'}`}>
-                            {formatCurrency(trendAdjustedForecast)}
+                          <p className={`text-2xl font-bold ${trendProjection >= 0 ? 'text-violet-400' : 'text-rose-400'}`}>
+                            {formatCurrency(trendProjection)}
                           </p>
                           <p className="text-slate-500 text-xs">Weighted recent trends</p>
                         </div>
                       </div>
                       <div className="bg-slate-800/30 rounded-lg p-3">
                         <p className="text-slate-400 text-sm">
-                          <span className="text-violet-400 font-medium">📊 Forecast Methodology:</span> AI analyzes your last 3 months' performance trends and weights them higher than older data. 
-                          With {monthsRemaining} months remaining, your recent average monthly net of {formatCurrency(recentAvgNet)} projects to {formatCurrency(trendAdjustedForecast)} by year-end.
-                          {trendAdjustedForecast > projectedYearEndProfit 
-                            ? " 📈 Recent performance is trending above your year average!" 
-                            : trendAdjustedForecast < projectedYearEndProfit 
-                              ? " 📉 Recent performance is below your year average — may need attention."
+                          <span className="text-violet-400 font-medium">📊 Forecast Methodology:</span> 
+                          {forecastBasis === 'sales' 
+                            ? ` Using ${weeksWithData} weeks of actual sales profit data. Linear projection uses your average weekly profit (${formatCurrency(avgMonthlyProfit / 4.33)}) × remaining weeks. AI Trend weights your last 4 weeks more heavily to capture recent momentum.`
+                            : ` Using banking cash flow data. Linear projection extrapolates your average monthly net (${formatCurrency(avgMonthlyProfit)}). AI Trend weights recent 3 months higher to reflect current performance.`
+                          }
+                          {trendProjection > linearProjection 
+                            ? " 📈 Recent performance is trending above average!" 
+                            : trendProjection < linearProjection 
+                              ? " 📉 Recent performance is below average — may need attention."
                               : ""}
                         </p>
                       </div>
@@ -24734,75 +24790,120 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   cardTransactions[name] = sortedTxns.filter(t => t.account === name && t.isExpense);
                 });
                 
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                
                 // Determine card type and calculate optimal payment dates
                 const getCardAnalysis = (cardName, txns) => {
-                  const isAmexPlatinum = cardName.toLowerCase().includes('platinum');
-                  const isAmexPrime = cardName.toLowerCase().includes('prime') || cardName.toLowerCase().includes('amazon');
-                  const isAmex = cardName.toLowerCase().includes('amex') || cardName.toLowerCase().includes('american express') || isAmexPlatinum || isAmexPrime;
+                  const nameLower = cardName.toLowerCase();
+                  const isAmexPlatinum = nameLower.includes('platinum');
+                  const isAmexPrime = nameLower.includes('prime') || nameLower.includes('amazon');
+                  const isAmex = nameLower.includes('amex') || nameLower.includes('american express') || isAmexPlatinum || isAmexPrime;
                   
-                  // Group transactions by statement period (approximate)
-                  // Amex Business cards: Statement closes monthly, payment due 25 days after statement close
-                  // For Amex Platinum: "Please Pay By" is suggested, actual due date is ~2 weeks later
+                  // Get unpaid charges (last 60 days)
+                  const recentCharges = txns.filter(t => {
+                    const txnDate = new Date(t.date + 'T12:00:00');
+                    const daysSinceTxn = Math.floor((today - txnDate) / (1000 * 60 * 60 * 24));
+                    return daysSinceTxn >= 0 && daysSinceTxn < 60;
+                  }).sort((a, b) => a.date.localeCompare(b.date));
                   
-                  const now = new Date();
-                  const pendingCharges = txns.filter(t => {
-                    const txnDate = new Date(t.date);
-                    const daysSinceTxn = (now - txnDate) / (1000 * 60 * 60 * 24);
-                    return daysSinceTxn < 60; // Last 60 days of charges
-                  });
+                  // Calculate payment schedule for each charge
+                  // Amex Business cards typically have:
+                  // - Statement closes on a fixed date each month (we'll estimate end of month)
+                  // - Standard due date: 25 days after statement close
+                  // - Amex Platinum "Please Pay By" is a suggestion; actual due is ~14 days later
                   
-                  // Calculate payment windows for each charge
-                  const chargeAnalysis = pendingCharges.map(t => {
-                    const txnDate = new Date(t.date);
+                  const chargeAnalysis = recentCharges.map(t => {
+                    const txnDate = new Date(t.date + 'T12:00:00');
                     
-                    // Estimate statement close (typically end of month or fixed date)
-                    // For simplicity, assume statement closes on the last day of the month
-                    const statementCloseDate = new Date(txnDate.getFullYear(), txnDate.getMonth() + 1, 0);
+                    // Determine which statement this charge will appear on
+                    // If charge is in first 25 days of month, it's on that month's statement
+                    // Otherwise it rolls to next month's statement
+                    let statementMonth, statementYear;
+                    if (txnDate.getDate() <= 25) {
+                      statementMonth = txnDate.getMonth();
+                      statementYear = txnDate.getFullYear();
+                    } else {
+                      statementMonth = txnDate.getMonth() + 1;
+                      statementYear = txnDate.getFullYear();
+                      if (statementMonth > 11) {
+                        statementMonth = 0;
+                        statementYear++;
+                      }
+                    }
                     
-                    // Payment due date: 25 days after statement close for Amex
-                    const paymentDueDate = new Date(statementCloseDate);
-                    paymentDueDate.setDate(paymentDueDate.getDate() + 25);
+                    // Statement closes at end of the statement month
+                    const statementCloseDate = new Date(statementYear, statementMonth + 1, 0);
+                    statementCloseDate.setHours(23, 59, 59, 999);
                     
-                    // Optimal pay date: 5 days before due date to avoid interest
-                    const optimalPayDate = new Date(paymentDueDate);
-                    optimalPayDate.setDate(optimalPayDate.getDate() - 5);
+                    // Standard payment due: 25 days after statement close
+                    const standardDueDate = new Date(statementCloseDate);
+                    standardDueDate.setDate(standardDueDate.getDate() + 25);
+                    standardDueDate.setHours(23, 59, 59, 999);
                     
-                    // For Amex Platinum: actual due date is ~14 days after "Please Pay By" date
-                    // So the real due date is statement close + 25 days + 14 days ≈ 39 days
-                    const amexPlatinumRealDueDate = isAmexPlatinum 
-                      ? new Date(statementCloseDate.getTime() + (39 * 24 * 60 * 60 * 1000))
-                      : paymentDueDate;
-                    const amexPlatinumOptimalPayDate = new Date(amexPlatinumRealDueDate);
-                    amexPlatinumOptimalPayDate.setDate(amexPlatinumOptimalPayDate.getDate() - 5);
+                    // For Amex Platinum: "Please Pay By" is 25 days after close, but REAL due date is ~14 days later
+                    // Total: 39 days after statement close
+                    let realDueDate, optimalPayDate;
+                    if (isAmexPlatinum) {
+                      realDueDate = new Date(statementCloseDate);
+                      realDueDate.setDate(realDueDate.getDate() + 39);
+                      optimalPayDate = new Date(realDueDate);
+                      optimalPayDate.setDate(optimalPayDate.getDate() - 5);
+                    } else {
+                      realDueDate = new Date(standardDueDate);
+                      optimalPayDate = new Date(standardDueDate);
+                      optimalPayDate.setDate(optimalPayDate.getDate() - 5);
+                    }
                     
-                    // For Amazon Business Prime: 90-day terms if selected
-                    const amazonPrimeMaxDate = isAmexPrime 
-                      ? new Date(txnDate.getTime() + (90 * 24 * 60 * 60 * 1000))
-                      : null;
-                    const amazonPrimeOptimalPayDate = amazonPrimeMaxDate 
-                      ? new Date(amazonPrimeMaxDate.getTime() - (5 * 24 * 60 * 60 * 1000))
-                      : null;
+                    // Calculate days until due
+                    const daysUntilDue = Math.ceil((realDueDate - today) / (1000 * 60 * 60 * 24));
+                    const daysUntilOptimal = Math.ceil((optimalPayDate - today) / (1000 * 60 * 60 * 24));
+                    
+                    // Is this charge urgent? (due within 10 days)
+                    const isUrgent = daysUntilDue <= 10;
+                    const isPastDue = daysUntilDue < 0;
                     
                     return {
                       ...t,
+                      txnDate,
                       statementCloseDate,
-                      standardDueDate: paymentDueDate,
-                      optimalPayDate: isAmexPlatinum ? amexPlatinumOptimalPayDate : optimalPayDate,
-                      realDueDate: isAmexPlatinum ? amexPlatinumRealDueDate : paymentDueDate,
-                      amazonPrimeMaxDate,
-                      amazonPrimeOptimalPayDate,
-                      daysUntilDue: Math.ceil((isAmexPlatinum ? amexPlatinumRealDueDate : paymentDueDate - now) / (1000 * 60 * 60 * 24)),
-                      isUrgent: (isAmexPlatinum ? amexPlatinumRealDueDate : paymentDueDate) <= new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000)),
+                      standardDueDate,
+                      realDueDate,
+                      optimalPayDate,
+                      daysUntilDue,
+                      daysUntilOptimal,
+                      isUrgent,
+                      isPastDue,
                     };
                   });
                   
-                  // Find the soonest payment needed
-                  const urgentCharges = chargeAnalysis.filter(c => c.isUrgent);
-                  const nextPaymentDue = chargeAnalysis.length > 0 
-                    ? chargeAnalysis.reduce((min, c) => c.realDueDate < min.realDueDate ? c : min)
-                    : null;
+                  // Group charges by statement period
+                  const statementGroups = {};
+                  chargeAnalysis.forEach(c => {
+                    const key = c.statementCloseDate.toISOString().slice(0, 7);
+                    if (!statementGroups[key]) {
+                      statementGroups[key] = {
+                        statementCloseDate: c.statementCloseDate,
+                        realDueDate: c.realDueDate,
+                        optimalPayDate: c.optimalPayDate,
+                        daysUntilDue: c.daysUntilDue,
+                        charges: [],
+                        total: 0,
+                      };
+                    }
+                    statementGroups[key].charges.push(c);
+                    statementGroups[key].total += c.amount;
+                  });
                   
-                  // Total balance
+                  // Find next payment needed (soonest due date with unpaid charges)
+                  const sortedStatements = Object.values(statementGroups).sort((a, b) => a.realDueDate - b.realDueDate);
+                  const nextStatement = sortedStatements.find(s => s.daysUntilDue > -30); // Allow some past due
+                  
+                  // Urgent charges (due within 10 days)
+                  const urgentCharges = chargeAnalysis.filter(c => c.isUrgent && !c.isPastDue);
+                  const pastDueCharges = chargeAnalysis.filter(c => c.isPastDue);
+                  
+                  // Total balance from account
                   const balance = bankingData.accounts?.[cardName]?.balance || 0;
                   
                   return {
@@ -24812,31 +24913,45 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     isAmexPrime,
                     balance,
                     charges: chargeAnalysis,
+                    statementGroups: sortedStatements,
+                    nextStatement,
                     urgentCharges,
-                    nextPaymentDue,
-                    totalPending: pendingCharges.reduce((s, t) => s + t.amount, 0),
+                    pastDueCharges,
+                    totalPending: recentCharges.reduce((s, t) => s + t.amount, 0),
                   };
                 };
                 
                 const cardAnalyses = creditAccts.map(([name, _]) => getCardAnalysis(name, cardTransactions[name] || []));
                 
-                // Find next urgent payment across all cards
+                // Find any urgent payments across all cards
                 const allUrgentCharges = cardAnalyses.flatMap(c => c.urgentCharges);
-                const nextGlobalPayment = cardAnalyses.filter(c => c.nextPaymentDue).sort((a, b) => 
-                  a.nextPaymentDue.realDueDate - b.nextPaymentDue.realDueDate
-                )[0];
+                const allPastDueCharges = cardAnalyses.flatMap(c => c.pastDueCharges);
                 
                 return (
                   <div className="space-y-6">
-                    {/* Payment Alert */}
-                    {allUrgentCharges.length > 0 && (
+                    {/* Past Due Alert */}
+                    {allPastDueCharges.length > 0 && (
+                      <div className="bg-rose-900/30 border border-rose-500/50 rounded-xl p-4">
+                        <h3 className="text-lg font-semibold text-rose-400 mb-2 flex items-center gap-2">
+                          <AlertCircle className="w-5 h-5" />
+                          Past Due Warning
+                        </h3>
+                        <p className="text-rose-200">
+                          You have {allPastDueCharges.length} charges that may be past their due date.
+                          Pay immediately to avoid late fees and interest.
+                        </p>
+                      </div>
+                    )}
+                    
+                    {/* Payment Due Soon Alert */}
+                    {allUrgentCharges.length > 0 && allPastDueCharges.length === 0 && (
                       <div className="bg-amber-900/30 border border-amber-500/50 rounded-xl p-4">
                         <h3 className="text-lg font-semibold text-amber-400 mb-2 flex items-center gap-2">
                           <AlertTriangle className="w-5 h-5" />
                           Payment Due Soon
                         </h3>
                         <p className="text-amber-200">
-                          You have {allUrgentCharges.length} charges with payments due within 7 days.
+                          You have charges with payments due within 10 days.
                           Pay by the optimal dates below to avoid interest while maximizing your cash flow.
                         </p>
                       </div>
@@ -24852,21 +24967,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <div className="bg-slate-700/30 rounded-lg p-4 border-l-4 border-violet-500">
                           <h4 className="font-semibold text-violet-400 mb-2">💳 Business Platinum</h4>
                           <ul className="text-sm text-slate-300 space-y-1">
-                            <li>• "Please Pay By" date is NOT the due date</li>
-                            <li>• Actual due date is ~14 days AFTER "Please Pay By"</li>
-                            <li>• Pay in full by actual due date to avoid interest</li>
-                            <li>• Pay Over Time feature accrues interest from day 1</li>
-                            <li>• <span className="text-emerald-400">Optimal: Pay 5 days before actual due date</span></li>
+                            <li>• Statement closes ~end of month</li>
+                            <li>• "Please Pay By" = 25 days after close</li>
+                            <li>• <span className="text-amber-400">Actual due date = ~39 days after close</span></li>
+                            <li>• Pay in full by actual due date = no interest</li>
+                            <li>• <span className="text-emerald-400">Strategy: Pay 5 days before actual due</span></li>
                           </ul>
                         </div>
                         <div className="bg-slate-700/30 rounded-lg p-4 border-l-4 border-amber-500">
                           <h4 className="font-semibold text-amber-400 mb-2">📦 Business Prime (Amazon)</h4>
                           <ul className="text-sm text-slate-300 space-y-1">
-                            <li>• Standard: 25-day grace period after statement</li>
-                            <li>• Optional: 90-day payment terms (no 5% back)</li>
-                            <li>• Choose 5% back OR 90-day terms per purchase</li>
-                            <li>• No interest if paid in full by due date</li>
-                            <li>• <span className="text-emerald-400">Optimal: Pay 5 days before due date</span></li>
+                            <li>• Statement closes ~end of month</li>
+                            <li>• Due date = 25 days after statement close</li>
+                            <li>• Optional: 90-day terms (forfeits 5% back)</li>
+                            <li>• Pay in full by due date = no interest</li>
+                            <li>• <span className="text-emerald-400">Strategy: Pay 5 days before due</span></li>
                           </ul>
                         </div>
                       </div>
@@ -24885,61 +25000,91 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           <span className="text-rose-400 font-bold text-lg">{formatCurrency(card.balance)}</span>
                         </div>
                         
-                        {card.nextPaymentDue && (
-                          <div className={`mb-4 p-3 rounded-lg ${card.nextPaymentDue.isUrgent ? 'bg-amber-900/30 border border-amber-500/30' : 'bg-emerald-900/20 border border-emerald-500/30'}`}>
+                        {/* Next Payment Due */}
+                        {card.nextStatement && (
+                          <div className={`mb-4 p-4 rounded-lg ${
+                            card.nextStatement.daysUntilDue < 0 ? 'bg-rose-900/30 border border-rose-500/30' :
+                            card.nextStatement.daysUntilDue <= 10 ? 'bg-amber-900/30 border border-amber-500/30' : 
+                            'bg-emerald-900/20 border border-emerald-500/30'
+                          }`}>
                             <div className="flex items-center justify-between">
                               <div>
-                                <p className={`font-medium ${card.nextPaymentDue.isUrgent ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                  {card.nextPaymentDue.isUrgent ? '⚠️ Payment Due Soon' : '✓ Next Payment Window'}
+                                <p className={`font-medium ${
+                                  card.nextStatement.daysUntilDue < 0 ? 'text-rose-400' :
+                                  card.nextStatement.daysUntilDue <= 10 ? 'text-amber-400' : 
+                                  'text-emerald-400'
+                                }`}>
+                                  {card.nextStatement.daysUntilDue < 0 ? '🚨 Past Due!' :
+                                   card.nextStatement.daysUntilDue <= 10 ? '⚠️ Payment Due Soon' : 
+                                   '✓ Next Payment Window'}
+                                </p>
+                                <p className="text-sm text-slate-300 mt-1">
+                                  Statement Total: <span className="font-bold text-white">{formatCurrency(card.nextStatement.total)}</span>
                                 </p>
                                 <p className="text-sm text-slate-300">
-                                  Optimal Pay Date: <span className="font-bold text-white">{card.nextPaymentDue.optimalPayDate.toLocaleDateString()}</span>
-                                  <span className="text-slate-500"> ({card.nextPaymentDue.daysUntilDue} days)</span>
+                                  Optimal Pay Date: <span className="font-bold text-cyan-400">{card.nextStatement.optimalPayDate.toLocaleDateString()}</span>
+                                  <span className="text-slate-500 ml-1">
+                                    ({card.nextStatement.daysUntilDue - 5 > 0 ? `in ${card.nextStatement.daysUntilDue - 5} days` : 'now'})
+                                  </span>
                                 </p>
                               </div>
                               <div className="text-right">
                                 <p className="text-slate-400 text-xs">Due Date</p>
-                                <p className="font-medium text-white">{card.nextPaymentDue.realDueDate.toLocaleDateString()}</p>
+                                <p className={`font-bold text-lg ${card.nextStatement.daysUntilDue < 0 ? 'text-rose-400' : 'text-white'}`}>
+                                  {card.nextStatement.realDueDate.toLocaleDateString()}
+                                </p>
+                                <p className={`text-sm ${
+                                  card.nextStatement.daysUntilDue < 0 ? 'text-rose-400' :
+                                  card.nextStatement.daysUntilDue <= 10 ? 'text-amber-400' : 
+                                  'text-slate-400'
+                                }`}>
+                                  {card.nextStatement.daysUntilDue < 0 
+                                    ? `${Math.abs(card.nextStatement.daysUntilDue)} days overdue`
+                                    : `${card.nextStatement.daysUntilDue} days left`}
+                                </p>
                               </div>
                             </div>
                           </div>
                         )}
                         
-                        {/* Recent Charges with Payment Schedule */}
-                        {card.charges.length > 0 && (
-                          <div className="overflow-x-auto max-h-64 overflow-y-auto">
-                            <table className="w-full text-sm">
-                              <thead className="sticky top-0 bg-slate-800">
-                                <tr className="border-b border-slate-700">
-                                  <th className="text-left text-slate-400 font-medium py-2 px-2">Date</th>
-                                  <th className="text-left text-slate-400 font-medium py-2 px-2">Description</th>
-                                  <th className="text-right text-slate-400 font-medium py-2 px-2">Amount</th>
-                                  <th className="text-right text-slate-400 font-medium py-2 px-2">Pay By</th>
-                                  <th className="text-right text-slate-400 font-medium py-2 px-2">Status</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {card.charges.slice(0, 10).map((charge, i) => (
-                                  <tr key={charge.id || i} className="border-b border-slate-700/50">
-                                    <td className="py-2 px-2 text-slate-400">{charge.date}</td>
-                                    <td className="py-2 px-2 text-white truncate max-w-[200px]">{charge.name}</td>
-                                    <td className="py-2 px-2 text-right text-rose-400">{formatCurrency(charge.amount)}</td>
-                                    <td className="py-2 px-2 text-right text-cyan-400">{charge.optimalPayDate.toLocaleDateString()}</td>
-                                    <td className="py-2 px-2 text-right">
-                                      {charge.isUrgent 
-                                        ? <span className="text-amber-400 text-xs">⚠️ Soon</span>
-                                        : <span className="text-emerald-400 text-xs">✓ OK</span>
-                                      }
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                        {/* Statement Breakdown */}
+                        {card.statementGroups.length > 0 && (
+                          <div className="space-y-3">
+                            <h4 className="text-sm font-medium text-slate-400">Payment Schedule by Statement</h4>
+                            {card.statementGroups.slice(0, 3).map((stmt, i) => (
+                              <div key={i} className="bg-slate-700/30 rounded-lg p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="text-white font-medium">
+                                    {stmt.statementCloseDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })} Statement
+                                  </span>
+                                  <span className="text-rose-400 font-bold">{formatCurrency(stmt.total)}</span>
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 text-xs">
+                                  <div>
+                                    <span className="text-slate-500">Closes</span>
+                                    <p className="text-slate-300">{stmt.statementCloseDate.toLocaleDateString()}</p>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-500">Pay By (Optimal)</span>
+                                    <p className="text-cyan-400">{stmt.optimalPayDate.toLocaleDateString()}</p>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-500">Due Date</span>
+                                    <p className={stmt.daysUntilDue < 0 ? 'text-rose-400' : 'text-white'}>{stmt.realDueDate.toLocaleDateString()}</p>
+                                  </div>
+                                </div>
+                                <div className="mt-2 text-xs text-slate-500">
+                                  {stmt.charges.length} charges • {stmt.daysUntilDue < 0 ? 
+                                    <span className="text-rose-400">{Math.abs(stmt.daysUntilDue)} days overdue</span> : 
+                                    <span>{stmt.daysUntilDue} days until due</span>}
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         )}
                         
                         {card.charges.length === 0 && (
-                          <p className="text-slate-500 text-sm">No recent charges found for this card</p>
+                          <p className="text-slate-500 text-sm">No recent charges found for this card in the last 60 days.</p>
                         )}
                       </div>
                     ))}
