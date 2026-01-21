@@ -1219,6 +1219,7 @@ const handleLogout = async () => {
   const [showAddProduction, setShowAddProduction] = useState(false);
   const [editingProduction, setEditingProduction] = useState(null);
   const [productionForm, setProductionForm] = useState({ 
+    // Legacy single-item fields (kept for backwards compatibility)
     sku: '', 
     productName: '', 
     quantity: '', 
@@ -1240,6 +1241,8 @@ const handleLogout = async () => {
     balanceNetDays: 0, // Days after shipment to pay balance (0 = on shipment)
     // Cure time (for soaps)
     cureTimeDays: 0, // Days product needs before sellable
+    // Multi-SKU line items
+    lineItems: [], // [{ sku, productName, quantity, unitCost }]
   });
   const [productionFile, setProductionFile] = useState(null);
   const [productionFileName, setProductionFileName] = useState('');
@@ -17240,7 +17243,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   setProductionForm({ 
                     sku: '', productName: '', quantity: '', expectedDate: '', notes: '',
                     poNumber: '', vendor: '', unitCost: '', paymentTerms: '50-50', depositPercent: 50,
-                    depositPaid: false, depositPaidDate: '', balancePaid: false, balancePaidDate: '', shipments: []
+                    depositPaid: false, depositPaidDate: '', balancePaid: false, balancePaidDate: '', shipments: [],
+                    depositNetDays: 0, balanceNetDays: 0, cureTimeDays: 0, lineItems: []
                   }); 
                   setEditingProduction(null); 
                   setShowAddProduction(true); 
@@ -17392,32 +17396,169 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     </div>
                   </div>
                   
-                  {/* Product Info */}
-                  <div className="grid grid-cols-2 gap-4 mb-4">
-                    <div>
-                      <label className="block text-sm text-slate-400 mb-1">SKU</label>
-                      <input type="text" value={productionForm.sku} onChange={(e) => setProductionForm(p => ({ ...p, sku: e.target.value }))} placeholder="ABC-123" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                  {/* Line Items - Multiple SKUs */}
+                  <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-white font-medium">Line Items</h4>
+                      <button
+                        type="button"
+                        onClick={() => setProductionForm(p => ({
+                          ...p,
+                          lineItems: [...(p.lineItems || []), { sku: '', productName: '', quantity: '', unitCost: '' }]
+                        }))}
+                        className="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white text-sm flex items-center gap-1"
+                      >
+                        <Plus className="w-4 h-4" /> Add Item
+                      </button>
                     </div>
-                    <div>
-                      <label className="block text-sm text-slate-400 mb-1">Product Name</label>
-                      <input type="text" value={productionForm.productName} onChange={(e) => setProductionForm(p => ({ ...p, productName: e.target.value }))} placeholder="Product description" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
-                    </div>
-                  </div>
-                  
-                  {/* Quantity & Cost */}
-                  <div className="grid grid-cols-3 gap-4 mb-4">
-                    <div>
-                      <label className="block text-sm text-slate-400 mb-1">Total Quantity</label>
-                      <input type="number" value={productionForm.quantity} onChange={(e) => setProductionForm(p => ({ ...p, quantity: e.target.value }))} placeholder="75000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-slate-400 mb-1">Unit Cost ($)</label>
-                      <input type="number" step="0.01" value={productionForm.unitCost || ''} onChange={(e) => setProductionForm(p => ({ ...p, unitCost: e.target.value }))} placeholder="0.45" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-slate-400 mb-1">Total PO Value</label>
-                      <div className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-emerald-400 font-medium">
-                        {formatCurrency((parseFloat(productionForm.quantity) || 0) * (parseFloat(productionForm.unitCost) || 0))}
+                    
+                    {/* Show legacy single item if no line items yet */}
+                    {(!productionForm.lineItems || productionForm.lineItems.length === 0) && (
+                      <div className="grid grid-cols-12 gap-2 mb-2">
+                        <div className="col-span-2">
+                          <label className="block text-xs text-slate-500 mb-1">SKU</label>
+                          <input 
+                            type="text" 
+                            value={productionForm.sku} 
+                            onChange={(e) => setProductionForm(p => ({ ...p, sku: e.target.value }))} 
+                            placeholder="SKU" 
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm" 
+                          />
+                        </div>
+                        <div className="col-span-4">
+                          <label className="block text-xs text-slate-500 mb-1">Product Name</label>
+                          <input 
+                            type="text" 
+                            value={productionForm.productName} 
+                            onChange={(e) => setProductionForm(p => ({ ...p, productName: e.target.value }))} 
+                            placeholder="Product description" 
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm" 
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <label className="block text-xs text-slate-500 mb-1">Qty</label>
+                          <input 
+                            type="number" 
+                            value={productionForm.quantity} 
+                            onChange={(e) => setProductionForm(p => ({ ...p, quantity: e.target.value }))} 
+                            placeholder="1000" 
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm" 
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <label className="block text-xs text-slate-500 mb-1">Unit Cost</label>
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value={productionForm.unitCost} 
+                            onChange={(e) => setProductionForm(p => ({ ...p, unitCost: e.target.value }))} 
+                            placeholder="0.45" 
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm" 
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <label className="block text-xs text-slate-500 mb-1">Line Total</label>
+                          <div className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-emerald-400 text-sm">
+                            {formatCurrency((parseFloat(productionForm.quantity) || 0) * (parseFloat(productionForm.unitCost) || 0))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Line items list */}
+                    {(productionForm.lineItems || []).map((item, idx) => (
+                      <div key={idx} className="grid grid-cols-12 gap-2 mb-2 items-end">
+                        <div className="col-span-2">
+                          {idx === 0 && <label className="block text-xs text-slate-500 mb-1">SKU</label>}
+                          <input 
+                            type="text" 
+                            value={item.sku} 
+                            onChange={(e) => {
+                              const newItems = [...productionForm.lineItems];
+                              newItems[idx] = { ...newItems[idx], sku: e.target.value };
+                              setProductionForm(p => ({ ...p, lineItems: newItems }));
+                            }} 
+                            placeholder="SKU" 
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm" 
+                          />
+                        </div>
+                        <div className="col-span-3">
+                          {idx === 0 && <label className="block text-xs text-slate-500 mb-1">Product Name</label>}
+                          <input 
+                            type="text" 
+                            value={item.productName} 
+                            onChange={(e) => {
+                              const newItems = [...productionForm.lineItems];
+                              newItems[idx] = { ...newItems[idx], productName: e.target.value };
+                              setProductionForm(p => ({ ...p, lineItems: newItems }));
+                            }} 
+                            placeholder="Product" 
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm" 
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          {idx === 0 && <label className="block text-xs text-slate-500 mb-1">Qty</label>}
+                          <input 
+                            type="number" 
+                            value={item.quantity} 
+                            onChange={(e) => {
+                              const newItems = [...productionForm.lineItems];
+                              newItems[idx] = { ...newItems[idx], quantity: e.target.value };
+                              setProductionForm(p => ({ ...p, lineItems: newItems }));
+                            }} 
+                            placeholder="1000" 
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm" 
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          {idx === 0 && <label className="block text-xs text-slate-500 mb-1">Unit Cost</label>}
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value={item.unitCost} 
+                            onChange={(e) => {
+                              const newItems = [...productionForm.lineItems];
+                              newItems[idx] = { ...newItems[idx], unitCost: e.target.value };
+                              setProductionForm(p => ({ ...p, lineItems: newItems }));
+                            }} 
+                            placeholder="0.45" 
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm" 
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          {idx === 0 && <label className="block text-xs text-slate-500 mb-1">Line Total</label>}
+                          <div className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-emerald-400 text-sm">
+                            {formatCurrency((parseFloat(item.quantity) || 0) * (parseFloat(item.unitCost) || 0))}
+                          </div>
+                        </div>
+                        <div className="col-span-1">
+                          {idx === 0 && <label className="block text-xs text-slate-500 mb-1">&nbsp;</label>}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newItems = productionForm.lineItems.filter((_, i) => i !== idx);
+                              setProductionForm(p => ({ ...p, lineItems: newItems }));
+                            }}
+                            className="p-1.5 text-slate-500 hover:text-rose-400"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {/* Total */}
+                    <div className="flex justify-end mt-3 pt-3 border-t border-slate-700">
+                      <div className="text-right">
+                        <span className="text-slate-400 text-sm mr-4">Total PO Value:</span>
+                        <span className="text-emerald-400 font-bold text-lg">
+                          {formatCurrency(
+                            ((productionForm.lineItems || []).length > 0 
+                              ? productionForm.lineItems.reduce((sum, item) => sum + ((parseFloat(item.quantity) || 0) * (parseFloat(item.unitCost) || 0)), 0)
+                              : (parseFloat(productionForm.quantity) || 0) * (parseFloat(productionForm.unitCost) || 0)
+                            )
+                          )}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -17573,16 +17714,41 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   
                   <div className="flex gap-3 mt-6">
                     <button onClick={() => {
-                      if (!productionForm.sku && !productionForm.productName) {
-                        setToast({ message: 'SKU or Product Name required', type: 'error' });
+                      // Validate: need either single item or line items
+                      const hasLineItems = productionForm.lineItems && productionForm.lineItems.length > 0;
+                      const hasSingleItem = productionForm.sku || productionForm.productName;
+                      
+                      if (!hasLineItems && !hasSingleItem) {
+                        setToast({ message: 'Add at least one item (SKU or Product Name)', type: 'error' });
                         return;
                       }
+                      
+                      // Calculate total from line items or single item
+                      let totalValue = 0;
+                      let totalQty = 0;
+                      let lineItems = [];
+                      
+                      if (hasLineItems) {
+                        lineItems = productionForm.lineItems.map(item => ({
+                          sku: item.sku,
+                          productName: item.productName,
+                          quantity: parseInt(item.quantity) || 0,
+                          unitCost: parseFloat(item.unitCost) || 0,
+                        }));
+                        totalValue = lineItems.reduce((sum, item) => sum + (item.quantity * item.unitCost), 0);
+                        totalQty = lineItems.reduce((sum, item) => sum + item.quantity, 0);
+                      } else {
+                        totalQty = parseInt(productionForm.quantity) || 0;
+                        totalValue = totalQty * (parseFloat(productionForm.unitCost) || 0);
+                      }
+                      
                       const poData = {
                         ...productionForm,
-                        quantity: parseInt(productionForm.quantity) || 0,
-                        unitCost: parseFloat(productionForm.unitCost) || 0,
+                        quantity: hasLineItems ? totalQty : (parseInt(productionForm.quantity) || 0),
+                        unitCost: hasLineItems ? (totalQty > 0 ? totalValue / totalQty : 0) : (parseFloat(productionForm.unitCost) || 0),
                         depositPercent: parseInt(productionForm.depositPercent) || 50,
-                        totalValue: (parseInt(productionForm.quantity) || 0) * (parseFloat(productionForm.unitCost) || 0),
+                        totalValue,
+                        lineItems: hasLineItems ? lineItems : [],
                         shipments: productionForm.shipments || [],
                       };
                       if (editingProduction) {
@@ -17728,7 +17894,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <tr key={item.id} className="border-t border-slate-700/50 hover:bg-slate-700/20">
                           <td className="px-4 py-3">
                             <div>
-                              <p className="text-white font-medium">{item.productName || item.sku || '—'}</p>
+                              {/* Show line items if present, otherwise single product */}
+                              {item.lineItems && item.lineItems.length > 0 ? (
+                                <div>
+                                  {item.lineItems.map((li, idx) => (
+                                    <p key={idx} className="text-white text-sm">
+                                      <span className="text-slate-500">{li.sku || '—'}</span>
+                                      {li.productName && <span className="ml-2">{li.productName}</span>}
+                                      <span className="text-cyan-400 ml-2">×{li.quantity}</span>
+                                    </p>
+                                  ))}
+                                  {item.lineItems.length > 1 && (
+                                    <p className="text-slate-500 text-xs mt-1">{item.lineItems.length} items</p>
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="text-white font-medium">{item.productName || item.sku || '—'}</p>
+                              )}
                               <div className="flex flex-wrap gap-2 mt-1">
                                 {item.poNumber && <span className="text-slate-500 text-xs">PO: {item.poNumber}</span>}
                                 {item.vendor && <span className="text-slate-500 text-xs">• {item.vendor}</span>}
@@ -17837,6 +18019,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                   depositNetDays: item.depositNetDays || 0,
                                   balanceNetDays: item.balanceNetDays || 0,
                                   cureTimeDays: item.cureTimeDays || 0,
+                                  lineItems: item.lineItems || [],
                                 });
                                 setEditingProduction(item.id);
                                 setShowAddProduction(true);
@@ -18333,6 +18516,65 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       };
     }).filter(w => w.revenue > 0); // Only show weeks with actual sales data
     
+    // GENERATE FUTURE PROJECTED WEEKS
+    // Calculate average weekly revenue/profit/units from recent data
+    const recentWeeks = weeklyData.slice(-4); // Last 4 weeks for trend
+    const avgWeeklyRevenue = recentWeeks.length > 0 ? recentWeeks.reduce((s, w) => s + w.revenue, 0) / recentWeeks.length : 0;
+    const avgWeeklyProfit = recentWeeks.length > 0 ? recentWeeks.reduce((s, w) => s + w.profit, 0) / recentWeeks.length : 0;
+    const avgWeeklyUnits = recentWeeks.length > 0 ? recentWeeks.reduce((s, w) => s + w.units, 0) / recentWeeks.length : 0;
+    const avgWeeklyMargin = avgWeeklyRevenue > 0 ? (avgWeeklyProfit / avgWeeklyRevenue) * 100 : 0;
+    
+    // Calculate week-over-week growth trend
+    const growthRates = [];
+    for (let i = 1; i < recentWeeks.length; i++) {
+      if (recentWeeks[i-1].revenue > 0) {
+        growthRates.push((recentWeeks[i].revenue - recentWeeks[i-1].revenue) / recentWeeks[i-1].revenue);
+      }
+    }
+    const avgGrowth = growthRates.length > 0 ? growthRates.reduce((s, r) => s + r, 0) / growthRates.length : 0;
+    
+    // Generate next 8 projected weeks
+    const lastWeekDate = weeklyData.length > 0 ? new Date(weeklyData[weeklyData.length - 1].key + 'T00:00:00') : new Date();
+    const projectedWeeks = [];
+    
+    for (let i = 1; i <= 8; i++) {
+      const futureDate = new Date(lastWeekDate.getTime() + i * 7 * 24 * 60 * 60 * 1000);
+      const weekKey = futureDate.toISOString().split('T')[0];
+      
+      // Apply growth trend to projection
+      const growthMultiplier = Math.pow(1 + Math.max(-0.1, Math.min(0.1, avgGrowth)), i); // Cap growth at ±10% per week
+      const projectedRevenue = Math.round(avgWeeklyRevenue * growthMultiplier);
+      const projectedProfit = Math.round(avgWeeklyProfit * growthMultiplier);
+      const projectedUnits = Math.round(avgWeeklyUnits * growthMultiplier);
+      
+      // Check if we have an Amazon forecast for this week
+      const amazonForecast = amazonForecasts[weekKey];
+      const forecastRevenue = amazonForecast?.totals?.sales || amazonForecast?.totals?.revenue || null;
+      
+      projectedWeeks.push({
+        key: weekKey,
+        label: futureDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        source: 'projected',
+        isProjected: true,
+        revenue: 0, // No actual yet
+        profit: 0,
+        units: 0,
+        margin: 0,
+        amazonRev: 0,
+        shopifyRev: 0,
+        // Projected values
+        projectedRevenue: forecastRevenue || projectedRevenue,
+        projectedProfit,
+        projectedUnits,
+        projectedMargin: avgWeeklyMargin,
+        forecastRevenue: forecastRevenue || projectedRevenue,
+        forecastSource: forecastRevenue ? 'amazon' : 'trend',
+      });
+    }
+    
+    // Combine actual + projected
+    const weeklyDataWithProjections = [...weeklyData, ...projectedWeeks];
+    
     // Get daily data (last 30 days with real sales data, not just ads)
     const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
     const dailyData = sortedDays.slice(-30).map(d => {
@@ -18360,24 +18602,66 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const monthlyTrends = getMonthlyTrends();
     const yearlyTrends = getYearlyTrends();
     
+    // Add projected months
+    const monthlyWithProjections = (() => {
+      const monthlyData = monthlyTrends.map(([k, v]) => v);
+      if (monthlyData.length === 0) return [];
+      
+      // Calculate average monthly metrics from recent data
+      const recentMonths = monthlyData.slice(-3);
+      const avgMonthlyRevenue = recentMonths.reduce((s, m) => s + m.revenue, 0) / recentMonths.length;
+      const avgMonthlyProfit = recentMonths.reduce((s, m) => s + m.profit, 0) / recentMonths.length;
+      const avgMonthlyUnits = recentMonths.reduce((s, m) => s + m.units, 0) / recentMonths.length;
+      const avgMonthlyMargin = avgMonthlyRevenue > 0 ? (avgMonthlyProfit / avgMonthlyRevenue) * 100 : 0;
+      
+      // Generate next 6 projected months
+      const lastMonth = monthlyData[monthlyData.length - 1];
+      const lastDate = new Date(lastMonth.key + '-01');
+      const projectedMonths = [];
+      
+      for (let i = 1; i <= 6; i++) {
+        const futureDate = new Date(lastDate.getFullYear(), lastDate.getMonth() + i, 1);
+        const monthKey = `${futureDate.getFullYear()}-${String(futureDate.getMonth() + 1).padStart(2, '0')}`;
+        
+        projectedMonths.push({
+          key: monthKey,
+          label: futureDate.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+          source: 'projected',
+          isProjected: true,
+          revenue: 0,
+          profit: 0,
+          units: 0,
+          margin: 0,
+          projectedRevenue: Math.round(avgMonthlyRevenue),
+          projectedProfit: Math.round(avgMonthlyProfit),
+          projectedUnits: Math.round(avgMonthlyUnits),
+          projectedMargin: avgMonthlyMargin,
+          forecastRevenue: Math.round(avgMonthlyRevenue),
+          forecastSource: 'trend',
+        });
+      }
+      
+      return [...monthlyData, ...projectedMonths];
+    })();
+    
     // Select data based on active tab with fallbacks
     let currentData = [];
     if (trendsTab === 'daily' && dailyData.length > 0) {
       currentData = dailyData;
-    } else if (trendsTab === 'weekly' && weeklyData.length > 0) {
-      currentData = weeklyData;
-    } else if (trendsTab === 'monthly' && monthlyTrends.length > 0) {
-      currentData = monthlyTrends.map(([k, v]) => v);
+    } else if (trendsTab === 'weekly' && weeklyDataWithProjections.length > 0) {
+      currentData = weeklyDataWithProjections;
+    } else if (trendsTab === 'monthly' && monthlyWithProjections.length > 0) {
+      currentData = monthlyWithProjections;
     } else if (trendsTab === 'yearly' && yearlyTrends.length > 0) {
       currentData = yearlyTrends.map(([k, v]) => v);
     } else {
       // Fallback: use whatever data is available
       if (dailyData.length > 0) {
         currentData = dailyData;
-      } else if (monthlyTrends.length > 0) {
-        currentData = monthlyTrends.map(([k, v]) => v);
-      } else if (weeklyData.length > 0) {
-        currentData = weeklyData;
+      } else if (monthlyWithProjections.length > 0) {
+        currentData = monthlyWithProjections;
+      } else if (weeklyDataWithProjections.length > 0) {
+        currentData = weeklyDataWithProjections;
       } else if (yearlyTrends.length > 0) {
         currentData = yearlyTrends.map(([k, v]) => v);
       }
@@ -18609,22 +18893,27 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   <div className="flex items-center gap-4 text-xs">
                     <span className="flex items-center gap-1"><span className="w-3 h-3 bg-violet-500 rounded" />Actual</span>
                     <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500/60 rounded" />Forecast</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500/60 rounded" style={{ backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(0,0,0,0.2) 2px, rgba(0,0,0,0.2) 4px)' }} />Projected</span>
                   </div>
                 </div>
                 {(() => {
-                  // Include forecast values in max calculation for proper scaling
+                  // Include forecast/projected values in max calculation for proper scaling
                   const allValues = currentData.flatMap(d => [
                     getFilteredValue(d, 'revenue'), 
-                    d.forecastRevenue || 0
+                    d.forecastRevenue || 0,
+                    d.projectedRevenue || 0
                   ]);
                   const chartMaxRevenue = Math.max(...allValues, 1);
                   const barMinWidth = currentData.length > 30 ? '4px' : currentData.length > 20 ? '8px' : '16px';
                   
-                  // Calculate overall forecast accuracy
+                  // Calculate overall forecast accuracy (only for periods with actual data)
                   const weeksWithForecasts = currentData.filter(d => d.forecastRevenue !== null && d.revenue > 0);
                   const avgAccuracy = weeksWithForecasts.length > 0 
                     ? weeksWithForecasts.reduce((s, d) => s + (d.accuracy || 0), 0) / weeksWithForecasts.length 
                     : null;
+                  
+                  // Count projected periods
+                  const projectedPeriods = currentData.filter(d => d.isProjected);
                   
                   return (
                     <>
@@ -18636,7 +18925,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               {avgAccuracy.toFixed(1)}%
                             </span>
                           </span>
-                          <span className="text-slate-500">({weeksWithForecasts.length} weeks with forecasts)</span>
+                          <span className="text-slate-500">({weeksWithForecasts.length} periods with forecasts)</span>
+                        </div>
+                      )}
+                      {projectedPeriods.length > 0 && (
+                        <div className="flex items-center gap-4 mb-3 text-sm">
+                          <span className="text-amber-400/80">📊 {projectedPeriods.length} projected periods shown (based on recent trend)</span>
                         </div>
                       )}
                       
@@ -18646,14 +18940,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           <p className="text-slate-500 text-center w-full self-center">No data available</p>
                         ) : currentData.map((d, i) => {
                           const actualValue = getFilteredValue(d, 'revenue');
-                          const forecastValue = d.forecastRevenue || 0;
+                          const forecastValue = d.forecastRevenue || d.projectedRevenue || 0;
+                          const isProjected = d.isProjected;
                           const actualHeight = chartMaxRevenue > 0 ? (actualValue / chartMaxRevenue) * 100 : 0;
-                          const forecastHeight = chartMaxRevenue > 0 ? (forecastValue / chartMaxRevenue) * 100 : 0;
-                          const isLatest = i === currentData.length - 1;
-                          const isClickable = trendsTab === 'daily' && d.key;
+                          const projectedHeight = chartMaxRevenue > 0 ? (forecastValue / chartMaxRevenue) * 100 : 0;
+                          const isLatest = i === currentData.filter(x => !x.isProjected).length - 1;
+                          const isClickable = trendsTab === 'daily' && d.key && !isProjected;
                           const hasForecast = forecastValue > 0;
-                          const variance = hasForecast ? actualValue - forecastValue : null;
-                          const variancePct = hasForecast && forecastValue > 0 ? ((variance / forecastValue) * 100) : null;
+                          const variance = hasForecast && actualValue > 0 ? actualValue - forecastValue : null;
+                          const variancePct = hasForecast && forecastValue > 0 && actualValue > 0 ? ((variance / forecastValue) * 100) : null;
                           
                           return (
                             <div 
@@ -18664,14 +18959,25 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             >
                               {/* Tooltip */}
                               <div className="absolute -top-16 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1.5 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
-                                <p className="font-medium">{d.label}</p>
-                                <p>Actual: {formatCurrency(actualValue)}</p>
-                                {hasForecast && (
+                                <p className="font-medium">{d.label} {isProjected && <span className="text-amber-400">(Projected)</span>}</p>
+                                {isProjected ? (
                                   <>
-                                    <p className="text-amber-400">Forecast: {formatCurrency(forecastValue)}</p>
-                                    <p className={variance >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                                      {variance >= 0 ? '▲' : '▼'} {formatCurrency(Math.abs(variance))} ({variancePct >= 0 ? '+' : ''}{variancePct?.toFixed(1)}%)
-                                    </p>
+                                    <p className="text-amber-400">Projected: {formatCurrency(forecastValue)}</p>
+                                    <p className="text-slate-400 text-[10px]">Based on {d.forecastSource === 'amazon' ? 'Amazon forecast' : 'recent trend'}</p>
+                                  </>
+                                ) : (
+                                  <>
+                                    <p>Actual: {formatCurrency(actualValue)}</p>
+                                    {hasForecast && (
+                                      <>
+                                        <p className="text-amber-400">Forecast: {formatCurrency(forecastValue)}</p>
+                                        {variance !== null && (
+                                          <p className={variance >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                            {variance >= 0 ? '▲' : '▼'} {formatCurrency(Math.abs(variance))} ({variancePct >= 0 ? '+' : ''}{variancePct?.toFixed(1)}%)
+                                          </p>
+                                        )}
+                                      </>
+                                    )}
                                   </>
                                 )}
                                 {isClickable && <span className="text-cyan-400 block text-center mt-1">Click for details</span>}
@@ -18679,20 +18985,34 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               
                               {/* Bars container */}
                               <div className="w-full flex items-end justify-center gap-0.5 h-full">
-                                {/* Forecast bar (behind, wider, more transparent) */}
-                                {hasForecast && (
+                                {isProjected ? (
+                                  /* Projected period - only show amber bar with striped pattern */
                                   <div 
-                                    className="absolute bottom-0 w-full bg-amber-500/40 rounded-t"
-                                    style={{ height: `${forecastHeight}%`, minHeight: forecastHeight > 0 ? '4px' : '0' }}
+                                    className="w-3/4 rounded-t transition-all relative z-10 bg-amber-500/60"
+                                    style={{ 
+                                      height: `${projectedHeight}%`, 
+                                      minHeight: projectedHeight > 0 ? '4px' : '0',
+                                      backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.1) 3px, rgba(0,0,0,0.1) 6px)'
+                                    }}
                                   />
+                                ) : (
+                                  <>
+                                    {/* Forecast bar (behind, wider, more transparent) */}
+                                    {hasForecast && (
+                                      <div 
+                                        className="absolute bottom-0 w-full bg-amber-500/40 rounded-t"
+                                        style={{ height: `${projectedHeight}%`, minHeight: projectedHeight > 0 ? '4px' : '0' }}
+                                      />
+                                    )}
+                                    {/* Actual bar (front, narrower) */}
+                                    <div 
+                                      className={`w-3/4 rounded-t transition-all relative z-10 ${
+                                        isLatest ? 'bg-violet-500' : 'bg-violet-500/80'
+                                      } hover:bg-violet-400`}
+                                      style={{ height: `${actualHeight}%`, minHeight: actualHeight > 0 ? '4px' : '0' }}
+                                    />
+                                  </>
                                 )}
-                                {/* Actual bar (front, narrower or same width) */}
-                                <div 
-                                  className={`w-3/4 rounded-t transition-all relative z-10 ${
-                                    isLatest ? 'bg-violet-500' : 'bg-violet-500/80'
-                                  } hover:bg-violet-400`}
-                                  style={{ height: `${actualHeight}%`, minHeight: actualHeight > 0 ? '4px' : '0' }}
-                                />
                               </div>
                             </div>
                           );
@@ -18830,7 +19150,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     {trendsChannel !== 'combined' && <span className="text-sm font-normal text-slate-400 ml-2">({trendsChannel === 'amazon' ? 'Amazon' : 'Shopify'})</span>}
                   </h3>
                   {(() => {
-                    const chartMaxProfit = Math.max(...currentData.map(d => Math.abs(getFilteredValue(d, 'profit'))), 1);
+                    const allProfitValues = currentData.flatMap(d => [
+                      Math.abs(getFilteredValue(d, 'profit')),
+                      Math.abs(d.projectedProfit || 0)
+                    ]);
+                    const chartMaxProfit = Math.max(...allProfitValues, 1);
                     const barMinWidth = currentData.length > 30 ? '4px' : currentData.length > 20 ? '8px' : '16px';
                     return (
                       <>
@@ -18838,11 +19162,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           {currentData.length === 0 ? (
                             <p className="text-slate-500 text-center w-full self-center">No data</p>
                           ) : currentData.map((d, i) => {
-                            const value = getFilteredValue(d, 'profit');
-                            const height = chartMaxProfit > 0 ? (Math.abs(value) / chartMaxProfit) * 100 : 0;
-                            const isPositive = value >= 0;
-                            const isLatest = i === currentData.length - 1;
-                            const isClickable = trendsTab === 'daily' && d.key;
+                            const actualProfit = getFilteredValue(d, 'profit');
+                            const projectedProfit = d.projectedProfit || 0;
+                            const isProjected = d.isProjected;
+                            const displayValue = isProjected ? projectedProfit : actualProfit;
+                            const height = chartMaxProfit > 0 ? (Math.abs(displayValue) / chartMaxProfit) * 100 : 0;
+                            const isPositive = displayValue >= 0;
+                            const isLatest = !isProjected && i === currentData.filter(x => !x.isProjected).length - 1;
+                            const isClickable = trendsTab === 'daily' && d.key && !isProjected;
                             return (
                               <div 
                                 key={d.key || i} 
@@ -18851,12 +19178,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                 onClick={() => isClickable && setViewingDayDetails(d.key)}
                               >
                                 <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
-                                  {d.label}<br/>{formatCurrency(value)}
+                                  {d.label} {isProjected && <span className="text-amber-400">(Projected)</span>}<br/>
+                                  {isProjected ? <span className="text-amber-400">{formatCurrency(projectedProfit)}</span> : formatCurrency(actualProfit)}
                                   {isClickable && <span className="text-cyan-400 block text-center mt-1">Click for details</span>}
                                 </div>
                                 <div 
-                                  className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')} hover:bg-emerald-400`}
-                                  style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
+                                  className={`w-full rounded-t transition-all ${
+                                    isProjected 
+                                      ? (isPositive ? 'bg-emerald-500/50' : 'bg-rose-500/50')
+                                      : isPositive 
+                                        ? (isLatest ? 'bg-emerald-500' : 'bg-emerald-500/70') 
+                                        : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')
+                                  } ${!isProjected && 'hover:bg-emerald-400'}`}
+                                  style={{ 
+                                    height: `${height}%`, 
+                                    minHeight: height > 0 ? '4px' : '0',
+                                    ...(isProjected && { backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.1) 3px, rgba(0,0,0,0.1) 6px)' })
+                                  }}
                                 />
                               </div>
                             );
@@ -18890,8 +19228,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 overflow-hidden">
                   <h3 className="text-lg font-semibold text-white mb-4">{periodLabel} Margin Trend</h3>
                   {(() => {
-                    // Calculate margin from filtered values
+                    // Calculate margin from filtered values, including projections
                     const marginData = currentData.map(d => {
+                      if (d.isProjected) {
+                        return d.projectedMargin || 0;
+                      }
                       const rev = getFilteredValue(d, 'revenue');
                       const prof = getFilteredValue(d, 'profit');
                       return rev > 0 ? (prof / rev) * 100 : 0;
@@ -18907,8 +19248,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             const margin = marginData[i];
                             const height = (Math.abs(margin) / maxMargin) * 100;
                             const isPositive = margin >= 0;
-                            const isLatest = i === currentData.length - 1;
-                            const isClickable = trendsTab === 'daily' && d.key;
+                            const isProjected = d.isProjected;
+                            const isLatest = !isProjected && i === currentData.filter(x => !x.isProjected).length - 1;
+                            const isClickable = trendsTab === 'daily' && d.key && !isProjected;
                             return (
                               <div 
                                 key={d.key || i} 
@@ -18917,12 +19259,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                 onClick={() => isClickable && setViewingDayDetails(d.key)}
                               >
                                 <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
-                                  {d.label}<br/>{formatPercent(margin)}
+                                  {d.label} {isProjected && <span className="text-amber-400">(Projected)</span>}<br/>
+                                  {isProjected ? <span className="text-amber-400">{formatPercent(margin)}</span> : formatPercent(margin)}
                                   {isClickable && <span className="text-cyan-400 block text-center mt-1">Click for details</span>}
                                 </div>
                                 <div 
-                                  className={`w-full rounded-t transition-all ${isPositive ? (isLatest ? 'bg-cyan-500' : 'bg-cyan-500/70') : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')} hover:bg-cyan-400`}
-                                  style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
+                                  className={`w-full rounded-t transition-all ${
+                                    isProjected 
+                                      ? (isPositive ? 'bg-cyan-500/50' : 'bg-rose-500/50')
+                                      : isPositive 
+                                        ? (isLatest ? 'bg-cyan-500' : 'bg-cyan-500/70') 
+                                        : (isLatest ? 'bg-rose-500' : 'bg-rose-500/70')
+                                  } ${!isProjected && 'hover:bg-cyan-400'}`}
+                                  style={{ 
+                                    height: `${height}%`, 
+                                    minHeight: height > 0 ? '4px' : '0',
+                                    ...(isProjected && { backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.1) 3px, rgba(0,0,0,0.1) 6px)' })
+                                  }}
                                 />
                               </div>
                             );
@@ -24871,48 +25224,78 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     // ==================== RECURRING EXPENSE DETECTION ====================
     // Detect recurring expenses by looking for same vendor + similar amount across multiple months
+    // AND by looking for exact same dollar amounts appearing in multiple months
     const detectRecurringExpenses = () => {
-      // Group all expenses by vendor (from description) and track monthly occurrences
+      // APPROACH 1: Group all expenses by vendor (from description) and track monthly occurrences
       const vendorPatterns = {};
       
-      // Lower threshold to $25 to catch more recurring items
-      sortedTxns.filter(t => t.isExpense && t.amount > 25).forEach(t => {
+      // APPROACH 2: Group by exact dollar amount to catch recurring charges
+      const amountPatterns = {};
+      
+      // Process all expenses
+      sortedTxns.filter(t => t.isExpense && t.amount > 10).forEach(t => {
         // Extract vendor from description (first part before common separators)
         const desc = (t.description || '').toUpperCase();
         const vendor = desc.split(/\s+(PAYMENT|AUTOPAY|ACH|DEBIT|BILL|#|\d{4,})/)[0].trim().substring(0, 40);
-        if (!vendor || vendor.length < 3) return;
-        
         const month = t.date.substring(0, 7); // YYYY-MM
-        const key = vendor;
         
-        if (!vendorPatterns[key]) {
-          vendorPatterns[key] = {
-            vendor: vendor,
-            category: t.topCategory,
+        // Track by vendor
+        if (vendor && vendor.length >= 3) {
+          const key = vendor;
+          if (!vendorPatterns[key]) {
+            vendorPatterns[key] = {
+              vendor: vendor,
+              category: t.topCategory,
+              months: {},
+              amounts: [],
+              descriptions: new Set(),
+              txnIds: [],
+            };
+          }
+          
+          if (!vendorPatterns[key].months[month]) {
+            vendorPatterns[key].months[month] = { total: 0, count: 0, amounts: [] };
+          }
+          vendorPatterns[key].months[month].total += t.amount;
+          vendorPatterns[key].months[month].count++;
+          vendorPatterns[key].months[month].amounts.push(t.amount);
+          vendorPatterns[key].amounts.push(t.amount);
+          vendorPatterns[key].descriptions.add(t.description?.substring(0, 50));
+          vendorPatterns[key].txnIds.push(t.id);
+        }
+        
+        // Track by exact amount (for subscriptions that may have different descriptions)
+        const amountKey = t.amount.toFixed(2);
+        if (!amountPatterns[amountKey]) {
+          amountPatterns[amountKey] = {
+            amount: t.amount,
             months: {},
-            amounts: [],
+            vendors: new Set(),
             descriptions: new Set(),
+            category: t.topCategory,
+            txnIds: [],
           };
         }
-        
-        if (!vendorPatterns[key].months[month]) {
-          vendorPatterns[key].months[month] = { total: 0, count: 0, amounts: [] };
+        if (!amountPatterns[amountKey].months[month]) {
+          amountPatterns[amountKey].months[month] = { count: 0, dates: [] };
         }
-        vendorPatterns[key].months[month].total += t.amount;
-        vendorPatterns[key].months[month].count++;
-        vendorPatterns[key].months[month].amounts.push(t.amount);
-        vendorPatterns[key].amounts.push(t.amount);
-        vendorPatterns[key].descriptions.add(t.description?.substring(0, 50));
+        amountPatterns[amountKey].months[month].count++;
+        amountPatterns[amountKey].months[month].dates.push(t.date);
+        amountPatterns[amountKey].vendors.add(vendor || 'Unknown');
+        amountPatterns[amountKey].descriptions.add(t.description?.substring(0, 50));
+        amountPatterns[amountKey].txnIds.push(t.id);
       });
       
-      // Analyze patterns - look for charges appearing 2+ months (lowered from 3)
+      // Analyze patterns
       const recurring = [];
       const allMonths = [...new Set(sortedTxns.map(t => t.date.substring(0, 7)))].sort();
       const recentMonths = allMonths.slice(-6); // Look at last 6 months
+      const usedKeys = new Set(); // Prevent duplicates
       
+      // VENDOR-BASED DETECTION (original approach)
       Object.entries(vendorPatterns).forEach(([key, pattern]) => {
         const monthsWithCharges = Object.keys(pattern.months).filter(m => recentMonths.includes(m));
-        if (monthsWithCharges.length < 2) return; // Lowered from 3 to 2 months
+        if (monthsWithCharges.length < 2) return; // Need at least 2 months
         
         // Calculate typical monthly amount (median to avoid outliers)
         const monthlyAmounts = monthsWithCharges.map(m => pattern.months[m].total).sort((a, b) => a - b);
@@ -24924,11 +25307,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         // Calculate average amount
         const avgAmount = monthlyAmounts.reduce((s, a) => s + a, 0) / monthlyAmounts.length;
         
-        // Only include if reasonably consistent - lowered threshold from $100 to $50
-        if (avgAmount >= 50 && (isConsistent || monthsWithCharges.length >= 3)) {
+        // Include if appears in 2+ months with any amount > $25
+        if (avgAmount >= 25 && monthsWithCharges.length >= 2) {
           const isConfirmed = confirmedRecurring[key]?.confirmed;
-          const isIgnored = confirmedRecurring[key]?.ignored;
+          const isIgnored = confirmedRecurring[key]?.ignored || confirmedRecurring[key]?.notRecurring;
           
+          usedKeys.add(key);
           recurring.push({
             key,
             vendor: pattern.vendor,
@@ -24941,6 +25325,69 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             confirmed: isConfirmed || false,
             ignored: isIgnored || false,
             annualCost: Math.round(avgAmount * 12),
+            detectionType: 'vendor',
+          });
+        }
+      });
+      
+      // EXACT AMOUNT DETECTION (new approach for subscriptions with varying descriptions)
+      Object.entries(amountPatterns).forEach(([amountKey, pattern]) => {
+        const monthsWithCharges = Object.keys(pattern.months).filter(m => recentMonths.includes(m));
+        if (monthsWithCharges.length < 2) return; // Need at least 2 months
+        
+        // Skip small amounts
+        if (pattern.amount < 10) return;
+        
+        // Check if this is truly recurring (same amount, appears once per month typically)
+        const avgChargesPerMonth = monthsWithCharges.reduce((s, m) => s + pattern.months[m].count, 0) / monthsWithCharges.length;
+        
+        // Only flag if it's roughly once per month (1-2 charges) and appears consistently
+        if (avgChargesPerMonth > 3) return; // Too many charges, probably not a subscription
+        
+        // Create a unique key combining amount and first vendor
+        const vendorList = [...pattern.vendors];
+        const primaryVendor = vendorList[0] || 'Unknown';
+        const key = `AMOUNT_${amountKey}_${primaryVendor.substring(0, 10)}`;
+        
+        // Skip if we already have this from vendor detection
+        if (usedKeys.has(primaryVendor)) return;
+        
+        const isConfirmed = confirmedRecurring[key]?.confirmed;
+        const isIgnored = confirmedRecurring[key]?.ignored || confirmedRecurring[key]?.notRecurring;
+        
+        recurring.push({
+          key,
+          vendor: vendorList.length > 1 ? `${primaryVendor} (+${vendorList.length - 1} more)` : primaryVendor,
+          category: pattern.category,
+          monthlyAmount: Math.round(pattern.amount),
+          frequency: monthsWithCharges.length,
+          totalMonths: recentMonths.length,
+          consistency: 'exact', // Exact same amount
+          description: [...pattern.descriptions][0] || `$${pattern.amount.toFixed(2)} charge`,
+          confirmed: isConfirmed || false,
+          ignored: isIgnored || false,
+          annualCost: Math.round(pattern.amount * 12),
+          detectionType: 'amount',
+        });
+      });
+      
+      // ADD MANUALLY FLAGGED TRANSACTIONS as recurring
+      Object.entries(confirmedRecurring).forEach(([key, data]) => {
+        if (data.flaggedFromTxn && data.confirmed && !data.manual) {
+          // This was flagged from a transaction
+          recurring.push({
+            key,
+            vendor: data.vendor || key,
+            category: data.category || 'Flagged',
+            monthlyAmount: data.amount || 0,
+            frequency: 12, // Assume monthly
+            totalMonths: 12,
+            consistency: 'flagged',
+            description: data.description || data.vendor,
+            confirmed: true,
+            ignored: false,
+            annualCost: (data.amount || 0) * 12,
+            detectionType: 'flagged',
           });
         }
       });
@@ -24969,10 +25416,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       }));
     
     const confirmedRecurringList = [
-      ...detectedRecurring.filter(r => r.confirmed),
-      ...manualRecurring,
+      ...detectedRecurring.filter(r => r.confirmed && r.monthlyAmount > 0),
+      ...manualRecurring.filter(r => r.monthlyAmount > 0),
     ];
-    const pendingRecurringList = detectedRecurring.filter(r => !r.confirmed && !r.ignored);
+    const pendingRecurringList = detectedRecurring.filter(r => !r.confirmed && !r.ignored && r.monthlyAmount > 0);
     const totalMonthlyRecurring = confirmedRecurringList.reduce((s, r) => s + (r.monthlyAmount || 0), 0);
     const totalAnnualRecurring = totalMonthlyRecurring * 12;
     
@@ -25245,18 +25692,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   // Skip if name looks corrupted (has quotes or is super long)
                   if (name.includes('"')) return false;
                   if (name.length > 100) return false;
-                  // Skip if balance is undefined or NaN
+                  // Skip if balance is undefined, NaN, or zero (likely junk)
                   if (acct.balance === undefined || isNaN(acct.balance)) return false;
+                  if (Math.abs(acct.balance) < 0.01) return false; // Skip $0 balances
+                  // Skip if name looks like a transaction description (has commas before account pattern)
+                  if (name.includes(',') && !/\(\d{4}\)/.test(name)) return false;
+                  // Skip if name contains common transaction words
+                  const lower = name.toLowerCase();
+                  if (lower.includes('water') || lower.includes('filter') || lower.includes('purchase')) return false;
                   // Accept accounts that have a balance and reasonable name
                   // Look for patterns like: account number in parens, or common bank terms
-                  const lower = name.toLowerCase();
                   const looksLikeAccount = (
                     /\(\d{4}\)/.test(name) || // Has (1234) pattern
-                    lower.includes('checking') ||
-                    lower.includes('savings') ||
-                    lower.includes('operations') ||
-                    lower.includes('card') ||
-                    lower.includes('credit') ||
+                    (lower.includes('checking') && !name.includes(',')) ||
+                    (lower.includes('savings') && !name.includes(',')) ||
+                    (lower.includes('operations') && !name.includes(',')) ||
+                    (lower.includes('card') && /\(\d{4}\)/.test(name)) || // Card with account number
+                    (lower.includes('credit') && /\(\d{4}\)/.test(name)) ||
                     lower.includes('amex') ||
                     lower.includes('chase') ||
                     lower.includes('bank') ||
@@ -25841,19 +26293,59 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               <th className="text-left text-slate-400 font-medium py-2 px-2">Description</th>
                               <th className="text-left text-slate-400 font-medium py-2 px-2">Account</th>
                               <th className="text-right text-slate-400 font-medium py-2 px-2">Amount</th>
+                              <th className="text-center text-slate-400 font-medium py-2 px-2">Recurring</th>
                             </tr>
                           </thead>
                           <tbody>
                             {filteredTxns
                               .filter(t => t.isExpense && t.topCategory === bankingDrilldown.category)
-                              .map((txn, i) => (
-                                <tr key={txn.id || i} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                                  <td className="py-2 px-2 text-slate-400 whitespace-nowrap">{txn.date}</td>
-                                  <td className="py-2 px-2 text-white">{txn.name}</td>
-                                  <td className="py-2 px-2 text-slate-400 text-xs">{txn.account?.split('(')[0]?.trim() || '-'}</td>
-                                  <td className="py-2 px-2 text-right text-rose-400 font-medium">{formatCurrency(txn.amount)}</td>
-                                </tr>
-                              ))}
+                              .map((txn, i) => {
+                                // Check if this transaction is flagged as recurring
+                                const vendorKey = (txn.description || txn.name || '').toUpperCase().split(/\s+(PAYMENT|AUTOPAY|ACH|DEBIT|BILL|#|\d{4,})/)[0].trim().substring(0, 40);
+                                const txnKey = `TXN_${vendorKey}_${txn.amount.toFixed(2)}`;
+                                const isFlaggedRecurring = confirmedRecurring[txnKey]?.confirmed || confirmedRecurring[vendorKey]?.confirmed;
+                                const isMarkedNotRecurring = confirmedRecurring[txnKey]?.notRecurring || confirmedRecurring[vendorKey]?.notRecurring;
+                                
+                                return (
+                                  <tr key={txn.id || i} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                    <td className="py-2 px-2 text-slate-400 whitespace-nowrap">{txn.date}</td>
+                                    <td className="py-2 px-2 text-white">{txn.name}</td>
+                                    <td className="py-2 px-2 text-slate-400 text-xs">{txn.account?.split('(')[0]?.trim() || '-'}</td>
+                                    <td className="py-2 px-2 text-right text-rose-400 font-medium">{formatCurrency(txn.amount)}</td>
+                                    <td className="py-2 px-2 text-center">
+                                      {isFlaggedRecurring ? (
+                                        <span className="px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded text-xs">
+                                          ✓ Recurring
+                                        </span>
+                                      ) : isMarkedNotRecurring ? (
+                                        <span className="text-slate-500 text-xs">Not recurring</span>
+                                      ) : (
+                                        <button
+                                          onClick={() => {
+                                            setConfirmedRecurring(prev => ({
+                                              ...prev,
+                                              [txnKey]: {
+                                                confirmed: true,
+                                                flaggedFromTxn: true,
+                                                vendor: vendorKey,
+                                                description: txn.name || txn.description,
+                                                amount: txn.amount,
+                                                category: txn.topCategory,
+                                                flaggedAt: new Date().toISOString(),
+                                              }
+                                            }));
+                                            setToast({ message: `"${vendorKey}" flagged as recurring ($${txn.amount.toFixed(2)}/mo)`, type: 'success' });
+                                          }}
+                                          className="px-2 py-0.5 bg-slate-700 hover:bg-purple-600 text-slate-400 hover:text-white rounded text-xs transition-colors"
+                                          title="Flag this as a recurring monthly expense"
+                                        >
+                                          🔁 Flag
+                                        </button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
                           </tbody>
                         </table>
                       </div>
