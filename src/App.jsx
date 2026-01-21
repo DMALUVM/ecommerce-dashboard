@@ -2165,7 +2165,12 @@ const switchStore = useCallback(async (storeId) => {
   setActiveStoreId(storeId);
   await loadFromCloud(storeId);
   
+  // Sync storeName from stores array
   const store = stores.find(s => s.id === storeId);
+  if (store?.name) {
+    setStoreName(store.name);
+  }
+  
   setToast({ message: `Switched to "${store?.name || 'store'}"`, type: 'success' });
   setShowStoreSelector(false);
   setShowStoreModal(false);
@@ -2505,8 +2510,54 @@ const savePeriods = async (d) => {
   } catch {}
 };
 
-  const handleFile = useCallback((type, file, isInv = false) => {
+  const handleFile = useCallback(async (type, file, isInv = false) => {
     if (!file) return;
+    
+    // Check if it's an Excel file (for 3PL)
+    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+    
+    if (type === 'threepl' && isExcel) {
+      // Parse Excel file for 3PL - extract Summary sheet
+      try {
+        const xlsx = await loadXLSX();
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = xlsx.read(data, { type: 'array' });
+            
+            // Look for Summary sheet
+            if (workbook.SheetNames.includes('Summary')) {
+              const summarySheet = workbook.Sheets['Summary'];
+              const rows = xlsx.utils.sheet_to_json(summarySheet);
+              console.log('3PL Excel parsed (weekly) - Summary sheet:', rows);
+              // This gives us the format parse3PLData expects
+              setFiles(p => ({ ...p, threepl: [...(p.threepl || []), rows] }));
+              setFileNames(p => ({ ...p, threepl: [...(p.threepl || []), file.name] }));
+              setToast({ message: `Loaded ${rows.length} 3PL charges from Excel`, type: 'success' });
+            } else {
+              // Try first sheet as fallback
+              const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+              const rows = xlsx.utils.sheet_to_json(firstSheet);
+              console.log('3PL Excel parsed (weekly) - First sheet:', rows);
+              setFiles(p => ({ ...p, threepl: [...(p.threepl || []), rows] }));
+              setFileNames(p => ({ ...p, threepl: [...(p.threepl || []), file.name] }));
+              setToast({ message: `Loaded ${rows.length} rows from 3PL Excel`, type: 'success' });
+            }
+          } catch (err) {
+            console.error('Error parsing 3PL Excel:', err);
+            setToast({ message: 'Error parsing 3PL Excel file', type: 'error' });
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      } catch (err) {
+        console.error('Error loading SheetJS:', err);
+        setToast({ message: 'Error loading Excel parser', type: 'error' });
+      }
+      return;
+    }
+    
+    // Regular CSV handling
     const reader = new FileReader();
     reader.onload = (e) => {
       const data = parseCSV(e.target.result);
@@ -2526,8 +2577,48 @@ const savePeriods = async (d) => {
     setFileNames(p => ({ ...p, threepl: [] }));
   }, []);
 
-  const handlePeriodFile = useCallback((type, file) => {
+  const handlePeriodFile = useCallback(async (type, file) => {
     if (!file) return;
+    
+    // Check if it's an Excel file (for 3PL)
+    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+    
+    if (type === 'threepl' && isExcel) {
+      try {
+        const xlsx = await loadXLSX();
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = xlsx.read(data, { type: 'array' });
+            
+            if (workbook.SheetNames.includes('Summary')) {
+              const summarySheet = workbook.Sheets['Summary'];
+              const rows = xlsx.utils.sheet_to_json(summarySheet);
+              console.log('3PL Excel parsed (period) - Summary:', rows);
+              setPeriodFiles(p => ({ ...p, threepl: [...(p.threepl || []), rows] }));
+              setPeriodFileNames(p => ({ ...p, threepl: [...(p.threepl || []), file.name] }));
+              setToast({ message: `Loaded ${rows.length} 3PL charges from Excel`, type: 'success' });
+            } else {
+              const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+              const rows = xlsx.utils.sheet_to_json(firstSheet);
+              console.log('3PL Excel parsed (period) - First sheet:', rows);
+              setPeriodFiles(p => ({ ...p, threepl: [...(p.threepl || []), rows] }));
+              setPeriodFileNames(p => ({ ...p, threepl: [...(p.threepl || []), file.name] }));
+              setToast({ message: `Loaded ${rows.length} rows from 3PL Excel`, type: 'success' });
+            }
+          } catch (err) {
+            console.error('Error parsing 3PL Excel:', err);
+            setToast({ message: 'Error parsing 3PL Excel file', type: 'error' });
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      } catch (err) {
+        console.error('Error loading SheetJS:', err);
+      }
+      return;
+    }
+    
     const reader = new FileReader();
     reader.onload = (e) => {
       const data = parseCSV(e.target.result);
@@ -2543,8 +2634,48 @@ const savePeriods = async (d) => {
     reader.readAsText(file);
   }, []);
 
-  const handleReprocessFile = useCallback((type, file) => {
+  const handleReprocessFile = useCallback(async (type, file) => {
     if (!file) return;
+    
+    // Check if it's an Excel file (for 3PL)
+    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+    
+    if (type === 'threepl' && isExcel) {
+      try {
+        const xlsx = await loadXLSX();
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = xlsx.read(data, { type: 'array' });
+            
+            if (workbook.SheetNames.includes('Summary')) {
+              const summarySheet = workbook.Sheets['Summary'];
+              const rows = xlsx.utils.sheet_to_json(summarySheet);
+              console.log('3PL Excel parsed - Summary sheet rows:', rows);
+              setReprocessFiles(p => ({ ...p, [type]: rows }));
+              setReprocessFileNames(p => ({ ...p, [type]: file.name }));
+              setToast({ message: `Loaded ${rows.length} charges from 3PL Excel`, type: 'success' });
+            } else {
+              const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+              const rows = xlsx.utils.sheet_to_json(firstSheet);
+              console.log('3PL Excel parsed - First sheet rows:', rows);
+              setReprocessFiles(p => ({ ...p, [type]: rows }));
+              setReprocessFileNames(p => ({ ...p, [type]: file.name }));
+              setToast({ message: `Loaded ${rows.length} rows from 3PL Excel`, type: 'success' });
+            }
+          } catch (err) {
+            console.error('Error parsing 3PL Excel:', err);
+            setToast({ message: 'Error parsing 3PL Excel file', type: 'error' });
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      } catch (err) {
+        console.error('Error loading SheetJS:', err);
+      }
+      return;
+    }
+    
     const reader = new FileReader();
     reader.onload = (e) => {
       const data = parseCSV(e.target.result);
@@ -6806,10 +6937,11 @@ Analyze the data and respond with ONLY this JSON:
     const isMulti3PL = type === 'threepl' && !isInv;
     const hasFile = isMulti3PL ? (fs.threepl?.length > 0) : fs[type];
     const displayName = isMulti3PL ? (fn.threepl?.length > 0 ? `${fn.threepl.length} file(s)` : '') : fn[type];
+    const acceptTypes = type === 'threepl' ? '.csv,.xlsx,.xls' : '.csv';
     
     return (
       <div className={`relative border-2 border-dashed rounded-xl p-4 ${hasFile ? 'border-emerald-400 bg-emerald-950/30' : 'border-slate-600 hover:border-slate-400 bg-slate-800/30'}`}>
-        <input type="file" accept=".csv" onChange={(e) => handleFile(type, e.target.files[0], isInv)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+        <input type="file" accept={acceptTypes} onChange={(e) => handleFile(type, e.target.files[0], isInv)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
         <div className="flex items-center gap-3">
           <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${hasFile ? 'bg-emerald-500' : 'bg-slate-700'}`}>
             {hasFile ? <Check className="w-5 h-5 text-white" /> : <FileSpreadsheet className="w-5 h-5 text-slate-300" />}
@@ -6840,10 +6972,11 @@ Analyze the data and respond with ONLY this JSON:
     const isMulti3PL = type === 'threepl';
     const hasFile = isMulti3PL ? (periodFiles.threepl?.length > 0) : periodFiles[type];
     const displayName = isMulti3PL ? (periodFileNames.threepl?.length > 0 ? `${periodFileNames.threepl.length} file(s)` : '') : periodFileNames[type];
+    const acceptTypes = type === 'threepl' ? '.csv,.xlsx,.xls' : '.csv';
     
     return (
       <div className={`relative border-2 border-dashed rounded-xl p-4 ${hasFile ? 'border-emerald-400 bg-emerald-950/30' : 'border-slate-600 hover:border-slate-400 bg-slate-800/30'}`}>
-        <input type="file" accept=".csv" onChange={(e) => handlePeriodFile(type, e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+        <input type="file" accept={acceptTypes} onChange={(e) => handlePeriodFile(type, e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
         <div className="flex items-center gap-3">
           <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${hasFile ? 'bg-emerald-500' : 'bg-slate-700'}`}>
             {hasFile ? <Check className="w-5 h-5 text-white" /> : <FileSpreadsheet className="w-5 h-5 text-slate-300" />}
@@ -11678,7 +11811,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     className="px-4 py-2 bg-gradient-to-r from-violet-600/40 to-purple-600/40 hover:from-violet-600/60 hover:to-purple-600/60 border border-violet-500/50 rounded-xl text-sm text-white flex items-center gap-2 shadow-lg"
                   >
                     <Store className="w-4 h-4 text-violet-300" />
-                    <span className="max-w-[150px] truncate font-medium">{storeName || 'My Store'}</span>
+                    <span className="max-w-[150px] truncate font-medium">{stores.find(s => s.id === activeStoreId)?.name || storeName || 'My Store'}</span>
                     <ChevronDown className={`w-4 h-4 transition-transform ${showStoreSelector ? 'rotate-180' : ''}`} />
                   </button>
                   {showStoreSelector && (
@@ -11700,24 +11833,27 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                               <p className="text-xs mt-1">Create a new store below to switch between them</p>
                             </div>
                           ) : (
-                            stores.map(store => (
-                              <button
-                                key={store.id}
-                                onClick={() => {
-                                  if (store.id !== activeStoreId) {
-                                    switchStore(store.id);
-                                  }
-                                  setShowStoreSelector(false);
-                                }}
-                                className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 mb-1 transition-all ${store.id === activeStoreId ? 'bg-violet-600/30 text-white border border-violet-500/50' : 'hover:bg-slate-700/70 text-slate-300'}`}
-                              >
-                                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${store.id === activeStoreId ? 'bg-violet-600' : 'bg-slate-700'}`}>
-                                  <Store className="w-4 h-4 text-white" />
-                                </div>
-                                <span className="flex-1 truncate font-medium">{store.name}</span>
-                                {store.id === activeStoreId && <Check className="w-5 h-5 text-violet-400" />}
-                              </button>
-                            ))
+                            stores.map(store => {
+                              const isActive = store.id === activeStoreId;
+                              return (
+                                <button
+                                  key={store.id}
+                                  onClick={() => {
+                                    if (!isActive) {
+                                      switchStore(store.id);
+                                    }
+                                    setShowStoreSelector(false);
+                                  }}
+                                  className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 mb-1 transition-all ${isActive ? 'bg-violet-600/30 text-white border border-violet-500/50' : 'bg-slate-700/30 hover:bg-slate-700/70 text-slate-300'}`}
+                                >
+                                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isActive ? 'bg-violet-600' : 'bg-slate-600'}`}>
+                                    <Store className="w-4 h-4 text-white" />
+                                  </div>
+                                  <span className={`flex-1 truncate font-medium ${isActive ? 'text-white' : 'text-slate-300'}`}>{store.name}</span>
+                                  {isActive && <Check className="w-5 h-5 text-violet-400" />}
+                                </button>
+                              );
+                            })
                           )}
                         </div>
                         <div className="p-2 border-t border-slate-700 bg-slate-900/50">
@@ -13558,7 +13694,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                 <FileBox type="amazon" label="Amazon Report" desc="Business Reports > Detail Page" req />
                 <FileBox type="shopify" label="Shopify Sales" desc="Analytics > Sales by product" req />
                 <div className="relative">
-                  <FileBox type="threepl" label="3PL Costs" desc="Fulfillment invoice CSV" multi />
+                  <FileBox type="threepl" label="3PL Costs" desc="Fulfillment invoice (CSV or Excel)" multi />
                   <button 
                     onClick={() => setShow3PLBulkUpload(true)} 
                     className="absolute top-2 right-2 px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs text-white flex items-center gap-1"
@@ -13686,7 +13822,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 <PeriodFileBox type="amazon" label="Amazon Report" desc="Business Reports" req />
                 <PeriodFileBox type="shopify" label="Shopify Sales" desc="Sales by product" req />
-                <PeriodFileBox type="threepl" label="3PL Costs" desc="Fulfillment CSV" multi />
+                <PeriodFileBox type="threepl" label="3PL Costs" desc="Fulfillment file (CSV or Excel)" multi />
               </div>
               
               <div className="grid grid-cols-2 gap-4 mb-6">
@@ -14741,10 +14877,10 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                   <div>
                     <label className="block text-sm font-medium text-slate-300 mb-2">3PL Costs (Optional)</label>
                     <div className={`relative border-2 border-dashed rounded-xl p-3 ${reprocessFiles.threepl ? 'border-emerald-400 bg-emerald-950/30' : 'border-slate-600 bg-slate-800/30'}`}>
-                      <input type="file" accept=".csv" onChange={(e) => handleReprocessFile('threepl', e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                      <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleReprocessFile('threepl', e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                       <div className="flex items-center gap-2">
                         {reprocessFiles.threepl ? <Check className="w-4 h-4 text-emerald-400" /> : <FileSpreadsheet className="w-4 h-4 text-slate-400" />}
-                        <span className={reprocessFiles.threepl ? 'text-emerald-400 text-sm' : 'text-slate-400 text-sm'}>{reprocessFileNames.threepl || 'Click to upload'}</span>
+                        <span className={reprocessFiles.threepl ? 'text-emerald-400 text-sm' : 'text-slate-400 text-sm'}>{reprocessFileNames.threepl || 'Click to upload (.csv or .xlsx)'}</span>
                       </div>
                     </div>
                   </div>
@@ -14888,7 +15024,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                   <div>
                     <label className="block text-sm text-slate-300 mb-2">3PL Cost Files (click multiple times to add)</label>
                     <div className={`relative border-2 border-dashed rounded-xl p-4 ${periodFiles.threepl?.length > 0 ? 'border-emerald-400 bg-emerald-950/30' : 'border-slate-600 hover:border-slate-400 bg-slate-800/30'}`}>
-                      <input type="file" accept=".csv" onChange={(e) => handlePeriodFile('threepl', e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                      <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handlePeriodFile('threepl', e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                       <div className="text-center">
                         {periodFileNames.threepl?.length > 0 ? (
                           <div>
@@ -14897,7 +15033,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                             <button onClick={(e) => { e.stopPropagation(); clearPeriod3PLFiles(); }} className="text-xs text-rose-400 mt-2">Clear all</button>
                           </div>
                         ) : (
-                          <p className="text-slate-500 text-sm">Click to add 3PL files</p>
+                          <p className="text-slate-500 text-sm">Click to add 3PL files (.csv or .xlsx)</p>
                         )}
                       </div>
                     </div>
@@ -16229,7 +16365,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   const chartMaxRevenue = Math.max(...currentData.map(d => getFilteredValue(d, 'revenue')), 1);
                   return (
                     <>
-                      <div className="flex items-end gap-2 h-52 bg-slate-900/30 rounded-lg p-3">
+                      <div className="flex items-end gap-1 h-52 bg-slate-900/30 rounded-lg p-3 overflow-hidden">
                         {currentData.length === 0 ? (
                           <p className="text-slate-500 text-center w-full self-center">No data available</p>
                         ) : currentData.map((d, i) => {
@@ -16237,10 +16373,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           const height = chartMaxRevenue > 0 ? (value / chartMaxRevenue) * 100 : 0;
                           const isLatest = i === currentData.length - 1;
                           const isClickable = trendsTab === 'daily' && d.key;
+                          // Dynamic bar width based on data count
+                          const barMinWidth = currentData.length > 30 ? '4px' : currentData.length > 20 ? '8px' : '16px';
                           return (
                             <div 
                               key={d.key || i} 
-                              className={`flex-1 flex flex-col items-center justify-end group relative h-full min-w-[30px] ${isClickable ? 'cursor-pointer' : ''}`}
+                              className={`flex flex-col items-center justify-end group relative h-full ${isClickable ? 'cursor-pointer' : ''}`}
+                              style={{ flex: '1 1 0', minWidth: barMinWidth, maxWidth: '60px' }}
                               onClick={() => isClickable && setViewingDayDetails(d.key)}
                             >
                               <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
@@ -16257,9 +16396,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         })}
                       </div>
                       <div className="flex justify-between px-3 mt-1">
-                        {currentData.map((d, i) => (
-                          <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
-                        ))}
+                        {currentData.length <= 12 ? (
+                          // Show all labels if 12 or fewer data points
+                          currentData.map((d, i) => (
+                            <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
+                          ))
+                        ) : (
+                          // Show only first and last labels for many data points
+                          <>
+                            <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
+                            <span className="flex-1" />
+                            <span className="text-[10px] text-slate-500">{currentData[currentData.length - 1]?.label}</span>
+                          </>
+                        )}
                       </div>
                     </>
                   );
