@@ -12470,6 +12470,9 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
       if (sortedDays.length > 0) {
         const yesterday = sortedDays[sortedDays.length - 1];
         const dayData = allDaysData[yesterday];
+        const googleAds = dayData.shopify?.googleSpend || dayData.googleSpend || dayData.googleAds || 0;
+        const metaAds = dayData.shopify?.metaSpend || dayData.metaSpend || dayData.metaAds || 0;
+        const amazonAds = dayData.amazon?.adSpend || 0;
         current = {
           revenue: dayData.total?.revenue || 0,
           profit: dayData.total?.netProfit || 0,
@@ -12480,6 +12483,9 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
           date: yesterday,
           amazonRev: dayData.amazon?.revenue || 0,
           shopifyRev: dayData.shopify?.revenue || 0,
+          googleAds,
+          metaAds,
+          amazonAds,
         };
         usingDailyData = true;
         
@@ -12496,6 +12502,9 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     } else if (dashboardRange === 'year' && allPeriodsData[currentYear]) {
       // Use period data for current year
       const period = allPeriodsData[currentYear];
+      const googleAds = period?.shopify?.googleSpend || period?.shopify?.googleAds || 0;
+      const metaAds = period?.shopify?.metaSpend || period?.shopify?.metaAds || 0;
+      const amazonAds = period?.amazon?.adSpend || 0;
       current = {
         revenue: period.total?.revenue || 0,
         profit: period.total?.netProfit || 0,
@@ -12503,6 +12512,9 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
         adSpend: period.total?.adSpend || 0,
         cogs: period.total?.cogs || 0,
         orders: (period.shopify?.threeplMetrics?.orderCount || 0) + (period.amazon?.units || 0),
+        googleAds,
+        metaAds,
+        amazonAds,
       };
       usingPeriodData = true;
       
@@ -12516,8 +12528,11 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
       }
     } else {
       // Use weekly data
-      current = rangeWeeks.reduce((acc, w) => {
+      const weeklyAggWithAds = rangeWeeks.reduce((acc, w) => {
         const week = allWeeksData[w];
+        const googleAds = week?.shopify?.googleSpend || week?.shopify?.googleAds || 0;
+        const metaAds = week?.shopify?.metaSpend || week?.shopify?.metaAds || 0;
+        const amazonAds = week?.amazon?.adSpend || 0;
         return {
           revenue: acc.revenue + (week.total?.revenue || 0),
           profit: acc.profit + (week.total?.netProfit || 0),
@@ -12525,8 +12540,13 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
           adSpend: acc.adSpend + (week.total?.adSpend || 0),
           cogs: acc.cogs + (week.total?.cogs || 0),
           orders: acc.orders + (week.shopify?.threeplMetrics?.orderCount || 0) + (week.amazon?.units || 0),
+          googleAds: acc.googleAds + googleAds,
+          metaAds: acc.metaAds + metaAds,
+          amazonAds: acc.amazonAds + amazonAds,
         };
-      }, { revenue: 0, profit: 0, units: 0, adSpend: 0, cogs: 0, orders: 0 });
+      }, { revenue: 0, profit: 0, units: 0, adSpend: 0, cogs: 0, orders: 0, googleAds: 0, metaAds: 0, amazonAds: 0 });
+      
+      current = weeklyAggWithAds;
       
       // Previous range for comparison
       const previousRangeWeeks = dashboardRange === 'week' 
@@ -14087,6 +14107,13 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                   <p className="text-slate-400 text-sm font-medium mb-1">Ad Spend</p>
                   <p className="text-2xl lg:text-3xl font-bold text-white">{formatCurrency(current.adSpend)}</p>
                   <p className="text-slate-500 text-sm mt-1">{current.revenue > 0 ? ((current.adSpend / current.revenue) * 100).toFixed(1) : 0}% TACOS</p>
+                  {(current.googleAds > 0 || current.metaAds > 0 || current.amazonAds > 0) && (
+                    <div className="mt-3 pt-3 border-t border-slate-700 space-y-1 text-xs">
+                      {current.googleAds > 0 && <div className="flex justify-between"><span className="text-red-400">● Google</span><span className="text-white">{formatCurrency(current.googleAds)}</span></div>}
+                      {current.metaAds > 0 && <div className="flex justify-between"><span className="text-blue-400">● Meta</span><span className="text-white">{formatCurrency(current.metaAds)}</span></div>}
+                      {current.amazonAds > 0 && <div className="flex justify-between"><span className="text-orange-400">● Amazon</span><span className="text-white">{formatCurrency(current.amazonAds)}</span></div>}
+                    </div>
+                  )}
                 </div>
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
                   <p className="text-slate-400 text-sm font-medium mb-1">Net Margin</p>
@@ -21887,16 +21914,62 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     };
     
     // Calculate aggregated data
+    // Get days based on time tab selection - Daily=yesterday, Weekly=last 7 days, Monthly=last 30 days (from daysInMonth)
+    const getDaysForPeriod = () => {
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      
+      switch (adsTimeTab) {
+        case 'daily': {
+          // Yesterday only - get the most recent day with ad data
+          const yesterday = new Date(now);
+          yesterday.setDate(yesterday.getDate() - 1);
+          const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+          // Return yesterday if we have data, otherwise the most recent day with any data
+          if (sortedDays.includes(yesterdayStr)) {
+            return [yesterdayStr];
+          }
+          // Fall back to most recent day with data
+          const mostRecentWithAds = sortedDays.filter(d => {
+            const day = allDaysData[d];
+            return (day?.shopify?.googleSpend || day?.shopify?.metaSpend || day?.amazon?.adSpend || 0) > 0;
+          }).slice(-1);
+          return mostRecentWithAds.length > 0 ? mostRecentWithAds : sortedDays.slice(-1);
+        }
+        case 'weekly': {
+          // Last 7 days
+          const sevenDaysAgo = new Date(now);
+          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+          return sortedDays.filter(d => {
+            const date = new Date(d + 'T00:00:00');
+            return date >= sevenDaysAgo && date <= now;
+          });
+        }
+        case 'monthly': {
+          // Last 30 days OR selected month
+          return daysInMonth;
+        }
+        default:
+          return daysInMonth;
+      }
+    };
+    
     const periodWeeks = getWeeksForPeriod();
-    const periodDays = adsTimeTab === 'daily' ? daysInMonth : [];
+    const periodDays = getDaysForPeriod();
     const weeklyTotals = aggregateWeeklyData(periodWeeks);
-    const dailyTotals = aggregateDailyData(adsTimeTab === 'daily' ? periodDays : daysInMonth);
+    const dailyTotals = aggregateDailyData(periodDays);
     const compWeeks = getComparisonWeeks();
     const compTotals = aggregateWeeklyData(compWeeks);
     
-    // Use daily totals for the daily tab, weekly for others
-    const totals = adsTimeTab === 'daily' ? {
-      ...dailyTotals, amzAds: 0, amzRev: 0, shopAds: dailyTotals.googleAds + dailyTotals.metaAds, shopRev: 0, totalRev: 0
+    // Use daily totals for daily/weekly tabs (since they use day-level data), weekly for others
+    const useDailyData = adsTimeTab === 'daily' || adsTimeTab === 'weekly';
+    const totals = useDailyData ? {
+      ...dailyTotals, 
+      amzAds: dailyTotals.amazonAds || 0, 
+      amzRev: dailyTotals.amazonRev || 0, 
+      shopAds: dailyTotals.googleAds + dailyTotals.metaAds, 
+      shopRev: dailyTotals.shopifyRev || 0,
+      totalRev: dailyTotals.totalRev || 0
     } : weeklyTotals;
     
     // Calculate metrics
@@ -21926,8 +21999,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       return { week: w, amzAds, metaAds, googleAds, totalAds, totalRev, tacos: totalRev > 0 ? (totalAds / totalRev) * 100 : 0 };
     });
     
-    // Build daily table data
-    const dailyTableData = (adsTimeTab === 'daily' ? periodDays : daysInMonth).map(d => {
+    // Build daily table data - use periodDays for daily/weekly tabs
+    const dailyTableData = (useDailyData ? periodDays : daysInMonth).map(d => {
       const day = allDaysData[d];
       const googleAds = day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
       const metaAds = day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
@@ -21962,8 +22035,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     // Labels
     const getPeriodLabel = () => {
       switch (adsTimeTab) {
-        case 'daily': return `${monthNames[adsMonth]} ${adsYear} - Daily`;
-        case 'weekly': return adsSelectedWeek ? `Week ending ${new Date(adsSelectedWeek + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : 'Select a week';
+        case 'daily': {
+          // Show "Yesterday" or the actual date if different
+          const yesterday = new Date();
+          yesterday.setDate(yesterday.getDate() - 1);
+          const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+          if (periodDays.length === 1 && periodDays[0] === yesterdayStr) {
+            return 'Yesterday';
+          } else if (periodDays.length === 1) {
+            return new Date(periodDays[0] + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+          }
+          return `${monthNames[adsMonth]} ${adsYear} - Daily`;
+        }
+        case 'weekly': return `Last 7 Days (${periodDays.length} days with data)`;
         case 'monthly': return `${monthNames[adsMonth]} ${adsYear}`;
         case 'quarterly': return `Q${adsQuarter} ${adsYear}`;
         case 'yearly': return `${adsYear} Full Year`;
@@ -22437,20 +22521,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </select>
             </div>
             
-            {(adsTimeTab === 'daily' || adsTimeTab === 'monthly') && (
+            {(adsTimeTab === 'monthly') && (
               <div className="flex items-center gap-2">
                 <span className="text-slate-400 text-sm">Month:</span>
                 <select value={adsMonth} onChange={(e) => setAdsMonth(parseInt(e.target.value))} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
                   {monthNames.map((m, i) => <option key={i} value={i} disabled={!monthsWithData.includes(i)}>{m}</option>)}
-                </select>
-              </div>
-            )}
-            
-            {adsTimeTab === 'weekly' && weeksInYear.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-slate-400 text-sm">Week:</span>
-                <select value={adsSelectedWeek || ''} onChange={(e) => setAdsSelectedWeek(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
-                  {weeksInYear.slice().reverse().map(w => <option key={w} value={w}>{new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</option>)}
                 </select>
               </div>
             )}
@@ -22473,18 +22548,22 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           {/* Period Header */}
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-xl font-bold text-white">{getPeriodLabel()}</h2>
-            <span className="text-slate-400 text-sm">{adsTimeTab === 'daily' ? `${periodDays.length} days` : `${periodWeeks.length} week${periodWeeks.length !== 1 ? 's' : ''}`}</span>
+            <span className="text-slate-400 text-sm">
+              {useDailyData 
+                ? `${periodDays.length} day${periodDays.length !== 1 ? 's' : ''}` 
+                : `${periodWeeks.length} week${periodWeeks.length !== 1 ? 's' : ''}`}
+            </span>
           </div>
           
           {/* KPI Cards */}
-          {adsTimeTab === 'daily' ? (
+          {useDailyData ? (
             <>
             {/* Main KPI Row */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
               <div className="bg-gradient-to-br from-purple-900/30 to-slate-800/50 rounded-xl border border-purple-500/30 p-4">
                 <p className="text-slate-400 text-xs uppercase">Total Spend</p>
                 <p className="text-2xl font-bold text-white">{formatCurrency(dailyTotals.totalAds)}</p>
-                <p className="text-purple-400 text-xs mt-1">{dailyTotals.count} days</p>
+                <p className="text-purple-400 text-xs mt-1">{periodDays.length} day{periodDays.length !== 1 ? 's' : ''}</p>
               </div>
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                 <p className="text-slate-400 text-xs uppercase">Impressions</p>
@@ -22622,10 +22701,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           )}
           
           {/* Daily Table */}
-          {adsTimeTab === 'daily' && dailyTableData.length > 0 && (
+          {useDailyData && dailyTableData.length > 0 && (
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-white">Daily Breakdown</h3>
+                <h3 className="text-lg font-semibold text-white">{adsTimeTab === 'daily' ? 'Daily Details' : 'Last 7 Days Breakdown'}</h3>
                 <button onClick={() => setShowAdsBulkUpload(true)} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white flex items-center gap-1">
                   <Upload className="w-4 h-4" />Import Ads
                 </button>
@@ -22679,8 +22758,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             </div>
           )}
           
-          {/* Weekly Table (non-daily) */}
-          {adsTimeTab !== 'daily' && weeklyTableData.length > 0 && (
+          {/* Weekly Table (for monthly/quarterly/yearly) */}
+          {!useDailyData && weeklyTableData.length > 0 && (
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
               <h3 className="text-lg font-semibold text-white mb-4">Weekly Breakdown</h3>
               <div className="overflow-x-auto">
@@ -22706,7 +22785,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           )}
           
           {/* Empty state */}
-          {((adsTimeTab === 'daily' && dailyTableData.length === 0) || (adsTimeTab !== 'daily' && weeklyTableData.length === 0)) && (
+          {((useDailyData && dailyTableData.length === 0) || (!useDailyData && weeklyTableData.length === 0)) && (
             <div className="text-center py-12 bg-slate-800/30 rounded-2xl border border-slate-700">
               <DollarSign className="w-12 h-12 text-slate-600 mx-auto mb-4" />
               <p className="text-slate-400 mb-4">No ad data for {getPeriodLabel()}</p>
