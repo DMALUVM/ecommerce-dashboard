@@ -6729,8 +6729,8 @@ Respond with ONLY this JSON:
             daysWithAds: adsAnalysis.daysWithAds,
           },
           dataPoints: {
-            daysAnalyzed: dailyData.length,
-            weeksAnalyzed: completeWeeks.length,
+            dailyDays: dailyData.length,
+            weeklyWeeks: completeWeeks.length,
             amazonForecastWeeks: futureAmazonForecasts.length,
             amazonAccuracySamples: amazonAccuracy.samples,
             adsDataDays: adsAnalysis.daysWithAds,
