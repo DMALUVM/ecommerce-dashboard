@@ -11146,6 +11146,49 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
         weekly: generateForecast.weekly
       } : null;
       
+      // Include Multi-Signal AI Forecast (the most accurate forecast - same as dashboard widget)
+      const multiSignalForecast = aiForecasts?.salesForecast ? {
+        nextWeek: aiForecasts.salesForecast.next4Weeks?.[0] || null,
+        next4Weeks: aiForecasts.salesForecast.next4Weeks || [],
+        signals: aiForecasts.calculatedSignals || {},
+        dataPoints: aiForecasts.dataPoints || {},
+        generatedAt: aiForecasts.generatedAt,
+        methodology: 'Weighted: 60% daily trends (last 7 days), 20% weekly averages, 20% Amazon forecasts (if available)',
+      } : null;
+      
+      // Include Forecast Accuracy History (for learning from past predictions)
+      const forecastAccuracy = {
+        records: forecastAccuracyHistory.records?.slice(-20) || [], // Last 20 forecast vs actual comparisons
+        summary: (() => {
+          const records = forecastAccuracyHistory.records || [];
+          if (records.length === 0) return null;
+          const withActuals = records.filter(r => r.actualRevenue !== undefined);
+          if (withActuals.length === 0) return { message: 'No actuals recorded yet - waiting for weeks to complete' };
+          
+          const avgRevenueError = withActuals.reduce((s, r) => {
+            const error = r.forecastRevenue > 0 ? Math.abs(r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100 : 0;
+            return s + error;
+          }, 0) / withActuals.length;
+          
+          const avgBias = withActuals.reduce((s, r) => {
+            const bias = r.forecastRevenue > 0 ? (r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100 : 0;
+            return s + bias;
+          }, 0) / withActuals.length;
+          
+          return {
+            samplesWithActuals: withActuals.length,
+            avgAccuracy: (100 - avgRevenueError).toFixed(1) + '%',
+            avgBias: (avgBias > 0 ? '+' : '') + avgBias.toFixed(1) + '% (positive = forecasts too low)',
+            recentTrend: withActuals.slice(-5).map(r => ({
+              week: r.weekEnding,
+              forecast: r.forecastRevenue,
+              actual: r.actualRevenue,
+              error: r.forecastRevenue > 0 ? ((r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100).toFixed(1) + '%' : 'N/A'
+            }))
+          };
+        })(),
+      };
+      
       // Include week notes
       const notesData = Object.entries(weekNotes).filter(([k, v]) => v).map(([week, note]) => ({ week, note }));
       
@@ -11219,6 +11262,54 @@ ${forecastData ? `
 - Forecast Confidence: ${forecastData.confidence}%
 - Weekly Projections: ${JSON.stringify(forecastData.weekly)}
 ` : 'Not enough data for forecast (need 4+ weeks)'}
+
+=== 🧠 MULTI-SIGNAL AI FORECAST (PRIMARY - Use this for predictions) ===
+${multiSignalForecast ? `
+This is the most accurate forecast - it's the same one shown on the dashboard widget.
+
+**NEXT WEEK PREDICTION:**
+- Revenue: $${multiSignalForecast.nextWeek?.predictedRevenue?.toFixed(2) || 0}
+- Profit: $${multiSignalForecast.nextWeek?.predictedProfit?.toFixed(2) || 0}
+- Units: ${multiSignalForecast.nextWeek?.predictedUnits || 0}
+- Confidence: ${multiSignalForecast.nextWeek?.confidence || 'N/A'}
+
+**4-WEEK OUTLOOK:**
+${JSON.stringify(multiSignalForecast.next4Weeks)}
+
+**SIGNALS USED:**
+- Daily Average (7 days): $${multiSignalForecast.signals.dailyAvg7?.toFixed(2) || 0}/day
+- Momentum (7d vs prior 7d): ${multiSignalForecast.signals.momentum?.toFixed(1) || 0}%
+- Profit Margin: ${((multiSignalForecast.signals.avgProfitMargin || 0) * 100).toFixed(1)}%
+
+**DATA SOURCES:**
+- Daily data points: ${multiSignalForecast.dataPoints.dailyDays || 0} days
+- Weekly data points: ${multiSignalForecast.dataPoints.weeklyWeeks || 0} weeks  
+- Amazon forecasts: ${multiSignalForecast.dataPoints.amazonForecastWeeks || 0} weeks
+
+**METHODOLOGY:** ${multiSignalForecast.methodology}
+
+Last updated: ${multiSignalForecast.generatedAt || 'Not yet generated'}
+` : 'Multi-Signal forecast not yet generated. User should click "Refresh Forecast" on dashboard.'}
+
+=== 📊 FORECAST ACCURACY LEARNING (Compare predictions to actuals) ===
+${forecastAccuracy.summary ? `
+**ACCURACY SUMMARY (from past forecasts vs actuals):**
+- Samples with actual data: ${forecastAccuracy.summary.samplesWithActuals || 0}
+- Average Accuracy: ${forecastAccuracy.summary.avgAccuracy || 'N/A'}
+- Bias: ${forecastAccuracy.summary.avgBias || 'N/A'}
+
+**RECENT FORECAST vs ACTUAL COMPARISONS:**
+${forecastAccuracy.summary.recentTrend ? JSON.stringify(forecastAccuracy.summary.recentTrend, null, 2) : 'No recent comparisons yet'}
+
+⚠️ LEARNING INSTRUCTIONS:
+- If bias is consistently positive (actuals > forecast), predictions are too conservative - adjust up
+- If bias is consistently negative (actuals < forecast), predictions are too optimistic - adjust down
+- Use the accuracy % to determine confidence level in your predictions
+- Factor in the specific error patterns when making new predictions
+` : 'No forecast accuracy data yet. As weeks complete and actuals are uploaded, I will learn from prediction errors.'}
+
+**FULL ACCURACY HISTORY (last 20 records):**
+${forecastAccuracy.records.length > 0 ? JSON.stringify(forecastAccuracy.records.slice(-10)) : 'No records yet'}
 
 === GOALS ===
 - Weekly Revenue Target: $${ctx.goals.weeklyRevenue || 0}
@@ -11717,7 +11808,28 @@ You can help with:
 - Identifying the biggest expense drivers
 ` : 'No banking data uploaded yet. User can upload QBO Transaction Detail by Account CSV.'}
 
-Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. When comparing periods, always show the actual numbers and % change. If the user asks about data you don't have, let them know what they need to upload.`;
+Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. When comparing periods, always show the actual numbers and % change. If the user asks about data you don't have, let them know what they need to upload.
+
+=== 🧠 AI LEARNING INSTRUCTIONS ===
+You have access to the MULTI-SIGNAL AI FORECAST which is the most accurate forecast available. Use it as your PRIMARY source for predictions.
+
+**FOR PREDICTIONS:**
+1. Always use the Multi-Signal AI Forecast data (if available) for weekly predictions
+2. Check the FORECAST ACCURACY LEARNING section to understand how past predictions performed
+3. Apply any correction bias you observe (e.g., if forecasts are consistently 5% low, adjust up 5%)
+4. Consider momentum - if daily trends show acceleration/deceleration, factor this in
+
+**FOR ANALYSIS:**
+1. Cross-reference sales data with banking data when available to validate accuracy
+2. Use seasonal patterns to contextualize current performance
+3. Reference the day-of-week patterns for tactical recommendations
+
+**FOR CONSISTENCY:**
+1. Your predictions should align with the Multi-Signal AI Forecast shown on the dashboard
+2. If asked "what will next week's revenue be?", use the Multi-Signal next week prediction
+3. Be transparent about confidence levels and data quality
+
+The goal is for you to learn from the forecast vs actual comparisons over time and become increasingly accurate.`;
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -12445,9 +12557,20 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               <p className="text-white/70 text-xs">Ask about your business data</p>
             </div>
           </div>
-          <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {aiMessages.length > 0 && (
+              <button 
+                onClick={() => { if (confirm('Clear chat history?')) setAiMessages([]); }} 
+                className="p-2 hover:bg-white/20 rounded-lg text-white/70 hover:text-white"
+                title="Clear chat history"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+            <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
         
         <div className="h-80 overflow-y-auto p-4 space-y-4">
@@ -14459,8 +14582,15 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                       ? recentMonths.reduce((s, m) => s + (bankingData.monthlySnapshots[m]?.expenses || 0), 0) / recentMonths.length
                       : 0;
                     
-                    // Cash runway (months of cash at current burn rate)
-                    const runway = avgBurn > 0 ? Math.floor(totalCash / avgBurn) : 99;
+                    // Calculate average net cash flow (income - expenses)
+                    const avgNetCashFlow = recentMonths.length > 0
+                      ? recentMonths.reduce((s, m) => s + (bankingData.monthlySnapshots[m]?.net || 0), 0) / recentMonths.length
+                      : 0;
+                    
+                    // Cash runway - for revenue-generating business, use NET cash flow
+                    // If net positive, runway is infinite. If net negative, calculate months until cash runs out.
+                    const runway = avgNetCashFlow >= 0 ? 99 : Math.floor(totalCash / Math.abs(avgNetCashFlow));
+                    const isCashFlowPositive = avgNetCashFlow >= 0;
                     
                     // Trend: compare this month to last month
                     const trend = thisMonthSnap.net - lastMonthSnap.net;
@@ -14489,13 +14619,15 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                         {/* Key Metrics */}
                         <div className="space-y-2 text-sm">
                           <div className="flex justify-between items-center">
-                            <span className="text-slate-400">Monthly Burn Rate</span>
-                            <span className="text-rose-400 font-medium">{formatCurrency(avgBurn)}</span>
+                            <span className="text-slate-400">Avg Monthly Net</span>
+                            <span className={`font-medium ${avgNetCashFlow >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {avgNetCashFlow >= 0 ? '+' : ''}{formatCurrency(avgNetCashFlow)}
+                            </span>
                           </div>
                           <div className="flex justify-between items-center">
                             <span className="text-slate-400">Cash Runway</span>
-                            <span className={`font-bold ${runway > 6 ? 'text-emerald-400' : runway > 3 ? 'text-amber-400' : 'text-rose-400'}`}>
-                              {runway > 12 ? '12+ months' : `${runway} months`}
+                            <span className={`font-bold ${isCashFlowPositive ? 'text-emerald-400' : runway > 6 ? 'text-emerald-400' : runway > 3 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {isCashFlowPositive ? 'Cash Flow +' : runway > 12 ? '12+ months' : `${runway} months`}
                             </span>
                           </div>
                           <div className="flex justify-between items-center pt-2 border-t border-slate-700">
@@ -21380,19 +21512,37 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     <h3 className="text-xl font-semibold text-white">
                       {forecastPeriod === 'tomorrow' ? "Tomorrow's" : forecastPeriod === 'week' ? 'This Week' : forecastPeriod === 'month' ? 'This Month' : 'This Quarter'} Sales Forecast
                     </h3>
-                    <p className="text-slate-400 text-sm">AI prediction using {activeWeeksCount} active weeks + {sortedDays.length} days of sales data</p>
+                    <p className="text-slate-400 text-sm">
+                      {forecastPeriod === 'week' 
+                        ? 'Multi-Signal AI forecast (synced with dashboard)'
+                        : `AI prediction using ${activeWeeksCount} active weeks + ${sortedDays.length} days of sales data`}
+                    </p>
                   </div>
-                  <button 
-                    onClick={() => generateSalesForecastAI(forecastPeriod)}
-                    disabled={aiForecastModule.loading === 'sales' || !hasEnoughData}
-                    className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-xl text-white font-medium flex items-center gap-2"
-                  >
-                    {aiForecastModule.loading === 'sales' ? (
-                      <><Loader2 className="w-5 h-5 animate-spin" />Analyzing...</>
-                    ) : (
-                      <><Zap className="w-5 h-5" />Generate Forecast</>
-                    )}
-                  </button>
+                  {forecastPeriod === 'week' ? (
+                    <button 
+                      onClick={generateAIForecasts}
+                      disabled={aiForecastLoading}
+                      className="px-6 py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-xl text-white font-medium flex items-center gap-2"
+                    >
+                      {aiForecastLoading ? (
+                        <><Loader2 className="w-5 h-5 animate-spin" />Analyzing...</>
+                      ) : (
+                        <><Brain className="w-5 h-5" />Refresh Forecast</>
+                      )}
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={() => generateSalesForecastAI(forecastPeriod)}
+                      disabled={aiForecastModule.loading === 'sales' || !hasEnoughData}
+                      className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-xl text-white font-medium flex items-center gap-2"
+                    >
+                      {aiForecastModule.loading === 'sales' ? (
+                        <><Loader2 className="w-5 h-5 animate-spin" />Analyzing...</>
+                      ) : (
+                        <><Zap className="w-5 h-5" />Generate Forecast</>
+                      )}
+                    </button>
+                  )}
                 </div>
                 
                 {!hasEnoughData && (
@@ -21401,7 +21551,106 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   </div>
                 )}
                 
-                {aiForecastModule.sales?.[forecastPeriod] && (
+                {/* This Week - Always use Multi-Signal AI Forecast (same as dashboard) */}
+                {forecastPeriod === 'week' && aiForecasts?.salesForecast?.next4Weeks?.[0] && (
+                  <div className="space-y-4">
+                    {/* Prediction Cards */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="bg-slate-800/70 rounded-xl p-4 border border-slate-700">
+                        <p className="text-slate-400 text-sm mb-1">Expected Revenue</p>
+                        <p className="text-3xl font-bold text-white">{formatCurrency(aiForecasts.salesForecast.next4Weeks[0].predictedRevenue || 0)}</p>
+                        <p className="text-slate-500 text-xs mt-1">
+                          Daily avg: {formatCurrency(aiForecasts.calculatedSignals?.dailyAvg7 || 0)}/day
+                        </p>
+                      </div>
+                      <div className="bg-slate-800/70 rounded-xl p-4 border border-slate-700">
+                        <p className="text-slate-400 text-sm mb-1">Expected Profit</p>
+                        <p className={`text-3xl font-bold ${(aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {formatCurrency(aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0)}
+                        </p>
+                        <p className="text-slate-500 text-xs mt-1">
+                          {aiForecasts.salesForecast.next4Weeks[0].confidence} confidence
+                        </p>
+                      </div>
+                      <div className="bg-slate-800/70 rounded-xl p-4 border border-slate-700">
+                        <p className="text-slate-400 text-sm mb-1">Expected Units</p>
+                        <p className="text-3xl font-bold text-white">{formatNumber(aiForecasts.salesForecast.next4Weeks[0].predictedUnits || 0)}</p>
+                        <p className="text-slate-500 text-xs mt-1">
+                          ~{formatNumber(Math.round((aiForecasts.salesForecast.next4Weeks[0].predictedUnits || 0) / 7))}/day
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {/* Signals & Methodology */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="bg-slate-800/50 rounded-xl p-4">
+                        <div className="flex items-center gap-3 mb-2">
+                          <span className={`px-3 py-1 rounded-lg text-sm font-medium ${
+                            aiForecasts.salesForecast.next4Weeks[0].confidence === 'high' ? 'bg-emerald-500/20 text-emerald-400' :
+                            aiForecasts.salesForecast.next4Weeks[0].confidence === 'medium' ? 'bg-amber-500/20 text-amber-400' :
+                            'bg-slate-600 text-slate-300'
+                          }`}>
+                            {aiForecasts.salesForecast.next4Weeks[0].confidence} confidence
+                          </span>
+                          <span className={`px-3 py-1 rounded-lg text-sm ${
+                            (aiForecasts.calculatedSignals?.momentum || 0) > 5 ? 'bg-emerald-500/20 text-emerald-400' :
+                            (aiForecasts.calculatedSignals?.momentum || 0) < -5 ? 'bg-rose-500/20 text-rose-400' :
+                            'bg-slate-600 text-slate-300'
+                          }`}>
+                            {(aiForecasts.calculatedSignals?.momentum || 0) > 5 ? '↑ Upward momentum' : 
+                             (aiForecasts.calculatedSignals?.momentum || 0) < -5 ? '↓ Downward momentum' : '→ Stable'}
+                          </span>
+                        </div>
+                        <p className="text-slate-300 text-sm">
+                          Momentum: {aiForecasts.calculatedSignals?.momentum > 0 ? '+' : ''}{aiForecasts.calculatedSignals?.momentum?.toFixed(1)}% (last 7 days vs prior 7 days)
+                        </p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl p-4">
+                        <p className="text-slate-400 text-sm mb-2">Forecast Methodology</p>
+                        <div className="flex flex-wrap gap-2">
+                          <span className="px-2 py-1 bg-slate-700 text-slate-300 rounded text-xs">📊 {aiForecasts.dataPoints?.dailyDays || 0} days of daily data</span>
+                          <span className="px-2 py-1 bg-slate-700 text-slate-300 rounded text-xs">📅 {aiForecasts.dataPoints?.weeklyWeeks || 0} weeks of weekly data</span>
+                          {aiForecasts.dataPoints?.amazonForecastWeeks > 0 && (
+                            <span className="px-2 py-1 bg-orange-700 text-orange-300 rounded text-xs">🛒 {aiForecasts.dataPoints.amazonForecastWeeks} Amazon forecasts</span>
+                          )}
+                        </div>
+                        <p className="text-purple-400 text-xs mt-2">Weighted: 60% daily trends, 20% weekly, 20% Amazon (if available)</p>
+                      </div>
+                    </div>
+                    
+                    {/* 4-Week Outlook */}
+                    <div className="bg-slate-800/50 rounded-xl p-4">
+                      <p className="text-slate-400 text-sm mb-3">4-Week Outlook</p>
+                      <div className="grid grid-cols-4 gap-3">
+                        {aiForecasts.salesForecast.next4Weeks.map((w, i) => (
+                          <div key={i} className={`text-center p-3 rounded-lg ${i === 0 ? 'bg-purple-900/30 border border-purple-500/30' : 'bg-slate-700/30'}`}>
+                            <p className="text-slate-500 text-xs mb-1">Week {i + 1}</p>
+                            <p className="text-white font-bold">{formatCurrency(w.predictedRevenue || 0)}</p>
+                            <p className={`text-xs ${(w.predictedProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {formatCurrency(w.predictedProfit || 0)}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    <p className="text-slate-500 text-xs text-right">
+                      Last updated: {aiForecasts.generatedAt ? new Date(aiForecasts.generatedAt).toLocaleString() : '—'}
+                    </p>
+                  </div>
+                )}
+                
+                {/* This Week - No forecast yet */}
+                {forecastPeriod === 'week' && !aiForecasts?.salesForecast?.next4Weeks?.[0] && !aiForecastLoading && hasEnoughData && (
+                  <div className="text-center py-8">
+                    <Brain className="w-12 h-12 text-purple-400/30 mx-auto mb-3" />
+                    <p className="text-slate-400">Click "Refresh Forecast" to generate your weekly prediction</p>
+                    <p className="text-slate-500 text-xs mt-2">Uses the same Multi-Signal AI as the dashboard widget</p>
+                  </div>
+                )}
+                
+                {/* Other periods (Tomorrow, Month, Quarter) - use generateSalesForecastAI */}
+                {forecastPeriod !== 'week' && aiForecastModule.sales?.[forecastPeriod] && (
                   <div className="space-y-4">
                     {/* Prediction Cards */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -21469,10 +21718,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   </div>
                 )}
                 
-                {!aiForecastModule.sales?.[forecastPeriod] && !aiForecastModule.loading && hasEnoughData && (
+                {/* Empty state for non-week periods */}
+                {forecastPeriod !== 'week' && !aiForecastModule.sales?.[forecastPeriod] && !aiForecastModule.loading && hasEnoughData && (
                   <div className="text-center py-8">
                     <TrendingUp className="w-12 h-12 text-emerald-400/30 mx-auto mb-3" />
-                    <p className="text-slate-400">Click "Generate Forecast" to get AI predictions for {forecastPeriod === 'tomorrow' ? "tomorrow's" : forecastPeriod === 'week' ? 'this week' : forecastPeriod === 'month' ? 'this month' : 'this quarter'} sales</p>
+                    <p className="text-slate-400">Click "Generate Forecast" to get AI predictions for {forecastPeriod === 'tomorrow' ? "tomorrow's" : forecastPeriod === 'month' ? 'this month' : 'this quarter'} sales</p>
                   </div>
                 )}
               </div>
@@ -24710,12 +24960,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   ? last3Months.reduce((s, m) => s + (monthlySnapshots[m]?.expenses || 0), 0) / last3Months.length 
                   : 0;
                 
-                // Runway calculation
+                // Net cash flow (avg monthly income - expenses over last 3 months)
+                const avgMonthlyNet = last3Months.length > 0
+                  ? last3Months.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0) / last3Months.length
+                  : 0;
+                
+                // Runway calculation - for revenue-generating business, use NET cash flow
                 const realAccts = Object.entries(bankingData.accounts || {}).filter(([name, _]) => 
                   /\(\d{4}\)\s*-\s*\d+$/.test(name) && !name.includes('"') && name.length <= 60
                 );
                 const totalCash = realAccts.filter(([_, a]) => a.type !== 'credit_card').reduce((s, [_, a]) => s + (a.balance || 0), 0);
-                const runwayMonths = avgMonthlyExpenses > 0 ? totalCash / avgMonthlyExpenses : Infinity;
+                // If net cash flow is positive or zero, business is self-sustaining (infinite runway)
+                // If net is negative, calculate how many months until cash runs out
+                const runwayMonths = avgMonthlyNet >= 0 ? Infinity : totalCash / Math.abs(avgMonthlyNet);
+                const isCashFlowPositive = avgMonthlyNet >= 0;
                 
                 // MoM growth
                 const revenueMoM = lastMonthData.income > 0 
@@ -24825,10 +25083,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         />
                         <KPICard 
                           label="Cash Runway"
-                          value={runwayMonths === Infinity ? '∞' : `${runwayMonths.toFixed(1)}mo`}
-                          subLabel="At current burn rate"
-                          color={runwayMonths >= 6 ? 'text-emerald-400' : runwayMonths >= 3 ? 'text-amber-400' : 'text-rose-400'}
-                          tooltip={`With ${formatCurrency(totalCash)} cash and avg monthly expenses of ${formatCurrency(avgMonthlyExpenses)}, you have ${runwayMonths === Infinity ? 'unlimited' : runwayMonths.toFixed(1) + ' months'} of runway. 6+ months is comfortable, 3-6 months needs monitoring, under 3 months is critical.`}
+                          value={isCashFlowPositive ? 'Positive' : `${runwayMonths.toFixed(1)}mo`}
+                          subLabel={isCashFlowPositive ? 'Net cash flow +' : 'At current burn'}
+                          color={isCashFlowPositive ? 'text-emerald-400' : runwayMonths >= 6 ? 'text-emerald-400' : runwayMonths >= 3 ? 'text-amber-400' : 'text-rose-400'}
+                          tooltip={isCashFlowPositive 
+                            ? `Your business is cash flow positive! Average net: ${formatCurrency(avgMonthlyNet)}/month. You're generating more income than expenses, so runway is unlimited.`
+                            : `With ${formatCurrency(totalCash)} cash and avg monthly net loss of ${formatCurrency(Math.abs(avgMonthlyNet))}, you have ${runwayMonths.toFixed(1)} months of runway. This factors in your revenue, not just expenses.`}
                         />
                       </div>
                     </div>
@@ -25186,72 +25446,48 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                   card.nextStatement.daysUntilDue <= 10 ? 'text-amber-400' : 
                                   'text-emerald-400'
                                 }`}>
-                                  {card.nextStatement.daysUntilDue < 0 ? '🚨 Past Due!' :
-                                   card.nextStatement.daysUntilDue <= 10 ? '⚠️ Payment Due Soon' : 
-                                   '✓ Next Payment Window'}
+                                  {card.nextStatement.daysUntilDue < 0 ? '🚨 Check Statement - Payment May Be Due' :
+                                   card.nextStatement.daysUntilDue <= 10 ? '⚠️ Payment Window Open' : 
+                                   '✓ On Track'}
                                 </p>
                                 <p className="text-sm text-slate-300 mt-1">
-                                  Statement Total: <span className="font-bold text-white">{formatCurrency(card.nextStatement.total)}</span>
+                                  Current Balance: <span className="font-bold text-white">{formatCurrency(Math.abs(card.balance))}</span>
+                                  <span className="text-slate-500 text-xs ml-1">(from QBO)</span>
                                 </p>
                                 <p className="text-sm text-slate-300">
-                                  Optimal Pay Date: <span className="font-bold text-cyan-400">{card.nextStatement.optimalPayDate.toLocaleDateString()}</span>
+                                  Suggested Pay By: <span className="font-bold text-cyan-400">{card.nextStatement.optimalPayDate.toLocaleDateString()}</span>
                                   <span className="text-slate-500 ml-1">
-                                    ({card.nextStatement.daysUntilDue - 5 > 0 ? `in ${card.nextStatement.daysUntilDue - 5} days` : 'now'})
+                                    ({card.nextStatement.daysUntilDue - 5 > 0 ? `~${card.nextStatement.daysUntilDue - 5} days` : 'soon'})
                                   </span>
                                 </p>
                               </div>
                               <div className="text-right">
-                                <p className="text-slate-400 text-xs">Due Date</p>
+                                <p className="text-slate-400 text-xs">Est. Due Date</p>
                                 <p className={`font-bold text-lg ${card.nextStatement.daysUntilDue < 0 ? 'text-rose-400' : 'text-white'}`}>
                                   {card.nextStatement.realDueDate.toLocaleDateString()}
                                 </p>
-                                <p className={`text-sm ${
-                                  card.nextStatement.daysUntilDue < 0 ? 'text-rose-400' :
-                                  card.nextStatement.daysUntilDue <= 10 ? 'text-amber-400' : 
-                                  'text-slate-400'
-                                }`}>
-                                  {card.nextStatement.daysUntilDue < 0 
-                                    ? `${Math.abs(card.nextStatement.daysUntilDue)} days overdue`
-                                    : `${card.nextStatement.daysUntilDue} days left`}
-                                </p>
+                                <p className="text-xs text-slate-500 mt-1">Verify w/ statement</p>
                               </div>
                             </div>
+                            <p className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-700/50">
+                              💡 Due dates are estimates based on typical {card.isAmex ? 'Amex' : 'credit card'} billing cycles. Always check your actual statement.
+                            </p>
                           </div>
                         )}
                         
-                        {/* Statement Breakdown */}
-                        {card.statementGroups.length > 0 && (
+                        {/* Recent Charges Summary */}
+                        {card.charges.length > 0 && (
                           <div className="space-y-3">
-                            <h4 className="text-sm font-medium text-slate-400">Payment Schedule by Statement</h4>
-                            {card.statementGroups.slice(0, 3).map((stmt, i) => (
-                              <div key={i} className="bg-slate-700/30 rounded-lg p-3">
-                                <div className="flex items-center justify-between mb-2">
-                                  <span className="text-white font-medium">
-                                    {stmt.statementCloseDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })} Statement
-                                  </span>
-                                  <span className="text-rose-400 font-bold">{formatCurrency(stmt.total)}</span>
-                                </div>
-                                <div className="grid grid-cols-3 gap-2 text-xs">
-                                  <div>
-                                    <span className="text-slate-500">Closes</span>
-                                    <p className="text-slate-300">{stmt.statementCloseDate.toLocaleDateString()}</p>
-                                  </div>
-                                  <div>
-                                    <span className="text-slate-500">Pay By (Optimal)</span>
-                                    <p className="text-cyan-400">{stmt.optimalPayDate.toLocaleDateString()}</p>
-                                  </div>
-                                  <div>
-                                    <span className="text-slate-500">Due Date</span>
-                                    <p className={stmt.daysUntilDue < 0 ? 'text-rose-400' : 'text-white'}>{stmt.realDueDate.toLocaleDateString()}</p>
-                                  </div>
-                                </div>
-                                <div className="mt-2 text-xs text-slate-500">
-                                  {stmt.charges.length} charges • {stmt.daysUntilDue < 0 ? 
-                                    <span className="text-rose-400">{Math.abs(stmt.daysUntilDue)} days overdue</span> : 
-                                    <span>{stmt.daysUntilDue} days until due</span>}
-                                </div>
+                            <h4 className="text-sm font-medium text-slate-400">Recent Activity (Last 35 Days)</h4>
+                            <div className="bg-slate-700/30 rounded-lg p-3">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-slate-300 text-sm">{card.charges.length} charges tracked</span>
+                                <span className="text-slate-400 text-sm">{formatCurrency(card.charges.reduce((s, c) => s + c.amount, 0))}</span>
                               </div>
-                            ))}
+                              <p className="text-xs text-slate-500">
+                                Note: This is recent activity only, not your full statement balance
+                              </p>
+                            </div>
                           </div>
                         )}
                         
