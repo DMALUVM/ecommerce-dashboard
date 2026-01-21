@@ -11282,8 +11282,8 @@ ${JSON.stringify(multiSignalForecast.next4Weeks)}
 - Profit Margin: ${((multiSignalForecast.signals.avgProfitMargin || 0) * 100).toFixed(1)}%
 
 **DATA SOURCES:**
-- Daily data points: ${multiSignalForecast.dataPoints.dailyDays || 0} days
-- Weekly data points: ${multiSignalForecast.dataPoints.weeklyWeeks || 0} weeks  
+- Daily data points: ${multiSignalForecast.dataPoints.dailyDays || multiSignalForecast.dataPoints.daysAnalyzed || 0} days
+- Weekly data points: ${multiSignalForecast.dataPoints.weeklyWeeks || multiSignalForecast.dataPoints.weeksAnalyzed || 0} weeks  
 - Amazon forecasts: ${multiSignalForecast.dataPoints.amazonForecastWeeks || 0} weeks
 
 **METHODOLOGY:** ${multiSignalForecast.methodology}
@@ -21608,8 +21608,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       <div className="bg-slate-800/50 rounded-xl p-4">
                         <p className="text-slate-400 text-sm mb-2">Forecast Methodology</p>
                         <div className="flex flex-wrap gap-2">
-                          <span className="px-2 py-1 bg-slate-700 text-slate-300 rounded text-xs">📊 {aiForecasts.dataPoints?.dailyDays || 0} days of daily data</span>
-                          <span className="px-2 py-1 bg-slate-700 text-slate-300 rounded text-xs">📅 {aiForecasts.dataPoints?.weeklyWeeks || 0} weeks of weekly data</span>
+                          <span className="px-2 py-1 bg-slate-700 text-slate-300 rounded text-xs">📊 {aiForecasts.dataPoints?.dailyDays || aiForecasts.dataPoints?.daysAnalyzed || 0} days of daily data</span>
+                          <span className="px-2 py-1 bg-slate-700 text-slate-300 rounded text-xs">📅 {aiForecasts.dataPoints?.weeklyWeeks || aiForecasts.dataPoints?.weeksAnalyzed || 0} weeks of weekly data</span>
                           {aiForecasts.dataPoints?.amazonForecastWeeks > 0 && (
                             <span className="px-2 py-1 bg-orange-700 text-orange-300 rounded text-xs">🛒 {aiForecasts.dataPoints.amazonForecastWeeks} Amazon forecasts</span>
                           )}
