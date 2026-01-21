@@ -812,6 +812,12 @@ const handleLogout = async () => {
   const [threeplProcessing, setThreeplProcessing] = useState(false);
   const [threeplResults, setThreeplResults] = useState(null);
   
+  // Ads Bulk Upload (Meta & Google)
+  const [showAdsBulkUpload, setShowAdsBulkUpload] = useState(false);
+  const [adsSelectedFiles, setAdsSelectedFiles] = useState([]);
+  const [adsProcessing, setAdsProcessing] = useState(false);
+  const [adsResults, setAdsResults] = useState(null);
+  
   // Sales Tax Management
   const [salesTaxConfig, setSalesTaxConfig] = useState({
     nexusStates: {}, // { stateCode: { hasNexus: true, frequency: 'monthly', registrationId: '', customFilings: [], notes: '' } }
@@ -5708,6 +5714,28 @@ Keep insights brief and actionable. Format as numbered list.`;
       const criticalInventory = inventoryItems.filter(i => i.daysOfSupply > 0 && i.daysOfSupply < 14);
       const lowInventory = inventoryItems.filter(i => i.daysOfSupply >= 14 && i.daysOfSupply < 30);
       
+      // ==================== ADS SPEND ANALYSIS ====================
+      const adsAnalysis = sortedDays.slice(-30).reduce((acc, d) => {
+        const dayData = allDaysData[d];
+        const googleAds = dayData?.shopify?.googleSpend || 0;
+        const metaAds = dayData?.shopify?.metaSpend || 0;
+        const adsMetrics = dayData?.shopify?.adsMetrics || {};
+        return {
+          totalGoogleSpend: acc.totalGoogleSpend + googleAds,
+          totalMetaSpend: acc.totalMetaSpend + metaAds,
+          totalImpressions: acc.totalImpressions + (adsMetrics.googleImpressions || 0) + (adsMetrics.metaImpressions || 0),
+          totalClicks: acc.totalClicks + (adsMetrics.googleClicks || 0) + (adsMetrics.metaClicks || 0),
+          totalConversions: acc.totalConversions + (adsMetrics.googleConversions || 0) + (adsMetrics.metaPurchases || 0),
+          metaPurchaseValue: acc.metaPurchaseValue + (adsMetrics.metaPurchaseValue || 0),
+          daysWithAds: googleAds > 0 || metaAds > 0 ? acc.daysWithAds + 1 : acc.daysWithAds,
+        };
+      }, { totalGoogleSpend: 0, totalMetaSpend: 0, totalImpressions: 0, totalClicks: 0, totalConversions: 0, metaPurchaseValue: 0, daysWithAds: 0 });
+      
+      const totalAdSpend = adsAnalysis.totalGoogleSpend + adsAnalysis.totalMetaSpend;
+      const avgDailyAdSpend = adsAnalysis.daysWithAds > 0 ? totalAdSpend / adsAnalysis.daysWithAds : 0;
+      const overallCTR = adsAnalysis.totalImpressions > 0 ? (adsAnalysis.totalClicks / adsAnalysis.totalImpressions * 100) : 0;
+      const avgCPC = adsAnalysis.totalClicks > 0 ? totalAdSpend / adsAnalysis.totalClicks : 0;
+      
       // ==================== BUILD COMPREHENSIVE PROMPT ====================
       const prompt = `You are an elite e-commerce forecasting AI. I've pre-calculated key signals - your job is to synthesize them into accurate predictions.
 
@@ -5756,6 +5784,21 @@ ${JSON.stringify(futureAmazonForecasts, null, 2)}
 Critical (< 14 days): ${criticalInventory.length} items
 Low Stock (< 30 days): ${lowInventory.length} items
 ${criticalInventory.length > 0 ? JSON.stringify(criticalInventory.slice(0, 5), null, 2) : ''}
+
+### ADS SPEND ANALYSIS (Last 30 days)
+${adsAnalysis.daysWithAds > 0 ? `
+- Total Google Ads Spend: $${adsAnalysis.totalGoogleSpend.toFixed(2)}
+- Total Meta Ads Spend: $${adsAnalysis.totalMetaSpend.toFixed(2)}
+- Combined Ad Spend: $${totalAdSpend.toFixed(2)}
+- Avg Daily Ad Spend: $${avgDailyAdSpend.toFixed(2)}/day
+- Days with Ad Data: ${adsAnalysis.daysWithAds}
+- Total Impressions: ${adsAnalysis.totalImpressions.toLocaleString()}
+- Total Clicks: ${adsAnalysis.totalClicks.toLocaleString()}
+- Overall CTR: ${overallCTR.toFixed(2)}%
+- Avg CPC: $${avgCPC.toFixed(2)}
+- Conversions: ${adsAnalysis.totalConversions}
+- Meta Purchase Value: $${adsAnalysis.metaPurchaseValue.toFixed(2)}
+` : 'No ads data available for the last 30 days'}
 
 ### LEARNING CORRECTIONS (from past predictions)
 - Confidence: ${forecastCorrections.confidence?.toFixed(1) || 0}%
@@ -5807,8 +5850,19 @@ Respond with ONLY this JSON:
   "inventoryRecommendations": [
     { "sku": "SKU", "action": "reorder|monitor", "urgency": "critical|high|medium", "reasoning": "why" }
   ],
+  "adsRecommendations": {
+    "overallPerformance": "good|average|poor",
+    "recommendations": [
+      { "platform": "google|meta|amazon", "action": "increase|maintain|decrease|pause", "reasoning": "why" }
+    ],
+    "suggestedBudget": {
+      "daily": number,
+      "weekly": number,
+      "rationale": "why this budget"
+    }
+  },
   "actionableInsights": [
-    { "category": "sales|inventory|marketing", "priority": "high|medium", "insight": "specific action", "expectedImpact": "expected result" }
+    { "category": "sales|inventory|marketing|ads", "priority": "high|medium", "insight": "specific action", "expectedImpact": "expected result" }
   ],
   "risks": [
     { "risk": "description", "likelihood": "high|medium|low", "mitigation": "how to address" }
@@ -5867,11 +5921,25 @@ Respond with ONLY this JSON:
             profitPrediction,
             avgProfitMargin: avgProfitMargin * 100,
           },
+          adsAnalysis: {
+            totalGoogleSpend: adsAnalysis.totalGoogleSpend,
+            totalMetaSpend: adsAnalysis.totalMetaSpend,
+            totalAdSpend,
+            avgDailyAdSpend,
+            totalImpressions: adsAnalysis.totalImpressions,
+            totalClicks: adsAnalysis.totalClicks,
+            totalConversions: adsAnalysis.totalConversions,
+            metaPurchaseValue: adsAnalysis.metaPurchaseValue,
+            overallCTR,
+            avgCPC,
+            daysWithAds: adsAnalysis.daysWithAds,
+          },
           dataPoints: {
             daysAnalyzed: dailyData.length,
             weeksAnalyzed: completeWeeks.length,
             amazonForecastWeeks: futureAmazonForecasts.length,
             amazonAccuracySamples: amazonAccuracy.samples,
+            adsDataDays: adsAnalysis.daysWithAds,
           },
         });
       } else {
@@ -8374,6 +8442,495 @@ Analyze the data and respond with ONLY this JSON:
     );
   };
 
+  // ADS BULK UPLOAD MODAL (Meta & Google)
+  const AdsBulkUploadModal = () => {
+    const [dragActive, setDragActive] = useState(false);
+    
+    if (!showAdsBulkUpload) return null;
+    
+    const handleDrag = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.type === 'dragenter' || e.type === 'dragover') setDragActive(true);
+      else if (e.type === 'dragleave') setDragActive(false);
+    };
+    
+    const handleDrop = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDragActive(false);
+      const files = [...e.dataTransfer.files].filter(f => f.name.endsWith('.csv'));
+      setAdsSelectedFiles(prev => [...prev, ...files]);
+    };
+    
+    const handleFileSelect = (e) => {
+      const files = [...e.target.files].filter(f => f.name.endsWith('.csv'));
+      setAdsSelectedFiles(prev => [...prev, ...files]);
+    };
+    
+    const removeFile = (idx) => setAdsSelectedFiles(prev => prev.filter((_, i) => i !== idx));
+    
+    // Parse date formats from Meta and Google ads exports
+    const parseAdsDate = (dateStr) => {
+      if (!dateStr) return null;
+      const str = dateStr.replace(/"/g, '').trim();
+      
+      // Format: "Jan 4, 2026" or "Dec 31, 2025" (Meta)
+      const metaMatch = str.match(/^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/);
+      if (metaMatch) {
+        const months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+        const month = months[metaMatch[1].toLowerCase().substring(0, 3)];
+        const day = parseInt(metaMatch[2]);
+        const year = parseInt(metaMatch[3]);
+        if (month !== undefined && day && year) {
+          const d = new Date(year, month, day);
+          return d.toISOString().split('T')[0]; // YYYY-MM-DD
+        }
+      }
+      
+      // Format: "Mon, Dec 29, 2025" (Google)
+      const googleMatch = str.match(/^[A-Za-z]+,\s*([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/);
+      if (googleMatch) {
+        const months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+        const month = months[googleMatch[1].toLowerCase().substring(0, 3)];
+        const day = parseInt(googleMatch[2]);
+        const year = parseInt(googleMatch[3]);
+        if (month !== undefined && day && year) {
+          const d = new Date(year, month, day);
+          return d.toISOString().split('T')[0];
+        }
+      }
+      
+      // Format: YYYY-MM-DD
+      const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (isoMatch) return str;
+      
+      // Format: MM/DD/YYYY
+      const usMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (usMatch) {
+        const d = new Date(parseInt(usMatch[3]), parseInt(usMatch[1]) - 1, parseInt(usMatch[2]));
+        return d.toISOString().split('T')[0];
+      }
+      
+      return null;
+    };
+    
+    // Parse currency/number values
+    const parseNumber = (val) => {
+      if (val === null || val === undefined || val === 'null' || val === '') return 0;
+      const str = String(val).replace(/[$,]/g, '').trim();
+      const num = parseFloat(str);
+      return isNaN(num) ? 0 : num;
+    };
+    
+    // Detect file type and parse accordingly
+    const parseAdsFile = async (file) => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const text = e.target.result;
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+            if (lines.length < 2) {
+              reject(new Error('File has no data rows'));
+              return;
+            }
+            
+            // Parse header
+            const parseCSVLine = (line) => {
+              const result = [];
+              let current = '';
+              let inQuotes = false;
+              for (const char of line) {
+                if (char === '"') inQuotes = !inQuotes;
+                else if (char === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+                else current += char;
+              }
+              result.push(current.trim());
+              return result;
+            };
+            
+            const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/"/g, ''));
+            const dateColIdx = headers.findIndex(h => h === 'date' || h.includes('date'));
+            
+            if (dateColIdx === -1) {
+              reject(new Error('No date column found'));
+              return;
+            }
+            
+            // Detect file type by headers
+            const isMetaAds = headers.some(h => h.includes('ad name') || h.includes('amount spent') || h.includes('roas'));
+            const isGoogleAds = headers.some(h => h.includes('avg. cpc') || h.includes('avg cpc') || h.includes('cost / conv'));
+            
+            if (!isMetaAds && !isGoogleAds) {
+              reject(new Error('Unrecognized ads format. Expected Meta or Google Ads export.'));
+              return;
+            }
+            
+            // Map headers to indices
+            const getColIdx = (patterns) => headers.findIndex(h => patterns.some(p => h.includes(p)));
+            
+            const dailyData = {}; // { date: { metaSpend, googleSpend, impressions, clicks, ... } }
+            
+            // Parse data rows
+            for (let i = 1; i < lines.length; i++) {
+              const cols = parseCSVLine(lines[i]);
+              const dateStr = cols[dateColIdx];
+              const parsedDate = parseAdsDate(dateStr);
+              
+              if (!parsedDate) continue; // Skip invalid dates
+              
+              if (!dailyData[parsedDate]) {
+                dailyData[parsedDate] = {
+                  metaSpend: 0, googleSpend: 0,
+                  metaImpressions: 0, googleImpressions: 0,
+                  metaClicks: 0, googleClicks: 0,
+                  metaPurchases: 0, googleConversions: 0,
+                  metaPurchaseValue: 0, googleConversionValue: 0,
+                  metaROAS: 0, googleCostPerConv: 0,
+                  metaCPM: 0, metaCPC: 0, googleCPC: 0,
+                  metaCTR: 0, googleCTR: 0,
+                };
+              }
+              
+              if (isMetaAds) {
+                // Meta columns: Amount spent, Purchases value, Purchases, ROAS, Impressions, Link clicks, CTR, CPC, CPM
+                const spendIdx = getColIdx(['amount spent']);
+                const purchaseValueIdx = getColIdx(['purchases value', 'purchase value']);
+                const purchasesIdx = getColIdx(['purchases (all)', 'purchases']);
+                const roasIdx = getColIdx(['roas']);
+                const impressionsIdx = getColIdx(['impressions']);
+                const clicksIdx = getColIdx(['link clicks', 'clicks']);
+                const ctrIdx = getColIdx(['ctr']);
+                const cpcIdx = getColIdx(['cost per link click', 'cpc']);
+                const cpmIdx = getColIdx(['cpm']);
+                
+                dailyData[parsedDate].metaSpend += parseNumber(cols[spendIdx]);
+                dailyData[parsedDate].metaImpressions += parseNumber(cols[impressionsIdx]);
+                dailyData[parsedDate].metaClicks += parseNumber(cols[clicksIdx]);
+                dailyData[parsedDate].metaPurchases += parseNumber(cols[purchasesIdx]);
+                dailyData[parsedDate].metaPurchaseValue += parseNumber(cols[purchaseValueIdx]);
+                
+                // For averages (CTR, CPC, CPM, ROAS), we'll recalculate after aggregation
+              } else if (isGoogleAds) {
+                // Google columns: Impressions, Avg. CPC, Cost, Cost / conv.
+                const impressionsIdx = getColIdx(['impressions']);
+                const cpcIdx = getColIdx(['avg. cpc', 'avg cpc']);
+                const costIdx = getColIdx(['cost']);
+                const costPerConvIdx = getColIdx(['cost / conv', 'cost/conv', 'cost per conv']);
+                
+                dailyData[parsedDate].googleSpend += parseNumber(cols[costIdx]);
+                dailyData[parsedDate].googleImpressions += parseNumber(cols[impressionsIdx]);
+                dailyData[parsedDate].googleCPC = parseNumber(cols[cpcIdx]); // Will take last value (daily totals)
+                dailyData[parsedDate].googleCostPerConv = parseNumber(cols[costPerConvIdx]);
+                
+                // Estimate conversions from cost per conv
+                const cost = parseNumber(cols[costIdx]);
+                const costPerConv = parseNumber(cols[costPerConvIdx]);
+                if (costPerConv > 0) {
+                  dailyData[parsedDate].googleConversions += Math.round(cost / costPerConv);
+                }
+              }
+            }
+            
+            // Calculate derived metrics for Meta
+            Object.keys(dailyData).forEach(date => {
+              const d = dailyData[date];
+              if (d.metaImpressions > 0) {
+                d.metaCPM = (d.metaSpend / d.metaImpressions) * 1000;
+                d.metaCTR = (d.metaClicks / d.metaImpressions) * 100;
+              }
+              if (d.metaClicks > 0) {
+                d.metaCPC = d.metaSpend / d.metaClicks;
+              }
+              if (d.metaSpend > 0 && d.metaPurchaseValue > 0) {
+                d.metaROAS = d.metaPurchaseValue / d.metaSpend;
+              }
+              if (d.googleImpressions > 0 && d.googleSpend > 0) {
+                d.googleCTR = (d.googleSpend / d.googleCPC / d.googleImpressions) * 100 || 0;
+              }
+            });
+            
+            const dates = Object.keys(dailyData).sort();
+            if (dates.length === 0) {
+              reject(new Error('No valid daily data found'));
+              return;
+            }
+            
+            resolve({
+              type: isMetaAds ? 'meta' : 'google',
+              dailyData,
+              dateRange: { start: dates[0], end: dates[dates.length - 1] },
+              daysCount: dates.length,
+            });
+          } catch (err) {
+            reject(new Error(`Parse error: ${err.message}`));
+          }
+        };
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsText(file);
+      });
+    };
+    
+    const processFiles = async () => {
+      setAdsProcessing(true);
+      const processResults = [];
+      let updatedDays = { ...allDaysData };
+      let totalDaysUpdated = 0;
+      let allDatesAffected = new Set();
+      
+      for (const file of adsSelectedFiles) {
+        try {
+          const parsed = await parseAdsFile(file);
+          let daysUpdated = 0;
+          
+          Object.entries(parsed.dailyData).forEach(([date, adsData]) => {
+            allDatesAffected.add(date);
+            
+            // Get existing day data or create minimal structure
+            const existingDay = updatedDays[date] || {
+              total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
+              amazon: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
+              shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, netProfit: 0 },
+            };
+            
+            // Update ad spend data WITHOUT touching sales data
+            const newMetaSpend = parsed.type === 'meta' ? adsData.metaSpend : (existingDay.shopify?.metaSpend || 0);
+            const newGoogleSpend = parsed.type === 'google' ? adsData.googleSpend : (existingDay.shopify?.googleSpend || 0);
+            const totalAdSpend = newMetaSpend + newGoogleSpend;
+            
+            // Store ads metrics
+            const adsMetrics = {
+              ...(existingDay.shopify?.adsMetrics || {}),
+              ...(parsed.type === 'meta' ? {
+                metaImpressions: adsData.metaImpressions,
+                metaClicks: adsData.metaClicks,
+                metaPurchases: adsData.metaPurchases,
+                metaPurchaseValue: adsData.metaPurchaseValue,
+                metaROAS: adsData.metaROAS,
+                metaCPM: adsData.metaCPM,
+                metaCPC: adsData.metaCPC,
+                metaCTR: adsData.metaCTR,
+              } : {}),
+              ...(parsed.type === 'google' ? {
+                googleImpressions: adsData.googleImpressions,
+                googleClicks: adsData.googleClicks,
+                googleConversions: adsData.googleConversions,
+                googleCPC: adsData.googleCPC,
+                googleCostPerConv: adsData.googleCostPerConv,
+              } : {}),
+            };
+            
+            // Calculate new profit (existing revenue - existing cogs - new ad spend)
+            const shopifyRevenue = existingDay.shopify?.revenue || 0;
+            const shopifyCogs = existingDay.shopify?.cogs || 0;
+            const shopifyThreeplCosts = existingDay.shopify?.threeplCosts || 0;
+            const shopifyDiscounts = existingDay.shopify?.discounts || 0;
+            const newShopifyProfit = shopifyRevenue - shopifyCogs - totalAdSpend - shopifyThreeplCosts - shopifyDiscounts;
+            
+            const amazonProfit = existingDay.amazon?.netProfit || 0;
+            const totalProfit = amazonProfit + newShopifyProfit;
+            
+            updatedDays[date] = {
+              ...existingDay,
+              shopify: {
+                ...existingDay.shopify,
+                adSpend: totalAdSpend,
+                metaSpend: newMetaSpend,
+                googleSpend: newGoogleSpend,
+                netProfit: newShopifyProfit,
+                adsMetrics,
+              },
+              total: {
+                ...existingDay.total,
+                adSpend: totalAdSpend + (existingDay.amazon?.adSpend || 0),
+                netProfit: totalProfit,
+              },
+            };
+            
+            daysUpdated++;
+          });
+          
+          totalDaysUpdated += daysUpdated;
+          processResults.push({
+            file: file.name,
+            status: 'success',
+            type: parsed.type,
+            daysUpdated,
+            dateRange: parsed.dateRange,
+          });
+        } catch (err) {
+          console.error('Error processing ads file:', file.name, err);
+          processResults.push({
+            file: file.name,
+            status: 'error',
+            error: err.message,
+          });
+        }
+      }
+      
+      // Save updated data
+      if (totalDaysUpdated > 0) {
+        setAllDaysData(updatedDays);
+        lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays));
+      }
+      
+      setAdsResults({
+        processResults,
+        totalDaysUpdated,
+        datesAffected: allDatesAffected.size,
+      });
+      setAdsProcessing(false);
+    };
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-violet-600 to-purple-600 p-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <TrendingUp className="w-6 h-6" />Bulk Upload Ads Data
+              </h2>
+              <p className="text-white/70 text-sm">Import Meta (Facebook) & Google Ads daily data</p>
+            </div>
+            <button onClick={() => { setShowAdsBulkUpload(false); setAdsSelectedFiles([]); setAdsResults(null); }} className="p-2 hover:bg-white/20 rounded-lg text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          {/* Content */}
+          <div className="p-6 overflow-y-auto flex-1">
+            {!adsResults ? (
+              <>
+                {/* Instructions */}
+                <div className="bg-slate-800/50 rounded-xl p-4 mb-4">
+                  <h3 className="text-white font-semibold mb-2">Supported Formats</h3>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div className="bg-blue-900/30 rounded-lg p-3 border border-blue-500/30">
+                      <p className="text-blue-400 font-medium mb-1">📘 Meta/Facebook Ads</p>
+                      <p className="text-slate-400 text-xs">Export from Meta Ads Manager with:</p>
+                      <p className="text-slate-300 text-xs mt-1">Date, Amount spent, Purchases, ROAS, Impressions, Clicks, CTR, CPC, CPM</p>
+                    </div>
+                    <div className="bg-amber-900/30 rounded-lg p-3 border border-amber-500/30">
+                      <p className="text-amber-400 font-medium mb-1">🔶 Google Ads</p>
+                      <p className="text-slate-400 text-xs">Export from Google Ads with:</p>
+                      <p className="text-slate-300 text-xs mt-1">Date, Impressions, Avg CPC, Cost, Cost/conv</p>
+                    </div>
+                  </div>
+                  <p className="text-slate-500 text-xs mt-3">✓ Daily data will be parsed and aggregated by date • ✓ Sales data will NOT be overwritten • ✓ Existing ads data for same dates will be replaced</p>
+                </div>
+                
+                {/* Drop Zone */}
+                <div
+                  className={`border-2 border-dashed rounded-xl p-8 text-center transition-all ${dragActive ? 'border-violet-500 bg-violet-500/10' : 'border-slate-600 hover:border-slate-500'}`}
+                  onDragEnter={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDragOver={handleDrag}
+                  onDrop={handleDrop}
+                >
+                  <TrendingUp className="w-12 h-12 text-slate-500 mx-auto mb-3" />
+                  <p className="text-white font-medium mb-1">Drop CSV files here</p>
+                  <p className="text-slate-400 text-sm mb-3">or click to browse</p>
+                  <input type="file" multiple accept=".csv" onChange={handleFileSelect} className="hidden" id="ads-file-input" />
+                  <label htmlFor="ads-file-input" className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white cursor-pointer inline-block">
+                    Select Files
+                  </label>
+                  <p className="text-slate-500 text-xs mt-3">Supports .csv • Multiple files OK • Meta & Google can be mixed</p>
+                </div>
+                
+                {/* Selected Files */}
+                {adsSelectedFiles.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-slate-400 text-sm mb-2">Selected Files ({adsSelectedFiles.length})</p>
+                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                      {adsSelectedFiles.map((file, idx) => (
+                        <div key={idx} className="flex items-center justify-between bg-slate-900/50 rounded-lg p-2">
+                          <div className="flex items-center gap-2">
+                            <FileSpreadsheet className="w-4 h-4 text-violet-400" />
+                            <span className="text-white text-sm">{file.name}</span>
+                            <span className="text-slate-500 text-xs">({(file.size / 1024).toFixed(1)} KB)</span>
+                          </div>
+                          <button onClick={() => removeFile(idx)} className="text-slate-400 hover:text-rose-400">
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    
+                    <button
+                      onClick={processFiles}
+                      disabled={adsProcessing}
+                      className="w-full mt-4 py-3 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
+                    >
+                      {adsProcessing ? (
+                        <><RefreshCw className="w-5 h-5 animate-spin" />Processing...</>
+                      ) : (
+                        <><Upload className="w-5 h-5" />Import {adsSelectedFiles.length} File{adsSelectedFiles.length > 1 ? 's' : ''}</>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              /* Results */
+              <div className="space-y-4">
+                <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <CheckCircle className="w-5 h-5 text-emerald-400" />
+                    <span className="text-emerald-400 font-semibold">Import Complete</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 text-center">
+                    <div>
+                      <p className="text-2xl font-bold text-emerald-400">{adsResults.totalDaysUpdated}</p>
+                      <p className="text-slate-400 text-xs">Days Updated</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold text-violet-400">{adsResults.datesAffected}</p>
+                      <p className="text-slate-400 text-xs">Unique Dates</p>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* File Results */}
+                <div className="space-y-2">
+                  {adsResults.processResults.map((r, idx) => (
+                    <div key={idx} className={`rounded-lg p-3 flex items-center justify-between ${r.status === 'success' ? 'bg-slate-800' : 'bg-rose-900/30 border border-rose-500/30'}`}>
+                      <div className="flex items-center gap-3">
+                        {r.status === 'success' ? (
+                          <CheckCircle className="w-5 h-5 text-emerald-400" />
+                        ) : (
+                          <AlertTriangle className="w-5 h-5 text-rose-400" />
+                        )}
+                        <div>
+                          <p className="text-white text-sm">{r.file}</p>
+                          {r.status === 'success' ? (
+                            <p className="text-slate-400 text-xs">
+                              {r.type === 'meta' ? '📘 Meta' : '🔶 Google'} • {r.daysUpdated} days • {r.dateRange?.start} to {r.dateRange?.end}
+                            </p>
+                          ) : (
+                            <p className="text-rose-400 text-xs">{r.error}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                
+                <button
+                  onClick={() => { setShowAdsBulkUpload(false); setAdsSelectedFiles([]); setAdsResults(null); }}
+                  className="w-full py-3 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-semibold"
+                >
+                  Done
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // INVOICE/BILLS MODAL
   const InvoiceModal = () => {
     if (!showInvoiceModal) return null;
@@ -10799,7 +11356,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -12078,7 +12635,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-4xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -12643,9 +13200,29 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                 </div>
               </div>
               
-              <div className="grid grid-cols-2 gap-4 mb-6">
+              <div className="grid grid-cols-2 gap-4 mb-4">
                 <div><label className="block text-sm text-slate-400 mb-2">Meta Ad Spend</label><input type="number" value={adSpend.meta} onChange={(e) => setAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
                 <div><label className="block text-sm text-slate-400 mb-2">Google Ad Spend</label><input type="number" value={adSpend.google} onChange={(e) => setAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
+              </div>
+              
+              {/* Ads Bulk Upload Banner */}
+              <div className="bg-violet-900/20 border border-violet-500/30 rounded-xl p-4 mb-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <TrendingUp className="w-8 h-8 text-violet-400" />
+                    <div>
+                      <p className="text-white font-medium">Bulk Upload Ad Spend Data</p>
+                      <p className="text-slate-400 text-sm">Import Meta & Google Ads CSV exports with full metrics</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setShowAdsBulkUpload(true)}
+                    className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium flex items-center gap-2"
+                  >
+                    <Upload className="w-4 h-4" />
+                    Upload Ads Data
+                  </button>
+                </div>
               </div>
               
               {!hasCogs && <div className="bg-amber-900/30 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" /><div><p className="text-amber-300 font-medium">COGS not set up</p><p className="text-amber-200/70 text-sm">Upload a COGS file or configure in settings for profit tracking</p></div></div>}
@@ -13522,7 +14099,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-3xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -13540,7 +14117,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-3xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -13565,7 +14142,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -13630,7 +14207,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -13837,7 +14414,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -13863,7 +14440,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -13900,7 +14477,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -14116,7 +14693,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     const idx = dates.indexOf(selectedInvDate);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             <div className="flex gap-2">
@@ -15114,7 +15691,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
 
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -15683,7 +16260,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -16145,7 +16722,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     if (!hasWeeklyData && !hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+          <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -16172,7 +16749,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     if (!hasWeeklyData && hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+          <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -16243,7 +16820,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -16790,7 +17367,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -17198,7 +17775,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white">Analytics & Forecasting</h1>
@@ -17927,7 +18504,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -18278,7 +18855,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -19024,23 +19601,63 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       return days.reduce((acc, d) => {
         const day = allDaysData[d];
         if (!day) return acc;
-        const googleAds = day.googleSpend || day.googleAds || 0;
-        const metaAds = day.metaSpend || day.metaAds || 0;
-        const googleImpressions = day.googleImpressions || 0;
-        const metaImpressions = day.metaImpressions || 0;
-        const googleClicks = day.googleClicks || 0;
-        const metaClicks = day.metaClicks || 0;
-        const googleConversions = day.googleConversions || 0;
-        const metaConversions = day.metaConversions || 0;
+        
+        // Get ad spend from shopify object
+        const googleAds = day.shopify?.googleSpend || day.googleSpend || day.googleAds || 0;
+        const metaAds = day.shopify?.metaSpend || day.metaSpend || day.metaAds || 0;
+        const amazonAds = day.amazon?.adSpend || 0;
+        
+        // Get detailed metrics from adsMetrics
+        const adsMetrics = day.shopify?.adsMetrics || {};
+        const googleImpressions = adsMetrics.googleImpressions || day.googleImpressions || 0;
+        const metaImpressions = adsMetrics.metaImpressions || day.metaImpressions || 0;
+        const googleClicks = adsMetrics.googleClicks || day.googleClicks || 0;
+        const metaClicks = adsMetrics.metaClicks || day.metaClicks || 0;
+        const googleConversions = adsMetrics.googleConversions || day.googleConversions || 0;
+        const metaPurchases = adsMetrics.metaPurchases || day.metaConversions || 0;
+        const metaPurchaseValue = adsMetrics.metaPurchaseValue || 0;
+        const metaROAS = adsMetrics.metaROAS || 0;
+        const googleCPC = adsMetrics.googleCPC || 0;
+        const googleCostPerConv = adsMetrics.googleCostPerConv || 0;
+        const metaCPC = adsMetrics.metaCPC || 0;
+        const metaCPM = adsMetrics.metaCPM || 0;
+        const metaCTR = adsMetrics.metaCTR || 0;
+        
+        // Get revenue for ROAS calculation
+        const shopifyRev = day.shopify?.revenue || 0;
+        const amazonRev = day.amazon?.revenue || 0;
+        
         return {
-          googleAds: acc.googleAds + googleAds, metaAds: acc.metaAds + metaAds,
-          totalAds: acc.totalAds + googleAds + metaAds,
-          impressions: acc.impressions + googleImpressions + metaImpressions,
-          clicks: acc.clicks + googleClicks + metaClicks,
-          conversions: acc.conversions + googleConversions + metaConversions,
+          googleAds: acc.googleAds + googleAds, 
+          metaAds: acc.metaAds + metaAds,
+          amazonAds: acc.amazonAds + amazonAds,
+          totalAds: acc.totalAds + googleAds + metaAds + amazonAds,
+          googleImpressions: acc.googleImpressions + googleImpressions,
+          metaImpressions: acc.metaImpressions + metaImpressions,
+          totalImpressions: acc.totalImpressions + googleImpressions + metaImpressions,
+          googleClicks: acc.googleClicks + googleClicks,
+          metaClicks: acc.metaClicks + metaClicks,
+          totalClicks: acc.totalClicks + googleClicks + metaClicks,
+          googleConversions: acc.googleConversions + googleConversions,
+          metaPurchases: acc.metaPurchases + metaPurchases,
+          metaPurchaseValue: acc.metaPurchaseValue + metaPurchaseValue,
+          shopifyRev: acc.shopifyRev + shopifyRev,
+          amazonRev: acc.amazonRev + amazonRev,
+          totalRev: acc.totalRev + shopifyRev + amazonRev,
           count: acc.count + 1,
+          // Store for averaging later
+          _googleCPCs: googleCPC > 0 ? [...(acc._googleCPCs || []), googleCPC] : (acc._googleCPCs || []),
+          _metaCPCs: metaCPC > 0 ? [...(acc._metaCPCs || []), metaCPC] : (acc._metaCPCs || []),
+          _metaCPMs: metaCPM > 0 ? [...(acc._metaCPMs || []), metaCPM] : (acc._metaCPMs || []),
         };
-      }, { googleAds: 0, metaAds: 0, totalAds: 0, impressions: 0, clicks: 0, conversions: 0, count: 0 });
+      }, { 
+        googleAds: 0, metaAds: 0, amazonAds: 0, totalAds: 0, 
+        googleImpressions: 0, metaImpressions: 0, totalImpressions: 0,
+        googleClicks: 0, metaClicks: 0, totalClicks: 0,
+        googleConversions: 0, metaPurchases: 0, metaPurchaseValue: 0,
+        shopifyRev: 0, amazonRev: 0, totalRev: 0, count: 0,
+        _googleCPCs: [], _metaCPCs: [], _metaCPMs: [],
+      });
     };
     
     // Get weeks for selected period
@@ -19121,9 +19738,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const shopTacos = totals.shopRev > 0 ? (shopifyAds / totals.shopRev) * 100 : 0;
     
     // Daily KPIs
-    const cpc = dailyTotals.clicks > 0 ? dailyTotals.totalAds / dailyTotals.clicks : 0;
-    const cpa = dailyTotals.conversions > 0 ? dailyTotals.totalAds / dailyTotals.conversions : 0;
-    const ctr = dailyTotals.impressions > 0 ? (dailyTotals.clicks / dailyTotals.impressions) * 100 : 0;
+    const cpc = dailyTotals.totalClicks > 0 ? dailyTotals.totalAds / dailyTotals.totalClicks : 0;
+    const cpa = (dailyTotals.googleConversions + dailyTotals.metaPurchases) > 0 ? dailyTotals.totalAds / (dailyTotals.googleConversions + dailyTotals.metaPurchases) : 0;
+    const ctr = dailyTotals.totalImpressions > 0 ? (dailyTotals.totalClicks / dailyTotals.totalImpressions) * 100 : 0;
     
     // Comparison metrics
     const spendChange = compTotals.totalAds > 0 ? ((totals.totalAds - compTotals.totalAds) / compTotals.totalAds) * 100 : null;
@@ -19144,12 +19761,34 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     // Build daily table data
     const dailyTableData = (adsTimeTab === 'daily' ? periodDays : daysInMonth).map(d => {
       const day = allDaysData[d];
-      const googleAds = day?.googleSpend || day?.googleAds || 0;
-      const metaAds = day?.metaSpend || day?.metaAds || 0;
-      const impressions = (day?.googleImpressions || 0) + (day?.metaImpressions || 0);
-      const clicks = (day?.googleClicks || 0) + (day?.metaClicks || 0);
-      const conversions = (day?.googleConversions || 0) + (day?.metaConversions || 0);
-      return { date: d, googleAds, metaAds, totalAds: googleAds + metaAds, impressions, clicks, conversions };
+      const googleAds = day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
+      const metaAds = day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
+      const amazonAds = day?.amazon?.adSpend || 0;
+      const adsMetrics = day?.shopify?.adsMetrics || {};
+      const googleImpressions = adsMetrics.googleImpressions || day?.googleImpressions || 0;
+      const metaImpressions = adsMetrics.metaImpressions || day?.metaImpressions || 0;
+      const googleClicks = adsMetrics.googleClicks || day?.googleClicks || 0;
+      const metaClicks = adsMetrics.metaClicks || day?.metaClicks || 0;
+      const googleConversions = adsMetrics.googleConversions || day?.googleConversions || 0;
+      const metaPurchases = adsMetrics.metaPurchases || day?.metaConversions || 0;
+      const metaPurchaseValue = adsMetrics.metaPurchaseValue || 0;
+      const metaROAS = adsMetrics.metaROAS || 0;
+      const shopifyRev = day?.shopify?.revenue || 0;
+      const amazonRev = day?.amazon?.revenue || 0;
+      return { 
+        date: d, 
+        googleAds, metaAds, amazonAds,
+        totalAds: googleAds + metaAds + amazonAds, 
+        googleImpressions, metaImpressions,
+        impressions: googleImpressions + metaImpressions, 
+        googleClicks, metaClicks,
+        clicks: googleClicks + metaClicks, 
+        googleConversions, metaPurchases,
+        conversions: googleConversions + metaPurchases,
+        metaPurchaseValue, metaROAS,
+        shopifyRev, amazonRev,
+        totalRev: shopifyRev + amazonRev,
+      };
     });
     
     // Labels
@@ -19258,7 +19897,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           <NavTabs />
           {dataBar}
           
@@ -19272,7 +19911,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 <button onClick={() => setShowAdsAIChat(true)} className="px-4 py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-lg text-white flex items-center gap-2">
                   <Zap className="w-4 h-4" />AI Insights
                 </button>
-                <button onClick={() => { setUploadTab('bulk-ads'); setView('upload'); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white flex items-center gap-2">
+                <button onClick={() => setShowAdsBulkUpload(true)} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white flex items-center gap-2">
                   <Upload className="w-4 h-4" />Bulk Upload
                 </button>
               </div>
@@ -19671,7 +20310,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           
           {/* KPI Cards */}
           {adsTimeTab === 'daily' ? (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+            <>
+            {/* Main KPI Row */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
               <div className="bg-gradient-to-br from-purple-900/30 to-slate-800/50 rounded-xl border border-purple-500/30 p-4">
                 <p className="text-slate-400 text-xs uppercase">Total Spend</p>
                 <p className="text-2xl font-bold text-white">{formatCurrency(dailyTotals.totalAds)}</p>
@@ -19679,26 +20320,91 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </div>
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                 <p className="text-slate-400 text-xs uppercase">Impressions</p>
-                <p className="text-2xl font-bold text-white">{formatNumber(dailyTotals.impressions)}</p>
+                <p className="text-2xl font-bold text-white">{formatNumber(dailyTotals.totalImpressions)}</p>
               </div>
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                 <p className="text-slate-400 text-xs uppercase">Clicks</p>
-                <p className="text-2xl font-bold text-white">{formatNumber(dailyTotals.clicks)}</p>
+                <p className="text-2xl font-bold text-white">{formatNumber(dailyTotals.totalClicks)}</p>
                 <p className="text-slate-500 text-xs mt-1">CTR: {ctr.toFixed(2)}%</p>
               </div>
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                 <p className="text-slate-400 text-xs uppercase">Conversions</p>
-                <p className="text-2xl font-bold text-white">{formatNumber(dailyTotals.conversions)}</p>
+                <p className="text-2xl font-bold text-white">{formatNumber(dailyTotals.googleConversions + dailyTotals.metaPurchases)}</p>
               </div>
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                 <p className="text-slate-400 text-xs uppercase">Avg CPC</p>
                 <p className={`text-2xl font-bold ${cpc < 1.50 ? 'text-emerald-400' : cpc < 2.50 ? 'text-amber-400' : 'text-rose-400'}`}>{formatCurrency(cpc)}</p>
               </div>
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-                <p className="text-slate-400 text-xs uppercase">Avg CPA</p>
-                <p className={`text-2xl font-bold ${cpa < 20 ? 'text-emerald-400' : cpa < 40 ? 'text-amber-400' : 'text-rose-400'}`}>{formatCurrency(cpa)}</p>
+                <p className="text-slate-400 text-xs uppercase">Revenue</p>
+                <p className="text-2xl font-bold text-emerald-400">{formatCurrency(dailyTotals.totalRev)}</p>
+                <p className="text-slate-500 text-xs mt-1">ROAS: {dailyTotals.totalAds > 0 ? (dailyTotals.totalRev / dailyTotals.totalAds).toFixed(2) : '—'}x</p>
               </div>
             </div>
+            
+            {/* Platform Breakdown Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              {/* Google Ads Card */}
+              <div className="bg-gradient-to-br from-red-900/20 to-slate-800/50 rounded-xl border border-red-500/30 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-red-400 font-semibold flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full bg-red-500" />Google Ads
+                  </h4>
+                  <span className="text-white font-bold">{formatCurrency(dailyTotals.googleAds)}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div><p className="text-slate-500">Impr</p><p className="text-white">{formatNumber(dailyTotals.googleImpressions)}</p></div>
+                  <div><p className="text-slate-500">Clicks</p><p className="text-white">{formatNumber(dailyTotals.googleClicks)}</p></div>
+                  <div><p className="text-slate-500">Conv</p><p className="text-emerald-400">{dailyTotals.googleConversions}</p></div>
+                </div>
+                {dailyTotals.googleAds > 0 && (
+                  <div className="mt-2 pt-2 border-t border-slate-700/50 flex justify-between text-xs">
+                    <span className="text-slate-500">CPC: {formatCurrency(dailyTotals.googleClicks > 0 ? dailyTotals.googleAds / dailyTotals.googleClicks : 0)}</span>
+                    <span className="text-slate-500">CPA: {formatCurrency(dailyTotals.googleConversions > 0 ? dailyTotals.googleAds / dailyTotals.googleConversions : 0)}</span>
+                  </div>
+                )}
+              </div>
+              
+              {/* Meta Ads Card */}
+              <div className="bg-gradient-to-br from-blue-900/20 to-slate-800/50 rounded-xl border border-blue-500/30 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-blue-400 font-semibold flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full bg-blue-500" />Meta Ads
+                  </h4>
+                  <span className="text-white font-bold">{formatCurrency(dailyTotals.metaAds)}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div><p className="text-slate-500">Impr</p><p className="text-white">{formatNumber(dailyTotals.metaImpressions)}</p></div>
+                  <div><p className="text-slate-500">Clicks</p><p className="text-white">{formatNumber(dailyTotals.metaClicks)}</p></div>
+                  <div><p className="text-slate-500">Purchases</p><p className="text-emerald-400">{dailyTotals.metaPurchases}</p></div>
+                </div>
+                {dailyTotals.metaAds > 0 && (
+                  <div className="mt-2 pt-2 border-t border-slate-700/50 flex justify-between text-xs">
+                    <span className="text-slate-500">ROAS: {dailyTotals.metaPurchaseValue > 0 ? (dailyTotals.metaPurchaseValue / dailyTotals.metaAds).toFixed(2) : '—'}x</span>
+                    <span className="text-emerald-400">Sales: {formatCurrency(dailyTotals.metaPurchaseValue)}</span>
+                  </div>
+                )}
+              </div>
+              
+              {/* Amazon Ads Card */}
+              <div className="bg-gradient-to-br from-orange-900/20 to-slate-800/50 rounded-xl border border-orange-500/30 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-orange-400 font-semibold flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full bg-orange-500" />Amazon PPC
+                  </h4>
+                  <span className="text-white font-bold">{formatCurrency(dailyTotals.amazonAds)}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div><p className="text-slate-500">Revenue</p><p className="text-white">{formatCurrency(dailyTotals.amazonRev)}</p></div>
+                  <div><p className="text-slate-500">ACOS</p><p className={`${dailyTotals.amazonRev > 0 ? (dailyTotals.amazonAds / dailyTotals.amazonRev * 100 <= 25 ? 'text-emerald-400' : 'text-amber-400') : 'text-slate-500'}`}>{dailyTotals.amazonRev > 0 ? (dailyTotals.amazonAds / dailyTotals.amazonRev * 100).toFixed(1) + '%' : '—'}</p></div>
+                  <div><p className="text-slate-500">ROAS</p><p className={`${dailyTotals.amazonAds > 0 ? (dailyTotals.amazonRev / dailyTotals.amazonAds >= 3 ? 'text-emerald-400' : 'text-amber-400') : 'text-slate-500'}`}>{dailyTotals.amazonAds > 0 ? (dailyTotals.amazonRev / dailyTotals.amazonAds).toFixed(2) + 'x' : '—'}</p></div>
+                </div>
+                {!dailyTotals.amazonAds && (
+                  <p className="mt-2 text-slate-500 text-xs">Amazon ads data coming soon</p>
+                )}
+              </div>
+            </div>
+            </>
           ) : (
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               <div className="bg-gradient-to-br from-purple-900/30 to-slate-800/50 rounded-xl border border-purple-500/30 p-4">
@@ -19750,24 +20456,56 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           {/* Daily Table */}
           {adsTimeTab === 'daily' && dailyTableData.length > 0 && (
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Daily Breakdown</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">Daily Breakdown</h3>
+                <button onClick={() => setShowAdsBulkUpload(true)} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white flex items-center gap-1">
+                  <Upload className="w-4 h-4" />Import Ads
+                </button>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead><tr className="border-b border-slate-700"><th className="text-left text-slate-400 py-2">Date</th><th className="text-right text-slate-400 py-2">Google</th><th className="text-right text-slate-400 py-2">Meta</th><th className="text-right text-slate-400 py-2">Total</th><th className="text-right text-slate-400 py-2">Impr</th><th className="text-right text-slate-400 py-2">Clicks</th><th className="text-right text-slate-400 py-2">Conv</th></tr></thead>
+                  <thead><tr className="border-b border-slate-700">
+                    <th className="text-left text-slate-400 py-2">Date</th>
+                    <th className="text-right text-slate-400 py-2">Google</th>
+                    <th className="text-right text-slate-400 py-2">Meta</th>
+                    <th className="text-right text-slate-400 py-2">Amazon</th>
+                    <th className="text-right text-slate-400 py-2">Total</th>
+                    <th className="text-right text-slate-400 py-2">Impr</th>
+                    <th className="text-right text-slate-400 py-2">Clicks</th>
+                    <th className="text-right text-slate-400 py-2">Conv</th>
+                    <th className="text-right text-slate-400 py-2">Revenue</th>
+                    <th className="text-right text-slate-400 py-2">ROAS</th>
+                  </tr></thead>
                   <tbody>
-                    {dailyTableData.slice().reverse().map(d => (
+                    {dailyTableData.slice().reverse().map(d => {
+                      const roas = d.totalAds > 0 ? d.totalRev / d.totalAds : 0;
+                      return (
                       <tr key={d.date} className="border-b border-slate-700/50 hover:bg-slate-700/30">
                         <td className="py-2 text-white">{new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</td>
                         <td className="py-2 text-right text-red-400">{formatCurrency(d.googleAds)}</td>
                         <td className="py-2 text-right text-blue-400">{formatCurrency(d.metaAds)}</td>
+                        <td className="py-2 text-right text-orange-400">{formatCurrency(d.amazonAds)}</td>
                         <td className="py-2 text-right text-white font-medium">{formatCurrency(d.totalAds)}</td>
                         <td className="py-2 text-right text-slate-400">{formatNumber(d.impressions)}</td>
                         <td className="py-2 text-right text-slate-300">{formatNumber(d.clicks)}</td>
                         <td className="py-2 text-right text-emerald-400">{d.conversions}</td>
+                        <td className="py-2 text-right text-white">{formatCurrency(d.totalRev)}</td>
+                        <td className={`py-2 text-right font-medium ${roas >= 3 ? 'text-emerald-400' : roas >= 2 ? 'text-amber-400' : roas > 0 ? 'text-rose-400' : 'text-slate-500'}`}>{roas > 0 ? roas.toFixed(2) + 'x' : '—'}</td>
                       </tr>
-                    ))}
+                    );})}
                   </tbody>
-                  <tfoot><tr className="border-t-2 border-slate-600 font-semibold"><td className="py-2 text-white">Total</td><td className="py-2 text-right text-red-400">{formatCurrency(dailyTotals.googleAds)}</td><td className="py-2 text-right text-blue-400">{formatCurrency(dailyTotals.metaAds)}</td><td className="py-2 text-right text-white">{formatCurrency(dailyTotals.totalAds)}</td><td className="py-2 text-right text-slate-400">{formatNumber(dailyTotals.impressions)}</td><td className="py-2 text-right text-slate-300">{formatNumber(dailyTotals.clicks)}</td><td className="py-2 text-right text-emerald-400">{dailyTotals.conversions}</td></tr></tfoot>
+                  <tfoot><tr className="border-t-2 border-slate-600 font-semibold">
+                    <td className="py-2 text-white">Total</td>
+                    <td className="py-2 text-right text-red-400">{formatCurrency(dailyTotals.googleAds)}</td>
+                    <td className="py-2 text-right text-blue-400">{formatCurrency(dailyTotals.metaAds)}</td>
+                    <td className="py-2 text-right text-orange-400">{formatCurrency(dailyTotals.amazonAds)}</td>
+                    <td className="py-2 text-right text-white">{formatCurrency(dailyTotals.totalAds)}</td>
+                    <td className="py-2 text-right text-slate-400">{formatNumber(dailyTotals.totalImpressions)}</td>
+                    <td className="py-2 text-right text-slate-300">{formatNumber(dailyTotals.totalClicks)}</td>
+                    <td className="py-2 text-right text-emerald-400">{dailyTotals.googleConversions + dailyTotals.metaPurchases}</td>
+                    <td className="py-2 text-right text-white">{formatCurrency(dailyTotals.totalRev)}</td>
+                    <td className={`py-2 text-right font-medium ${dailyTotals.totalAds > 0 && dailyTotals.totalRev / dailyTotals.totalAds >= 3 ? 'text-emerald-400' : 'text-amber-400'}`}>{dailyTotals.totalAds > 0 ? (dailyTotals.totalRev / dailyTotals.totalAds).toFixed(2) + 'x' : '—'}</td>
+                  </tr></tfoot>
                 </table>
               </div>
             </div>
@@ -19803,8 +20541,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           {((adsTimeTab === 'daily' && dailyTableData.length === 0) || (adsTimeTab !== 'daily' && weeklyTableData.length === 0)) && (
             <div className="text-center py-12 bg-slate-800/30 rounded-2xl border border-slate-700">
               <DollarSign className="w-12 h-12 text-slate-600 mx-auto mb-4" />
-              <p className="text-slate-400 mb-2">No ad data for {getPeriodLabel()}</p>
-              <button onClick={() => { setUploadTab('bulk-ads'); setView('upload'); }} className="text-blue-400 hover:text-blue-300 text-sm">Upload ad spend data →</button>
+              <p className="text-slate-400 mb-4">No ad data for {getPeriodLabel()}</p>
+              <button onClick={() => setShowAdsBulkUpload(true)} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white flex items-center gap-2 mx-auto">
+                <Upload className="w-4 h-4" />Upload Ad Spend Data
+              </button>
             </div>
           )}
             </>
@@ -20217,7 +20957,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -20591,7 +21331,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+        <div className="max-w-4xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
@@ -20951,6 +21691,34 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             <SettingRow label="Restore from Backup" desc="Import a previously exported JSON file">
               <label className="px-4 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Import Backup<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
             </SettingRow>
+            
+            {/* Bulk Import Section */}
+            <div className="mt-4 pt-4 border-t border-slate-700">
+              <h4 className="text-white font-medium mb-3 flex items-center gap-2"><Upload className="w-4 h-4 text-cyan-400" />Bulk Import Tools</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <button 
+                  onClick={() => setShowAdsBulkUpload(true)}
+                  className="p-3 bg-violet-900/30 hover:bg-violet-900/50 border border-violet-500/30 rounded-xl text-left flex items-center gap-3"
+                >
+                  <TrendingUp className="w-8 h-8 text-violet-400" />
+                  <div>
+                    <p className="text-white font-medium">Ads Data Upload</p>
+                    <p className="text-slate-400 text-xs">Import Meta & Google Ads CSV exports</p>
+                  </div>
+                </button>
+                <button 
+                  onClick={() => setShow3PLBulkUpload(true)}
+                  className="p-3 bg-blue-900/30 hover:bg-blue-900/50 border border-blue-500/30 rounded-xl text-left flex items-center gap-3"
+                >
+                  <Truck className="w-8 h-8 text-blue-400" />
+                  <div>
+                    <p className="text-white font-medium">3PL Bulk Upload</p>
+                    <p className="text-slate-400 text-xs">Import Packiyo Excel files</p>
+                  </div>
+                </button>
+              </div>
+            </div>
+            
             <div className="mt-4 p-3 bg-slate-900/50 rounded-lg">
               <p className="text-slate-400 text-xs mb-2">Backup includes:</p>
               <div className="grid grid-cols-2 gap-1 text-xs">
