@@ -12417,203 +12417,75 @@ ${topExpenses.map(e => `- ${e.name}: $${e.total.toFixed(0)}`).join('\n')}`;
         status: p.status,
       })) : null;
       
-      // Build comprehensive report prompt
+      // Build comprehensive report prompt (optimized for size)
       const reportPrompt = `Generate a ${typeLabels[type]} INTELLIGENCE REPORT for "${storeName || 'Store'}".
 
-=== ${typeLabels[type]} REPORT FOR ${periodLabel.toUpperCase()} ===
+=== ${typeLabels[type]} REPORT: ${periodLabel.toUpperCase()} ===
 
-PERFORMANCE METRICS:
+PERFORMANCE:
 - Revenue: $${reportData.total.revenue.toFixed(0)}${comparisonData ? ` (${changes.revenue >= 0 ? '+' : ''}${changes.revenue.toFixed(1)}% ${comparisonLabel})` : ''}
-- Profit: $${reportData.total.netProfit.toFixed(0)}${comparisonData ? ` (${changes.profit >= 0 ? '+' : ''}${changes.profit.toFixed(1)}% ${comparisonLabel})` : ''}
-- Units Sold: ${reportData.total.units}${comparisonData ? ` (${changes.units >= 0 ? '+' : ''}${changes.units.toFixed(1)}%)` : ''}
-- Profit Margin: ${reportData.total.netMargin.toFixed(1)}%${comparisonData ? ` (${changes.margin >= 0 ? '+' : ''}${changes.margin.toFixed(1)} pts)` : ''}
-- Total Ad Spend: $${reportData.total.adSpend.toFixed(0)}
+- Profit: $${reportData.total.netProfit.toFixed(0)}${comparisonData ? ` (${changes.profit >= 0 ? '+' : ''}${changes.profit.toFixed(1)}%)` : ''}
+- Units: ${reportData.total.units}${comparisonData ? ` (${changes.units >= 0 ? '+' : ''}${changes.units.toFixed(1)}%)` : ''}
+- Margin: ${reportData.total.netMargin.toFixed(1)}%${comparisonData ? ` (${changes.margin >= 0 ? '+' : ''}${changes.margin.toFixed(1)} pts)` : ''}
+- Ad Spend: $${reportData.total.adSpend.toFixed(0)}
 
-CHANNEL BREAKDOWN:
-Amazon:
-- Revenue: $${reportData.amazon.revenue.toFixed(0)} (${reportData.total.amazonShare.toFixed(0)}% of total)
-- Profit: $${reportData.amazon.netProfit.toFixed(0)}
-- Ad Spend: $${reportData.amazon.adSpend.toFixed(0)}
-- ROAS: ${reportData.amazon.roas.toFixed(1)}x
+CHANNELS:
+Amazon: $${reportData.amazon.revenue.toFixed(0)} rev (${reportData.total.amazonShare.toFixed(0)}%), $${reportData.amazon.netProfit.toFixed(0)} profit, ${reportData.amazon.roas.toFixed(1)}x ROAS
+Shopify: $${reportData.shopify.revenue.toFixed(0)} rev (${reportData.total.shopifyShare.toFixed(0)}%), $${reportData.shopify.netProfit.toFixed(0)} profit, ${reportData.shopify.roas.toFixed(1)}x ROAS
 
-Shopify:
-- Revenue: $${reportData.shopify.revenue.toFixed(0)} (${reportData.total.shopifyShare.toFixed(0)}% of total)
-- Profit: $${reportData.shopify.netProfit.toFixed(0)}
-- Ad Spend: $${reportData.shopify.adSpend.toFixed(0)} (Meta + Google)
-- ROAS: ${reportData.shopify.roas.toFixed(1)}x
-- 3PL Costs: $${reportData.shopify.threeplCosts.toFixed(0)}
+🧠 AI FORECAST:
+${multiSignalForecast ? `Next Week: $${multiSignalForecast.nextWeek?.predictedRevenue?.toFixed(0) || 0} rev, $${multiSignalForecast.nextWeek?.predictedProfit?.toFixed(0) || 0} profit (${multiSignalForecast.confidence} confidence)
+Momentum: ${multiSignalForecast.signals?.momentum?.toFixed(1) || 0}%
+4-Week: ${multiSignalForecast.next4Weeks.map(w => '$' + (w.predictedRevenue?.toFixed(0) || 0)).join(' → ')}` : 'Not available'}
 
-=== 🧠 MULTI-SIGNAL AI FORECAST (Use this for predictions) ===
-${multiSignalForecast ? `
-This is the AI forecast from the dashboard - the most accurate prediction:
-- Next Week Revenue: $${multiSignalForecast.nextWeek?.predictedRevenue?.toFixed(0) || 0}
-- Next Week Profit: $${multiSignalForecast.nextWeek?.predictedProfit?.toFixed(0) || 0}
-- Confidence: ${multiSignalForecast.confidence}
-- Momentum: ${multiSignalForecast.signals?.momentum?.toFixed(1) || 0}%
-
-4-Week Outlook:
-${JSON.stringify(multiSignalForecast.next4Weeks.map(w => ({ week: w.weekEnding, revenue: w.predictedRevenue, profit: w.predictedProfit })))}
-` : 'Multi-Signal forecast not available - user should generate it on dashboard'}
-
-=== 📦 INVENTORY STATUS & ACTION ITEMS ===
+📦 INVENTORY (${inventoryAnalysis?.length || 0} SKUs):
 ${inventoryAnalysis ? `
-INVENTORY ANALYSIS (${inventoryAnalysis.length} SKUs tracked):
+CRITICAL (<30 days): ${inventoryAnalysis.filter(i => i.needsRestock).map(i => 
+  `${i.sku}: ${i.daysOfSupply}d supply, ${i.fbaStock} FBA/${i.threeplStock} 3PL → Transfer ${i.suggestedFBATransfer} to FBA${i.needsManufacturing ? `, Order ${i.suggestedManufacturingOrder}` : ''}`
+).join('; ') || 'None'}
+WATCH (30-60d): ${inventoryAnalysis.filter(i => !i.needsRestock && i.needsManufacturing).map(i => `${i.sku}: ${i.daysOfSupply}d`).join(', ') || 'None'}
+HEALTHY (60+d): ${inventoryAnalysis.filter(i => !i.needsManufacturing).length} SKUs` : 'No inventory data'}
 
-CRITICAL - NEEDS IMMEDIATE ATTENTION:
-${inventoryAnalysis.filter(i => i.needsRestock).map(i => 
-  `- ${i.sku} (${i.name}): ${i.daysOfSupply} days supply, ${i.fbaStock} at FBA, ${i.threeplStock} at 3PL
-    → TRANSFER ${i.suggestedFBATransfer} units from 3PL to FBA
-    → ${i.needsManufacturing ? `ORDER ${i.suggestedManufacturingOrder} units from manufacturer` : ''}`
-).join('\n') || 'No critical inventory issues'}
+🏭 PRODUCTION PIPELINE: ${pipelineSummary ? pipelineSummary.map(p => `${p.sku}: ${p.quantity} units by ${p.expectedDate}`).join('; ') : 'None'}
 
-WATCH LIST (30-60 days supply):
-${inventoryAnalysis.filter(i => !i.needsRestock && i.needsManufacturing).map(i => 
-  `- ${i.sku}: ${i.daysOfSupply} days supply, consider ordering ${i.suggestedManufacturingOrder} units`
-).join('\n') || 'None'}
+🚚 3PL: ${threeplSummary ? `${threeplSummary.totalOrders} orders, $${threeplSummary.totalCost.toFixed(0)} total, $${threeplSummary.avgCostPerOrder.toFixed(2)}/order avg` : 'No data'}
 
-HEALTHY STOCK (60+ days):
-${inventoryAnalysis.filter(i => !i.needsManufacturing).map(i => 
-  `- ${i.sku}: ${i.daysOfSupply} days supply (${i.totalUnits} units)`
-).slice(0, 5).join('\n') || 'None'}
-` : 'No inventory data - upload Amazon Inventory Report'}
+📊 AMAZON FORECASTS: ${forecastInfo.upcoming.length > 0 ? forecastInfo.upcoming.map(f => `${f.week}: $${f.sales.toFixed(0)}`).join(', ') : 'None uploaded'}
+${forecastInfo.alerts.length > 0 ? `ALERTS: ${forecastInfo.alerts.join('; ')}` : ''}
 
-=== 🚚 3PL FULFILLMENT ===
-${threeplSummary ? `
-- Total Orders: ${threeplSummary.totalOrders}
-- Total 3PL Cost: $${threeplSummary.totalCost.toFixed(0)}
-- Avg Cost Per Order: $${threeplSummary.avgCostPerOrder.toFixed(2)}
-` : 'No 3PL data uploaded'}
-
-=== 🏭 PRODUCTION PIPELINE ===
-${pipelineSummary ? `
-Incoming inventory from manufacturing:
-${pipelineSummary.map(p => `- ${p.sku} (${p.product}): ${p.quantity} units, arriving ${p.expectedDate}, status: ${p.status}`).join('\n')}
-` : 'No production orders tracked - add in Production tab'}
-
-=== 📊 AMAZON FORECASTS ===
-${forecastInfo.upcoming.length > 0 ? `
-Upcoming Amazon projections:
-${forecastInfo.upcoming.map(f => `- ${f.week}: $${f.sales.toFixed(0)} projected sales`).join('\n')}
-` : 'No Amazon forecasts uploaded'}
-
-${forecastInfo.alerts.length > 0 ? `
-FORECAST ALERTS:
-${forecastInfo.alerts.map(a => `⚠️ ${a}`).join('\n')}
-` : ''}
+📈 PPC CAMPAIGNS: ${amazonCampaigns.campaigns?.length > 0 ? `${amazonCampaigns.campaigns.length} campaigns, $${(amazonCampaigns.summary?.totalSpend || 0).toFixed(0)} spend, ${(amazonCampaigns.summary?.roas || 0).toFixed(2)}x ROAS, ${(amazonCampaigns.summary?.acos || 0).toFixed(1)}% ACOS
+Top: ${amazonCampaigns.campaigns?.filter(c => c.spend > 50).sort((a,b) => b.roas - a.roas).slice(0,3).map(c => `${c.name?.substring(0,25)}: ${c.roas?.toFixed(1)}x`).join('; ') || 'N/A'}
+Underperforming: ${amazonCampaigns.campaigns?.filter(c => c.spend > 50 && c.roas < 2).slice(0,3).map(c => `${c.name?.substring(0,25)}: ${c.roas?.toFixed(1)}x`).join('; ') || 'None'}` : 'No PPC data'}
 
 ${bankingSection}
 
-=== ACTIVE ALERTS ===
-${alertsSummary.length > 0 ? alertsSummary.join('\n') : 'No critical alerts'}
+📅 PATTERNS: ${ctx.dayOfWeekPatterns ? `Best days: ${Object.entries(ctx.dayOfWeekPatterns).sort((a,b) => b[1].avgRevenue - a[1].avgRevenue).slice(0,2).map(([d, data]) => `${d} ($${data.avgRevenue?.toFixed(0)})`).join(', ')}` : 'Need more daily data'}
+${ctx.seasonalPatterns ? `Strong months: ${ctx.seasonalPatterns.strongMonths?.join(', ') || 'TBD'}` : ''}
 
-=== 📈 AMAZON PPC CAMPAIGNS ===
-${amazonCampaigns.campaigns?.length > 0 ? `
-Campaign Data (${amazonCampaigns.campaigns.length} campaigns):
-- Total Spend: $${(amazonCampaigns.summary?.totalSpend || 0).toFixed(0)}
-- Total Sales: $${(amazonCampaigns.summary?.totalSales || 0).toFixed(0)}
-- Overall ROAS: ${(amazonCampaigns.summary?.roas || 0).toFixed(2)}x
-- ACOS: ${(amazonCampaigns.summary?.acos || 0).toFixed(1)}%
-
-Top Performing Campaigns (by ROAS):
-${amazonCampaigns.campaigns?.filter(c => c.spend > 50 && c.state === 'ENABLED').sort((a,b) => b.roas - a.roas).slice(0,5).map(c => 
-  `- ${c.name?.substring(0,40) || 'Unknown'}: ${c.roas?.toFixed(2) || 0}x ROAS, $${c.spend?.toFixed(0) || 0} spend, $${c.sales?.toFixed(0) || 0} sales`
-).join('\n') || 'No qualifying campaigns'}
-
-Underperforming Campaigns (need attention):
-${amazonCampaigns.campaigns?.filter(c => c.spend > 50 && c.roas < 2 && c.state === 'ENABLED').sort((a,b) => a.roas - b.roas).slice(0,5).map(c => 
-  `- ${c.name?.substring(0,40) || 'Unknown'}: ${c.roas?.toFixed(2) || 0}x ROAS, ${c.acos?.toFixed(0) || 0}% ACOS - consider pausing`
-).join('\n') || 'All campaigns performing adequately'}
-` : 'No Amazon PPC campaign data uploaded'}
-
-=== 📊 FORECAST ACCURACY LEARNING ===
-${(() => {
-  const records = forecastAccuracyHistory.records || [];
-  const withActuals = records.filter(r => r.actualRevenue !== undefined);
-  if (withActuals.length === 0) return 'No forecast accuracy data yet - will learn as weeks complete';
-  
-  const avgError = withActuals.reduce((s, r) => {
-    const error = r.forecastRevenue > 0 ? Math.abs(r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100 : 0;
-    return s + error;
-  }, 0) / withActuals.length;
-  
-  const avgBias = withActuals.reduce((s, r) => {
-    const bias = r.forecastRevenue > 0 ? (r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100 : 0;
-    return s + bias;
-  }, 0) / withActuals.length;
-  
-  return `Forecast Learning (${withActuals.length} samples):
-- Average Accuracy: ${(100 - avgError).toFixed(1)}%
-- Bias: ${avgBias > 0 ? '+' : ''}${avgBias.toFixed(1)}% (${avgBias > 0 ? 'forecasts tend to be low' : 'forecasts tend to be high'})
-
-Recent Predictions vs Actuals:
-${withActuals.slice(-5).map(r => 
-  `- Week ${r.weekEnding}: Forecast $${r.forecastRevenue?.toFixed(0) || 0} → Actual $${r.actualRevenue?.toFixed(0) || 0} (${r.forecastRevenue > 0 ? ((r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100).toFixed(1) : 0}%)`
-).join('\n')}`;
-})()}
-
-=== 📅 DAY-OF-WEEK PATTERNS ===
-${ctx.dayOfWeekPatterns && Object.keys(ctx.dayOfWeekPatterns).length > 0 ? `
-Best performing days based on historical data:
-${Object.entries(ctx.dayOfWeekPatterns).sort((a, b) => b[1].avgRevenue - a[1].avgRevenue).map(([day, data]) => 
-  `- ${day}: Avg $${data.avgRevenue?.toFixed(0) || 0} revenue, $${data.avgProfit?.toFixed(0) || 0} profit`
-).join('\n')}
-
-Use this for: optimal ad spend timing, inventory planning, promotion scheduling
-` : 'Not enough daily data for day-of-week analysis yet'}
-
-=== 🔄 SEASONAL PATTERNS ===
-${ctx.seasonalPatterns ? `
-Monthly Performance Patterns:
-- Strong Months (>10% above avg): ${ctx.seasonalPatterns.strongMonths?.join(', ') || 'None identified'}
-- Weak Months (<10% below avg): ${ctx.seasonalPatterns.weakMonths?.join(', ') || 'None identified'}
-- Overall Monthly Avg: $${ctx.seasonalPatterns.overallMonthlyAvg?.toFixed(0) || 0}
-` : 'Not enough historical data for seasonal patterns'}
-
-Create a comprehensive markdown report with these sections:
+Create markdown report:
 
 # 📊 ${typeLabels[type]} Intelligence Report
 **${periodLabel}**
 
-## Executive Summary
-(3-4 sentences: overall performance, biggest win, main concern, and the AI forecast outlook)
+## Executive Summary (3-4 sentences)
 
-## 💰 Key Metrics
-| Metric | Value | ${comparisonData ? 'Change | ' : ''}Status |
-(Revenue, Profit, Units, Margin - use ✅ for good, ⚠️ for watch, ❌ for concern)
+## 💰 Key Metrics Table (Revenue, Profit, Units, Margin with ✅⚠️❌ status)
 
-## 🏆 Wins & Achievements
-(3-4 specific wins with actual numbers)
+## 🏆 Wins (3-4 specific wins)
 
-## ⚠️ Areas Needing Attention
-(3-4 actionable items based on the data)
+## ⚠️ Areas Needing Attention (3-4 items)
 
-## 📈 Channel Performance
-(Detailed Amazon vs Shopify analysis with ROAS insights)
+## 📈 Channel Performance (Amazon vs Shopify with ROAS)
 
-## 🎯 Amazon PPC Analysis
-(If PPC data available: analyze top/bottom campaigns, ACOS trends, optimization opportunities)
+${amazonCampaigns.campaigns?.length > 0 ? '## 🎯 Amazon PPC Analysis (top/bottom campaigns, optimization suggestions)\n' : ''}
+## 📦 Inventory & Supply Chain (specific transfer/order recommendations with quantities)
 
-## 📦 Inventory & Supply Chain
-(CRITICAL: Analyze the inventory data above. Be specific about:
-- Which SKUs need 3PL→FBA transfers and how many units
-- Which SKUs need manufacturing orders and suggested quantities
-- Production pipeline timing and if it covers upcoming needs
-- Any stockout risks based on velocity vs current inventory)
+## 🔮 AI Forecast & Outlook (use the forecast data above)
 
-## 🔮 AI Forecast & Outlook
-(Use the Multi-Signal AI Forecast data. Include next week prediction with confidence level and 4-week outlook. Reference forecast accuracy learning if available.)
+${hasBanking ? '## 💵 Cash Flow (position, runway, concerns)\n' : ''}
+## 🎯 Recommendations (5-7 prioritized actions with expected impact)
 
-${hasBanking ? `## 💵 Cash Flow & Financial Health
-(Analysis of cash position, burn rate, runway, and expense trends)
-` : ''}
-## 🎯 Recommendations
-(5-7 specific, prioritized action items with expected impact. MUST include:
-- Specific inventory actions like "Transfer X units of SKU-123 from 3PL to FBA"
-- PPC optimization suggestions if campaign data available
-- Cash flow actions if banking data shows concerns
-- Timing recommendations based on day-of-week patterns)
-
-Use the ACTUAL numbers provided. Be specific and actionable. Include period-over-period changes where available.`;
+Be specific with numbers. Include exact SKUs and quantities for inventory actions.`;
 
       const response = await fetch('/api/chat', {
         method: 'POST',
