@@ -1927,8 +1927,9 @@ useEffect(() => {
 // Sync new features to cloud when they change
 useEffect(() => {
   if (!session?.user?.id || !supabase) return;
+  if (isLoadingDataRef.current) return; // Don't sync during initial load
   queueCloudSave(combinedData);
-}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline]);
+}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData]);
 
 const loadFromCloud = useCallback(async (storeId = null) => {
   if (!supabase || !session?.user?.id) return false;
@@ -4507,8 +4508,13 @@ const savePeriods = async (d) => {
         }
         // Daily data
         if (d.dailySales && Object.keys(d.dailySales).length > 0) {
-          setAllDaysData(prev => ({...prev, ...d.dailySales}));
-          lsSet('ecommerce_daily_sales_v1', JSON.stringify({...allDaysData, ...d.dailySales}));
+          const mergedDays = {...allDaysData, ...d.dailySales};
+          setAllDaysData(mergedDays);
+          lsSet('ecommerce_daily_sales_v1', JSON.stringify(mergedDays));
+          // Explicitly sync to cloud
+          if (session?.user?.id && supabase) {
+            queueCloudSave({ ...combinedData, dailySales: mergedDays });
+          }
           restored.push(`${Object.keys(d.dailySales).length} days`);
         }
         if (d.inventory && Object.keys(d.inventory).length > 0) { 
@@ -7405,8 +7411,8 @@ Analyze the data and respond with ONLY this JSON:
                   <div className="flex justify-between"><span className="text-slate-400 text-sm">Units Sold</span><span className="text-white font-medium">{formatNumber(shopify.units || 0)}</span></div>
                   <div className="flex justify-between"><span className="text-slate-400 text-sm">COGS</span><span className="text-white font-medium">{formatCurrency(shopify.cogs || 0)}</span></div>
                   <div className="flex justify-between"><span className="text-slate-400 text-sm">Discounts</span><span className="text-rose-400 font-medium">{formatCurrency(shopify.discounts || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Meta Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.metaSpend || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Google Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.googleSpend || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Meta Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.metaSpend || dayData.metaSpend || dayData.metaAds || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Google Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.googleSpend || dayData.googleSpend || dayData.googleAds || 0)}</span></div>
                   <div className="border-t border-green-500/30 pt-2 mt-2">
                     <div className="flex justify-between"><span className="text-slate-300 text-sm font-medium">Net Profit</span><span className={`font-bold ${(shopify.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(shopify.netProfit || 0)}</span></div>
                     <div className="flex justify-between"><span className="text-slate-400 text-sm">Margin</span><span className={`font-medium ${(shopify.netMargin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(shopify.netMargin || 0)}</span></div>
@@ -7420,7 +7426,7 @@ Analyze the data and respond with ONLY this JSON:
           </div>
           
           {/* Google Ads data if present (without full sales data) */}
-          {(dayData.googleAds || dayData.googleSpend) && (
+          {(dayData.googleAds || dayData.googleSpend || dayData.googleImpressions) && (
             <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4 mb-6">
               <h3 className="text-lg font-semibold text-blue-400 mb-3">Google Ads Metrics</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -7430,6 +7436,27 @@ Analyze the data and respond with ONLY this JSON:
                 <div><p className="text-slate-400 text-xs">Conversions</p><p className="text-white font-medium">{formatNumber(dayData.googleConversions || 0)}</p></div>
                 <div><p className="text-slate-400 text-xs">CPC</p><p className="text-white font-medium">{formatCurrency(dayData.googleCpc || 0)}</p></div>
                 <div><p className="text-slate-400 text-xs">CPA</p><p className="text-white font-medium">{formatCurrency(dayData.googleCpa || 0)}</p></div>
+              </div>
+            </div>
+          )}
+          
+          {/* Meta Ads data if present */}
+          {(dayData.metaAds || dayData.metaSpend || dayData.metaImpressions || (shopify.adsMetrics?.metaImpressions)) && (
+            <div className="bg-indigo-900/20 border border-indigo-500/30 rounded-xl p-4 mb-6">
+              <h3 className="text-lg font-semibold text-indigo-400 mb-3">Meta Ads Metrics</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div><p className="text-slate-400 text-xs">Spend</p><p className="text-white font-medium">{formatCurrency(dayData.metaSpend || dayData.metaAds || shopify.metaSpend || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">Clicks</p><p className="text-white font-medium">{formatNumber(dayData.metaClicks || shopify.adsMetrics?.metaClicks || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">Impressions</p><p className="text-white font-medium">{formatNumber(dayData.metaImpressions || shopify.adsMetrics?.metaImpressions || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">Purchases</p><p className="text-white font-medium">{formatNumber(dayData.metaConversions || shopify.adsMetrics?.metaPurchases || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">CTR</p><p className="text-white font-medium">{(dayData.metaCtr || shopify.adsMetrics?.metaCTR || 0).toFixed(2)}%</p></div>
+                <div><p className="text-slate-400 text-xs">CPC</p><p className="text-white font-medium">{formatCurrency(dayData.metaCpc || shopify.adsMetrics?.metaCPC || 0)}</p></div>
+                {(shopify.adsMetrics?.metaPurchaseValue > 0 || dayData.metaPurchaseValue > 0) && (
+                  <div><p className="text-slate-400 text-xs">Purchase Value</p><p className="text-emerald-400 font-medium">{formatCurrency(dayData.metaPurchaseValue || shopify.adsMetrics?.metaPurchaseValue || 0)}</p></div>
+                )}
+                {(shopify.adsMetrics?.metaROAS > 0 || dayData.metaROAS > 0) && (
+                  <div><p className="text-slate-400 text-xs">ROAS</p><p className="text-cyan-400 font-medium">{(dayData.metaROAS || shopify.adsMetrics?.metaROAS || 0).toFixed(2)}x</p></div>
+                )}
               </div>
             </div>
           )}
@@ -8789,8 +8816,21 @@ Analyze the data and respond with ONLY this JSON:
       
       // Save updated data
       if (totalDaysUpdated > 0) {
+        // Save to state
         setAllDaysData(updatedDays);
+        
+        // Save to localStorage immediately  
         lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays));
+        
+        // Push to cloud immediately (not queued) with explicit dailySales
+        // Build fresh combined data with the new dailySales
+        const freshCombinedData = {
+          ...combinedData,
+          dailySales: updatedDays,
+        };
+        if (session?.user?.id && supabase) {
+          pushToCloudNow(freshCombinedData);
+        }
       }
       
       setAdsResults({
