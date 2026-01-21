@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain } from 'lucide-react';
 
 // Dynamically load SheetJS from CDN (avoids npm vulnerability)
 let XLSX = null;
@@ -713,7 +713,8 @@ const isLoadingDataRef = useRef(false);
 // Multi-store support
 const [stores, setStores] = useState([]); // List of { id, name, createdAt }
 const [activeStoreId, setActiveStoreId] = useState(null);
-const [showStoreSelector, setShowStoreSelector] = useState(false);
+const [showStoreSelector, setShowStoreSelector] = useState(false); // Header dropdown
+const [showStoreModal, setShowStoreModal] = useState(false); // Full modal for create/manage
 const [newStoreName, setNewStoreName] = useState('');
 
 // Auto-lock (idle timeout)
@@ -2120,7 +2121,7 @@ const deleteStore = useCallback(async (storeId) => {
 
 // Store Selector Modal
 const StoreSelectorModal = () => {
-  if (!showStoreSelector || !session) return null;
+  if (!showStoreModal || !session) return null;
   
   const currentStore = stores.find(s => s.id === activeStoreId);
   
@@ -2133,7 +2134,7 @@ const StoreSelectorModal = () => {
               <Store className="w-5 h-5" />
               My Stores
             </h2>
-            <button onClick={() => setShowStoreSelector(false)} className="text-slate-400 hover:text-white">
+            <button onClick={() => setShowStoreModal(false)} className="text-slate-400 hover:text-white">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -2153,7 +2154,7 @@ const StoreSelectorModal = () => {
                 <div 
                   key={store.id}
                   className={`flex items-center justify-between p-3 rounded-xl border ${store.id === activeStoreId ? 'bg-violet-900/30 border-violet-500/50' : 'bg-slate-700/30 border-slate-600 hover:bg-slate-700/50'} cursor-pointer`}
-                  onClick={() => switchStore(store.id)}
+                  onClick={() => { switchStore(store.id); setShowStoreModal(false); }}
                 >
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${store.id === activeStoreId ? 'bg-violet-600' : 'bg-slate-600'}`}>
@@ -5120,15 +5121,19 @@ const savePeriods = async (d) => {
     };
     
     Object.entries(amazonForecasts).forEach(([weekKey, forecast]) => {
+      // Skip if forecast doesn't have the required structure
+      if (!forecast || (!forecast.totals && !forecast.totalSales)) return;
+      
       const match = findMatchingActual(weekKey);
       
       if (match && match.actual && match.actual.amazon) {
         const actual = match.actual;
-        const forecastRev = forecast.totals.sales;
+        // Support both old (totalSales) and new (totals.sales) structures
+        const forecastRev = forecast.totals?.sales || forecast.totalSales || 0;
         const actualRev = actual.amazon.revenue || 0;
-        const forecastUnits = forecast.totals.units;
+        const forecastUnits = forecast.totals?.units || forecast.totalUnits || 0;
         const actualUnits = actual.amazon.units || 0;
-        const forecastProfit = forecast.totals.proceeds;
+        const forecastProfit = forecast.totals?.proceeds || forecast.totalProceeds || 0;
         const actualProfit = actual.amazon.netProfit || 0;
         
         // SKU-level comparison with correction factors for learning
@@ -5138,22 +5143,25 @@ const savePeriods = async (d) => {
           actual.amazon.skuData.forEach(s => { actualSkuMap[s.sku] = s; });
           
           Object.entries(forecast.skus).forEach(([sku, fcast]) => {
+            if (!fcast) return; // Skip if fcast is undefined
             const actualSku = actualSkuMap[sku];
+            const fcastUnits = fcast.units || 0;
+            const fcastSales = fcast.sales || 0;
             if (actualSku) {
               skuComparisons.push({
                 sku,
-                forecast: { units: fcast.units, sales: fcast.sales },
+                forecast: { units: fcastUnits, sales: fcastSales },
                 actual: { units: actualSku.unitsSold || 0, sales: actualSku.netSales || 0 },
                 variance: {
-                  units: (actualSku.unitsSold || 0) - fcast.units,
-                  unitsPercent: fcast.units > 0 ? (((actualSku.unitsSold || 0) - fcast.units) / fcast.units * 100) : 0,
-                  sales: (actualSku.netSales || 0) - fcast.sales,
-                  salesPercent: fcast.sales > 0 ? (((actualSku.netSales || 0) - fcast.sales) / fcast.sales * 100) : 0,
+                  units: (actualSku.unitsSold || 0) - fcastUnits,
+                  unitsPercent: fcastUnits > 0 ? (((actualSku.unitsSold || 0) - fcastUnits) / fcastUnits * 100) : 0,
+                  sales: (actualSku.netSales || 0) - fcastSales,
+                  salesPercent: fcastSales > 0 ? (((actualSku.netSales || 0) - fcastSales) / fcastSales * 100) : 0,
                 },
                 // Correction factor for this SKU (for self-learning)
                 correctionFactor: {
-                  units: fcast.units > 0 ? (actualSku.unitsSold || 0) / fcast.units : 1,
-                  sales: fcast.sales > 0 ? (actualSku.netSales || 0) / fcast.sales : 1,
+                  units: fcastUnits > 0 ? (actualSku.unitsSold || 0) / fcastUnits : 1,
+                  sales: fcastSales > 0 ? (actualSku.netSales || 0) / fcastSales : 1,
                 },
               });
             }
@@ -6435,19 +6443,21 @@ Respond with ONLY this JSON:
         const forecast = amazonForecasts[weekKey];
         const actual = allWeeksData[weekKey];
         if (actual && forecast) {
+          const forecastRevenue = forecast.totals?.sales || forecast.totalSales || 0;
+          const forecastUnits = forecast.totals?.units || forecast.totalUnits || 0;
           comparisons.push({
             weekEnding: weekKey,
             amazonForecast: {
-              revenue: forecast.totals?.sales || forecast.totals?.revenue || 0,
-              units: forecast.totals?.units || 0,
+              revenue: forecastRevenue,
+              units: forecastUnits,
             },
             actual: {
               revenue: actual.amazon?.revenue || 0,
               units: actual.amazon?.units || 0,
             },
             variance: {
-              revenuePercent: forecast.totals?.sales ? ((actual.amazon?.revenue || 0) - forecast.totals.sales) / forecast.totals.sales * 100 : 0,
-              unitsPercent: forecast.totals?.units ? ((actual.amazon?.units || 0) - forecast.totals.units) / forecast.totals.units * 100 : 0,
+              revenuePercent: forecastRevenue > 0 ? ((actual.amazon?.revenue || 0) - forecastRevenue) / forecastRevenue * 100 : 0,
+              unitsPercent: forecastUnits > 0 ? ((actual.amazon?.units || 0) - forecastUnits) / forecastUnits * 100 : 0,
             },
           });
         }
@@ -9989,7 +9999,7 @@ ${JSON.stringify(invoices.filter(i => !i.paid).map(i => ({ vendor: i.vendor, amo
 === AMAZON FORECASTS (from Amazon's projections) ===
 ${upcomingAmazonForecasts.length > 0 ? `
 Upcoming Amazon projections:
-${JSON.stringify(upcomingAmazonForecasts.map(f => ({ weekEnding: f.weekEnding, projectedRevenue: f.totals.sales, projectedUnits: f.totals.units, projectedProfit: f.totals.proceeds, skuCount: f.skuCount })))}
+${JSON.stringify(upcomingAmazonForecasts.map(f => ({ weekEnding: f.weekEnding, projectedRevenue: f.totals?.sales || f.totalSales || 0, projectedUnits: f.totals?.units || f.totalUnits || 0, projectedProfit: f.totals?.proceeds || f.totalProceeds || 0, skuCount: f.skuCount || 0 })))}
 ` : 'No upcoming Amazon forecasts uploaded'}
 
 ${getAmazonForecastComparison.length > 0 ? `
@@ -10044,7 +10054,7 @@ SELF-LEARNING FORECAST SYSTEM:
 
 ${pendingForecasts.length > 0 ? `
 PENDING FORECASTS (awaiting actual data):
-${pendingForecasts.map(pf => `- Week ${pf.weekEnding}: ${pf.forecast.totals.sales.toFixed(0)} forecasted (${pf.isPast ? 'PAST - needs actuals uploaded' : pf.daysUntil + ' days until week ends'})`).join('\n')}
+${pendingForecasts.map(pf => `- Week ${pf.weekEnding}: ${(pf.forecast.totals?.sales || pf.forecast.totalSales || 0).toFixed(0)} forecasted (${pf.isPast ? 'PAST - needs actuals uploaded' : pf.daysUntil + ' days until week ends'})`).join('\n')}
 ` : ''}
 
 === PRODUCTION PIPELINE (incoming inventory) ===
@@ -10186,8 +10196,8 @@ BY CAMPAIGN TYPE:
 - Sponsored Display (SD): ${amazonCampaigns.summary?.byType?.SD?.length || 0} campaigns, $${(amazonCampaigns.summary?.byType?.SD?.reduce((s,c) => s + c.spend, 0) || 0).toFixed(0)} spend
 
 TOP 10 CAMPAIGNS BY SPEND:
-${amazonCampaigns.campaigns?.slice().sort((a,b) => b.spend - a.spend).slice(0,10).map(c => 
-  `- ${c.name.substring(0,50)}${c.name.length > 50 ? '...' : ''}: $${c.spend.toFixed(0)} spend, $${c.sales.toFixed(0)} sales, ${c.roas.toFixed(2)}x ROAS, ${c.acos.toFixed(0)}% ACOS`
+${amazonCampaigns.campaigns?.slice().sort((a,b) => (b.spend || 0) - (a.spend || 0)).slice(0,10).map(c => 
+  `- ${(c.name || 'Unknown').substring(0,50)}${(c.name || '').length > 50 ? '...' : ''}: $${(c.spend || 0).toFixed(0)} spend, $${(c.sales || 0).toFixed(0)} sales, ${(c.roas || 0).toFixed(2)}x ROAS, ${(c.acos || 0).toFixed(0)}% ACOS`
 ).join('\n')}
 
 TOP 5 CAMPAIGNS BY ROAS (>$100 spend):
@@ -11463,47 +11473,74 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               </div>
             </div>
             <div className="flex items-center gap-3 flex-wrap">
-              {/* Store Selector Dropdown */}
-              {session && stores.length > 0 && (
+              {/* Store Selector Dropdown - Always visible */}
+              {session && (
                 <div className="relative">
                   <button 
                     onClick={() => setShowStoreSelector(!showStoreSelector)}
-                    className="px-3 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2"
+                    className="px-4 py-2 bg-gradient-to-r from-violet-600/40 to-purple-600/40 hover:from-violet-600/60 hover:to-purple-600/60 border border-violet-500/50 rounded-xl text-sm text-white flex items-center gap-2 shadow-lg"
                   >
-                    <Store className="w-4 h-4" />
-                    <span className="max-w-[100px] truncate">{storeName || 'Select Store'}</span>
-                    <ChevronRight className={`w-4 h-4 transition-transform ${showStoreSelector ? 'rotate-90' : ''}`} />
+                    <Store className="w-4 h-4 text-violet-300" />
+                    <span className="max-w-[150px] truncate font-medium">{storeName || 'My Store'}</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${showStoreSelector ? 'rotate-180' : ''}`} />
                   </button>
                   {showStoreSelector && (
-                    <div className="absolute top-full mt-2 right-0 w-64 bg-slate-800 border border-slate-600 rounded-xl shadow-xl z-50 overflow-hidden">
-                      <div className="p-2">
-                        <p className="text-slate-400 text-xs uppercase px-2 py-1">Your Stores</p>
-                        {stores.map(store => (
+                    <>
+                      {/* Backdrop to close dropdown */}
+                      <div className="fixed inset-0 z-40" onClick={() => setShowStoreSelector(false)} />
+                      <div className="absolute top-full mt-2 right-0 w-72 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-50 overflow-hidden">
+                        <div className="p-3 border-b border-slate-700 bg-slate-800/80">
+                          <p className="text-white font-semibold flex items-center gap-2">
+                            <Store className="w-4 h-4 text-violet-400" />
+                            Switch Store
+                          </p>
+                          <p className="text-slate-400 text-xs mt-0.5">Select or create a store</p>
+                        </div>
+                        <div className="p-2 max-h-64 overflow-y-auto">
+                          {stores.length === 0 ? (
+                            <div className="text-center py-4 text-slate-500 text-sm">
+                              <p>Current store: <span className="text-white">{storeName || 'My Store'}</span></p>
+                              <p className="text-xs mt-1">Create a new store below to switch between them</p>
+                            </div>
+                          ) : (
+                            stores.map(store => (
+                              <button
+                                key={store.id}
+                                onClick={() => {
+                                  if (store.id !== activeStoreId) {
+                                    switchStore(store.id);
+                                  }
+                                  setShowStoreSelector(false);
+                                }}
+                                className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 mb-1 transition-all ${store.id === activeStoreId ? 'bg-violet-600/30 text-white border border-violet-500/50' : 'hover:bg-slate-700/70 text-slate-300'}`}
+                              >
+                                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${store.id === activeStoreId ? 'bg-violet-600' : 'bg-slate-700'}`}>
+                                  <Store className="w-4 h-4 text-white" />
+                                </div>
+                                <span className="flex-1 truncate font-medium">{store.name}</span>
+                                {store.id === activeStoreId && <Check className="w-5 h-5 text-violet-400" />}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                        <div className="p-2 border-t border-slate-700 bg-slate-900/50">
                           <button
-                            key={store.id}
-                            onClick={() => {
-                              if (store.id !== activeStoreId) {
-                                switchStore(store.id);
-                              }
-                              setShowStoreSelector(false);
-                            }}
-                            className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2 ${store.id === activeStoreId ? 'bg-violet-600/30 text-violet-300' : 'hover:bg-slate-700 text-white'}`}
+                            onClick={() => { setShowStoreSelector(false); setShowStoreModal(true); }}
+                            className="w-full text-left px-3 py-2.5 rounded-lg bg-violet-600/20 hover:bg-violet-600/30 text-violet-300 flex items-center gap-2 text-sm border border-violet-500/30"
                           >
-                            <Store className="w-4 h-4" />
-                            <span className="flex-1 truncate">{store.name}</span>
-                            {store.id === activeStoreId && <Check className="w-4 h-4 text-violet-400" />}
+                            <Plus className="w-4 h-4" />
+                            <span className="font-medium">Create New Store</span>
                           </button>
-                        ))}
-                        <div className="border-t border-slate-700 mt-2 pt-2">
                           <button
-                            onClick={() => { setShowStoreSelector(false); setView('settings'); }}
-                            className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-400 flex items-center gap-2 text-sm"
+                            onClick={() => { setShowStoreSelector(false); setShowStoreModal(true); }}
+                            className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700/50 text-slate-400 flex items-center gap-2 text-xs mt-1"
                           >
-                            <Plus className="w-4 h-4" />Add New Store
+                            <Settings className="w-3 h-3" />
+                            Manage All Stores
                           </button>
                         </div>
                       </div>
-                    </div>
+                    </>
                   )}
                 </div>
               )}
@@ -14997,9 +15034,9 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     })),
                     amazonForecast: amazonForecastData ? {
                       weekEnding: amazonForecastData.weekEnding,
-                      projectedUnits: amazonForecastData.totals.units,
-                      projectedRevenue: amazonForecastData.totals.sales,
-                      topSkus: Object.entries(amazonForecastData.skus || {}).slice(0, 10).map(([sku, data]) => ({ sku, units: data.units }))
+                      projectedUnits: amazonForecastData.totals?.units || amazonForecastData.totalUnits || 0,
+                      projectedRevenue: amazonForecastData.totals?.sales || amazonForecastData.totalSales || 0,
+                      topSkus: Object.entries(amazonForecastData.skus || {}).slice(0, 10).map(([sku, data]) => ({ sku, units: data?.units || 0 }))
                     } : null,
                     productionPipeline: pendingProduction.map(p => ({
                       sku: p.sku,
@@ -15087,7 +15124,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 </div>
                 {upcomingAmazonForecasts.length > 0 ? (
                   <>
-                    <p className="text-2xl font-bold text-white">{formatNumber(upcomingAmazonForecasts[0].totals.units)} units</p>
+                    <p className="text-2xl font-bold text-white">{formatNumber(upcomingAmazonForecasts[0].totals?.units || upcomingAmazonForecasts[0].totalUnits || 0)} units</p>
                     <p className="text-slate-400 text-xs">Projected next week</p>
                   </>
                 ) : (
@@ -18056,7 +18093,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           <div key={pf.weekEnding} className="flex items-center justify-between bg-slate-800/50 rounded-lg p-3">
                             <div>
                               <p className="text-white font-medium">Week ending {new Date(pf.weekEnding + 'T00:00:00').toLocaleDateString()}</p>
-                              <p className="text-slate-400 text-sm">{formatCurrency(pf.forecast.totals.sales)} forecasted • {pf.forecast.skuCount} SKUs</p>
+                              <p className="text-slate-400 text-sm">{formatCurrency(pf.forecast.totals?.sales || pf.forecast.totalSales || 0)} forecasted • {pf.forecast.skuCount || 0} SKUs</p>
                             </div>
                             <div className="text-right">
                               {pf.isPast ? (
