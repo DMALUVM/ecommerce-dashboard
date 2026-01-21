@@ -1138,6 +1138,8 @@ const handleLogout = async () => {
       return JSON.parse(localStorage.getItem('ecommerce_recurring_v1')) || {};
     } catch { return {}; }
   });
+  const [showAddRecurring, setShowAddRecurring] = useState(false);
+  const [recurringForm, setRecurringForm] = useState({ vendor: '', category: '', amount: '', notes: '' });
   const [skuDateRange, setSkuDateRange] = useState('all'); // 'all' | '4weeks' | 'ytd' | '2025' | '2024'
   
   // Save confirmed recurring to localStorage
@@ -2118,7 +2120,9 @@ const combinedData = useMemo(() => ({
   aiMessages, // Chat history
   // Banking data
   bankingData,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, weeklyReports, aiMessages, bankingData]);
+  // Recurring expenses
+  confirmedRecurring,
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, weeklyReports, aiMessages, bankingData, confirmedRecurring]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -2278,7 +2282,7 @@ useEffect(() => {
   if (!session?.user?.id || !supabase) return;
   if (isLoadingDataRef.current) return; // Don't sync during initial load
   queueCloudSave(combinedData);
-}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData]);
+}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring]);
 
 const loadFromCloud = useCallback(async (storeId = null) => {
   if (!supabase || !session?.user?.id) return { ok: false, stores: [] };
@@ -2377,6 +2381,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.weeklyReports) setWeeklyReports(cloud.weeklyReports);
     if (cloud.aiMessages) setAiMessages(cloud.aiMessages);
     if (cloud.bankingData) setBankingData(cloud.bankingData);
+    if (cloud.confirmedRecurring) setConfirmedRecurring(cloud.confirmedRecurring);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -2409,6 +2414,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.weeklyReports) writeToLocal(WEEKLY_REPORTS_KEY, JSON.stringify(cloud.weeklyReports));
     if (cloud.aiMessages && cloud.aiMessages.length > 0) writeToLocal('ecommerce_ai_chat_history_v1', JSON.stringify(cloud.aiMessages));
     if (cloud.bankingData) writeToLocal('ecommerce_banking_v1', JSON.stringify(cloud.bankingData));
+    if (cloud.confirmedRecurring) writeToLocal('ecommerce_recurring_v1', JSON.stringify(cloud.confirmedRecurring));
 
     setCloudStatus('');
     return { ok: true, stores: loadedStores };
@@ -24869,7 +24875,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       // Group all expenses by vendor (from description) and track monthly occurrences
       const vendorPatterns = {};
       
-      sortedTxns.filter(t => t.isExpense && t.amount > 50).forEach(t => {
+      // Lower threshold to $25 to catch more recurring items
+      sortedTxns.filter(t => t.isExpense && t.amount > 25).forEach(t => {
         // Extract vendor from description (first part before common separators)
         const desc = (t.description || '').toUpperCase();
         const vendor = desc.split(/\s+(PAYMENT|AUTOPAY|ACH|DEBIT|BILL|#|\d{4,})/)[0].trim().substring(0, 40);
@@ -24898,27 +24905,27 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         vendorPatterns[key].descriptions.add(t.description?.substring(0, 50));
       });
       
-      // Analyze patterns - look for charges appearing 3+ months with consistent amounts
+      // Analyze patterns - look for charges appearing 2+ months (lowered from 3)
       const recurring = [];
       const allMonths = [...new Set(sortedTxns.map(t => t.date.substring(0, 7)))].sort();
       const recentMonths = allMonths.slice(-6); // Look at last 6 months
       
       Object.entries(vendorPatterns).forEach(([key, pattern]) => {
         const monthsWithCharges = Object.keys(pattern.months).filter(m => recentMonths.includes(m));
-        if (monthsWithCharges.length < 3) return; // Need at least 3 months
+        if (monthsWithCharges.length < 2) return; // Lowered from 3 to 2 months
         
         // Calculate typical monthly amount (median to avoid outliers)
         const monthlyAmounts = monthsWithCharges.map(m => pattern.months[m].total).sort((a, b) => a - b);
         const medianAmount = monthlyAmounts[Math.floor(monthlyAmounts.length / 2)];
         
-        // Check consistency - amounts should be within 20% of median
-        const isConsistent = monthlyAmounts.every(a => Math.abs(a - medianAmount) / medianAmount < 0.2);
+        // Check consistency - amounts should be within 30% of median (relaxed from 20%)
+        const isConsistent = monthlyAmounts.every(a => Math.abs(a - medianAmount) / medianAmount < 0.3);
         
         // Calculate average amount
         const avgAmount = monthlyAmounts.reduce((s, a) => s + a, 0) / monthlyAmounts.length;
         
-        // Only include if reasonably consistent
-        if (avgAmount >= 100 && (isConsistent || monthlyAmounts.length >= 4)) {
+        // Only include if reasonably consistent - lowered threshold from $100 to $50
+        if (avgAmount >= 50 && (isConsistent || monthsWithCharges.length >= 3)) {
           const isConfirmed = confirmedRecurring[key]?.confirmed;
           const isIgnored = confirmedRecurring[key]?.ignored;
           
@@ -24943,9 +24950,30 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     };
     
     const detectedRecurring = detectRecurringExpenses();
-    const confirmedRecurringList = detectedRecurring.filter(r => r.confirmed);
+    
+    // Get manually added recurring expenses
+    const manualRecurring = Object.entries(confirmedRecurring)
+      .filter(([_, data]) => data.manual && data.confirmed)
+      .map(([key, data]) => ({
+        key,
+        vendor: data.vendor,
+        category: data.category,
+        monthlyAmount: data.amount,
+        annualCost: (data.amount || 0) * 12,
+        frequency: 12,
+        totalMonths: 12,
+        consistency: 'high',
+        description: data.notes || data.vendor,
+        confirmed: true,
+        manual: true,
+      }));
+    
+    const confirmedRecurringList = [
+      ...detectedRecurring.filter(r => r.confirmed),
+      ...manualRecurring,
+    ];
     const pendingRecurringList = detectedRecurring.filter(r => !r.confirmed && !r.ignored);
-    const totalMonthlyRecurring = confirmedRecurringList.reduce((s, r) => s + r.monthlyAmount, 0);
+    const totalMonthlyRecurring = confirmedRecurringList.reduce((s, r) => s + (r.monthlyAmount || 0), 0);
     const totalAnnualRecurring = totalMonthlyRecurring * 12;
     
     // Calculate EOY projection using recurring expenses
@@ -25078,7 +25106,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         
         setBankingData(newBankingData);
         localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
-        queueCloudSave();
+        queueCloudSave({ ...combinedData, bankingData: newBankingData });
         
         const message = duplicateCount > 0 
           ? `Added ${newCount} new transactions (${duplicateCount} duplicates skipped). Total: ${mergedTransactions.length}`
@@ -25102,7 +25130,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       // For now just update the override and let next upload recalculate
       setBankingData(newBankingData);
       localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
-      queueCloudSave();
+      queueCloudSave({ ...combinedData, bankingData: newBankingData });
       setToast({ message: 'Category updated', type: 'success' });
     };
     
@@ -25212,17 +25240,30 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               
               {/* Account Balances - CFO Summary */}
               {Object.keys(bankingData.accounts || {}).length > 0 && (() => {
-                // Filter to only show real bank accounts (strict pattern matching)
-                const realAccts = Object.entries(bankingData.accounts).filter(([name, _]) => {
-                  // Must have account number ending pattern like (5983) - 1
-                  if (!/\(\d{4}\)\s*-\s*\d+$/.test(name)) return false;
-                  // Must not contain quotes (corrupted data)
+                // Filter to only show real bank accounts (more flexible pattern matching)
+                const realAccts = Object.entries(bankingData.accounts).filter(([name, acct]) => {
+                  // Skip if name looks corrupted (has quotes or is super long)
                   if (name.includes('"')) return false;
-                  // Must be reasonably short
-                  if (name.length > 60) return false;
-                  // Must start with letter
-                  if (!/^[A-Za-z]/.test(name.trim())) return false;
-                  return true;
+                  if (name.length > 100) return false;
+                  // Skip if balance is undefined or NaN
+                  if (acct.balance === undefined || isNaN(acct.balance)) return false;
+                  // Accept accounts that have a balance and reasonable name
+                  // Look for patterns like: account number in parens, or common bank terms
+                  const lower = name.toLowerCase();
+                  const looksLikeAccount = (
+                    /\(\d{4}\)/.test(name) || // Has (1234) pattern
+                    lower.includes('checking') ||
+                    lower.includes('savings') ||
+                    lower.includes('operations') ||
+                    lower.includes('card') ||
+                    lower.includes('credit') ||
+                    lower.includes('amex') ||
+                    lower.includes('chase') ||
+                    lower.includes('bank') ||
+                    lower.includes('capital') ||
+                    acct.type === 'credit_card' // Explicitly marked as credit card
+                  );
+                  return looksLikeAccount;
                 });
                 const checkingAccts = realAccts.filter(([_, a]) => a.type !== 'credit_card');
                 const creditAccts = realAccts.filter(([_, a]) => a.type === 'credit_card');
@@ -25431,6 +25472,124 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Recurring Expenses Tab */}
               {bankingTab === 'recurring' && (
                 <div className="space-y-6">
+                  {/* Header with Add Button */}
+                  <div className="flex items-center justify-between">
+                    <div className="bg-slate-800/30 rounded-lg p-3 text-sm text-slate-400 flex-1 mr-4">
+                      {(() => {
+                        const allMonths = [...new Set(sortedTxns.map(t => t.date.substring(0, 7)))].sort();
+                        const expenseCount = sortedTxns.filter(t => t.isExpense).length;
+                        return (
+                          <>
+                            📊 Analyzing {expenseCount} expense transactions across {allMonths.length} months 
+                            ({allMonths.length > 0 ? `${allMonths[0]} to ${allMonths[allMonths.length - 1]}` : 'no data'})
+                            {detectedRecurring.length > 0 && ` • Found ${detectedRecurring.length} potential recurring expenses`}
+                          </>
+                        );
+                      })()}
+                    </div>
+                    <button
+                      onClick={() => { setRecurringForm({ vendor: '', category: '', amount: '', notes: '' }); setShowAddRecurring(true); }}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-white text-sm flex items-center gap-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Add Manual
+                    </button>
+                  </div>
+                  
+                  {/* Manual Add Recurring Modal */}
+                  {showAddRecurring && (
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                      <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
+                        <h3 className="text-lg font-semibold text-white mb-4">Add Recurring Expense</h3>
+                        <p className="text-slate-400 text-sm mb-4">Manually add a recurring expense that wasn't auto-detected (e.g., agency retainers, subscriptions).</p>
+                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-sm text-slate-400 mb-1">Vendor / Description</label>
+                            <input 
+                              type="text" 
+                              value={recurringForm.vendor} 
+                              onChange={(e) => setRecurringForm(f => ({ ...f, vendor: e.target.value }))}
+                              placeholder="e.g., Marketing Agency, Software Subscription"
+                              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-slate-400 mb-1">Category</label>
+                            <select
+                              value={recurringForm.category}
+                              onChange={(e) => setRecurringForm(f => ({ ...f, category: e.target.value }))}
+                              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                            >
+                              <option value="">Select category...</option>
+                              <option value="Marketing">Marketing</option>
+                              <option value="Software & Subscriptions">Software & Subscriptions</option>
+                              <option value="Professional Services">Professional Services</option>
+                              <option value="Insurance">Insurance</option>
+                              <option value="Utilities">Utilities</option>
+                              <option value="Rent">Rent</option>
+                              <option value="Payroll">Payroll</option>
+                              <option value="Other">Other</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-sm text-slate-400 mb-1">Monthly Amount ($)</label>
+                            <input 
+                              type="number" 
+                              value={recurringForm.amount} 
+                              onChange={(e) => setRecurringForm(f => ({ ...f, amount: e.target.value }))}
+                              placeholder="3000"
+                              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-slate-400 mb-1">Notes (optional)</label>
+                            <input 
+                              type="text" 
+                              value={recurringForm.notes} 
+                              onChange={(e) => setRecurringForm(f => ({ ...f, notes: e.target.value }))}
+                              placeholder="Any additional notes"
+                              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex gap-3 mt-6">
+                          <button
+                            onClick={() => {
+                              if (!recurringForm.vendor || !recurringForm.amount) {
+                                setToast({ message: 'Vendor and amount are required', type: 'error' });
+                                return;
+                              }
+                              const key = `MANUAL_${recurringForm.vendor.toUpperCase().replace(/\s+/g, '_')}`;
+                              setConfirmedRecurring(prev => ({
+                                ...prev,
+                                [key]: {
+                                  confirmed: true,
+                                  manual: true,
+                                  vendor: recurringForm.vendor,
+                                  category: recurringForm.category || 'Other',
+                                  amount: parseFloat(recurringForm.amount) || 0,
+                                  notes: recurringForm.notes,
+                                  addedAt: new Date().toISOString(),
+                                }
+                              }));
+                              setToast({ message: 'Recurring expense added', type: 'success' });
+                              setShowAddRecurring(false);
+                            }}
+                            className="flex-1 bg-purple-600 hover:bg-purple-500 text-white font-semibold py-2 rounded-lg"
+                          >
+                            Add Recurring
+                          </button>
+                          <button 
+                            onClick={() => setShowAddRecurring(false)}
+                            className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-lg"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
                   {/* Summary Cards */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="bg-gradient-to-br from-purple-900/40 to-purple-800/20 rounded-xl border border-purple-500/30 p-5">
@@ -25498,6 +25657,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     </div>
                   )}
                   
+                  {/* No recurring detected message */}
+                  {pendingRecurringList.length === 0 && confirmedRecurringList.length === 0 && (
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-6 text-center">
+                      <RefreshCw className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                      <h3 className="text-lg font-semibold text-white mb-2">No Recurring Expenses Detected</h3>
+                      <p className="text-slate-400 text-sm mb-4">
+                        To detect recurring expenses, you need at least 2 months of banking data with similar charges appearing in multiple months.
+                      </p>
+                      <div className="text-slate-500 text-xs space-y-1">
+                        <p>Detection criteria: Same vendor, $50+ average, appears in 2+ months of last 6</p>
+                        <p>Make sure your QBO export includes multiple months of transaction history</p>
+                      </div>
+                    </div>
+                  )}
+                  
                   {/* Confirmed Recurring */}
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                     <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
@@ -25511,9 +25685,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             <tr className="border-b border-slate-700">
                               <th className="text-left text-slate-400 font-medium py-2 px-2">Vendor</th>
                               <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
+                              <th className="text-center text-slate-400 font-medium py-2 px-2">Source</th>
                               <th className="text-right text-slate-400 font-medium py-2 px-2">Monthly</th>
                               <th className="text-right text-slate-400 font-medium py-2 px-2">Annual</th>
-                              <th className="text-right text-slate-400 font-medium py-2 px-2">Actions</th>
+                              <th className="text-center text-slate-400 font-medium py-2 px-2">Remove</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -25521,16 +25696,36 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               <tr key={item.key} className="border-b border-slate-700/50 hover:bg-slate-700/30">
                                 <td className="py-3 px-2 text-white">{item.vendor}</td>
                                 <td className="py-3 px-2 text-slate-400">{item.category}</td>
+                                <td className="py-3 px-2 text-center">
+                                  {item.manual ? (
+                                    <span className="px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded text-xs">Manual</span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-xs">Auto-detected</span>
+                                  )}
+                                </td>
                                 <td className="py-3 px-2 text-right text-rose-400 font-medium">{formatCurrency(item.monthlyAmount)}</td>
                                 <td className="py-3 px-2 text-right text-slate-300">{formatCurrency(item.annualCost)}</td>
-                                <td className="py-3 px-2 text-right">
+                                <td className="py-3 px-2 text-center">
                                   <button
-                                    onClick={() => setConfirmedRecurring(prev => {
-                                      const updated = { ...prev };
-                                      delete updated[item.key];
-                                      return updated;
-                                    })}
-                                    className="text-slate-500 hover:text-rose-400"
+                                    onClick={() => {
+                                      if (item.manual) {
+                                        // For manual items, completely remove
+                                        setConfirmedRecurring(prev => {
+                                          const updated = { ...prev };
+                                          delete updated[item.key];
+                                          return updated;
+                                        });
+                                      } else {
+                                        // For auto-detected, mark as NOT recurring (ignored)
+                                        setConfirmedRecurring(prev => ({
+                                          ...prev,
+                                          [item.key]: { ignored: true, notRecurring: true }
+                                        }));
+                                      }
+                                      setToast({ message: 'Removed from recurring', type: 'success' });
+                                    }}
+                                    className="text-slate-500 hover:text-rose-400 p-1"
+                                    title={item.manual ? "Delete" : "Mark as NOT recurring"}
                                   >
                                     <X className="w-4 h-4" />
                                   </button>
@@ -25540,7 +25735,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           </tbody>
                           <tfoot>
                             <tr className="border-t-2 border-slate-600">
-                              <td className="py-3 px-2 font-bold text-white" colSpan={2}>Total</td>
+                              <td className="py-3 px-2 font-bold text-white" colSpan={3}>Total</td>
                               <td className="py-3 px-2 text-right font-bold text-rose-400">{formatCurrency(totalMonthlyRecurring)}</td>
                               <td className="py-3 px-2 text-right font-bold text-white">{formatCurrency(totalAnnualRecurring)}</td>
                               <td></td>
@@ -25556,6 +25751,43 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       </div>
                     )}
                   </div>
+                  
+                  {/* Marked as NOT Recurring - ability to undo */}
+                  {(() => {
+                    const ignoredItems = Object.entries(confirmedRecurring)
+                      .filter(([_, data]) => data.ignored || data.notRecurring)
+                      .map(([key, data]) => ({ key, ...data }));
+                    
+                    if (ignoredItems.length === 0) return null;
+                    
+                    return (
+                      <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
+                        <h3 className="text-md font-medium text-slate-400 mb-3 flex items-center gap-2">
+                          <EyeOff className="w-4 h-4" />
+                          Marked as NOT Recurring ({ignoredItems.length})
+                        </h3>
+                        <p className="text-slate-500 text-sm mb-3">These items were marked as not recurring and won't appear in detected expenses.</p>
+                        <div className="flex flex-wrap gap-2">
+                          {ignoredItems.map(item => (
+                            <div key={item.key} className="bg-slate-700/50 rounded-lg px-3 py-2 flex items-center gap-2">
+                              <span className="text-slate-400 text-sm">{item.key.replace(/^MANUAL_/, '').replace(/_/g, ' ')}</span>
+                              <button
+                                onClick={() => setConfirmedRecurring(prev => {
+                                  const updated = { ...prev };
+                                  delete updated[item.key];
+                                  return updated;
+                                })}
+                                className="text-slate-500 hover:text-emerald-400 p-0.5"
+                                title="Undo - allow detection again"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   
                   {/* EOY Impact */}
                   <div className="bg-gradient-to-r from-purple-900/30 to-indigo-900/30 rounded-xl border border-purple-500/30 p-5">
