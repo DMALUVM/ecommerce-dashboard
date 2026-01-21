@@ -1132,7 +1132,7 @@ const handleLogout = async () => {
   const [bankingCategoryFilter, setBankingCategoryFilter] = useState('all');
   const [showBankingUpload, setShowBankingUpload] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState(null); // Transaction being edited
-  const [skuDateRange, setSkuDateRange] = useState('all'); // 'all' | '4weeks' | '8weeks' | '12weeks' | 'ytd'
+  const [skuDateRange, setSkuDateRange] = useState('all'); // 'all' | '4weeks' | 'ytd' | '2025' | '2024'
   
   // Sales Tax Management
   const [salesTaxConfig, setSalesTaxConfig] = useState({
@@ -7413,13 +7413,26 @@ Analyze the data and respond with ONLY this JSON:
 
   const exportSKUDataCSV = () => {
     const skuMap = {};
+    // Include weekly data (primarily 2026)
     Object.entries(allWeeksData).forEach(([week, data]) => {
       [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])].forEach(s => {
-        if (!skuMap[s.sku]) skuMap[s.sku] = { sku: s.sku, name: s.name || '', totalUnits: 0, totalRevenue: 0, totalProfit: 0, weeks: 0 };
+        if (!skuMap[s.sku]) skuMap[s.sku] = { sku: s.sku, name: savedProductNames[s.sku] || s.name || '', totalUnits: 0, totalRevenue: 0, totalProfit: 0, periods: 0 };
         skuMap[s.sku].totalUnits += s.unitsSold || 0;
         skuMap[s.sku].totalRevenue += s.netSales || 0;
         skuMap[s.sku].totalProfit += s.netProceeds || (s.netSales || 0) - (s.cogs || 0);
-        skuMap[s.sku].weeks += 1;
+        skuMap[s.sku].periods += 1;
+      });
+    });
+    // Include period data (2024 quarterly, 2025 monthly)
+    Object.entries(allPeriodsData).forEach(([period, data]) => {
+      // Skip yearly totals to avoid double-counting
+      if (/^\d{4}$/.test(period)) return;
+      [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])].forEach(s => {
+        if (!skuMap[s.sku]) skuMap[s.sku] = { sku: s.sku, name: savedProductNames[s.sku] || s.name || '', totalUnits: 0, totalRevenue: 0, totalProfit: 0, periods: 0 };
+        skuMap[s.sku].totalUnits += s.unitsSold || 0;
+        skuMap[s.sku].totalRevenue += s.netSales || 0;
+        skuMap[s.sku].totalProfit += s.netProceeds || (s.netSales || 0) - (s.cogs || 0);
+        skuMap[s.sku].periods += 1;
       });
     });
     const data = Object.values(skuMap).map(s => ({
@@ -7428,10 +7441,10 @@ Analyze the data and respond with ONLY this JSON:
       'Total Units': s.totalUnits,
       'Total Revenue': s.totalRevenue.toFixed(2),
       'Total Profit': s.totalProfit.toFixed(2),
-      'Weeks Active': s.weeks,
-      'Avg Units/Week': (s.totalUnits / s.weeks).toFixed(1),
+      'Periods Active': s.periods,
+      'Avg Units/Period': (s.totalUnits / s.periods).toFixed(1),
     }));
-    exportToCSV(data, 'sku_performance', ['SKU', 'Product Name', 'Total Units', 'Total Revenue', 'Total Profit', 'Weeks Active', 'Avg Units/Week']);
+    exportToCSV(data, 'sku_performance', ['SKU', 'Product Name', 'Total Units', 'Total Revenue', 'Total Profit', 'Periods Active', 'Avg Units/Period']);
   };
 
   const exportInventoryCSV = () => {
@@ -10533,11 +10546,28 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       skusByCategory[p.category].push(p.sku);
     });
     
-    const allTimeRevenue = weeksSummary.reduce((s, w) => s + w.totalRevenue, 0);
-    const allTimeProfit = weeksSummary.reduce((s, w) => s + w.totalProfit, 0);
-    const allTimeUnits = weeksSummary.reduce((s, w) => s + w.totalUnits, 0);
-    const recentWeeksData = weeksSummary.slice(-4);
-    const priorWeeksData = weeksSummary.slice(-8, -4);
+    // Calculate all time totals properly:
+    // 2026: Use weekly data (actual weeks)
+    // 2025: Use monthly period data (no weekly breakdown available)
+    // 2024: Use quarterly period data
+    const weeks2026 = weeksSummary.filter(w => w.weekKey && w.weekKey.startsWith('2026') && w.totalRevenue > 0);
+    const months2025 = periodsSummary.filter(p => p.period.includes('2025') && p.type === 'monthly');
+    const quarters2024 = periodsSummary.filter(p => p.period.includes('2024') && p.type === 'quarterly');
+    
+    const allTimeRevenue = 
+      weeks2026.reduce((s, w) => s + w.totalRevenue, 0) +
+      months2025.reduce((s, p) => s + p.totalRevenue, 0) +
+      quarters2024.reduce((s, p) => s + p.totalRevenue, 0);
+    const allTimeProfit = 
+      weeks2026.reduce((s, w) => s + w.totalProfit, 0) +
+      months2025.reduce((s, p) => s + p.totalProfit, 0) +
+      quarters2024.reduce((s, p) => s + p.totalProfit, 0);
+    const allTimeUnits = 
+      weeks2026.reduce((s, w) => s + w.totalUnits, 0) +
+      months2025.reduce((s, p) => s + p.totalUnits, 0) +
+      quarters2024.reduce((s, p) => s + p.totalUnits, 0);
+    const recentWeeksData = weeksSummary.filter(w => w.totalRevenue > 0).slice(-4);
+    const priorWeeksData = weeksSummary.filter(w => w.totalRevenue > 0).slice(-8, -4);
     const recentRevenue = recentWeeksData.reduce((s, w) => s + w.totalRevenue, 0);
     const priorRevenue = priorWeeksData.reduce((s, w) => s + w.totalRevenue, 0);
     const recentProfit = recentWeeksData.reduce((s, w) => s + w.totalProfit, 0);
@@ -19133,141 +19163,182 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
   // ==================== SKU RANKINGS VIEW ====================
   if (view === 'skus') {
     const allWeeks = Object.keys(allWeeksData).sort();
+    const now = new Date();
+    const currentYear = now.getFullYear();
     
-    // Filter weeks based on date range
-    const getFilteredWeeks = () => {
-      const now = new Date();
-      const currentYear = now.getFullYear();
-      switch (skuDateRange) {
-        case '4weeks': return allWeeks.slice(-4);
-        case '8weeks': return allWeeks.slice(-8);
-        case '12weeks': return allWeeks.slice(-12);
-        case 'ytd': return allWeeks.filter(w => w.startsWith(String(currentYear)));
-        default: return allWeeks;
-      }
-    };
-    const sortedWeeks = getFilteredWeeks();
-    const recentWeeks = sortedWeeks.slice(-4);
-    const olderWeeks = sortedWeeks.slice(-8, -4);
+    // Helper to get base SKU - keep full SKU since both channels use same format
+    const getBaseSku = (sku) => sku;
     
-    // Get period label for display
-    const getPeriodLabel = () => {
-      const weekCount = sortedWeeks.length;
-      const totalWeekCount = allWeeks.length;
-      const dateRange = sortedWeeks.length > 0 
-        ? `${sortedWeeks[0]} to ${sortedWeeks[sortedWeeks.length - 1]}`
-        : '';
-      switch (skuDateRange) {
-        case '4weeks': return `Last 4 Weeks (${Math.min(4, weekCount)} of ${totalWeekCount}) ${dateRange ? '• ' + dateRange : ''}`;
-        case '8weeks': return `Last 8 Weeks (${Math.min(8, weekCount)} of ${totalWeekCount}) ${dateRange ? '• ' + dateRange : ''}`;
-        case '12weeks': return `Last 12 Weeks (${Math.min(12, weekCount)} of ${totalWeekCount}) ${dateRange ? '• ' + dateRange : ''}`;
-        case 'ytd': return `Year to Date (${weekCount} weeks) ${dateRange ? '• ' + dateRange : ''}`;
-        default: return `All Time (${weekCount} weeks) ${dateRange ? '• ' + dateRange : ''}`;
-      }
-    };
-    
-    // Aggregate SKU data across filtered weeks
+    // Aggregate SKU data
     const skuAggregates = {};
     const skuRecentData = {};
     const skuOlderData = {};
+    const skuWeeklyData = {};
     
-    // NEW: Track weekly profit per unit for each SKU
-    const skuWeeklyData = {}; // { sku: { weekDate: { units, revenue, profit, profitPerUnit, fees } } }
+    // Helper function to add SKU data to aggregates
+    const addSkuData = (skuList, channel, isRecent, isOlder, periodKey) => {
+      (skuList || []).forEach(s => {
+        const baseSku = getBaseSku(s.sku);
+        const weekProfit = channel === 'Amazon' 
+          ? (s.netProceeds || 0)  // Amazon: netProceeds is profit
+          : (s.netSales || 0) - (s.cogs || 0);  // Shopify: revenue - COGS
+        
+        if (!skuAggregates[baseSku]) {
+          skuAggregates[baseSku] = { 
+            sku: baseSku, 
+            name: savedProductNames[s.sku] || savedProductNames[baseSku] || s.name, 
+            channels: [], 
+            units: 0, 
+            revenue: 0, 
+            profit: 0, 
+            cogs: 0, 
+            weeks: 0 
+          };
+        }
+        if (!skuAggregates[baseSku].channels.includes(channel)) {
+          skuAggregates[baseSku].channels.push(channel);
+        }
+        skuAggregates[baseSku].units += s.unitsSold || 0;
+        skuAggregates[baseSku].revenue += s.netSales || 0;
+        skuAggregates[baseSku].cogs += s.cogs || 0;
+        skuAggregates[baseSku].profit += weekProfit;
+        skuAggregates[baseSku].weeks += 1;
+        
+        // Track weekly/period data for trends
+        if (periodKey) {
+          if (!skuWeeklyData[baseSku]) {
+            skuWeeklyData[baseSku] = { 
+              sku: baseSku, 
+              name: savedProductNames[s.sku] || savedProductNames[baseSku] || s.name, 
+              channel, 
+              weeks: {} 
+            };
+          }
+          if (!skuWeeklyData[baseSku].weeks[periodKey]) {
+            skuWeeklyData[baseSku].weeks[periodKey] = { units: 0, revenue: 0, profit: 0, fees: 0 };
+          }
+          skuWeeklyData[baseSku].weeks[periodKey].units += s.unitsSold || 0;
+          skuWeeklyData[baseSku].weeks[periodKey].revenue += s.netSales || 0;
+          skuWeeklyData[baseSku].weeks[periodKey].profit += weekProfit;
+        }
+        
+        if (isRecent) {
+          if (!skuRecentData[baseSku]) skuRecentData[baseSku] = { units: 0, revenue: 0, profit: 0 };
+          skuRecentData[baseSku].units += s.unitsSold || 0;
+          skuRecentData[baseSku].revenue += s.netSales || 0;
+          skuRecentData[baseSku].profit += weekProfit;
+        }
+        if (isOlder) {
+          if (!skuOlderData[baseSku]) skuOlderData[baseSku] = { units: 0, revenue: 0, profit: 0 };
+          skuOlderData[baseSku].units += s.unitsSold || 0;
+          skuOlderData[baseSku].revenue += s.netSales || 0;
+          skuOlderData[baseSku].profit += weekProfit;
+        }
+      });
+    };
     
+    // Determine which data sources to use based on date range
+    let sortedWeeks = [];
+    let periodsUsed = [];
+    let dataSourceLabel = '';
+    
+    // Only use 2026 weekly data (user confirmed no weekly data before 2026)
+    const weeks2026 = allWeeks.filter(w => w.startsWith('2026'));
+    
+    if (skuDateRange === '4weeks') {
+      sortedWeeks = weeks2026.slice(-4);
+      dataSourceLabel = `Last 4 Weeks`;
+    } else if (skuDateRange === 'ytd') {
+      // YTD = 2026 weekly data only
+      sortedWeeks = weeks2026;
+      dataSourceLabel = `2026 Year to Date`;
+    } else if (skuDateRange === '2025') {
+      // 2025 = Monthly periods only (no weekly data for 2025)
+      sortedWeeks = [];
+      const monthlyPeriods = [
+        'january-2025', 'february-2025', 'march-2025', 'april-2025', 'may-2025', 'june-2025',
+        'july-2025', 'august-2025', 'september-2025', 'october-2025', 'november-2025', 'december-2025'
+      ];
+      monthlyPeriods.forEach(pKey => {
+        if (allPeriodsData[pKey] && allPeriodsData[pKey].total?.revenue > 0) {
+          periodsUsed.push(pKey);
+        }
+      });
+      dataSourceLabel = `2025 (${periodsUsed.length} months)`;
+    } else if (skuDateRange === '2024') {
+      // 2024 = Quarterly periods only
+      sortedWeeks = [];
+      const quarterlyPeriods = ['q2-2024', 'q3-2024', 'q4-2024'];
+      quarterlyPeriods.forEach(pKey => {
+        if (allPeriodsData[pKey] && allPeriodsData[pKey].total?.revenue > 0) {
+          periodsUsed.push(pKey);
+        }
+      });
+      dataSourceLabel = `2024 (${periodsUsed.length} quarters)`;
+    } else {
+      // ALL TIME: 2026 weekly + 2025 monthly + 2024 quarterly (no overlap)
+      sortedWeeks = weeks2026; // Only 2026 weekly data
+      
+      // Add quarterly 2024 data
+      const quarterlyPeriods = ['q2-2024', 'q3-2024', 'q4-2024'];
+      quarterlyPeriods.forEach(pKey => {
+        if (allPeriodsData[pKey] && allPeriodsData[pKey].total?.revenue > 0) {
+          periodsUsed.push(pKey);
+        }
+      });
+      
+      // Add monthly 2025 data (all 12 months)
+      const monthlyPeriods = [
+        'january-2025', 'february-2025', 'march-2025', 'april-2025', 'may-2025', 'june-2025',
+        'july-2025', 'august-2025', 'september-2025', 'october-2025', 'november-2025', 'december-2025'
+      ];
+      monthlyPeriods.forEach(pKey => {
+        if (allPeriodsData[pKey] && allPeriodsData[pKey].total?.revenue > 0) {
+          periodsUsed.push(pKey);
+        }
+      });
+      
+      dataSourceLabel = `All Time`;
+    }
+    
+    const recentWeeks = sortedWeeks.slice(-4);
+    const olderWeeks = sortedWeeks.slice(-8, -4);
+    
+    // Process weekly data
     sortedWeeks.forEach(w => {
       const week = allWeeksData[w];
+      if (!week) return;
       const isRecent = recentWeeks.includes(w);
       const isOlder = olderWeeks.includes(w);
       
-      // Amazon SKUs
-      (week.amazon?.skuData || []).forEach(s => {
-        // Amazon: netProceeds IS the profit (already has COGS, fees, and ad spend deducted)
-        const weekProceeds = s.netProceeds || 0;
-        const weekProfit = weekProceeds;
-        
-        if (!skuAggregates[s.sku]) skuAggregates[s.sku] = { sku: s.sku, name: s.name, channel: 'Amazon', units: 0, revenue: 0, profit: 0, cogs: 0, weeks: 0 };
-        skuAggregates[s.sku].units += s.unitsSold || 0;
-        skuAggregates[s.sku].revenue += s.netSales || 0;
-        skuAggregates[s.sku].cogs += s.cogs || 0;
-        skuAggregates[s.sku].profit += weekProfit;
-        skuAggregates[s.sku].weeks += 1;
-        
-        // Track weekly data for profit per unit trending
-        if (!skuWeeklyData[s.sku]) skuWeeklyData[s.sku] = { sku: s.sku, name: s.name, channel: 'Amazon', weeks: {} };
-        const weekUnits = s.unitsSold || 0;
-        const weekRevenue = s.netSales || 0;
-        const weekFees = weekRevenue - weekProceeds; // Amazon fees = net sales - net proceeds
-        skuWeeklyData[s.sku].weeks[w] = {
-          units: weekUnits,
-          revenue: weekRevenue,
-          proceeds: weekProceeds,
-          cogs: s.cogs || 0,
-          profit: weekProfit,
-          fees: weekFees,
-          profitPerUnit: weekUnits > 0 ? weekProfit / weekUnits : 0,
-          feesPerUnit: weekUnits > 0 ? weekFees / weekUnits : 0,
-          revenuePerUnit: weekUnits > 0 ? weekRevenue / weekUnits : 0,
-        };
-        
-        if (isRecent) {
-          if (!skuRecentData[s.sku]) skuRecentData[s.sku] = { units: 0, revenue: 0, profit: 0 };
-          skuRecentData[s.sku].units += s.unitsSold || 0;
-          skuRecentData[s.sku].revenue += s.netSales || 0;
-          skuRecentData[s.sku].profit += weekProfit;
-        }
-        if (isOlder) {
-          if (!skuOlderData[s.sku]) skuOlderData[s.sku] = { units: 0, revenue: 0, profit: 0 };
-          skuOlderData[s.sku].units += s.unitsSold || 0;
-          skuOlderData[s.sku].revenue += s.netSales || 0;
-          skuOlderData[s.sku].profit += weekProfit;
-        }
-      });
-      
-      // Shopify SKUs
-      (week.shopify?.skuData || []).forEach(s => {
-        // Shopify: netSales already has discounts deducted, subtract COGS
-        const weekProfit = (s.netSales || 0) - (s.cogs || 0);
-        
-        const key = 'shop_' + s.sku;
-        if (!skuAggregates[key]) skuAggregates[key] = { sku: s.sku, name: s.name, channel: 'Shopify', units: 0, revenue: 0, profit: 0, cogs: 0, weeks: 0 };
-        skuAggregates[key].units += s.unitsSold || 0;
-        skuAggregates[key].revenue += s.netSales || 0;
-        skuAggregates[key].cogs += s.cogs || 0;
-        skuAggregates[key].profit += weekProfit;
-        skuAggregates[key].weeks += 1;
-        
-        // Track weekly data for Shopify too
-        if (!skuWeeklyData[key]) skuWeeklyData[key] = { sku: s.sku, name: s.name, channel: 'Shopify', weeks: {} };
-        const weekUnits = s.unitsSold || 0;
-        const weekRevenue = s.netSales || 0;
-        skuWeeklyData[key].weeks[w] = {
-          units: weekUnits,
-          revenue: weekRevenue,
-          cogs: s.cogs || 0,
-          profit: weekProfit,
-          fees: 0,
-          profitPerUnit: weekUnits > 0 ? weekProfit / weekUnits : 0,
-          feesPerUnit: 0,
-          revenuePerUnit: weekUnits > 0 ? weekRevenue / weekUnits : 0,
-        };
-        
-        if (isRecent) {
-          if (!skuRecentData[key]) skuRecentData[key] = { units: 0, revenue: 0, profit: 0 };
-          skuRecentData[key].units += s.unitsSold || 0;
-          skuRecentData[key].revenue += s.netSales || 0;
-          skuRecentData[key].profit += weekProfit;
-        }
-        if (isOlder) {
-          if (!skuOlderData[key]) skuOlderData[key] = { units: 0, revenue: 0 };
-          skuOlderData[key].units += s.unitsSold || 0;
-          skuOlderData[key].revenue += s.netSales || 0;
-        }
-      });
+      addSkuData(week.amazon?.skuData, 'Amazon', isRecent, isOlder, w);
+      addSkuData(week.shopify?.skuData, 'Shopify', isRecent, isOlder, w);
     });
+    
+    // Process period data (for All Time only)
+    periodsUsed.forEach(pKey => {
+      const period = allPeriodsData[pKey];
+      if (!period) return;
+      // Period data is older, use for comparison baseline
+      addSkuData(period.amazon?.skuData, 'Amazon', false, true, pKey);
+      addSkuData(period.shopify?.skuData, 'Shopify', false, true, pKey);
+    });
+    
+    // Get period label for display
+    const getPeriodLabel = () => {
+      if (sortedWeeks.length > 0) {
+        const dateRange = `${sortedWeeks[0]} to ${sortedWeeks[sortedWeeks.length - 1]}`;
+        if (periodsUsed.length > 0) {
+          return `${dataSourceLabel} • Weeks: ${dateRange}, Periods: Q2-Q4 2024 + Monthly 2025`;
+        }
+        return `${dataSourceLabel} • ${dateRange}`;
+      }
+      return dataSourceLabel;
+    };
     
     // Calculate profit per unit trends (recent 4 weeks vs prior 4 weeks)
     const skuProfitTrends = Object.entries(skuWeeklyData)
-      .filter(([key, data]) => data.channel === 'Amazon' && Object.keys(data.weeks).length >= 2)
+      .filter(([key, data]) => Object.keys(data.weeks).length >= 2)
       .map(([key, data]) => {
         const weekDates = Object.keys(data.weeks).sort();
         const recentWeekDates = weekDates.slice(-4);
@@ -19279,16 +19350,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         
         recentWeekDates.forEach(w => {
           const d = data.weeks[w];
-          recentUnits += d.units;
-          recentProfit += d.profit;
-          recentFees += d.fees;
+          recentUnits += d.units || 0;
+          recentProfit += d.profit || 0;
+          recentFees += d.fees || 0;
         });
         
         olderWeekDates.forEach(w => {
           const d = data.weeks[w];
-          olderUnits += d.units;
-          olderProfit += d.profit;
-          olderFees += d.fees;
+          olderUnits += d.units || 0;
+          olderProfit += d.profit || 0;
+          olderFees += d.fees || 0;
         });
         
         const recentPPU = recentUnits > 0 ? recentProfit / recentUnits : 0;
@@ -19302,7 +19373,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         
         return {
           sku: data.sku,
-          name: data.name,
+          name: savedProductNames[data.sku] || data.name,
           channel: data.channel,
           weeklyData: weekDates.slice(-8).map(w => ({ week: w, ...data.weeks[w] })),
           recentPPU,
@@ -19325,6 +19396,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     const allSkus = Object.values(skuAggregates).map(s => ({
       ...s,
+      channel: s.channels?.join(' + ') || 'Unknown',
       profitPerUnit: s.units > 0 ? s.profit / s.units : 0,
       margin: s.revenue > 0 ? (s.profit / s.revenue) * 100 : 0,
     }));
@@ -19333,11 +19405,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const topByProfit = [...allSkus].sort((a, b) => b.profit - a.profit).slice(0, 10);
     const topByProfitPerUnit = [...allSkus].filter(s => s.units >= 5).sort((a, b) => b.profitPerUnit - a.profitPerUnit).slice(0, 10);
     
-    // Calculate growth rates
+    // Calculate growth rates - use baseSku directly now
     const skusWithGrowth = allSkus.map(s => {
-      const key = s.channel === 'Shopify' ? 'shop_' + s.sku : s.sku;
-      const recent = skuRecentData[key]?.revenue || 0;
-      const older = skuOlderData[key]?.revenue || 0;
+      const recent = skuRecentData[s.sku]?.revenue || 0;
+      const older = skuOlderData[s.sku]?.revenue || 0;
       const growth = older > 0 ? ((recent - older) / older) * 100 : (recent > 0 ? 100 : 0);
       return { ...s, recentRev: recent, olderRev: older, growth };
     }).filter(s => s.recentRev > 0 || s.olderRev > 0);
@@ -19361,7 +19432,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             <thead>
               <tr className="border-b border-slate-700">
                 <th className="text-left text-slate-400 font-medium py-2">#</th>
-                <th className="text-left text-slate-400 font-medium py-2">SKU</th>
+                <th className="text-left text-slate-400 font-medium py-2">Product</th>
                 <th className="text-left text-slate-400 font-medium py-2">Channel</th>
                 <th className="text-right text-slate-400 font-medium py-2">Revenue</th>
                 <th className="text-right text-slate-400 font-medium py-2">Units</th>
@@ -19375,8 +19446,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {data.map((s, i) => (
                 <tr key={s.sku + s.channel + i} className="border-b border-slate-700/50 hover:bg-slate-700/30">
                   <td className="py-2 text-slate-500">{i + 1}</td>
-                  <td className="py-2"><div className="max-w-[200px] truncate text-white" title={s.name}>{s.sku}</div></td>
-                  <td className="py-2"><span className={`text-xs px-2 py-0.5 rounded ${s.channel === 'Amazon' ? 'bg-orange-500/20 text-orange-400' : 'bg-blue-500/20 text-blue-400'}`}>{s.channel}</span></td>
+                  <td className="py-2"><div className="max-w-[200px] truncate text-white" title={savedProductNames[s.sku] || s.name || s.sku}>{savedProductNames[s.sku] || s.name || s.sku}</div></td>
+                  <td className="py-2"><span className={`text-xs px-2 py-0.5 rounded ${s.channel === 'Amazon' ? 'bg-orange-500/20 text-orange-400' : s.channel === 'Amazon + Shopify' ? 'bg-purple-500/20 text-purple-400' : 'bg-green-500/20 text-green-400'}`}>{s.channel}</span></td>
                   <td className="py-2 text-right text-white">{formatCurrency(s.revenue)}</td>
                   <td className="py-2 text-right text-white">{formatNumber(s.units)}</td>
                   {showProfit && <td className={`py-2 text-right ${s.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profit)}</td>}
@@ -19406,9 +19477,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             <div className="flex flex-wrap gap-2">
               {[
                 { key: '4weeks', label: '4 Weeks' },
-                { key: '8weeks', label: '8 Weeks' },
-                { key: '12weeks', label: '12 Weeks' },
-                { key: 'ytd', label: 'YTD' },
+                { key: 'ytd', label: '2026 YTD' },
+                { key: '2025', label: '2025' },
+                { key: '2024', label: '2024' },
                 { key: 'all', label: 'All Time' },
               ].map(r => (
                 <button
@@ -19430,9 +19501,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 text-center">
               <p className="text-3xl font-bold text-white">{allSkus.length}</p>
-              <p className="text-slate-400 text-sm">SKUs with Sales</p>
+              <p className="text-slate-400 text-sm">Products with Sales</p>
               <p className="text-slate-500 text-xs mt-1">
-                {sortedWeeks.length} weeks filtered
+                {sortedWeeks.length > 0 && periodsUsed.length > 0 
+                  ? `${sortedWeeks.length} weeks + ${periodsUsed.length} periods`
+                  : sortedWeeks.length > 0 
+                    ? `${sortedWeeks.length} weeks`
+                    : `${periodsUsed.length} periods`
+                }
               </p>
             </div>
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 text-center">
@@ -19471,7 +19547,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     {decliningProfitability.slice(0, 5).map(s => (
                       <div key={s.sku} className="flex items-center justify-between py-2 border-b border-slate-700/50 last:border-0">
                         <div className="flex-1 min-w-0">
-                          <p className="text-white text-sm font-medium truncate">{s.sku}</p>
+                          <p className="text-white text-sm font-medium truncate" title={s.name || s.sku}>{s.name || s.sku}</p>
                           <p className="text-slate-500 text-xs">{s.totalUnits} units</p>
                         </div>
                         <div className="text-right ml-3">
@@ -19498,7 +19574,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     {improvingProfitability.slice(0, 5).map(s => (
                       <div key={s.sku} className="flex items-center justify-between py-2 border-b border-slate-700/50 last:border-0">
                         <div className="flex-1 min-w-0">
-                          <p className="text-white text-sm font-medium truncate">{s.sku}</p>
+                          <p className="text-white text-sm font-medium truncate" title={s.name || s.sku}>{s.name || s.sku}</p>
                           <p className="text-slate-500 text-xs">{s.totalUnits} units</p>
                         </div>
                         <div className="text-right ml-3">
