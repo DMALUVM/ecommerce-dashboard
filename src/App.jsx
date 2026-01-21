@@ -24949,6 +24949,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const totalAnnualRecurring = totalMonthlyRecurring * 12;
     
     // Calculate EOY projection using recurring expenses
+    const today = new Date();
     const currentMonth = today.getMonth(); // 0-11
     const remainingMonths = 12 - currentMonth - 1; // Months left in year (not counting current)
     const projectedRecurringCosts = totalMonthlyRecurring * remainingMonths;
