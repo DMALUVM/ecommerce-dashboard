@@ -2154,6 +2154,7 @@ const createStore = useCallback(async (name) => {
 const switchStore = useCallback(async (storeId) => {
   if (storeId === activeStoreId) {
     setShowStoreSelector(false);
+    setShowStoreModal(false);
     return;
   }
   
@@ -2167,6 +2168,7 @@ const switchStore = useCallback(async (storeId) => {
   const store = stores.find(s => s.id === storeId);
   setToast({ message: `Switched to "${store?.name || 'store'}"`, type: 'success' });
   setShowStoreSelector(false);
+  setShowStoreModal(false);
 }, [activeStoreId, stores, combinedData, pushToCloudNow, loadFromCloud]);
 
 const deleteStore = useCallback(async (storeId) => {
@@ -21793,7 +21795,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   <Store className="w-8 h-8 text-violet-400" />
                   <div className="flex-1">
                     <input 
-                      defaultValue={storeName || ''} 
+                      key={`store-name-${activeStoreId}`}
+                      defaultValue={storeName || stores.find(s => s.id === activeStoreId)?.name || ''} 
                       onBlur={(e) => {
                         const newName = e.target.value;
                         setStoreName(newName);
@@ -21817,9 +21820,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </div>
               
               {/* All Stores */}
-              {stores.length > 1 && (
+              {stores.length >= 1 && (
                 <div className="space-y-2 mb-4">
-                  <p className="text-slate-400 text-xs uppercase">Switch Store</p>
+                  <p className="text-slate-400 text-xs uppercase">
+                    {stores.length > 1 ? 'Switch Store' : 'Your Store'}
+                  </p>
                   {stores.map(store => (
                     <div key={store.id} className={`flex items-center justify-between p-3 rounded-xl border ${store.id === activeStoreId ? 'bg-violet-900/30 border-violet-500/50' : 'bg-slate-800/30 border-slate-700 hover:bg-slate-700/50'}`}>
                       <div className="flex items-center gap-3">
@@ -21827,14 +21832,25 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <span className={store.id === activeStoreId ? 'text-white font-medium' : 'text-slate-300'}>{store.name}</span>
                         {store.id === activeStoreId && <span className="text-xs text-violet-400 bg-violet-500/20 px-2 py-0.5 rounded">Active</span>}
                       </div>
-                      {store.id !== activeStoreId && (
-                        <button 
-                          onClick={() => switchStore(store.id)}
-                          className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"
-                        >
-                          Switch
-                        </button>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {store.id !== activeStoreId && (
+                          <button 
+                            onClick={() => switchStore(store.id)}
+                            className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"
+                          >
+                            Switch
+                          </button>
+                        )}
+                        {stores.length > 1 && (
+                          <button 
+                            onClick={() => deleteStore(store.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
+                            title="Delete store"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
