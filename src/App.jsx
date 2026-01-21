@@ -12266,7 +12266,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         },
         dataSource,
         inventoryAlerts: inventoryAlerts.length,
-        forecastWeeks: forecastInfo.upcoming.length,
+        forecastWeeks: Object.keys(amazonForecasts).length,
       };
 
       setCurrentReport(newReport);
