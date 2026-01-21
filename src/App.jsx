@@ -10552,8 +10552,7 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
     // 2025: Use monthly period data (no weekly breakdown available)
     // 2024: Use quarterly period data
     const weeks2026 = weeksSummary.filter(w => w.weekKey && w.weekKey.startsWith('2026') && w.totalRevenue > 0);
-    const months2025 = periodsSummary.filter(p => p.period.includes('2025') && p.type === 'monthly');
-    const quarters2024 = periodsSummary.filter(p => p.period.includes('2024') && p.type === 'quarterly');
+    // Note: months2025 and quarters2024 already defined above in YoY section
     
     const allTimeRevenue = 
       weeks2026.reduce((s, w) => s + w.totalRevenue, 0) +
@@ -24954,7 +24953,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     )}
                   </div>
                 );
-              }()}
+              })()}
             </>
           )}
         </div>
