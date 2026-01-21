@@ -927,7 +927,7 @@ export default function Dashboard() {
   const [threeplCustomEnd, setThreeplCustomEnd] = useState('');
   const [uploadTab, setUploadTab] = useState('weekly'); // For upload view tabs: 'daily' | 'weekly' | 'period'
   const [dashboardRange, setDashboardRange] = useState('month'); // 'yesterday' | 'week' | 'month' | 'quarter' | 'year'
-  const [trendsTab, setTrendsTab] = useState('weekly'); // 'daily' | 'weekly' | 'monthly' | 'yearly' for trends view
+  const [trendsTab, setTrendsTab] = useState('daily'); // 'daily' | 'weekly' | 'monthly' | 'yearly' for trends view
   const [trendsChannel, setTrendsChannel] = useState('combined'); // 'amazon' | 'shopify' | 'combined' for trends filtering
   const [dailyFiles, setDailyFiles] = useState({ amazon: null, shopify: null }); // Daily upload files
   const [dailyAdSpend, setDailyAdSpend] = useState({ meta: '', google: '' }); // Daily ad spend inputs
@@ -9897,28 +9897,88 @@ Analyze the data and respond with ONLY this JSON:
     
     // PDF Upload and AI extraction
     const handlePdfUpload = async (file) => {
-      if (!file || !file.type.includes('pdf')) {
-        alert('Please upload a PDF file');
+      if (!file) return;
+      
+      const fileName = file.name.toLowerCase();
+      const isPdf = file.type.includes('pdf') || fileName.endsWith('.pdf');
+      const isExcel = fileName.endsWith('.xlsx') || fileName.endsWith('.xls') || file.type.includes('spreadsheet') || file.type.includes('excel');
+      const isCsv = fileName.endsWith('.csv') || file.type.includes('csv');
+      
+      if (!isPdf && !isExcel && !isCsv) {
+        alert('Please upload a PDF, Excel (.xlsx/.xls), or CSV file');
         return;
       }
       
       setProcessingPdf(true);
       
       try {
-        // Convert PDF to base64
-        const base64 = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result.split(',')[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
+        let textContent = '';
         
-        // Send to AI to extract invoice details
-        const response = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            system: `You are an invoice data extractor. Extract the following from the invoice and respond ONLY with valid JSON, no other text:
+        if (isCsv) {
+          // Handle CSV directly
+          textContent = await file.text();
+        } else if (isExcel) {
+          // Handle Excel files using SheetJS
+          const xlsxLib = await loadXLSX();
+          const arrayBuffer = await file.arrayBuffer();
+          const workbook = xlsxLib.read(arrayBuffer, { type: 'array' });
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          textContent = xlsxLib.utils.sheet_to_csv(firstSheet);
+        }
+        
+        if (isCsv || isExcel) {
+          // Parse CSV/Excel content with AI
+          const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              system: `You are an invoice data extractor. Extract the following from this invoice/bill data and respond ONLY with valid JSON, no other text:
+{
+  "vendor": "company name",
+  "description": "brief description of what this invoice is for",
+  "amount": number (just the number, no currency symbol),
+  "dueDate": "YYYY-MM-DD format",
+  "category": one of: "operations", "inventory", "marketing", "software", "shipping", "taxes", "other"
+}
+If you cannot find a field, use null. For dueDate, if only month/year given, use the 1st of that month. Look for amounts, totals, due dates, vendor names in the data.`,
+              messages: [{ 
+                role: 'user', 
+                content: `Extract invoice details from this data:\n\n${textContent.slice(0, 5000)}`
+              }]
+            }),
+          });
+          
+          if (!response.ok) throw new Error('API error');
+          const data = await response.json();
+          const text = data.content?.[0]?.text || data.content || '';
+          
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const extracted = JSON.parse(jsonMatch[0]);
+            setInvoiceForm(prev => ({
+              ...prev,
+              vendor: extracted.vendor || prev.vendor,
+              description: extracted.description || prev.description,
+              amount: extracted.amount?.toString() || prev.amount,
+              dueDate: extracted.dueDate || prev.dueDate,
+              category: extracted.category || prev.category,
+            }));
+          }
+        } else {
+          // Handle PDF with vision
+          const base64 = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+          
+          // Send to AI to extract invoice details
+          const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              system: `You are an invoice data extractor. Extract the following from the invoice and respond ONLY with valid JSON, no other text:
 {
   "vendor": "company name",
   "description": "brief description of what this invoice is for",
@@ -9927,35 +9987,36 @@ Analyze the data and respond with ONLY this JSON:
   "category": one of: "operations", "inventory", "marketing", "software", "shipping", "taxes", "other"
 }
 If you cannot find a field, use null. For dueDate, if only month/year given, use the 1st of that month.`,
-            messages: [{ 
-              role: 'user', 
-              content: [
-                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 }},
-                { type: 'text', text: 'Extract the invoice details from this PDF.' }
-              ]
-            }]
-          }),
-        });
-        
-        if (!response.ok) throw new Error('API error');
-        const data = await response.json();
-        const text = data.content?.[0]?.text || data.content || '';
-        
-        // Parse the JSON response
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const extracted = JSON.parse(jsonMatch[0]);
-          setInvoiceForm(prev => ({
-            ...prev,
-            vendor: extracted.vendor || prev.vendor,
-            description: extracted.description || prev.description,
-            amount: extracted.amount?.toString() || prev.amount,
-            dueDate: extracted.dueDate || prev.dueDate,
-            category: extracted.category || prev.category,
-          }));
+              messages: [{ 
+                role: 'user', 
+                content: [
+                  { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 }},
+                  { type: 'text', text: 'Extract the invoice details from this PDF.' }
+                ]
+              }]
+            }),
+          });
+          
+          if (!response.ok) throw new Error('API error');
+          const data = await response.json();
+          const text = data.content?.[0]?.text || data.content || '';
+          
+          // Parse the JSON response
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const extracted = JSON.parse(jsonMatch[0]);
+            setInvoiceForm(prev => ({
+              ...prev,
+              vendor: extracted.vendor || prev.vendor,
+              description: extracted.description || prev.description,
+              amount: extracted.amount?.toString() || prev.amount,
+              dueDate: extracted.dueDate || prev.dueDate,
+              category: extracted.category || prev.category,
+            }));
+          }
         }
       } catch (error) {
-        console.error('PDF extraction error:', error);
+        console.error('File extraction error:', error);
         alert('Could not extract invoice details. Please enter manually.');
       } finally {
         setProcessingPdf(false);
@@ -9985,7 +10046,7 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
             {/* PDF Upload */}
             <div className="mb-4">
               <label className={`flex items-center justify-center gap-2 p-3 border-2 border-dashed rounded-xl cursor-pointer transition-all ${processingPdf ? 'border-violet-500 bg-violet-950/30' : 'border-slate-600 hover:border-slate-500'}`}>
-                <input type="file" accept=".pdf" onChange={(e) => e.target.files[0] && handlePdfUpload(e.target.files[0])} className="hidden" disabled={processingPdf} />
+                <input type="file" accept=".pdf,.xlsx,.xls,.csv" onChange={(e) => e.target.files[0] && handlePdfUpload(e.target.files[0])} className="hidden" disabled={processingPdf} />
                 {processingPdf ? (
                   <>
                     <RefreshCw className="w-5 h-5 text-violet-400 animate-spin" />
@@ -9994,7 +10055,7 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
                 ) : (
                   <>
                     <Upload className="w-5 h-5 text-slate-400" />
-                    <span className="text-slate-400">Upload PDF to auto-fill</span>
+                    <span className="text-slate-400">Upload PDF, Excel, or CSV to auto-fill</span>
                   </>
                 )}
               </label>
@@ -19391,8 +19452,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       .filter(s => s.totalUnits >= 5) // Only SKUs with meaningful volume
       .sort((a, b) => a.ppuChange - b.ppuChange); // Sort by biggest decline first
     
-    const decliningProfitability = skuProfitTrends.filter(s => s.ppuChange < -0.5).slice(0, 10);
-    const improvingProfitability = skuProfitTrends.filter(s => s.ppuChange > 0.5).sort((a, b) => b.ppuChange - a.ppuChange).slice(0, 10);
+    // Only include SKUs that have data in BOTH periods (older AND recent) to show accurate trends
+    const decliningProfitability = skuProfitTrends.filter(s => s.ppuChange < -0.5 && s.olderUnits > 0 && s.recentUnits > 0).slice(0, 10);
+    const improvingProfitability = skuProfitTrends.filter(s => s.ppuChange > 0.5 && s.olderUnits > 0 && s.recentUnits > 0).sort((a, b) => b.ppuChange - a.ppuChange).slice(0, 10);
     
     const allSkus = Object.values(skuAggregates).map(s => ({
       ...s,
@@ -20093,91 +20155,195 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           )}
           
           {/* TOTAL FORECAST TAB */}
-          {analyticsTab === 'forecast' && generateForecast && (
+          {analyticsTab === 'forecast' && (aiForecasts?.salesForecast || generateForecast) && (
             <div className="space-y-6">
-              {/* Learning Status Banner */}
-              {enhancedForecast && (
-                <div className={`rounded-xl p-4 flex items-center justify-between ${enhancedForecast.corrected ? 'bg-purple-900/30 border border-purple-500/30' : 'bg-slate-800/50 border border-slate-700'}`}>
-                  <div className="flex items-center gap-3">
-                    <Brain className={`w-5 h-5 ${enhancedForecast.corrected ? 'text-purple-400' : 'text-slate-400'}`} />
-                    <div>
-                      <p className={`font-medium ${enhancedForecast.corrected ? 'text-purple-300' : 'text-slate-300'}`}>
-                        AI Self-Learning: {enhancedForecast.corrected ? 'ACTIVE' : 'Training'}
-                      </p>
-                      <p className="text-xs text-slate-400">{enhancedForecast.correctionNote}</p>
+              {/* AI Forecast from Dashboard (Multi-Signal) - Preferred */}
+              {aiForecasts?.salesForecast?.next4Weeks?.[0] && (
+                <>
+                  <div className="bg-gradient-to-br from-purple-900/30 to-indigo-900/20 rounded-xl border border-purple-500/30 p-4 mb-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Brain className="w-5 h-5 text-purple-400" />
+                        <span className="text-purple-300 font-medium">Multi-Signal AI Forecast</span>
+                      </div>
+                      <button 
+                        onClick={generateAIForecasts}
+                        disabled={aiForecastLoading}
+                        className="text-xs text-purple-400 hover:text-purple-300 flex items-center gap-1"
+                      >
+                        {aiForecastLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                        {aiForecastLoading ? 'Analyzing...' : 'Refresh'}
+                      </button>
                     </div>
+                    {aiForecasts.calculatedSignals && (
+                      <div className="mt-2 flex gap-4 text-xs text-slate-400">
+                        <span>📊 Daily avg: {formatCurrency(aiForecasts.calculatedSignals.dailyAvg7)}/day</span>
+                        <span>📈 Momentum: {aiForecasts.calculatedSignals.momentum > 0 ? '+' : ''}{aiForecasts.calculatedSignals.momentum?.toFixed(1)}%</span>
+                        {aiForecasts.dataPoints?.amazonForecastWeeks > 0 && (
+                          <span>🛒 Amazon: {aiForecasts.dataPoints.amazonForecastWeeks} weeks</span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  {enhancedForecast.learningStatus && (
-                    <div className="text-right text-xs">
-                      <p className="text-slate-400">{enhancedForecast.learningStatus.samples} samples</p>
-                      <p className={enhancedForecast.corrected ? 'text-purple-400' : 'text-slate-500'}>{enhancedForecast.learningStatus.confidence.toFixed(0)}% confidence</p>
+                  
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 rounded-2xl border border-emerald-500/30 p-6">
+                      <p className="text-emerald-400 text-sm font-medium mb-1">Next Week Prediction</p>
+                      <p className="text-3xl font-bold text-white">{formatCurrency(aiForecasts.salesForecast.next4Weeks[0].predictedRevenue || 0)}</p>
+                      <p className="text-slate-400 text-sm mt-1">
+                        {aiForecasts.salesForecast.next4Weeks[0].confidence} confidence
+                      </p>
                     </div>
-                  )}
-                </div>
-              )}
-              
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 rounded-2xl border border-emerald-500/30 p-6">
-                  <p className="text-emerald-400 text-sm font-medium mb-1">Projected Monthly Revenue</p>
-                  <p className="text-3xl font-bold text-white">{formatCurrency((enhancedForecast || generateForecast).monthly.revenue)}</p>
-                  {enhancedForecast?.corrected && enhancedForecast.originalMonthly && (
-                    <p className="text-xs text-slate-500 mt-1">
-                      Original: {formatCurrency(enhancedForecast.originalMonthly.revenue)} → Corrected
-                    </p>
-                  )}
-                  <p className={`text-sm mt-1 flex items-center gap-1 ${generateForecast.trend.revenue === 'up' ? 'text-emerald-400' : generateForecast.trend.revenue === 'down' ? 'text-rose-400' : 'text-slate-400'}`}>
-                    {generateForecast.trend.revenue === 'up' ? <TrendingUp className="w-4 h-4" /> : generateForecast.trend.revenue === 'down' ? <TrendingDown className="w-4 h-4" /> : <Minus className="w-4 h-4" />}
-                    {generateForecast.trend.revenueChange > 0 ? '+' : ''}{generateForecast.trend.revenueChange.toFixed(1)}% weekly trend
-                  </p>
-                </div>
-                <div className={`rounded-2xl border p-6 ${(enhancedForecast || generateForecast).monthly.profit >= 0 ? 'bg-gradient-to-br from-blue-900/40 to-blue-800/20 border-blue-500/30' : 'bg-gradient-to-br from-rose-900/40 to-rose-800/20 border-rose-500/30'}`}>
-                  <p className={`text-sm font-medium mb-1 ${(enhancedForecast || generateForecast).monthly.profit >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>Projected Monthly Profit</p>
-                  <p className="text-3xl font-bold text-white">{formatCurrency((enhancedForecast || generateForecast).monthly.profit)}</p>
-                  {goals.monthlyProfit > 0 && (
-                    <p className={`text-sm mt-1 ${(enhancedForecast || generateForecast).monthly.profit >= goals.monthlyProfit ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {(enhancedForecast || generateForecast).monthly.profit >= goals.monthlyProfit ? '✓ On track for goal' : `${formatCurrency(goals.monthlyProfit - (enhancedForecast || generateForecast).monthly.profit)} below goal`}
-                    </p>
-                  )}
-                </div>
-                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
-                  <p className="text-slate-400 text-sm font-medium mb-1">Projected Monthly Units</p>
-                  <p className="text-3xl font-bold text-white">{formatNumber((enhancedForecast || generateForecast).monthly.units)}</p>
-                  <p className="text-slate-500 text-sm mt-1">Confidence: {generateForecast.confidence}%</p>
-                </div>
-              </div>
-              
-              <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
-                <h3 className="text-lg font-semibold text-white mb-4">Weekly Projections</h3>
-                <div className="grid grid-cols-4 gap-4">
-                  {(enhancedForecast || generateForecast).weekly.map((w, i) => (
-                    <div key={i} className="bg-slate-900/50 rounded-xl p-4 text-center">
-                      <p className="text-slate-500 text-sm mb-2">{w.week}</p>
-                      <p className="text-xl font-bold text-white">{formatCurrency(w.revenue)}</p>
-                      <p className={`text-sm ${w.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(w.profit)} profit</p>
-                      <p className="text-slate-500 text-xs mt-1">{w.units} units</p>
-                      {w.correctionApplied && (
-                        <p className="text-purple-400 text-xs mt-1">✨ AI-corrected</p>
+                    <div className={`rounded-2xl border p-6 ${(aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0) >= 0 ? 'bg-gradient-to-br from-blue-900/40 to-blue-800/20 border-blue-500/30' : 'bg-gradient-to-br from-rose-900/40 to-rose-800/20 border-rose-500/30'}`}>
+                      <p className={`text-sm font-medium mb-1 ${(aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0) >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>Next Week Profit</p>
+                      <p className="text-3xl font-bold text-white">{formatCurrency(aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0)}</p>
+                      {goals.weeklyProfit > 0 && (
+                        <p className={`text-sm mt-1 ${(aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0) >= goals.weeklyProfit ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          {(aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0) >= goals.weeklyProfit ? '✓ On track' : `${formatCurrency(goals.weeklyProfit - (aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0))} below goal`}
+                        </p>
                       )}
                     </div>
-                  ))}
-                </div>
-              </div>
+                    <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+                      <p className="text-slate-400 text-sm font-medium mb-1">Next Week Units</p>
+                      <p className="text-3xl font-bold text-white">{formatNumber(aiForecasts.salesForecast.next4Weeks[0].predictedUnits || 0)}</p>
+                      <p className="text-slate-500 text-sm mt-1">Daily avg: {formatNumber(Math.round((aiForecasts.salesForecast.next4Weeks[0].predictedUnits || 0) / 7))}/day</p>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+                    <h3 className="text-lg font-semibold text-white mb-4">4-Week Projections</h3>
+                    <div className="grid grid-cols-4 gap-4">
+                      {aiForecasts.salesForecast.next4Weeks.map((w, i) => (
+                        <div key={i} className="bg-slate-900/50 rounded-xl p-4 text-center">
+                          <p className="text-slate-500 text-sm mb-2">Week {i + 1}</p>
+                          <p className="text-xl font-bold text-white">{formatCurrency(w.predictedRevenue || 0)}</p>
+                          <p className={`text-sm ${(w.predictedProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(w.predictedProfit || 0)} profit</p>
+                          <p className="text-slate-500 text-xs mt-1">{w.predictedUnits || 0} units</p>
+                          <p className="text-purple-400 text-xs mt-1">{w.confidence}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <p className="text-slate-500 text-sm text-center">
+                    Multi-signal forecast using daily trends, weekly patterns, momentum analysis
+                    {aiForecasts.dataPoints?.amazonForecastWeeks > 0 && ` + ${aiForecasts.dataPoints.amazonForecastWeeks} Amazon forecast weeks`}
+                  </p>
+                </>
+              )}
               
-              <p className="text-slate-500 text-sm text-center">
-                Based on {generateForecast.basedOn} weeks of historical data
-                {generateForecast.amazonBlended && ' + Amazon forecast data'}
-                {generateForecast.periodsAvailable > 0 && ` + ${generateForecast.periodsAvailable} historical periods for seasonality`}
-                {generateForecast.seasonalityApplied && ` (${((generateForecast.seasonalityApplied - 1) * 100).toFixed(0)}% YoY adjustment)`}
-                {enhancedForecast?.corrected && ' + AI self-learning corrections'}
-              </p>
+              {/* Fallback to generateForecast if no aiForecasts */}
+              {!aiForecasts?.salesForecast?.next4Weeks?.[0] && generateForecast && (
+                <>
+                  {/* Learning Status Banner */}
+                  {enhancedForecast && (
+                    <div className={`rounded-xl p-4 flex items-center justify-between ${enhancedForecast.corrected ? 'bg-purple-900/30 border border-purple-500/30' : 'bg-slate-800/50 border border-slate-700'}`}>
+                      <div className="flex items-center gap-3">
+                        <Brain className={`w-5 h-5 ${enhancedForecast.corrected ? 'text-purple-400' : 'text-slate-400'}`} />
+                        <div>
+                          <p className={`font-medium ${enhancedForecast.corrected ? 'text-purple-300' : 'text-slate-300'}`}>
+                            AI Self-Learning: {enhancedForecast.corrected ? 'ACTIVE' : 'Training'}
+                          </p>
+                          <p className="text-xs text-slate-400">{enhancedForecast.correctionNote}</p>
+                        </div>
+                      </div>
+                      {enhancedForecast.learningStatus && (
+                        <div className="text-right text-xs">
+                          <p className="text-slate-400">{enhancedForecast.learningStatus.samples} samples</p>
+                          <p className={enhancedForecast.corrected ? 'text-purple-400' : 'text-slate-500'}>{enhancedForecast.learningStatus.confidence.toFixed(0)}% confidence</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Generate AI Forecast Button */}
+                  <div className="bg-purple-900/20 border border-purple-500/30 rounded-xl p-4 flex items-center justify-between">
+                    <div>
+                      <p className="text-purple-300 font-medium">Upgrade to Multi-Signal AI Forecast</p>
+                      <p className="text-slate-400 text-sm">Get more accurate predictions using daily data, momentum, and Amazon forecasts</p>
+                    </div>
+                    <button 
+                      onClick={generateAIForecasts}
+                      disabled={aiForecastLoading}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 rounded-lg text-white text-sm flex items-center gap-2"
+                    >
+                      {aiForecastLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
+                      {aiForecastLoading ? 'Analyzing...' : 'Generate AI Forecast'}
+                    </button>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 rounded-2xl border border-emerald-500/30 p-6">
+                      <p className="text-emerald-400 text-sm font-medium mb-1">Projected Monthly Revenue</p>
+                      <p className="text-3xl font-bold text-white">{formatCurrency((enhancedForecast || generateForecast).monthly.revenue)}</p>
+                      {enhancedForecast?.corrected && enhancedForecast.originalMonthly && (
+                        <p className="text-xs text-slate-500 mt-1">
+                          Original: {formatCurrency(enhancedForecast.originalMonthly.revenue)} → Corrected
+                        </p>
+                      )}
+                      <p className={`text-sm mt-1 flex items-center gap-1 ${generateForecast.trend.revenue === 'up' ? 'text-emerald-400' : generateForecast.trend.revenue === 'down' ? 'text-rose-400' : 'text-slate-400'}`}>
+                        {generateForecast.trend.revenue === 'up' ? <TrendingUp className="w-4 h-4" /> : generateForecast.trend.revenue === 'down' ? <TrendingDown className="w-4 h-4" /> : <Minus className="w-4 h-4" />}
+                        {generateForecast.trend.revenueChange > 0 ? '+' : ''}{generateForecast.trend.revenueChange.toFixed(1)}% weekly trend
+                      </p>
+                    </div>
+                    <div className={`rounded-2xl border p-6 ${(enhancedForecast || generateForecast).monthly.profit >= 0 ? 'bg-gradient-to-br from-blue-900/40 to-blue-800/20 border-blue-500/30' : 'bg-gradient-to-br from-rose-900/40 to-rose-800/20 border-rose-500/30'}`}>
+                      <p className={`text-sm font-medium mb-1 ${(enhancedForecast || generateForecast).monthly.profit >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>Projected Monthly Profit</p>
+                      <p className="text-3xl font-bold text-white">{formatCurrency((enhancedForecast || generateForecast).monthly.profit)}</p>
+                      {goals.monthlyProfit > 0 && (
+                        <p className={`text-sm mt-1 ${(enhancedForecast || generateForecast).monthly.profit >= goals.monthlyProfit ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          {(enhancedForecast || generateForecast).monthly.profit >= goals.monthlyProfit ? '✓ On track for goal' : `${formatCurrency(goals.monthlyProfit - (enhancedForecast || generateForecast).monthly.profit)} below goal`}
+                        </p>
+                      )}
+                    </div>
+                    <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+                      <p className="text-slate-400 text-sm font-medium mb-1">Projected Monthly Units</p>
+                      <p className="text-3xl font-bold text-white">{formatNumber((enhancedForecast || generateForecast).monthly.units)}</p>
+                      <p className="text-slate-500 text-sm mt-1">Confidence: {generateForecast.confidence}%</p>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+                    <h3 className="text-lg font-semibold text-white mb-4">Weekly Projections</h3>
+                    <div className="grid grid-cols-4 gap-4">
+                      {(enhancedForecast || generateForecast).weekly.map((w, i) => (
+                        <div key={i} className="bg-slate-900/50 rounded-xl p-4 text-center">
+                          <p className="text-slate-500 text-sm mb-2">{w.week}</p>
+                          <p className="text-xl font-bold text-white">{formatCurrency(w.revenue)}</p>
+                          <p className={`text-sm ${w.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(w.profit)} profit</p>
+                          <p className="text-slate-500 text-xs mt-1">{w.units} units</p>
+                          {w.correctionApplied && (
+                            <p className="text-purple-400 text-xs mt-1">✨ AI-corrected</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <p className="text-slate-500 text-sm text-center">
+                    Based on {generateForecast.basedOn} weeks of historical data
+                    {generateForecast.amazonBlended && ' + Amazon forecast data'}
+                    {generateForecast.periodsAvailable > 0 && ` + ${generateForecast.periodsAvailable} historical periods for seasonality`}
+                    {generateForecast.seasonalityApplied && ` (${((generateForecast.seasonalityApplied - 1) * 100).toFixed(0)}% YoY adjustment)`}
+                    {enhancedForecast?.corrected && ' + AI self-learning corrections'}
+                  </p>
+                </>
+              )}
             </div>
           )}
           
-          {analyticsTab === 'forecast' && !generateForecast && (
+          {analyticsTab === 'forecast' && !generateForecast && !aiForecasts?.salesForecast && (
             <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-12 text-center">
               <TrendingUp className="w-12 h-12 text-slate-600 mx-auto mb-4" />
-              <p className="text-slate-400 text-lg">Need at least 4 weeks of data for forecasting</p>
-              <p className="text-slate-500 text-sm mt-2">Currently have {sortedWeeks.length} week(s)</p>
+              <p className="text-slate-400 text-lg">Need data for forecasting</p>
+              <p className="text-slate-500 text-sm mt-2">Upload at least 4 weeks of data or 7+ days of daily data</p>
+              <button 
+                onClick={generateAIForecasts}
+                disabled={aiForecastLoading || (Object.keys(allWeeksData).length < 2 && Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length < 7)}
+                className="mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 disabled:text-slate-500 rounded-lg text-white text-sm flex items-center gap-2 mx-auto"
+              >
+                {aiForecastLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
+                {aiForecastLoading ? 'Analyzing...' : 'Generate AI Forecast'}
+              </button>
             </div>
           )}
           
@@ -20880,7 +21046,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   const isPositive = t.margin >= 0;
                   const isLast = i === marginTrends.length - 1;
                   return (
-                    <div key={t.period} className="flex-1 flex flex-col items-center group relative">
+                    <div key={t.period} className="flex-1 flex flex-col items-center group relative h-full">
                       <div className="absolute -top-16 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded whitespace-nowrap z-50 shadow-lg pointer-events-none">
                         <p className="font-medium">{t.period}</p>
                         <p className="text-slate-300">Revenue: {formatCurrency(t.revenue)}</p>
@@ -20889,10 +21055,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <p className="text-orange-300">Fees: {t.feesPct.toFixed(1)}%</p>
                         <p className="text-purple-300">Ads: {t.adsPct.toFixed(1)}%</p>
                       </div>
-                      <div className="w-full h-full flex items-end">
+                      <div className="w-full flex-1 flex items-end">
                         <div 
                           className={`w-full rounded-t transition-all hover:opacity-80 ${isPositive ? (isLast ? 'bg-emerald-500' : 'bg-emerald-500/60') : (isLast ? 'bg-rose-500' : 'bg-rose-500/60')}`}
-                          style={{ height: `${Math.max(height, 4)}%` }}
+                          style={{ height: `${Math.max(height, 8)}%` }}
                         />
                       </div>
                       <div className="mt-2 text-center">
@@ -24800,11 +24966,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   const isAmexPrime = nameLower.includes('prime') || nameLower.includes('amazon');
                   const isAmex = nameLower.includes('amex') || nameLower.includes('american express') || isAmexPlatinum || isAmexPrime;
                   
-                  // Get unpaid charges (last 60 days)
+                  // Get charges from the CURRENT statement cycle only (not yet closed or just recently closed)
+                  // Old charges from previous statement cycles are assumed to have been paid
                   const recentCharges = txns.filter(t => {
                     const txnDate = new Date(t.date + 'T12:00:00');
                     const daysSinceTxn = Math.floor((today - txnDate) / (1000 * 60 * 60 * 24));
-                    return daysSinceTxn >= 0 && daysSinceTxn < 60;
+                    // Only include charges from last 35 days (current statement cycle)
+                    // Older charges are from previous statements which should have been paid
+                    return daysSinceTxn >= 0 && daysSinceTxn < 35;
                   }).sort((a, b) => a.date.localeCompare(b.date));
                   
                   // Calculate payment schedule for each charge
@@ -24860,8 +25029,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     const daysUntilOptimal = Math.ceil((optimalPayDate - today) / (1000 * 60 * 60 * 24));
                     
                     // Is this charge urgent? (due within 10 days)
-                    const isUrgent = daysUntilDue <= 10;
-                    const isPastDue = daysUntilDue < 0;
+                    const isUrgent = daysUntilDue <= 10 && daysUntilDue > -5;
+                    // Only flag as past due if significantly overdue (5+ days) AND statement recently closed
+                    // This avoids false positives from old charges that were already paid
+                    const statementAge = Math.floor((today - statementCloseDate) / (1000 * 60 * 60 * 24));
+                    const isPastDue = daysUntilDue < -5 && statementAge < 60;
                     
                     return {
                       ...t,
