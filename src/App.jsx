@@ -5099,7 +5099,7 @@ const savePeriods = async (d) => {
   // COMPLETE BACKUP - includes ALL dashboard data
   const exportAll = () => { 
     const fullBackup = {
-      version: '2.5',
+      version: '3.0',
       exportedAt: new Date().toISOString(),
       storeName,
       storeLogo,
@@ -5112,7 +5112,8 @@ const savePeriods = async (d) => {
       // Settings & config
       goals,
       settings: appSettings,
-      salesTaxConfig,
+      salesTax: salesTaxConfig, // Renamed for consistency
+      salesTaxConfig, // Keep old name for backward compatibility
       productNames: savedProductNames,
       theme,
       widgetConfig,
@@ -5127,6 +5128,15 @@ const savePeriods = async (d) => {
       // Self-learning forecast data
       forecastAccuracyHistory,
       forecastCorrections,
+      aiForecasts,
+      leadTimeSettings,
+      aiForecastModule,
+      aiLearningHistory,
+      // AI & Reports
+      weeklyReports,
+      aiMessages,
+      // Banking data
+      bankingData,
     };
     const blob = new Blob([JSON.stringify(fullBackup, null, 2)], { type: 'application/json' }); 
     const a = document.createElement('a'); 
@@ -5137,7 +5147,7 @@ const savePeriods = async (d) => {
     const now = new Date().toISOString();
     localStorage.setItem('ecommerce_last_backup', now);
     setLastBackupDate(now);
-    setToast({ message: 'Backup downloaded successfully', type: 'success' });
+    setToast({ message: 'Complete backup downloaded (v3.0)', type: 'success' });
   };
   
   // COMPLETE RESTORE - restores ALL dashboard data
@@ -5148,10 +5158,15 @@ const savePeriods = async (d) => {
         const d = JSON.parse(e.target.result); 
         let restored = [];
         
+        // Build merged data for cloud sync
+        let mergedData = { ...combinedData };
+        
         // Core data
         if (d.sales && Object.keys(d.sales).length > 0) { 
-          setAllWeeksData(prev => ({...prev, ...d.sales})); 
-          await save({...allWeeksData, ...d.sales}); 
+          const mergedSales = {...allWeeksData, ...d.sales};
+          setAllWeeksData(mergedSales); 
+          await save(mergedSales); 
+          mergedData.sales = mergedSales;
           restored.push(`${Object.keys(d.sales).length} weeks`);
         }
         // Daily data
@@ -5159,91 +5174,109 @@ const savePeriods = async (d) => {
           const mergedDays = {...allDaysData, ...d.dailySales};
           setAllDaysData(mergedDays);
           lsSet('ecommerce_daily_sales_v1', JSON.stringify(mergedDays));
-          // Explicitly sync to cloud
-          if (session?.user?.id && supabase) {
-            queueCloudSave({ ...combinedData, dailySales: mergedDays });
-          }
+          mergedData.dailySales = mergedDays;
           restored.push(`${Object.keys(d.dailySales).length} days`);
         }
         if (d.inventory && Object.keys(d.inventory).length > 0) { 
-          setInvHistory(prev => ({...prev, ...d.inventory})); 
-          await saveInv({...invHistory, ...d.inventory}); 
+          const mergedInv = {...invHistory, ...d.inventory};
+          setInvHistory(mergedInv); 
+          await saveInv(mergedInv); 
+          mergedData.inventory = mergedInv;
           restored.push('inventory');
         } 
         if (d.cogs && Object.keys(d.cogs).length > 0) { 
           setSavedCogs(d.cogs); 
           await saveCogs(d.cogs); 
+          mergedData.cogs = { lookup: d.cogs, updatedAt: new Date().toISOString() };
           restored.push('COGS');
         } 
         if (d.periods && Object.keys(d.periods).length > 0) { 
-          setAllPeriodsData(prev => ({...prev, ...d.periods})); 
-          await savePeriods({...allPeriodsData, ...d.periods}); 
+          const mergedPeriods = {...allPeriodsData, ...d.periods};
+          setAllPeriodsData(mergedPeriods); 
+          await savePeriods(mergedPeriods); 
+          mergedData.periods = mergedPeriods;
           restored.push(`${Object.keys(d.periods).length} periods`);
         } 
         if (d.goals) { 
           setGoals(d.goals); 
           lsSet(GOALS_KEY, JSON.stringify(d.goals)); 
+          mergedData.goals = d.goals;
           restored.push('goals');
         } 
         if (d.storeName) { 
           setStoreName(d.storeName); 
           lsSet(STORE_KEY, d.storeName); 
+          mergedData.storeName = d.storeName;
         }
         
         // Settings & config
         if (d.settings) {
           setAppSettings(d.settings);
           lsSet(SETTINGS_KEY, JSON.stringify(d.settings));
+          mergedData.settings = d.settings;
           restored.push('settings');
         }
-        if (d.salesTaxConfig) {
-          setSalesTaxConfig(d.salesTaxConfig);
-          lsSet(SALES_TAX_KEY, JSON.stringify(d.salesTaxConfig));
+        if (d.salesTax || d.salesTaxConfig) {
+          const taxConfig = d.salesTax || d.salesTaxConfig;
+          setSalesTaxConfig(taxConfig);
+          lsSet(SALES_TAX_KEY, JSON.stringify(taxConfig));
+          mergedData.salesTax = taxConfig;
           restored.push('sales tax');
         }
         if (d.productNames) {
           setSavedProductNames(d.productNames);
           lsSet(PRODUCT_NAMES_KEY, JSON.stringify(d.productNames));
+          mergedData.productNames = d.productNames;
           restored.push('product names');
         }
         if (d.theme) {
           setTheme(d.theme);
           lsSet(THEME_KEY, JSON.stringify(d.theme));
+          mergedData.theme = d.theme;
         }
         
         // New features
         if (d.invoices && d.invoices.length > 0) {
           setInvoices(d.invoices);
+          mergedData.invoices = d.invoices;
           restored.push(`${d.invoices.length} invoices`);
         }
         if (d.amazonForecasts && Object.keys(d.amazonForecasts).length > 0) {
           setAmazonForecasts(d.amazonForecasts);
+          mergedData.amazonForecasts = d.amazonForecasts;
           restored.push(`${Object.keys(d.amazonForecasts).length} forecasts`);
         }
         if (d.forecastMeta) {
           setForecastMeta(d.forecastMeta);
           localStorage.setItem('ecommerce_forecast_meta', JSON.stringify(d.forecastMeta));
+          mergedData.forecastMeta = d.forecastMeta;
           restored.push('forecast tracking');
         }
         if (d.weekNotes && Object.keys(d.weekNotes).length > 0) {
-          setWeekNotes(prev => ({...prev, ...d.weekNotes}));
+          const mergedNotes = {...weekNotes, ...d.weekNotes};
+          setWeekNotes(mergedNotes);
+          mergedData.weekNotes = mergedNotes;
           restored.push('notes');
         }
         if (d.productionPipeline && d.productionPipeline.length > 0) {
           setProductionPipeline(d.productionPipeline);
+          mergedData.productionPipeline = d.productionPipeline;
           restored.push(`${d.productionPipeline.length} production orders`);
         }
         if (d.storeLogo) {
           setStoreLogo(d.storeLogo);
+          mergedData.storeLogo = d.storeLogo;
         }
         if (d.threeplLedger && (Object.keys(d.threeplLedger.orders || {}).length > 0 || Object.keys(d.threeplLedger.summaryCharges || {}).length > 0)) {
           setThreeplLedger(d.threeplLedger);
           lsSet(THREEPL_LEDGER_KEY, JSON.stringify(d.threeplLedger));
+          mergedData.threeplLedger = d.threeplLedger;
           restored.push(`${Object.keys(d.threeplLedger.orders || {}).length} 3PL orders`);
         }
         if (d.widgetConfig) {
           setWidgetConfig(d.widgetConfig);
           lsSet(WIDGET_KEY, JSON.stringify(d.widgetConfig));
+          mergedData.widgetConfig = d.widgetConfig;
           restored.push('widget config');
         }
         
@@ -5251,18 +5284,58 @@ const savePeriods = async (d) => {
         if (d.forecastAccuracyHistory && d.forecastAccuracyHistory.records && d.forecastAccuracyHistory.records.length > 0) {
           setForecastAccuracyHistory(d.forecastAccuracyHistory);
           localStorage.setItem(FORECAST_ACCURACY_KEY, JSON.stringify(d.forecastAccuracyHistory));
+          mergedData.forecastAccuracyHistory = d.forecastAccuracyHistory;
           restored.push(`${d.forecastAccuracyHistory.records.length} learning samples`);
         }
         if (d.forecastCorrections && d.forecastCorrections.samplesUsed > 0) {
           setForecastCorrections(d.forecastCorrections);
           localStorage.setItem(FORECAST_CORRECTIONS_KEY, JSON.stringify(d.forecastCorrections));
+          mergedData.forecastCorrections = d.forecastCorrections;
           restored.push('forecast corrections');
         }
         
-        setToast({ message: `Restored: ${restored.join(', ')}`, type: 'success' });
+        // Restore additional data types
+        if (d.amazonCampaigns && (d.amazonCampaigns.campaigns?.length > 0 || d.amazonCampaigns.history?.length > 0)) {
+          setAmazonCampaigns(d.amazonCampaigns);
+          lsSet('ecommerce_amazon_campaigns_v1', JSON.stringify(d.amazonCampaigns));
+          mergedData.amazonCampaigns = d.amazonCampaigns;
+          restored.push(`${d.amazonCampaigns.campaigns?.length || 0} ad campaigns`);
+        }
+        if (d.bankingData && d.bankingData.transactions?.length > 0) {
+          setBankingData(d.bankingData);
+          lsSet('ecommerce_banking_v1', JSON.stringify(d.bankingData));
+          mergedData.bankingData = d.bankingData;
+          restored.push(`${d.bankingData.transactions.length} banking transactions`);
+        }
+        if (d.aiMessages && d.aiMessages.length > 0) {
+          setAiMessages(d.aiMessages);
+          lsSet('ecommerce_ai_chat_history_v1', JSON.stringify(d.aiMessages));
+          mergedData.aiMessages = d.aiMessages;
+          restored.push('AI chat history');
+        }
+        if (d.aiLearningHistory && (d.aiLearningHistory.predictions?.length > 0 || d.aiLearningHistory.modelUpdates?.length > 0)) {
+          setAiLearningHistory(d.aiLearningHistory);
+          lsSet('ecommerce_ai_learning_v1', JSON.stringify(d.aiLearningHistory));
+          mergedData.aiLearningHistory = d.aiLearningHistory;
+          restored.push('AI learning history');
+        }
+        if (d.weeklyReports && Object.keys(d.weeklyReports).length > 0) {
+          setWeeklyReports(d.weeklyReports);
+          lsSet(WEEKLY_REPORTS_KEY, JSON.stringify(d.weeklyReports));
+          mergedData.weeklyReports = d.weeklyReports;
+          restored.push(`${Object.keys(d.weeklyReports).length} reports`);
+        }
+        
+        // CRITICAL: Push all merged data to cloud to ensure sync
+        if (session?.user?.id && supabase) {
+          queueCloudSave(mergedData);
+          console.log('📤 Pushed imported data to cloud');
+        }
+        
+        setToast({ message: `Restored: ${restored.join(', ')}. Syncing to cloud...`, type: 'success' });
       } catch (err) { 
         console.error('Import error:', err);
-        setToast({ message: 'Invalid backup file', type: 'error' });
+        setToast({ message: 'Invalid backup file: ' + err.message, type: 'error' });
       }
     }; 
     reader.readAsText(file); 
@@ -18918,9 +18991,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 text-center">
               <p className="text-3xl font-bold text-white">{allSkus.length}</p>
               <p className="text-slate-400 text-sm">SKUs with Sales</p>
-              {Object.keys(savedProductNames).length > 0 && (
-                <p className="text-slate-500 text-xs mt-1">{Object.keys(savedProductNames).length} in catalog</p>
-              )}
+              <p className="text-slate-500 text-xs mt-1">
+                {sortedWeeks.length} weeks filtered
+              </p>
             </div>
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 text-center">
               <p className="text-3xl font-bold text-emerald-400">{formatCurrency(allSkus.reduce((s, x) => s + x.revenue, 0))}</p>
