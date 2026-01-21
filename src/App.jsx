@@ -927,7 +927,7 @@ export default function Dashboard() {
   const [threeplCustomEnd, setThreeplCustomEnd] = useState('');
   const [uploadTab, setUploadTab] = useState('weekly'); // For upload view tabs: 'daily' | 'weekly' | 'period'
   const [dashboardRange, setDashboardRange] = useState('month'); // 'yesterday' | 'week' | 'month' | 'quarter' | 'year'
-  const [trendsTab, setTrendsTab] = useState('monthly'); // 'daily' | 'weekly' | 'monthly' | 'yearly' for trends view
+  const [trendsTab, setTrendsTab] = useState('weekly'); // 'daily' | 'weekly' | 'monthly' | 'yearly' for trends view
   const [trendsChannel, setTrendsChannel] = useState('combined'); // 'amazon' | 'shopify' | 'combined' for trends filtering
   const [dailyFiles, setDailyFiles] = useState({ amazon: null, shopify: null }); // Daily upload files
   const [dailyAdSpend, setDailyAdSpend] = useState({ meta: '', google: '' }); // Daily ad spend inputs
@@ -17567,11 +17567,22 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     // Check for annual periods (labeled as "2024", "2025", etc.)
     const periodYears = Object.keys(allPeriodsData).filter(k => /^\d{4}$/.test(k)).sort();
     
-    // Also extract years from monthly periods like "January 2025", "Feb 2024", etc.
+    // Also extract years from monthly periods like "January 2025", "Feb 2024", "Dec '25", etc.
     const monthlyPeriodYears = [];
     Object.keys(allPeriodsData).forEach(k => {
-      const match = k.match(/\b(20\d{2})\b/); // Find any 4-digit year starting with 20
-      if (match) monthlyPeriodYears.push(match[1]);
+      // Try 4-digit year first
+      let match = k.match(/\b(20\d{2})\b/);
+      if (match) {
+        monthlyPeriodYears.push(match[1]);
+      } else {
+        // Try 2-digit year (e.g., '25 or -25)
+        match = k.match(/[''\-](\d{2})$/);
+        if (match) {
+          const shortYear = match[1];
+          const fullYear = shortYear >= '50' ? '19' + shortYear : '20' + shortYear;
+          monthlyPeriodYears.push(fullYear);
+        }
+      }
     });
     
     const allYears = [...new Set([...weekYears, ...periodYears, ...monthlyPeriodYears])].sort();
@@ -17629,42 +17640,52 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         months[month].units += allWeeksData[w].total?.units || 0;
       });
       
-      // Then check for monthly period data (e.g., "January 2025", "Jan 2025", "2025-01")
+      // Then check for monthly period data (flexible patterns for various formats)
+      // Matches: "January 2025", "Jan 2025", "2025-01", "January2025", "Jan2025", "Jan-2025", "Jan '25"
       const monthPatterns = [
-        { regex: /^january\s+(\d{4})$/i, month: '01' },
-        { regex: /^february\s+(\d{4})$/i, month: '02' },
-        { regex: /^march\s+(\d{4})$/i, month: '03' },
-        { regex: /^april\s+(\d{4})$/i, month: '04' },
-        { regex: /^may\s+(\d{4})$/i, month: '05' },
-        { regex: /^june\s+(\d{4})$/i, month: '06' },
-        { regex: /^july\s+(\d{4})$/i, month: '07' },
-        { regex: /^august\s+(\d{4})$/i, month: '08' },
-        { regex: /^september\s+(\d{4})$/i, month: '09' },
-        { regex: /^october\s+(\d{4})$/i, month: '10' },
-        { regex: /^november\s+(\d{4})$/i, month: '11' },
-        { regex: /^december\s+(\d{4})$/i, month: '12' },
-        { regex: /^jan\s+(\d{4})$/i, month: '01' },
-        { regex: /^feb\s+(\d{4})$/i, month: '02' },
-        { regex: /^mar\s+(\d{4})$/i, month: '03' },
-        { regex: /^apr\s+(\d{4})$/i, month: '04' },
-        { regex: /^jun\s+(\d{4})$/i, month: '06' },
-        { regex: /^jul\s+(\d{4})$/i, month: '07' },
-        { regex: /^aug\s+(\d{4})$/i, month: '08' },
-        { regex: /^sep\s+(\d{4})$/i, month: '09' },
-        { regex: /^oct\s+(\d{4})$/i, month: '10' },
-        { regex: /^nov\s+(\d{4})$/i, month: '11' },
-        { regex: /^dec\s+(\d{4})$/i, month: '12' },
+        { regex: /^january[\s\-]*['']?(\d{2,4})$/i, month: '01' },
+        { regex: /^february[\s\-]*['']?(\d{2,4})$/i, month: '02' },
+        { regex: /^march[\s\-]*['']?(\d{2,4})$/i, month: '03' },
+        { regex: /^april[\s\-]*['']?(\d{2,4})$/i, month: '04' },
+        { regex: /^may[\s\-]*['']?(\d{2,4})$/i, month: '05' },
+        { regex: /^june[\s\-]*['']?(\d{2,4})$/i, month: '06' },
+        { regex: /^july[\s\-]*['']?(\d{2,4})$/i, month: '07' },
+        { regex: /^august[\s\-]*['']?(\d{2,4})$/i, month: '08' },
+        { regex: /^september[\s\-]*['']?(\d{2,4})$/i, month: '09' },
+        { regex: /^october[\s\-]*['']?(\d{2,4})$/i, month: '10' },
+        { regex: /^november[\s\-]*['']?(\d{2,4})$/i, month: '11' },
+        { regex: /^december[\s\-]*['']?(\d{2,4})$/i, month: '12' },
+        { regex: /^jan[\s\-]*['']?(\d{2,4})$/i, month: '01' },
+        { regex: /^feb[\s\-]*['']?(\d{2,4})$/i, month: '02' },
+        { regex: /^mar[\s\-]*['']?(\d{2,4})$/i, month: '03' },
+        { regex: /^apr[\s\-]*['']?(\d{2,4})$/i, month: '04' },
+        { regex: /^jun[\s\-]*['']?(\d{2,4})$/i, month: '06' },
+        { regex: /^jul[\s\-]*['']?(\d{2,4})$/i, month: '07' },
+        { regex: /^aug[\s\-]*['']?(\d{2,4})$/i, month: '08' },
+        { regex: /^sep[\s\-]*['']?(\d{2,4})$/i, month: '09' },
+        { regex: /^oct[\s\-]*['']?(\d{2,4})$/i, month: '10' },
+        { regex: /^nov[\s\-]*['']?(\d{2,4})$/i, month: '11' },
+        { regex: /^dec[\s\-]*['']?(\d{2,4})$/i, month: '12' },
         { regex: /^(\d{4})-(\d{2})$/, yearGroup: 1, monthGroup: 2 }, // 2025-01 format
       ];
+      
+      // Helper to normalize year (handle 2-digit years)
+      const normalizeYear = (year) => {
+        if (year.length === 2) {
+          return year >= '50' ? '19' + year : '20' + year;
+        }
+        return year;
+      };
       
       Object.keys(allPeriodsData).forEach(periodKey => {
         for (const pattern of monthPatterns) {
           const match = periodKey.match(pattern.regex);
           if (match) {
             const periodYear = pattern.yearGroup ? match[pattern.yearGroup] : match[1];
+            const normalizedPeriodYear = normalizeYear(periodYear);
             const periodMonth = pattern.monthGroup ? match[pattern.monthGroup] : pattern.month;
             
-            if (periodYear === year) {
+            if (normalizedPeriodYear === year) {
               const p = allPeriodsData[periodKey];
               // Period data overrides or adds to weekly data
               if (!months[periodMonth] || months[periodMonth].source === 'weekly') {
@@ -17723,6 +17744,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">📅 Year-over-Year Comparison</h1>
             <p className="text-slate-400">{previousYear && currentYear ? `Comparing ${currentYear} vs ${previousYear}` : (currentYear ? `${currentYear} data (add previous year data to compare)` : 'No data available - upload periods labeled as years (e.g., "2024", "2025")')}</p>
+            {hasMonthlyData && (
+              <p className="text-slate-500 text-xs mt-2">
+                {Object.keys(currentMonths).length > 0 && `${currentYear}: ${Object.keys(currentMonths).map(m => monthNames[parseInt(m)-1]).join(', ')}`}
+                {Object.keys(currentMonths).length > 0 && Object.keys(previousMonths).length > 0 && ' • '}
+                {Object.keys(previousMonths).length > 0 && `${previousYear}: ${Object.keys(previousMonths).map(m => monthNames[parseInt(m)-1]).join(', ')}`}
+              </p>
+            )}
           </div>
           
           {!currentYearData && (
@@ -18611,12 +18639,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     // Get period label for display
     const getPeriodLabel = () => {
+      const weekCount = sortedWeeks.length;
+      const totalWeekCount = allWeeks.length;
+      const dateRange = sortedWeeks.length > 0 
+        ? `${sortedWeeks[0]} to ${sortedWeeks[sortedWeeks.length - 1]}`
+        : '';
       switch (skuDateRange) {
-        case '4weeks': return 'Last 4 Weeks';
-        case '8weeks': return 'Last 8 Weeks';
-        case '12weeks': return 'Last 12 Weeks';
-        case 'ytd': return 'Year to Date';
-        default: return 'All Time';
+        case '4weeks': return `Last 4 Weeks (${Math.min(4, weekCount)} of ${totalWeekCount}) ${dateRange ? '• ' + dateRange : ''}`;
+        case '8weeks': return `Last 8 Weeks (${Math.min(8, weekCount)} of ${totalWeekCount}) ${dateRange ? '• ' + dateRange : ''}`;
+        case '12weeks': return `Last 12 Weeks (${Math.min(12, weekCount)} of ${totalWeekCount}) ${dateRange ? '• ' + dateRange : ''}`;
+        case 'ytd': return `Year to Date (${weekCount} weeks) ${dateRange ? '• ' + dateRange : ''}`;
+        default: return `All Time (${weekCount} weeks) ${dateRange ? '• ' + dateRange : ''}`;
       }
     };
     
@@ -19780,17 +19813,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
 
   // ==================== PROFITABILITY VIEW ====================
   if (view === 'profitability') {
-    // Use trendsTab for period selection (reusing existing state)
-    const profitPeriod = trendsTab; // 'weekly' | 'monthly' | 'yearly'
+    // Use a separate state for profitability period, defaulting to weekly
+    // If trendsTab is 'daily', treat as 'weekly' for profitability
+    const profitPeriod = trendsTab === 'daily' ? 'weekly' : trendsTab; // 'weekly' | 'monthly' | 'yearly'
     
-    const sortedWeeks = Object.keys(allWeeksData).sort();
+    const sortedWeeks = Object.keys(allWeeksData).filter(w => {
+      const data = allWeeksData[w];
+      return (data.total?.revenue || 0) > 0;
+    }).sort();
     const sortedPeriods = Object.keys(allPeriodsData).sort();
     
-    // Categorize periods
-    const monthlyPeriods = sortedPeriods.filter(p => 
-      /^(january|february|march|april|may|june|july|august|september|october|november|december)/i.test(p) ||
-      /^\d{4}-\d{2}$/.test(p)
-    );
+    // Categorize periods - flexible matching for various formats
+    const monthlyPeriods = sortedPeriods.filter(p => {
+      // Full month names: "January 2025", "January2025", etc.
+      if (/^(january|february|march|april|may|june|july|august|september|october|november|december)[\s\-]*['']?\d{2,4}$/i.test(p)) return true;
+      // Short month names: "Jan 2025", "Jan2025", "Jan '25", etc.
+      if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[\s\-]*['']?\d{2,4}$/i.test(p)) return true;
+      // ISO format: "2025-01"
+      if (/^\d{4}-\d{2}$/.test(p)) return true;
+      return false;
+    });
     const quarterlyPeriods = sortedPeriods.filter(p => /q[1-4]/i.test(p));
     const yearlyPeriods = sortedPeriods.filter(p => /^\d{4}$/.test(p));
     
@@ -20006,7 +20048,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           
           {/* Profit Waterfall - Compact Horizontal View */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">Profit Waterfall</h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-white">Profit Waterfall</h3>
+              <span className="text-sm text-slate-400">{periodLabel}</span>
+            </div>
             {/* Horizontal Bar Waterfall */}
             <div className="space-y-2">
               {waterfall.map((item, i) => {
