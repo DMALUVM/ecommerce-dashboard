@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown } from 'lucide-react';
 
 // Dynamically load SheetJS from CDN (avoids npm vulnerability)
 let XLSX = null;
@@ -39,6 +39,150 @@ const parseCSVLine = (line) => {
   }
   result.push(current);
   return result;
+};
+
+// Parse QBO Transaction Detail CSV
+const parseQBOTransactions = (content) => {
+  const lines = content.split(/\r?\n/).filter(l => l.trim());
+  const transactions = [];
+  const accounts = {};
+  const categories = {};
+  let currentAccount = null;
+  
+  // Skip header rows (first 5 lines typically)
+  let dataStartIndex = 0;
+  for (let i = 0; i < Math.min(10, lines.length); i++) {
+    if (lines[i].includes('Transaction date') || lines[i].includes('transaction date')) {
+      dataStartIndex = i + 1;
+      break;
+    }
+  }
+  
+  for (let i = dataStartIndex; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    
+    const cols = parseCSVLine(line);
+    
+    // Check for section headers (account names like "General Operations (5983) - 1")
+    if (cols[0] && !cols[1] && !cols[0].startsWith('Total for') && !cols[0].startsWith(',TOTAL')) {
+      currentAccount = cols[0].trim();
+      if (!accounts[currentAccount]) {
+        accounts[currentAccount] = { name: currentAccount, transactions: 0, totalIn: 0, totalOut: 0 };
+      }
+      continue;
+    }
+    
+    // Skip total rows and empty rows
+    if (cols[0]?.startsWith('Total for') || cols[0]?.includes(',TOTAL') || cols[0]?.includes('Cash Basis')) continue;
+    
+    // Parse transaction row - format: empty, date, type, num, name, store, memo, category, amount, balance
+    const dateStr = cols[1]?.trim();
+    if (!dateStr || !dateStr.match(/^\d{1,2}\/\d{1,2}\/\d{4}$/)) continue;
+    
+    const txnType = cols[2]?.trim() || '';
+    const num = cols[3]?.trim() || '';
+    const vendorName = cols[4]?.trim() || '';
+    const storeName = cols[5]?.trim() || '';
+    const memo = cols[6]?.trim() || '';
+    const category = cols[7]?.trim() || 'Uncategorized';
+    
+    // Parse amount - remove commas, handle negatives
+    let amountStr = cols[8]?.trim().replace(/,/g, '').replace(/"/g, '') || '0';
+    const amount = parseFloat(amountStr) || 0;
+    
+    // Parse date (MM/DD/YYYY to YYYY-MM-DD)
+    const dateParts = dateStr.split('/');
+    const dateKey = `${dateParts[2]}-${dateParts[0].padStart(2, '0')}-${dateParts[1].padStart(2, '0')}`;
+    
+    // Determine if income or expense
+    const isIncome = amount > 0 && (txnType === 'Deposit' || txnType === 'Transfer' && amount > 0);
+    const isExpense = amount < 0 || (txnType === 'Expense' || txnType === 'Credit Card Payment');
+    
+    // Extract top-level category (before the colon)
+    const topCategory = category.split(':')[0].trim();
+    const subCategory = category.includes(':') ? category.split(':').slice(1).join(':').trim() : '';
+    
+    const txn = {
+      date: dateKey,
+      dateDisplay: dateStr,
+      type: txnType,
+      vendor: vendorName || (memo.includes('Credit ') ? memo.split('Credit ')[1]?.split(' ')[0] : '') || 'Unknown',
+      memo,
+      category,
+      topCategory,
+      subCategory,
+      amount: Math.abs(amount),
+      isIncome: amount > 0 && !isExpense,
+      isExpense: amount < 0 || isExpense,
+      account: currentAccount,
+      num,
+    };
+    
+    transactions.push(txn);
+    
+    // Update account stats
+    if (currentAccount && accounts[currentAccount]) {
+      accounts[currentAccount].transactions++;
+      if (txn.isIncome) accounts[currentAccount].totalIn += txn.amount;
+      if (txn.isExpense) accounts[currentAccount].totalOut += txn.amount;
+    }
+    
+    // Update category stats
+    if (!categories[topCategory]) {
+      categories[topCategory] = { name: topCategory, count: 0, totalIn: 0, totalOut: 0, subCategories: {} };
+    }
+    categories[topCategory].count++;
+    if (txn.isIncome) categories[topCategory].totalIn += txn.amount;
+    if (txn.isExpense) categories[topCategory].totalOut += txn.amount;
+    
+    if (subCategory) {
+      if (!categories[topCategory].subCategories[subCategory]) {
+        categories[topCategory].subCategories[subCategory] = { count: 0, totalIn: 0, totalOut: 0 };
+      }
+      categories[topCategory].subCategories[subCategory].count++;
+      if (txn.isIncome) categories[topCategory].subCategories[subCategory].totalIn += txn.amount;
+      if (txn.isExpense) categories[topCategory].subCategories[subCategory].totalOut += txn.amount;
+    }
+  }
+  
+  // Sort by date
+  transactions.sort((a, b) => a.date.localeCompare(b.date));
+  
+  // Generate monthly snapshots
+  const monthlySnapshots = {};
+  transactions.forEach(txn => {
+    const monthKey = txn.date.substring(0, 7); // YYYY-MM
+    if (!monthlySnapshots[monthKey]) {
+      monthlySnapshots[monthKey] = { income: 0, expenses: 0, transactions: 0, byCategory: {} };
+    }
+    monthlySnapshots[monthKey].transactions++;
+    if (txn.isIncome) monthlySnapshots[monthKey].income += txn.amount;
+    if (txn.isExpense) monthlySnapshots[monthKey].expenses += txn.amount;
+    
+    if (!monthlySnapshots[monthKey].byCategory[txn.topCategory]) {
+      monthlySnapshots[monthKey].byCategory[txn.topCategory] = { income: 0, expenses: 0 };
+    }
+    if (txn.isIncome) monthlySnapshots[monthKey].byCategory[txn.topCategory].income += txn.amount;
+    if (txn.isExpense) monthlySnapshots[monthKey].byCategory[txn.topCategory].expenses += txn.amount;
+  });
+  
+  // Calculate net for each month
+  Object.keys(monthlySnapshots).forEach(m => {
+    monthlySnapshots[m].net = monthlySnapshots[m].income - monthlySnapshots[m].expenses;
+  });
+  
+  return {
+    transactions,
+    accounts,
+    categories,
+    monthlySnapshots,
+    dateRange: transactions.length > 0 ? {
+      start: transactions[0].date,
+      end: transactions[transactions.length - 1].date
+    } : null,
+    transactionCount: transactions.length,
+  };
 };
 
 const formatCurrency = (num) => {
@@ -822,6 +966,36 @@ const handleLogout = async () => {
   const [adsSelectedFiles, setAdsSelectedFiles] = useState([]);
   const [adsProcessing, setAdsProcessing] = useState(false);
   const [adsResults, setAdsResults] = useState(null);
+  
+  // Banking Module - QBO Transaction Data
+  const [bankingData, setBankingData] = useState(() => {
+    try { 
+      const stored = JSON.parse(localStorage.getItem('ecommerce_banking_v1'));
+      return stored || { 
+        transactions: [], 
+        lastUpload: null, 
+        accounts: {},
+        categories: {},
+        monthlySnapshots: {},
+        settings: { reminderEnabled: true, reminderTime: '09:00' }
+      }; 
+    } catch { 
+      return { 
+        transactions: [], 
+        lastUpload: null, 
+        accounts: {},
+        categories: {},
+        monthlySnapshots: {},
+        settings: { reminderEnabled: true, reminderTime: '09:00' }
+      }; 
+    }
+  });
+  const [bankingFile, setBankingFile] = useState(null);
+  const [bankingProcessing, setBankingProcessing] = useState(false);
+  const [bankingDateRange, setBankingDateRange] = useState('month'); // 'week' | 'month' | 'quarter' | 'year' | 'all' | 'ytd'
+  const [bankingTab, setBankingTab] = useState('overview'); // 'overview' | 'income' | 'expenses' | 'accounts' | 'trends' | 'ai'
+  const [bankingCategoryFilter, setBankingCategoryFilter] = useState('all');
+  const [showBankingUpload, setShowBankingUpload] = useState(false);
   
   // Sales Tax Management
   const [salesTaxConfig, setSalesTaxConfig] = useState({
@@ -1770,7 +1944,9 @@ const combinedData = useMemo(() => ({
   // AI Reports & Chat
   weeklyReports,
   aiMessages, // Chat history
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, weeklyReports, aiMessages]);
+  // Banking data
+  bankingData,
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, weeklyReports, aiMessages, bankingData]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -1988,6 +2164,20 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     setCogsLastUpdated(cloud.cogs?.updatedAt || null);
     setAllPeriodsData(cloud.periods || {});
     setStoreName(cloud.storeName || '');
+    
+    // CRITICAL: Sync the stores array name with the loaded store's actual name
+    // This ensures the dropdown shows the correct name for the active store
+    if (cloud.storeName && loadedStores.length > 0) {
+      const updatedStores = loadedStores.map(s => 
+        s.id === targetStoreId ? { ...s, name: cloud.storeName } : s
+      );
+      // Only update if there's actually a change
+      const storeChanged = loadedStores.find(s => s.id === targetStoreId)?.name !== cloud.storeName;
+      if (storeChanged) {
+        setStores(updatedStores);
+      }
+    }
+    
     if (cloud.storeLogo) setStoreLogo(cloud.storeLogo);
     setSalesTaxConfig(cloud.salesTax || { nexusStates: {}, filingHistory: {}, hiddenStates: [] });
     if (cloud.settings) setAppSettings(prev => ({ ...prev, ...cloud.settings }));
@@ -2012,6 +2202,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiLearningHistory) setAiLearningHistory(cloud.aiLearningHistory);
     if (cloud.weeklyReports) setWeeklyReports(cloud.weeklyReports);
     if (cloud.aiMessages) setAiMessages(cloud.aiMessages);
+    if (cloud.bankingData) setBankingData(cloud.bankingData);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -2041,6 +2232,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiLearningHistory) writeToLocal('ecommerce_ai_learning_v1', JSON.stringify(cloud.aiLearningHistory));
     if (cloud.weeklyReports) writeToLocal(WEEKLY_REPORTS_KEY, JSON.stringify(cloud.weeklyReports));
     if (cloud.aiMessages && cloud.aiMessages.length > 0) writeToLocal('ecommerce_ai_chat_history_v1', JSON.stringify(cloud.aiMessages));
+    if (cloud.bankingData) writeToLocal('ecommerce_banking_v1', JSON.stringify(cloud.bankingData));
 
     setCloudStatus('');
     return { ok: true, stores: loadedStores };
@@ -2161,20 +2353,15 @@ const switchStore = useCallback(async (storeId) => {
   // Save current store first
   await pushToCloudNow(combinedData);
   
-  // Load new store
-  setActiveStoreId(storeId);
+  // Load new store - this will also set activeStoreId and sync storeName
   await loadFromCloud(storeId);
   
-  // Sync storeName from stores array
+  // Get the store name (loadFromCloud will have synced it)
   const store = stores.find(s => s.id === storeId);
-  if (store?.name) {
-    setStoreName(store.name);
-  }
-  
-  setToast({ message: `Switched to "${store?.name || 'store'}"`, type: 'success' });
+  setToast({ message: `Switched to "${store?.name || storeName || 'store'}"`, type: 'success' });
   setShowStoreSelector(false);
   setShowStoreModal(false);
-}, [activeStoreId, stores, combinedData, pushToCloudNow, loadFromCloud]);
+}, [activeStoreId, stores, combinedData, pushToCloudNow, loadFromCloud, storeName]);
 
 const deleteStore = useCallback(async (storeId) => {
   if (stores.length <= 1) {
@@ -4917,8 +5104,10 @@ const savePeriods = async (d) => {
     };
     
     // Priority 1: If we have 4+ weeks of weekly data, use linear regression with variance
-    if (sortedWeeks.length >= 4) {
-      const recentWeeks = sortedWeeks.slice(-8);
+    // Filter out weeks with no revenue (incomplete data)
+    const weeksWithRevenue = sortedWeeks.filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0);
+    if (weeksWithRevenue.length >= 4) {
+      const recentWeeks = weeksWithRevenue.slice(-8);
       const trend = calcWeeklyTrend(recentWeeks);
       
       const revenues = recentWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
@@ -4991,8 +5180,8 @@ const savePeriods = async (d) => {
     }
     
     // Priority 2: If we have 1-3 weeks of weekly data, use averages with decay
-    if (sortedWeeks.length >= 1) {
-      const trend = calcWeeklyTrend(sortedWeeks);
+    if (weeksWithRevenue.length >= 1) {
+      const trend = calcWeeklyTrend(weeksWithRevenue);
       
       // Get seasonality adjustment from period data
       let seasonalityFactor = 1.0;
@@ -6579,7 +6768,11 @@ Respond with ONLY this JSON:
     setAiForecastModule(prev => ({ ...prev, loading: channel }));
     
     try {
-      const sortedWeeks = Object.keys(allWeeksData).sort().slice(-12);
+      // Filter to only weeks with actual revenue data
+      const sortedWeeks = Object.keys(allWeeksData)
+        .filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0)
+        .sort()
+        .slice(-12);
       const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort().slice(-30);
       
       const channelWeekly = sortedWeeks.map(w => {
@@ -6592,7 +6785,7 @@ Respond with ONLY this JSON:
           adSpend: data.adSpend || (channel === 'shopify' ? (data.metaSpend || 0) + (data.googleSpend || 0) : 0),
           margin: data.netMargin || data.margin || 0,
         };
-      });
+      }).filter(w => w.revenue > 0); // Only include weeks with channel revenue
       
       const channelDaily = sortedDays.map(d => {
         const data = allDaysData[d]?.[channel] || {};
@@ -6602,7 +6795,7 @@ Respond with ONLY this JSON:
           profit: data.netProfit || 0,
           units: data.units || 0,
         };
-      });
+      }).filter(d => d.revenue > 0); // Only include days with channel revenue
       
       // Get Amazon forecasts if channel is amazon
       const amazonForecastData = channel === 'amazon' ? Object.entries(amazonForecasts)
@@ -7408,6 +7601,7 @@ Analyze the data and respond with ONLY this JSON:
       {appSettings.modulesEnabled?.threepl !== false && (
         <button onClick={() => setView('3pl')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === '3pl' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Truck className="w-4 h-4 inline mr-1" />3PL</button>
       )}
+      <button onClick={() => setView('banking')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'banking' ? 'bg-green-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Landmark className="w-4 h-4 inline mr-1" />Banking{bankingData.lastUpload && new Date().toDateString() !== new Date(bankingData.lastUpload).toDateString() && <span className="ml-1 w-2 h-2 bg-amber-400 rounded-full inline-block animate-pulse" title="Banking data not uploaded today" />}</button>
       
       <div className="w-px bg-slate-600 mx-1" />
       
@@ -10108,6 +10302,35 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
           error: p.accuracy?.revenueError,
         })) || [],
       },
+      // Banking/Cash Flow Data for AI analysis
+      banking: bankingData.transactions?.length > 0 ? {
+        transactionCount: bankingData.transactions.length,
+        dateRange: bankingData.dateRange,
+        lastUpload: bankingData.lastUpload,
+        monthlySnapshots: Object.entries(bankingData.monthlySnapshots || {}).slice(-12).map(([month, data]) => ({
+          month,
+          income: data.income,
+          expenses: data.expenses,
+          net: data.net,
+          transactionCount: data.transactions,
+        })),
+        topExpenseCategories: Object.entries(bankingData.categories || {})
+          .filter(([_, c]) => c.totalOut > 0)
+          .sort((a, b) => b[1].totalOut - a[1].totalOut)
+          .slice(0, 10)
+          .map(([name, data]) => ({ name, total: data.totalOut, count: data.count })),
+        topIncomeCategories: Object.entries(bankingData.categories || {})
+          .filter(([_, c]) => c.totalIn > 0)
+          .sort((a, b) => b[1].totalIn - a[1].totalIn)
+          .slice(0, 10)
+          .map(([name, data]) => ({ name, total: data.totalIn, count: data.count })),
+        accounts: Object.entries(bankingData.accounts || {}).map(([name, data]) => ({
+          name,
+          transactions: data.transactions,
+          totalIn: data.totalIn,
+          totalOut: data.totalOut,
+        })),
+      } : null,
     };
   };
   
@@ -10603,6 +10826,42 @@ USE THIS LEARNING: When forecasting, apply the correction factors if confidence 
 - Campaign optimization recommendations (which campaigns to pause, scale, or optimize)
 - Week-over-week campaign performance changes
 - Campaign type comparison (SP vs SB vs SD effectiveness)
+- **BANKING/CASH FLOW ANALYSIS** - analyze real bank transactions to find waste, forecast EOY profit
+
+=== BANKING & CASH FLOW DATA ===
+${ctx.banking ? `
+Banking data available from ${ctx.banking.dateRange?.start} to ${ctx.banking.dateRange?.end}
+Total transactions: ${ctx.banking.transactionCount}
+Last upload: ${ctx.banking.lastUpload ? new Date(ctx.banking.lastUpload).toLocaleString() : 'Unknown'}
+
+MONTHLY CASH FLOW (last 12 months):
+${ctx.banking.monthlySnapshots.map(m => 
+  `- ${m.month}: Income $${m.income?.toFixed(0) || 0}, Expenses $${m.expenses?.toFixed(0) || 0}, Net $${m.net?.toFixed(0) || 0}`
+).join('\n')}
+
+TOP EXPENSE CATEGORIES:
+${ctx.banking.topExpenseCategories.map((c, i) => 
+  `${i + 1}. ${c.name}: $${c.total?.toFixed(0) || 0} (${c.count} transactions)`
+).join('\n')}
+
+TOP INCOME SOURCES:
+${ctx.banking.topIncomeCategories.map((c, i) => 
+  `${i + 1}. ${c.name}: $${c.total?.toFixed(0) || 0} (${c.count} transactions)`
+).join('\n')}
+
+ACCOUNTS:
+${ctx.banking.accounts.map(a => 
+  `- ${a.name}: ${a.transactions} txns, In: $${a.totalIn?.toFixed(0) || 0}, Out: $${a.totalOut?.toFixed(0) || 0}`
+).join('\n')}
+
+You can help with:
+- Identifying where money is being wasted (unusual expense patterns, rising costs)
+- Projecting end-of-year profit based on monthly trends
+- Calculating true business profitability (income - all expenses)
+- Comparing expense categories over time to find cost creep
+- Analyzing cash flow patterns and forecasting cash needs
+- Identifying the biggest expense drivers
+` : 'No banking data uploaded yet. User can upload QBO Transaction Detail by Account CSV.'}
 
 Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. When comparing periods, always show the actual numbers and % change. If the user asks about data you don't have, let them know what they need to upload.`;
 
@@ -10634,7 +10893,7 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
     try {
       // Prepare minimal ads context to avoid timeout
       const sortedWeeks = Object.keys(allWeeksData || {}).sort();
-      const sortedDays = Object.keys(allDaysData || {}).sort();
+      const sortedDays = Object.keys(allDaysData || {}).filter(d => hasDailySalesData(allDaysData[d])).sort();
       
       // Only last 4 weeks of ad spend
       const recentWeeks = sortedWeeks.slice(-4).map(w => {
@@ -11348,7 +11607,10 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
   
   // Calculate dashboard metrics based on selected range
   const dashboardMetrics = useMemo(() => {
-    const sortedWeeks = Object.keys(allWeeksData).sort();
+    // Filter to only include weeks with actual revenue data
+    const sortedWeeks = Object.keys(allWeeksData)
+      .filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0)
+      .sort();
     const sortedPeriods = Object.keys(allPeriodsData).sort();
     const now = new Date();
     const currentYear = now.getFullYear().toString();
@@ -12939,8 +13201,9 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                         d.setDate(weekStart.getDate() + i);
                         const dateKey = formatDateKey(d);
                         const dayData = allDaysData[dateKey];
-                        if (dayData?.total?.revenue) {
-                          weeklyRevenue += dayData.total.revenue;
+                        // Only include days with actual sales data
+                        if (hasDailySalesData(dayData)) {
+                          weeklyRevenue += dayData.total?.revenue || 0;
                         }
                       }
                       
@@ -12977,8 +13240,9 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                         d.setDate(weekStart.getDate() + i);
                         const dateKey = formatDateKey(d);
                         const dayData = allDaysData[dateKey];
-                        if (dayData?.total?.netProfit !== undefined) {
-                          weeklyProfit += dayData.total.netProfit;
+                        // Only include days with actual sales data
+                        if (hasDailySalesData(dayData)) {
+                          weeklyProfit += dayData.total?.netProfit || 0;
                         }
                       }
                       
@@ -13127,6 +13391,52 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                       <button onClick={exportAll} className="w-full p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 text-sm text-left flex items-center gap-2"><Download className="w-4 h-4" />Export All Data</button>
                     </div>
                   </div>
+                  
+                  {/* Banking Summary Widget */}
+                  {bankingData.transactions?.length > 0 && (() => {
+                    const now = new Date();
+                    const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                    const lastMonth = now.getMonth() === 0 
+                      ? `${now.getFullYear() - 1}-12` 
+                      : `${now.getFullYear()}-${String(now.getMonth()).padStart(2, '0')}`;
+                    const thisMonthSnap = bankingData.monthlySnapshots?.[thisMonth] || { income: 0, expenses: 0, net: 0 };
+                    const lastMonthSnap = bankingData.monthlySnapshots?.[lastMonth] || { income: 0, expenses: 0, net: 0 };
+                    const isStale = !bankingData.lastUpload || new Date().toDateString() !== new Date(bankingData.lastUpload).toDateString();
+                    
+                    return (
+                      <div className={`bg-slate-800/50 rounded-2xl border ${isStale ? 'border-amber-500/50' : 'border-slate-700'} p-5`}>
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-sm font-semibold text-slate-300 uppercase flex items-center gap-2">
+                            <Landmark className="w-4 h-4 text-green-400" />Cash Flow
+                          </h3>
+                          {isStale && <span className="text-xs text-amber-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />Update needed</span>}
+                        </div>
+                        <div className="space-y-2 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">This month income</span>
+                            <span className="text-emerald-400 font-medium">{formatCurrency(thisMonthSnap.income)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">This month expenses</span>
+                            <span className="text-rose-400 font-medium">{formatCurrency(thisMonthSnap.expenses)}</span>
+                          </div>
+                          <div className="flex justify-between pt-2 border-t border-slate-700">
+                            <span className="text-slate-300 font-medium">Net Cash Flow</span>
+                            <span className={`font-bold ${thisMonthSnap.net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(thisMonthSnap.net)}</span>
+                          </div>
+                          {lastMonthSnap.net !== 0 && (
+                            <div className="flex justify-between text-xs">
+                              <span className="text-slate-500">vs Last Month</span>
+                              <span className={lastMonthSnap.net > 0 ? 'text-slate-400' : 'text-rose-400'}>{formatCurrency(lastMonthSnap.net)}</span>
+                            </div>
+                          )}
+                        </div>
+                        <button onClick={() => setView('banking')} className="w-full mt-3 p-2 bg-green-600/20 hover:bg-green-600/30 border border-green-500/30 rounded-lg text-green-300 text-sm flex items-center justify-center gap-2">
+                          <BarChart3 className="w-4 h-4" />View Banking Details
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </>
@@ -16010,7 +16320,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         }
       });
       
-      return Object.entries(monthData).sort((a, b) => a[0].localeCompare(b[0]));
+      // Filter out months with no revenue data
+      return Object.entries(monthData)
+        .filter(([k, v]) => v.revenue > 0)
+        .sort((a, b) => a[0].localeCompare(b[0]));
     };
     
     // Build yearly data
@@ -16077,10 +16390,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         y.roas = y.adSpend > 0 ? y.revenue / y.adSpend : 0;
       });
       
-      return Object.entries(yearData).sort((a, b) => a[0].localeCompare(b[0]));
+      // Filter out years with no revenue data
+      return Object.entries(yearData)
+        .filter(([k, v]) => v.revenue > 0)
+        .sort((a, b) => a[0].localeCompare(b[0]));
     };
     
-    // Get weekly data
+    // Get weekly data - filter out weeks with no meaningful revenue
     const weeklyData = sortedWeeks.slice(-12).map(w => {
       const week = allWeeksData[w];
       return {
@@ -16101,7 +16417,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         roas: week.total?.roas || 0,
         skuData: [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])],
       };
-    });
+    }).filter(w => w.revenue > 0); // Only show weeks with actual sales data
     
     // Get daily data (last 30 days with real sales data, not just ads)
     const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
@@ -16363,9 +16679,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 </h3>
                 {(() => {
                   const chartMaxRevenue = Math.max(...currentData.map(d => getFilteredValue(d, 'revenue')), 1);
+                  // Dynamic bar width based on data count
+                  const barMinWidth = currentData.length > 30 ? '4px' : currentData.length > 20 ? '8px' : '16px';
                   return (
                     <>
-                      <div className="relative flex items-end gap-1 h-52 bg-slate-900/30 rounded-lg p-3">
+                      {/* Chart bars */}
+                      <div className="relative flex items-end gap-1 h-48 bg-slate-900/30 rounded-lg p-3">
                         {currentData.length === 0 ? (
                           <p className="text-slate-500 text-center w-full self-center">No data available</p>
                         ) : currentData.map((d, i) => {
@@ -16373,13 +16692,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           const height = chartMaxRevenue > 0 ? (value / chartMaxRevenue) * 100 : 0;
                           const isLatest = i === currentData.length - 1;
                           const isClickable = trendsTab === 'daily' && d.key;
-                          // Dynamic bar width based on data count
-                          const barMinWidth = currentData.length > 30 ? '4px' : currentData.length > 20 ? '8px' : '16px';
                           return (
                             <div 
                               key={d.key || i} 
-                              className={`flex flex-col items-center justify-end group relative h-full ${isClickable ? 'cursor-pointer' : ''}`}
-                              style={{ flex: '1 1 0', minWidth: barMinWidth, maxWidth: '60px' }}
+                              className={`flex-1 flex items-end justify-center group relative h-full ${isClickable ? 'cursor-pointer' : ''}`}
+                              style={{ minWidth: barMinWidth, maxWidth: '60px' }}
                               onClick={() => isClickable && setViewingDayDetails(d.key)}
                             >
                               <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
@@ -16395,14 +16712,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           );
                         })}
                       </div>
-                      <div className="flex justify-between px-3 mt-1">
-                        {currentData.length <= 12 ? (
-                          // Show all labels if 12 or fewer data points
+                      {/* X-axis labels - outside chart area */}
+                      <div className="flex gap-1 mt-1 px-3">
+                        {currentData.length === 0 ? null : currentData.length <= 12 ? (
                           currentData.map((d, i) => (
-                            <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
+                            <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '60px' }}>
+                              <span className="text-[10px] text-slate-500 truncate block">{d.label}</span>
+                            </div>
                           ))
                         ) : (
-                          // Show only first and last labels for many data points
                           <>
                             <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
                             <span className="flex-1" />
@@ -16425,9 +16743,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   </h3>
                   {(() => {
                     const chartMaxProfit = Math.max(...currentData.map(d => Math.abs(getFilteredValue(d, 'profit'))), 1);
+                    const barMinWidth = currentData.length > 31 ? '2px' : '8px';
                     return (
                       <>
-                        <div className="relative flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3">
+                        <div className="relative flex items-end gap-0.5 h-40 bg-slate-900/30 rounded-lg p-3">
                           {currentData.length === 0 ? (
                             <p className="text-slate-500 text-center w-full self-center">No data</p>
                           ) : currentData.map((d, i) => {
@@ -16439,8 +16758,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             return (
                               <div 
                                 key={d.key || i} 
-                                className={`flex-1 flex flex-col items-center justify-end group relative h-full ${isClickable ? 'cursor-pointer' : ''}`}
-                                style={{ minWidth: currentData.length > 31 ? '2px' : '8px', maxWidth: '40px' }}
+                                className={`flex-1 flex items-end justify-center group relative h-full ${isClickable ? 'cursor-pointer' : ''}`}
+                                style={{ minWidth: barMinWidth, maxWidth: '40px' }}
                                 onClick={() => isClickable && setViewingDayDetails(d.key)}
                               >
                                 <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
@@ -16455,10 +16774,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             );
                           })}
                         </div>
-                        <div className="flex justify-between px-3 mt-1 overflow-hidden">
-                          {currentData.length <= 14 ? currentData.map((d, i) => (
-                            <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
-                          )) : (
+                        {/* X-axis labels */}
+                        <div className="flex gap-0.5 mt-1 px-3">
+                          {currentData.length === 0 ? null : currentData.length <= 14 ? (
+                            currentData.map((d, i) => (
+                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                                <span className="text-[10px] text-slate-500 truncate block">{d.label}</span>
+                              </div>
+                            ))
+                          ) : (
                             <>
                               <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
                               <span className="flex-1" />
@@ -16476,9 +16800,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   <h3 className="text-lg font-semibold text-white mb-4">{periodLabel} Margin Trend</h3>
                   {(() => {
                     const maxMargin = Math.max(...currentData.map(x => Math.abs(x.margin || 0)), 1);
+                    const barMinWidth = currentData.length > 31 ? '2px' : '8px';
                     return (
                       <>
-                        <div className="relative flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3">
+                        <div className="relative flex items-end gap-0.5 h-40 bg-slate-900/30 rounded-lg p-3">
                           {currentData.length === 0 ? (
                             <p className="text-slate-500 text-center w-full self-center">No data</p>
                           ) : currentData.map((d, i) => {
@@ -16488,8 +16813,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             return (
                               <div 
                                 key={d.key || i} 
-                                className="flex-1 flex flex-col items-center justify-end group relative h-full"
-                                style={{ minWidth: currentData.length > 31 ? '2px' : '8px', maxWidth: '40px' }}
+                                className="flex-1 flex items-end justify-center group relative h-full"
+                                style={{ minWidth: barMinWidth, maxWidth: '40px' }}
                               >
                                 <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                                   {d.label}<br/>{formatPercent(d.margin)}
@@ -16502,10 +16827,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             );
                           })}
                         </div>
-                        <div className="flex justify-between px-3 mt-1 overflow-hidden">
-                          {currentData.length <= 14 ? currentData.map((d, i) => (
-                            <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
-                          )) : (
+                        {/* X-axis labels */}
+                        <div className="flex gap-0.5 mt-1 px-3">
+                          {currentData.length === 0 ? null : currentData.length <= 14 ? (
+                            currentData.map((d, i) => (
+                              <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                                <span className="text-[10px] text-slate-500 truncate block">{d.label}</span>
+                              </div>
+                            ))
+                          ) : (
                             <>
                               <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
                               <span className="flex-1" />
@@ -16525,9 +16855,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 {(() => {
                   const ppuData = currentData.map(d => d.units > 0 ? d.profit / d.units : 0);
                   const maxPPU = Math.max(...ppuData.map(Math.abs), 1);
+                  const barMinWidth = currentData.length > 31 ? '2px' : '8px';
                   return (
                     <>
-                      <div className="relative flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3">
+                      <div className="relative flex items-end gap-0.5 h-40 bg-slate-900/30 rounded-lg p-3">
                         {currentData.length === 0 ? (
                           <p className="text-slate-500 text-center w-full self-center">No data</p>
                         ) : currentData.map((d, i) => {
@@ -16538,8 +16869,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           return (
                             <div 
                               key={d.key || i} 
-                              className="flex-1 flex flex-col items-center justify-end group relative h-full"
-                              style={{ minWidth: currentData.length > 31 ? '2px' : '8px', maxWidth: '40px' }}
+                              className="flex-1 flex items-end justify-center group relative h-full"
+                              style={{ minWidth: barMinWidth, maxWidth: '40px' }}
                             >
                               <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                                 {d.label}<br/>{formatCurrency(ppu)}/unit
@@ -16552,10 +16883,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           );
                         })}
                       </div>
-                      <div className="flex justify-between px-3 mt-1 overflow-hidden">
-                        {currentData.length <= 14 ? currentData.map((d, i) => (
-                          <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
-                        )) : (
+                      {/* X-axis labels */}
+                      <div className="flex gap-0.5 mt-1 px-3">
+                        {currentData.length === 0 ? null : currentData.length <= 14 ? (
+                          currentData.map((d, i) => (
+                            <div key={d.key || i} className="flex-1 text-center" style={{ minWidth: barMinWidth, maxWidth: '40px' }}>
+                              <span className="text-[10px] text-slate-500 truncate block">{d.label}</span>
+                            </div>
+                          ))
+                        ) : (
                           <>
                             <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
                             <span className="flex-1" />
@@ -21814,6 +22150,535 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </div>
             </div>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==================== BANKING VIEW ====================
+  if (view === 'banking') {
+    const now = new Date();
+    const sortedTxns = [...(bankingData.transactions || [])].sort((a, b) => b.date.localeCompare(a.date));
+    const categories = bankingData.categories || {};
+    const accounts = bankingData.accounts || {};
+    const monthlySnapshots = bankingData.monthlySnapshots || {};
+    
+    // Calculate date filter
+    const getDateFilter = () => {
+      const today = new Date();
+      switch (bankingDateRange) {
+        case 'week': return new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        case 'month': return new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
+        case 'quarter': return new Date(today.getFullYear(), Math.floor(today.getMonth() / 3) * 3, 1).toISOString().split('T')[0];
+        case 'ytd': return `${today.getFullYear()}-01-01`;
+        case 'year': return new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        default: return '1900-01-01';
+      }
+    };
+    const dateFilter = getDateFilter();
+    const filteredTxns = sortedTxns.filter(t => t.date >= dateFilter);
+    
+    // Calculate totals
+    const totalIncome = filteredTxns.filter(t => t.isIncome).reduce((s, t) => s + t.amount, 0);
+    const totalExpenses = filteredTxns.filter(t => t.isExpense).reduce((s, t) => s + t.amount, 0);
+    const netCashFlow = totalIncome - totalExpenses;
+    
+    // Group by category for filtered transactions
+    const expensesByCategory = {};
+    const incomeByCategory = {};
+    filteredTxns.forEach(t => {
+      if (t.isExpense) {
+        if (!expensesByCategory[t.topCategory]) expensesByCategory[t.topCategory] = 0;
+        expensesByCategory[t.topCategory] += t.amount;
+      } else if (t.isIncome) {
+        if (!incomeByCategory[t.topCategory]) incomeByCategory[t.topCategory] = 0;
+        incomeByCategory[t.topCategory] += t.amount;
+      }
+    });
+    
+    // Sort categories by amount
+    const topExpenseCategories = Object.entries(expensesByCategory).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const topIncomeCategories = Object.entries(incomeByCategory).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    
+    // Check if data is stale
+    const isDataStale = !bankingData.lastUpload || 
+      new Date().toDateString() !== new Date(bankingData.lastUpload).toDateString();
+    
+    // Monthly trend data
+    const monthKeys = Object.keys(monthlySnapshots).sort().slice(-12);
+    
+    // Handle file upload
+    const handleBankingUpload = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      
+      setBankingProcessing(true);
+      try {
+        const content = await file.text();
+        const parsed = parseQBOTransactions(content);
+        
+        if (parsed.transactions.length === 0) {
+          setToast({ message: 'No transactions found in file', type: 'error' });
+          setBankingProcessing(false);
+          return;
+        }
+        
+        const newBankingData = {
+          ...parsed,
+          lastUpload: new Date().toISOString(),
+          settings: bankingData.settings,
+        };
+        
+        setBankingData(newBankingData);
+        localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+        queueCloudSave();
+        
+        setToast({ 
+          message: `Imported ${parsed.transactionCount} transactions from ${parsed.dateRange?.start} to ${parsed.dateRange?.end}`, 
+          type: 'success' 
+        });
+      } catch (err) {
+        setToast({ message: 'Error parsing file: ' + err.message, type: 'error' });
+      }
+      setBankingProcessing(false);
+      e.target.value = '';
+    };
+    
+    return (
+      <div className={`min-h-screen ${theme === 'light' ? 'bg-gray-100' : 'bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900'}`}>
+        {nav}
+        <div className="max-w-7xl mx-auto px-4 py-6">
+          {/* Header */}
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+            <div>
+              <h1 className="text-2xl lg:text-3xl font-bold text-white flex items-center gap-3">
+                <Landmark className="w-8 h-8 text-green-400" />
+                Banking & Cash Flow
+              </h1>
+              <p className="text-slate-400 mt-1">
+                {bankingData.lastUpload 
+                  ? `Last updated: ${new Date(bankingData.lastUpload).toLocaleString()}`
+                  : 'Upload your QBO transaction export to get started'}
+                {bankingData.transactions?.length > 0 && ` • ${bankingData.transactions.length} transactions`}
+              </p>
+            </div>
+            
+            <div className="flex items-center gap-3">
+              {/* Stale Data Alert */}
+              {isDataStale && bankingData.transactions?.length > 0 && (
+                <div className="px-3 py-2 bg-amber-500/20 border border-amber-500/50 rounded-lg text-amber-300 text-sm flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4" />
+                  Banking data not uploaded today
+                </div>
+              )}
+              
+              {/* Upload Button */}
+              <label className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-white font-medium cursor-pointer flex items-center gap-2 transition-colors">
+                <Upload className="w-4 h-4" />
+                {bankingProcessing ? 'Processing...' : 'Upload QBO Export'}
+                <input type="file" accept=".csv" onChange={handleBankingUpload} className="hidden" disabled={bankingProcessing} />
+              </label>
+            </div>
+          </div>
+          
+          {/* Date Range Selector */}
+          <div className="flex flex-wrap items-center gap-2 mb-6">
+            {[
+              { key: 'week', label: 'Last 7 Days' },
+              { key: 'month', label: 'This Month' },
+              { key: 'quarter', label: 'This Quarter' },
+              { key: 'ytd', label: 'Year to Date' },
+              { key: 'year', label: 'Last 12 Months' },
+              { key: 'all', label: 'All Time' },
+            ].map(r => (
+              <button
+                key={r.key}
+                onClick={() => setBankingDateRange(r.key)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  bankingDateRange === r.key 
+                    ? 'bg-green-600 text-white' 
+                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+          
+          {bankingData.transactions?.length === 0 ? (
+            /* Empty State */
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-12 text-center">
+              <Landmark className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+              <h2 className="text-xl font-semibold text-white mb-2">No Banking Data Yet</h2>
+              <p className="text-slate-400 mb-6 max-w-md mx-auto">
+                Upload your QuickBooks Online Transaction Detail by Account report to analyze your cash flow, expenses, and profitability.
+              </p>
+              <label className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-xl text-white font-medium cursor-pointer inline-flex items-center gap-2 transition-colors">
+                <Upload className="w-5 h-5" />
+                Upload QBO Export (.csv)
+                <input type="file" accept=".csv" onChange={handleBankingUpload} className="hidden" />
+              </label>
+            </div>
+          ) : (
+            <>
+              {/* Key Metrics */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div className="bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 rounded-xl border border-emerald-500/30 p-5">
+                  <p className="text-emerald-400 text-sm font-medium mb-1">Total Income</p>
+                  <p className="text-2xl font-bold text-white">{formatCurrency(totalIncome)}</p>
+                  <p className="text-slate-400 text-xs mt-1">{filteredTxns.filter(t => t.isIncome).length} deposits</p>
+                </div>
+                <div className="bg-gradient-to-br from-rose-900/40 to-rose-800/20 rounded-xl border border-rose-500/30 p-5">
+                  <p className="text-rose-400 text-sm font-medium mb-1">Total Expenses</p>
+                  <p className="text-2xl font-bold text-white">{formatCurrency(totalExpenses)}</p>
+                  <p className="text-slate-400 text-xs mt-1">{filteredTxns.filter(t => t.isExpense).length} expenses</p>
+                </div>
+                <div className={`bg-gradient-to-br ${netCashFlow >= 0 ? 'from-blue-900/40 to-blue-800/20 border-blue-500/30' : 'from-amber-900/40 to-amber-800/20 border-amber-500/30'} rounded-xl border p-5`}>
+                  <p className={`${netCashFlow >= 0 ? 'text-blue-400' : 'text-amber-400'} text-sm font-medium mb-1`}>Net Cash Flow</p>
+                  <p className="text-2xl font-bold text-white">{formatCurrency(netCashFlow)}</p>
+                  <p className="text-slate-400 text-xs mt-1">{((netCashFlow / (totalIncome || 1)) * 100).toFixed(1)}% margin</p>
+                </div>
+                <div className="bg-gradient-to-br from-violet-900/40 to-violet-800/20 rounded-xl border border-violet-500/30 p-5">
+                  <p className="text-violet-400 text-sm font-medium mb-1">Avg Monthly Profit</p>
+                  <p className="text-2xl font-bold text-white">
+                    {formatCurrency(monthKeys.length > 0 ? monthKeys.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0) / monthKeys.length : 0)}
+                  </p>
+                  <p className="text-slate-400 text-xs mt-1">Last {monthKeys.length} months</p>
+                </div>
+              </div>
+              
+              {/* Tabs */}
+              <div className="flex gap-2 mb-6 border-b border-slate-700 pb-2">
+                {[
+                  { key: 'overview', label: 'Overview', icon: BarChart3 },
+                  { key: 'expenses', label: 'Expenses', icon: CreditCard },
+                  { key: 'income', label: 'Income', icon: Wallet },
+                  { key: 'trends', label: 'Trends', icon: TrendingUp },
+                  { key: 'transactions', label: 'Transactions', icon: FileText },
+                ].map(tab => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setBankingTab(tab.key)}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors ${
+                      bankingTab === tab.key 
+                        ? 'bg-green-600 text-white' 
+                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                    }`}
+                  >
+                    <tab.icon className="w-4 h-4" />
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              
+              {/* Overview Tab */}
+              {bankingTab === 'overview' && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Top Expenses */}
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                    <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <CreditCard className="w-5 h-5 text-rose-400" />
+                      Top Expense Categories
+                    </h3>
+                    <div className="space-y-3">
+                      {topExpenseCategories.slice(0, 8).map(([cat, amount], i) => (
+                        <div key={cat} className="flex items-center gap-3">
+                          <div className="w-6 text-slate-500 text-sm">{i + 1}</div>
+                          <div className="flex-1">
+                            <div className="flex justify-between text-sm mb-1">
+                              <span className="text-white truncate">{cat}</span>
+                              <span className="text-rose-400 font-medium">{formatCurrency(amount)}</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-rose-500/70 rounded-full"
+                                style={{ width: `${(amount / (topExpenseCategories[0]?.[1] || 1)) * 100}%` }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  {/* Top Income */}
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                    <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <Wallet className="w-5 h-5 text-emerald-400" />
+                      Top Income Sources
+                    </h3>
+                    <div className="space-y-3">
+                      {topIncomeCategories.slice(0, 8).map(([cat, amount], i) => (
+                        <div key={cat} className="flex items-center gap-3">
+                          <div className="w-6 text-slate-500 text-sm">{i + 1}</div>
+                          <div className="flex-1">
+                            <div className="flex justify-between text-sm mb-1">
+                              <span className="text-white truncate">{cat}</span>
+                              <span className="text-emerald-400 font-medium">{formatCurrency(amount)}</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-emerald-500/70 rounded-full"
+                                style={{ width: `${(amount / (topIncomeCategories[0]?.[1] || 1)) * 100}%` }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  {/* Monthly Cash Flow Chart */}
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 lg:col-span-2">
+                    <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <TrendingUp className="w-5 h-5 text-blue-400" />
+                      Monthly Cash Flow Trend
+                    </h3>
+                    {monthKeys.length > 0 && (() => {
+                      const maxVal = Math.max(...monthKeys.map(m => Math.max(monthlySnapshots[m]?.income || 0, monthlySnapshots[m]?.expenses || 0)), 1);
+                      return (
+                        <>
+                          <div className="flex items-end gap-1 h-48">
+                            {monthKeys.map((m, i) => {
+                              const snap = monthlySnapshots[m];
+                              const incomeHeight = ((snap?.income || 0) / maxVal) * 100;
+                              const expenseHeight = ((snap?.expenses || 0) / maxVal) * 100;
+                              return (
+                                <div key={m} className="flex-1 flex flex-col items-center group relative">
+                                  <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 shadow-lg">
+                                    {new Date(m + '-01').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}<br/>
+                                    In: {formatCurrency(snap?.income || 0)}<br/>
+                                    Out: {formatCurrency(snap?.expenses || 0)}<br/>
+                                    Net: <span className={snap?.net >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{formatCurrency(snap?.net || 0)}</span>
+                                  </div>
+                                  <div className="w-full flex gap-0.5 items-end h-40">
+                                    <div className="flex-1 bg-emerald-500/70 rounded-t transition-all" style={{ height: `${incomeHeight}%`, minHeight: incomeHeight > 0 ? '4px' : '0' }} />
+                                    <div className="flex-1 bg-rose-500/70 rounded-t transition-all" style={{ height: `${expenseHeight}%`, minHeight: expenseHeight > 0 ? '4px' : '0' }} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="flex gap-1 mt-2">
+                            {monthKeys.map(m => (
+                              <div key={m} className="flex-1 text-center text-[10px] text-slate-500">
+                                {new Date(m + '-01').toLocaleDateString('en-US', { month: 'short' })}
+                              </div>
+                            ))}
+                          </div>
+                          <div className="flex justify-center gap-6 mt-3 text-xs">
+                            <span className="flex items-center gap-2"><span className="w-3 h-3 bg-emerald-500 rounded" />Income</span>
+                            <span className="flex items-center gap-2"><span className="w-3 h-3 bg-rose-500 rounded" />Expenses</span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+              
+              {/* Expenses Tab */}
+              {bankingTab === 'expenses' && (
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                  <h3 className="text-lg font-semibold text-white mb-4">All Expense Categories</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-700">
+                          <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
+                          <th className="text-right text-slate-400 font-medium py-2 px-2">Total</th>
+                          <th className="text-right text-slate-400 font-medium py-2 px-2">% of Expenses</th>
+                          <th className="text-right text-slate-400 font-medium py-2 px-2">Txns</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {topExpenseCategories.map(([cat, amount]) => {
+                          const pct = (amount / totalExpenses) * 100;
+                          const count = filteredTxns.filter(t => t.isExpense && t.topCategory === cat).length;
+                          return (
+                            <tr key={cat} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                              <td className="py-2 px-2 text-white">{cat}</td>
+                              <td className="py-2 px-2 text-right text-rose-400 font-medium">{formatCurrency(amount)}</td>
+                              <td className="py-2 px-2 text-right">
+                                <div className="flex items-center justify-end gap-2">
+                                  <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                    <div className="h-full bg-rose-500" style={{ width: `${pct}%` }} />
+                                  </div>
+                                  <span className="text-slate-400 w-12 text-right">{pct.toFixed(1)}%</span>
+                                </div>
+                              </td>
+                              <td className="py-2 px-2 text-right text-slate-400">{count}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-slate-600">
+                          <td className="py-2 px-2 font-bold text-white">Total</td>
+                          <td className="py-2 px-2 text-right font-bold text-rose-400">{formatCurrency(totalExpenses)}</td>
+                          <td className="py-2 px-2 text-right text-slate-400">100%</td>
+                          <td className="py-2 px-2 text-right text-slate-400">{filteredTxns.filter(t => t.isExpense).length}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              )}
+              
+              {/* Income Tab */}
+              {bankingTab === 'income' && (
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                  <h3 className="text-lg font-semibold text-white mb-4">All Income Sources</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-700">
+                          <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
+                          <th className="text-right text-slate-400 font-medium py-2 px-2">Total</th>
+                          <th className="text-right text-slate-400 font-medium py-2 px-2">% of Income</th>
+                          <th className="text-right text-slate-400 font-medium py-2 px-2">Txns</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {topIncomeCategories.map(([cat, amount]) => {
+                          const pct = (amount / totalIncome) * 100;
+                          const count = filteredTxns.filter(t => t.isIncome && t.topCategory === cat).length;
+                          return (
+                            <tr key={cat} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                              <td className="py-2 px-2 text-white">{cat}</td>
+                              <td className="py-2 px-2 text-right text-emerald-400 font-medium">{formatCurrency(amount)}</td>
+                              <td className="py-2 px-2 text-right">
+                                <div className="flex items-center justify-end gap-2">
+                                  <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                    <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
+                                  </div>
+                                  <span className="text-slate-400 w-12 text-right">{pct.toFixed(1)}%</span>
+                                </div>
+                              </td>
+                              <td className="py-2 px-2 text-right text-slate-400">{count}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-slate-600">
+                          <td className="py-2 px-2 font-bold text-white">Total</td>
+                          <td className="py-2 px-2 text-right font-bold text-emerald-400">{formatCurrency(totalIncome)}</td>
+                          <td className="py-2 px-2 text-right text-slate-400">100%</td>
+                          <td className="py-2 px-2 text-right text-slate-400">{filteredTxns.filter(t => t.isIncome).length}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              )}
+              
+              {/* Trends Tab */}
+              {bankingTab === 'trends' && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Monthly Net Profit */}
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                    <h3 className="text-lg font-semibold text-white mb-4">Monthly Net Profit</h3>
+                    {monthKeys.length > 0 && (() => {
+                      const maxNet = Math.max(...monthKeys.map(m => Math.abs(monthlySnapshots[m]?.net || 0)), 1);
+                      return (
+                        <div className="flex items-end gap-1 h-40">
+                          {monthKeys.map(m => {
+                            const net = monthlySnapshots[m]?.net || 0;
+                            const height = (Math.abs(net) / maxNet) * 100;
+                            return (
+                              <div key={m} className="flex-1 flex flex-col items-center group relative">
+                                <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 shadow-lg">
+                                  {new Date(m + '-01').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}<br/>
+                                  {formatCurrency(net)}
+                                </div>
+                                <div 
+                                  className={`w-full rounded-t transition-all ${net >= 0 ? 'bg-emerald-500/70' : 'bg-rose-500/70'}`}
+                                  style={{ height: `${height}%`, minHeight: '4px' }}
+                                />
+                                <span className="text-[9px] text-slate-500 mt-1">{new Date(m + '-01').toLocaleDateString('en-US', { month: 'short' })}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  
+                  {/* EOY Projection */}
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                    <h3 className="text-lg font-semibold text-white mb-4">End of Year Projection</h3>
+                    {(() => {
+                      const currentYear = now.getFullYear();
+                      const ytdMonths = monthKeys.filter(m => m.startsWith(String(currentYear)));
+                      const ytdNet = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0);
+                      const avgMonthlyNet = ytdMonths.length > 0 ? ytdNet / ytdMonths.length : 0;
+                      const monthsRemaining = 12 - now.getMonth() - 1;
+                      const projectedEOY = ytdNet + (avgMonthlyNet * monthsRemaining);
+                      
+                      return (
+                        <div className="space-y-4">
+                          <div className="flex justify-between items-center p-3 bg-slate-700/30 rounded-lg">
+                            <span className="text-slate-400">YTD Net Profit</span>
+                            <span className={`font-bold ${ytdNet >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(ytdNet)}</span>
+                          </div>
+                          <div className="flex justify-between items-center p-3 bg-slate-700/30 rounded-lg">
+                            <span className="text-slate-400">Avg Monthly Net</span>
+                            <span className={`font-bold ${avgMonthlyNet >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(avgMonthlyNet)}</span>
+                          </div>
+                          <div className="flex justify-between items-center p-3 bg-slate-700/30 rounded-lg">
+                            <span className="text-slate-400">Months Remaining</span>
+                            <span className="font-bold text-white">{monthsRemaining}</span>
+                          </div>
+                          <div className="flex justify-between items-center p-4 bg-violet-600/20 border border-violet-500/30 rounded-xl">
+                            <span className="text-violet-300 font-medium">Projected EOY Profit</span>
+                            <span className={`text-2xl font-bold ${projectedEOY >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(projectedEOY)}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+              
+              {/* Transactions Tab */}
+              {bankingTab === 'transactions' && (
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-white">Recent Transactions</h3>
+                    <span className="text-slate-400 text-sm">{filteredTxns.length} transactions</span>
+                  </div>
+                  <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-slate-800">
+                        <tr className="border-b border-slate-700">
+                          <th className="text-left text-slate-400 font-medium py-2 px-2">Date</th>
+                          <th className="text-left text-slate-400 font-medium py-2 px-2">Vendor</th>
+                          <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
+                          <th className="text-right text-slate-400 font-medium py-2 px-2">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredTxns.slice(0, 200).map((txn, i) => (
+                          <tr key={i} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                            <td className="py-2 px-2 text-slate-400 whitespace-nowrap">{txn.dateDisplay}</td>
+                            <td className="py-2 px-2 text-white truncate max-w-[200px]" title={txn.vendor}>{txn.vendor}</td>
+                            <td className="py-2 px-2 text-slate-300 truncate max-w-[200px]" title={txn.category}>{txn.topCategory}</td>
+                            <td className={`py-2 px-2 text-right font-medium whitespace-nowrap ${txn.isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {txn.isIncome ? '+' : '-'}{formatCurrency(txn.amount)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {filteredTxns.length > 200 && (
+                      <p className="text-center text-slate-500 py-4">Showing first 200 of {filteredTxns.length} transactions</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
     );
