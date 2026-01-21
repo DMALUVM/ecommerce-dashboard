@@ -19666,16 +19666,27 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const previousYearData = previousYear ? getYearData(previousYear) : null;
     
     // Month-over-month YoY comparison (uses weekly data + monthly period data)
+    // Use the same aggregation approach that works in Trends
     const getMonthlyByYear = (year) => {
       const months = {};
       
-      // First, aggregate from weekly data
+      // First, aggregate from weekly data - use full month key then extract month
       sortedWeeks.filter(w => w.startsWith(year)).forEach(w => {
-        const month = w.substring(5, 7);
-        if (!months[month]) months[month] = { revenue: 0, profit: 0, units: 0, source: 'weekly' };
-        months[month].revenue += allWeeksData[w].total?.revenue || 0;
-        months[month].profit += allWeeksData[w].total?.netProfit || 0;
-        months[month].units += allWeeksData[w].total?.units || 0;
+        const week = allWeeksData[w];
+        if (!week) return;
+        
+        const month = w.substring(5, 7); // "01" for January
+        if (!months[month]) {
+          months[month] = { revenue: 0, profit: 0, units: 0, source: 'weekly' };
+        }
+        // Make sure we're getting the revenue correctly
+        const weekRevenue = week.total?.revenue || week.revenue || 0;
+        const weekProfit = week.total?.netProfit || week.profit || 0;
+        const weekUnits = week.total?.units || week.units || 0;
+        
+        months[month].revenue += weekRevenue;
+        months[month].profit += weekProfit;
+        months[month].units += weekUnits;
       });
       
       // Then check for monthly period data (flexible patterns for various formats)
@@ -19727,10 +19738,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               const p = allPeriodsData[periodKey];
               // Period data overrides or adds to weekly data
               if (!months[periodMonth] || months[periodMonth].source === 'weekly') {
+                const periodRevenue = p.total?.revenue || p.revenue || 0;
+                const periodProfit = p.total?.netProfit || p.profit || 0;
+                const periodUnits = p.total?.units || p.units || 0;
                 months[periodMonth] = {
-                  revenue: p.total?.revenue || 0,
-                  profit: p.total?.netProfit || 0,
-                  units: p.total?.units || 0,
+                  revenue: periodRevenue,
+                  profit: periodProfit,
+                  units: periodUnits,
                   source: 'period'
                 };
               }
