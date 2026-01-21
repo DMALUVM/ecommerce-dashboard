@@ -18533,23 +18533,53 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     }
     const avgGrowth = growthRates.length > 0 ? growthRates.reduce((s, r) => s + r, 0) / growthRates.length : 0;
     
-    // Generate next 8 projected weeks
+    // Generate next 8 projected weeks - USE AI FORECAST SYSTEM when available
     const lastWeekDate = weeklyData.length > 0 ? new Date(weeklyData[weeklyData.length - 1].key + 'T00:00:00') : new Date();
     const projectedWeeks = [];
+    
+    // Get AI forecast data if available
+    const aiForecast = enhancedForecast || generateForecast;
+    const aiWeeklyForecast = aiForecast?.weekly || [];
     
     for (let i = 1; i <= 8; i++) {
       const futureDate = new Date(lastWeekDate.getTime() + i * 7 * 24 * 60 * 60 * 1000);
       const weekKey = futureDate.toISOString().split('T')[0];
       
-      // Apply growth trend to projection
-      const growthMultiplier = Math.pow(1 + Math.max(-0.1, Math.min(0.1, avgGrowth)), i); // Cap growth at ±10% per week
-      const projectedRevenue = Math.round(avgWeeklyRevenue * growthMultiplier);
-      const projectedProfit = Math.round(avgWeeklyProfit * growthMultiplier);
-      const projectedUnits = Math.round(avgWeeklyUnits * growthMultiplier);
+      // Priority 1: Use AI forecast for first 4 weeks
+      const aiWeek = aiWeeklyForecast[i - 1];
       
-      // Check if we have an Amazon forecast for this week
+      // Priority 2: Check Amazon forecasts
       const amazonForecast = amazonForecasts[weekKey];
-      const forecastRevenue = amazonForecast?.totals?.sales || amazonForecast?.totals?.revenue || null;
+      const amazonRevenue = amazonForecast?.totals?.sales || amazonForecast?.totals?.revenue || null;
+      
+      // Priority 3: Fall back to trend calculation
+      const growthMultiplier = Math.pow(1 + Math.max(-0.1, Math.min(0.1, avgGrowth)), i);
+      const trendRevenue = Math.round(avgWeeklyRevenue * growthMultiplier);
+      const trendProfit = Math.round(avgWeeklyProfit * growthMultiplier);
+      const trendUnits = Math.round(avgWeeklyUnits * growthMultiplier);
+      
+      // Determine which forecast to use
+      let projectedRevenue, projectedProfit, projectedUnits, forecastSource;
+      
+      if (aiWeek && i <= 4) {
+        // Use AI forecast (includes Amazon blending if available)
+        projectedRevenue = aiWeek.revenue || trendRevenue;
+        projectedProfit = aiWeek.profit || trendProfit;
+        projectedUnits = aiWeek.units || trendUnits;
+        forecastSource = aiWeek.hasAmazonForecast ? 'ai-amazon' : 'ai-trend';
+      } else if (amazonRevenue) {
+        // Use direct Amazon forecast
+        projectedRevenue = amazonRevenue;
+        projectedProfit = trendProfit; // Estimate profit from trend
+        projectedUnits = trendUnits;
+        forecastSource = 'amazon';
+      } else {
+        // Use trend calculation
+        projectedRevenue = trendRevenue;
+        projectedProfit = trendProfit;
+        projectedUnits = trendUnits;
+        forecastSource = 'trend';
+      }
       
       projectedWeeks.push({
         key: weekKey,
@@ -18562,13 +18592,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         margin: 0,
         amazonRev: 0,
         shopifyRev: 0,
-        // Projected values
-        projectedRevenue: forecastRevenue || projectedRevenue,
+        // Projected values from AI forecast system
+        projectedRevenue,
         projectedProfit,
         projectedUnits,
         projectedMargin: avgWeeklyMargin,
-        forecastRevenue: forecastRevenue || projectedRevenue,
-        forecastSource: forecastRevenue ? 'amazon' : 'trend',
+        forecastRevenue: projectedRevenue,
+        forecastSource,
+        aiConfidence: aiForecast?.confidence,
       });
     }
     
@@ -18602,26 +18633,69 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const monthlyTrends = getMonthlyTrends();
     const yearlyTrends = getYearlyTrends();
     
-    // Add projected months
+    // Add projected months - USE AI FORECAST SYSTEM when available
     const monthlyWithProjections = (() => {
       const monthlyData = monthlyTrends.map(([k, v]) => v);
       if (monthlyData.length === 0) return [];
       
-      // Calculate average monthly metrics from recent data
+      // Get AI forecast data
+      const aiForecast = enhancedForecast || generateForecast;
+      const aiMonthlyForecast = aiForecast?.monthly;
+      const aiTrend = aiForecast?.trend;
+      const aiConfidence = aiForecast?.confidence;
+      
+      // Calculate average monthly metrics from recent data (fallback)
       const recentMonths = monthlyData.slice(-3);
       const avgMonthlyRevenue = recentMonths.reduce((s, m) => s + m.revenue, 0) / recentMonths.length;
       const avgMonthlyProfit = recentMonths.reduce((s, m) => s + m.profit, 0) / recentMonths.length;
       const avgMonthlyUnits = recentMonths.reduce((s, m) => s + m.units, 0) / recentMonths.length;
       const avgMonthlyMargin = avgMonthlyRevenue > 0 ? (avgMonthlyProfit / avgMonthlyRevenue) * 100 : 0;
       
-      // Generate next 6 projected months
+      // Calculate month-over-month growth trend from AI or calculate manually
+      let monthlyGrowthRate = 0;
+      if (aiTrend?.revenueChange) {
+        // Convert weekly trend to monthly (roughly 4.33 weeks per month)
+        monthlyGrowthRate = (aiTrend.revenueChange / 100) * 4.33;
+      } else {
+        // Calculate from recent months
+        const growthRates = [];
+        for (let i = 1; i < recentMonths.length; i++) {
+          if (recentMonths[i-1].revenue > 0) {
+            growthRates.push((recentMonths[i].revenue - recentMonths[i-1].revenue) / recentMonths[i-1].revenue);
+          }
+        }
+        monthlyGrowthRate = growthRates.length > 0 ? growthRates.reduce((s, r) => s + r, 0) / growthRates.length : 0;
+      }
+      // Cap growth at ±15% per month
+      const cappedGrowth = Math.max(-0.15, Math.min(0.15, monthlyGrowthRate));
+      
+      // Generate next 6 projected months with AI-informed growth
       const lastMonth = monthlyData[monthlyData.length - 1];
       const lastDate = new Date(lastMonth.key + '-01');
       const projectedMonths = [];
       
+      // Use AI monthly forecast for first month if available, then apply trend
+      let baseRevenue = aiMonthlyForecast?.revenue ? aiMonthlyForecast.revenue / 4 : lastMonth.revenue || avgMonthlyRevenue;
+      let baseProfit = aiMonthlyForecast?.profit ? aiMonthlyForecast.profit / 4 : lastMonth.profit || avgMonthlyProfit;
+      let baseUnits = aiMonthlyForecast?.units ? aiMonthlyForecast.units / 4 : lastMonth.units || avgMonthlyUnits;
+      
+      // If we have AI forecast, use it for base values
+      if (aiMonthlyForecast && aiMonthlyForecast.revenue > 0) {
+        // AI forecast is for 4 weeks, so this is roughly a monthly value
+        baseRevenue = aiMonthlyForecast.revenue;
+        baseProfit = aiMonthlyForecast.profit;
+        baseUnits = aiMonthlyForecast.units;
+      }
+      
       for (let i = 1; i <= 6; i++) {
         const futureDate = new Date(lastDate.getFullYear(), lastDate.getMonth() + i, 1);
         const monthKey = `${futureDate.getFullYear()}-${String(futureDate.getMonth() + 1).padStart(2, '0')}`;
+        
+        // Apply growth multiplier
+        const growthMultiplier = Math.pow(1 + cappedGrowth, i);
+        const projectedRevenue = Math.round(baseRevenue * growthMultiplier);
+        const projectedProfit = Math.round(baseProfit * growthMultiplier);
+        const projectedUnits = Math.round(baseUnits * growthMultiplier);
         
         projectedMonths.push({
           key: monthKey,
@@ -18632,12 +18706,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           profit: 0,
           units: 0,
           margin: 0,
-          projectedRevenue: Math.round(avgMonthlyRevenue),
-          projectedProfit: Math.round(avgMonthlyProfit),
-          projectedUnits: Math.round(avgMonthlyUnits),
+          projectedRevenue,
+          projectedProfit,
+          projectedUnits,
           projectedMargin: avgMonthlyMargin,
-          forecastRevenue: Math.round(avgMonthlyRevenue),
-          forecastSource: 'trend',
+          forecastRevenue: projectedRevenue,
+          forecastSource: aiMonthlyForecast ? 'ai-forecast' : 'trend',
+          growthRate: cappedGrowth,
+          aiConfidence,
         });
       }
       
@@ -18667,8 +18743,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       }
     }
     
-    const latestPeriod = currentData[currentData.length - 1];
-    const prevPeriod = currentData[currentData.length - 2];
+    // For stats cards, only use actual data (not projected)
+    const actualData = currentData.filter(d => !d.isProjected);
+    const latestPeriod = actualData[actualData.length - 1];
+    const prevPeriod = actualData[actualData.length - 2];
     
     const calcChange = (current, previous) => {
       if (!previous || previous === 0) return null;
@@ -18930,7 +19008,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       )}
                       {projectedPeriods.length > 0 && (
                         <div className="flex items-center gap-4 mb-3 text-sm">
-                          <span className="text-amber-400/80">📊 {projectedPeriods.length} projected periods shown (based on recent trend)</span>
+                          <span className="text-amber-400/80">
+                            {projectedPeriods.some(p => p.forecastSource?.startsWith('ai')) 
+                              ? `🤖 ${projectedPeriods.length} AI-projected periods` 
+                              : `📊 ${projectedPeriods.length} projected periods`}
+                            {(enhancedForecast || generateForecast)?.confidence && 
+                              <span className="text-violet-400 ml-2">({(enhancedForecast || generateForecast).confidence}% confidence)</span>
+                            }
+                          </span>
                         </div>
                       )}
                       
@@ -18963,7 +19048,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                 {isProjected ? (
                                   <>
                                     <p className="text-amber-400">Projected: {formatCurrency(forecastValue)}</p>
-                                    <p className="text-slate-400 text-[10px]">Based on {d.forecastSource === 'amazon' ? 'Amazon forecast' : 'recent trend'}</p>
+                                    <p className="text-slate-400 text-[10px]">
+                                      {d.forecastSource === 'ai-amazon' ? '🤖 AI + Amazon forecast' :
+                                       d.forecastSource === 'ai-trend' ? '🤖 AI trend forecast' :
+                                       d.forecastSource === 'ai-forecast' ? '🤖 AI forecast model' :
+                                       d.forecastSource === 'amazon' ? 'Amazon forecast' : 
+                                       d.forecastSource === 'average' ? 'Based on average' :
+                                       d.growthRate ? `${(d.growthRate * 100).toFixed(1)}% MoM trend` : 'Based on trend'}
+                                    </p>
+                                    {d.aiConfidence && <p className="text-violet-400 text-[10px]">{d.aiConfidence}% confidence</p>}
                                   </>
                                 ) : (
                                   <>
@@ -26832,31 +26925,37 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 // Calculate forecast based on best available data
                 let forecastBasis, avgMonthlyProfit, linearProjection, trendProjection;
                 
+                // Get recurring expenses for deduction
+                const recurringMonthlyExpenses = totalMonthlyRecurring || 0;
+                const recurringCostsRemaining = recurringMonthlyExpenses * monthsRemaining;
+                
                 if (hasActualSalesData && actualYTDRevenue > 0) {
                   // Use actual sales profit data
                   forecastBasis = 'sales';
                   const avgWeeklyProfit = actualYTDProfit / Math.max(weeksWithData, 1);
                   avgMonthlyProfit = avgWeeklyProfit * 4.33;
-                  linearProjection = actualYTDProfit + (avgMonthlyProfit * monthsRemaining);
+                  // Deduct recurring expenses from projections
+                  linearProjection = actualYTDProfit + (avgMonthlyProfit * monthsRemaining) - recurringCostsRemaining;
                   
                   // For trend, use last 4 weeks if available
                   const recentWeeks = sortedWeeks2026.slice(-4);
                   const recentProfit = recentWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.netProfit || 0), 0);
                   const recentAvgWeekly = recentProfit / Math.max(recentWeeks.length, 1);
                   const recentAvgMonthly = recentAvgWeekly * 4.33;
-                  trendProjection = actualYTDProfit + (recentAvgMonthly * monthsRemaining);
+                  trendProjection = actualYTDProfit + (recentAvgMonthly * monthsRemaining) - recurringCostsRemaining;
                 } else {
                   // Fall back to banking cash flow
                   forecastBasis = 'cashflow';
                   avgMonthlyProfit = ytdMonths.length > 0 ? ytdCashFlow / ytdMonths.length : 0;
-                  linearProjection = ytdCashFlow + (avgMonthlyProfit * monthsRemaining);
+                  // Deduct recurring expenses from projections
+                  linearProjection = ytdCashFlow + (avgMonthlyProfit * monthsRemaining) - recurringCostsRemaining;
                   
                   // Trend using last 3 months
                   const recentMonths = ytdMonths.slice(-3);
                   const recentAvgNet = recentMonths.length > 0 
                     ? recentMonths.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0) / recentMonths.length 
                     : avgMonthlyProfit;
-                  trendProjection = ytdCashFlow + (recentAvgNet * monthsRemaining);
+                  trendProjection = ytdCashFlow + (recentAvgNet * monthsRemaining) - recurringCostsRemaining;
                 }
                 
                 // ==================== OPEN PO CASH FLOW ====================
@@ -26996,6 +27095,24 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           <p className="text-slate-500 text-xs">Weighted recent trends</p>
                         </div>
                       </div>
+                      
+                      {/* Recurring Expenses Deduction */}
+                      {recurringMonthlyExpenses > 0 && (
+                        <div className="bg-rose-900/20 border border-rose-500/30 rounded-lg p-3 mb-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <RefreshCw className="w-4 h-4 text-rose-400" />
+                              <span className="text-rose-400 text-sm font-medium">Recurring Expenses Factored In</span>
+                            </div>
+                            <span className="text-rose-400 font-bold">-{formatCurrency(recurringCostsRemaining)}</span>
+                          </div>
+                          <p className="text-slate-500 text-xs mt-1">
+                            {confirmedRecurringList.length} confirmed recurring × {monthsRemaining} months remaining
+                            ({formatCurrency(recurringMonthlyExpenses)}/mo)
+                          </p>
+                        </div>
+                      )}
+                      
                       <div className="bg-slate-800/30 rounded-lg p-3">
                         <p className="text-slate-400 text-sm">
                           <span className="text-violet-400 font-medium">📊 Forecast Methodology:</span> 
@@ -27003,6 +27120,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             ? ` Using ${weeksWithData} weeks of actual sales profit data. Linear projection uses your average weekly profit (${formatCurrency(avgMonthlyProfit / 4.33)}) × remaining weeks. AI Trend weights your last 4 weeks more heavily to capture recent momentum.`
                             : ` Using banking cash flow data. Linear projection extrapolates your average monthly net (${formatCurrency(avgMonthlyProfit)}). AI Trend weights recent 3 months higher to reflect current performance.`
                           }
+                          {recurringMonthlyExpenses > 0 && ` 🔄 Deducting ${formatCurrency(recurringCostsRemaining)} in confirmed recurring expenses (${monthsRemaining} months × ${formatCurrency(recurringMonthlyExpenses)}/mo).`}
                           {trendProjection > linearProjection 
                             ? " 📈 Recent performance is trending above average!" 
                             : trendProjection < linearProjection 
