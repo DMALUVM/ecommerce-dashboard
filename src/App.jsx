@@ -76,8 +76,12 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
     }
   }
   
-  // Bank account patterns (only real bank/credit card accounts)
+  // Bank account patterns - must have account number pattern like (5983), (1003), (1009)
   const isBankAccount = (name) => {
+    // Must have account number in parentheses pattern
+    const hasAccountNumber = /\(\d{4}\)/.test(name);
+    if (!hasAccountNumber) return false;
+    
     const lower = name.toLowerCase();
     return (
       lower.includes('checking') ||
@@ -88,9 +92,10 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
       lower.includes('amex') ||
       lower.includes('visa') ||
       lower.includes('mastercard') ||
-      lower.includes('(5983)') || // Checking account number pattern
-      lower.includes('(1003)') || // Credit card pattern
-      lower.includes('(1009)')    // Credit card pattern
+      lower.includes('platinum') ||
+      lower.includes('(5983)') ||
+      lower.includes('(1003)') ||
+      lower.includes('(1009)')
     );
   };
   
@@ -1116,6 +1121,7 @@ const handleLogout = async () => {
   const [bankingTab, setBankingTab] = useState('overview'); // 'overview' | 'income' | 'expenses' | 'accounts' | 'trends' | 'ai'
   const [bankingCategoryFilter, setBankingCategoryFilter] = useState('all');
   const [showBankingUpload, setShowBankingUpload] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState(null); // Transaction being edited
   
   // Sales Tax Management
   const [salesTaxConfig, setSalesTaxConfig] = useState({
@@ -10468,34 +10474,59 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
         })) || [],
       },
       // Banking/Cash Flow Data for AI analysis
-      banking: bankingData.transactions?.length > 0 ? {
-        transactionCount: bankingData.transactions.length,
-        dateRange: bankingData.dateRange,
-        lastUpload: bankingData.lastUpload,
-        monthlySnapshots: Object.entries(bankingData.monthlySnapshots || {}).slice(-12).map(([month, data]) => ({
-          month,
-          income: data.income,
-          expenses: data.expenses,
-          net: data.net,
-          transactionCount: data.transactions,
-        })),
-        topExpenseCategories: Object.entries(bankingData.categories || {})
-          .filter(([_, c]) => c.totalOut > 0)
-          .sort((a, b) => b[1].totalOut - a[1].totalOut)
-          .slice(0, 10)
-          .map(([name, data]) => ({ name, total: data.totalOut, count: data.count })),
-        topIncomeCategories: Object.entries(bankingData.categories || {})
-          .filter(([_, c]) => c.totalIn > 0)
-          .sort((a, b) => b[1].totalIn - a[1].totalIn)
-          .slice(0, 10)
-          .map(([name, data]) => ({ name, total: data.totalIn, count: data.count })),
-        accounts: Object.entries(bankingData.accounts || {}).map(([name, data]) => ({
-          name,
-          transactions: data.transactions,
-          totalIn: data.totalIn,
-          totalOut: data.totalOut,
-        })),
-      } : null,
+      banking: bankingData.transactions?.length > 0 ? (() => {
+        const accts = Object.entries(bankingData.accounts || {});
+        const checkingAccts = accts.filter(([_, a]) => a.type !== 'credit_card');
+        const creditAccts = accts.filter(([_, a]) => a.type === 'credit_card');
+        const totalCash = checkingAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
+        const totalDebt = creditAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
+        const recentMonths = Object.keys(bankingData.monthlySnapshots || {}).sort().slice(-3);
+        const avgBurn = recentMonths.length > 0 
+          ? recentMonths.reduce((s, m) => s + (bankingData.monthlySnapshots[m]?.expenses || 0), 0) / recentMonths.length
+          : 0;
+        const runway = avgBurn > 0 ? Math.floor(totalCash / avgBurn) : 99;
+        
+        return {
+          transactionCount: bankingData.transactions.length,
+          dateRange: bankingData.dateRange,
+          lastUpload: bankingData.lastUpload,
+          // CFO Summary
+          cfoMetrics: {
+            cashPosition: totalCash,
+            creditCardDebt: totalDebt,
+            netPosition: totalCash - totalDebt,
+            monthlyBurnRate: avgBurn,
+            cashRunwayMonths: runway,
+          },
+          // Account Balances
+          accounts: accts.map(([name, data]) => ({
+            name: name.split('(')[0].trim(),
+            type: data.type,
+            balance: data.balance || 0,
+            transactions: data.transactions,
+          })),
+          // Monthly Performance (last 12 months)
+          monthlySnapshots: Object.entries(bankingData.monthlySnapshots || {}).slice(-12).map(([month, data]) => ({
+            month,
+            income: data.income,
+            expenses: data.expenses,
+            net: data.net,
+            transactionCount: data.transactions,
+          })),
+          // Top expense categories
+          topExpenseCategories: Object.entries(bankingData.categories || {})
+            .filter(([_, c]) => c.totalOut > 0)
+            .sort((a, b) => b[1].totalOut - a[1].totalOut)
+            .slice(0, 10)
+            .map(([name, data]) => ({ name, total: data.totalOut, count: data.count })),
+          // Top income sources
+          topIncomeCategories: Object.entries(bankingData.categories || {})
+            .filter(([_, c]) => c.totalIn > 0)
+            .sort((a, b) => b[1].totalIn - a[1].totalIn)
+            .slice(0, 10)
+            .map(([name, data]) => ({ name, total: data.totalIn, count: data.count })),
+        };
+      })() : null,
     };
   };
   
@@ -11431,7 +11462,55 @@ ${forecastInfo.upcoming.map(f => `- ${f.week}: $${f.sales.toFixed(0)} projected 
 🔔 FORECAST ALERTS:
 ${forecastInfo.alerts.map(a => `- ${a}`).join('\n')}`;
       }
+      
+      // Add banking/cash flow data if available
+      let bankingSection = '';
+      if (bankingData.transactions?.length > 0) {
+        const accts = Object.entries(bankingData.accounts || {});
+        const checkingAccts = accts.filter(([_, a]) => a.type !== 'credit_card');
+        const creditAccts = accts.filter(([_, a]) => a.type === 'credit_card');
+        const totalCash = checkingAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
+        const totalDebt = creditAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
+        const recentMonths = Object.keys(bankingData.monthlySnapshots || {}).sort().slice(-3);
+        const avgBurn = recentMonths.length > 0 
+          ? recentMonths.reduce((s, m) => s + (bankingData.monthlySnapshots[m]?.expenses || 0), 0) / recentMonths.length
+          : 0;
+        const runway = avgBurn > 0 ? Math.floor(totalCash / avgBurn) : 99;
+        
+        // Get this month's data
+        const now = new Date();
+        const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const thisMonthData = bankingData.monthlySnapshots?.[thisMonth] || { income: 0, expenses: 0, net: 0 };
+        
+        // Top expenses
+        const topExpenses = Object.entries(bankingData.categories || {})
+          .filter(([_, c]) => c.totalOut > 0)
+          .sort((a, b) => b[1].totalOut - a[1].totalOut)
+          .slice(0, 5)
+          .map(([name, data]) => ({ name, total: data.totalOut }));
+        
+        bankingSection = `
 
+💰 CASH FLOW & BANKING:
+- Cash Available: $${totalCash.toFixed(0)}
+- Credit Card Debt: $${totalDebt.toFixed(0)}
+- Net Position: $${(totalCash - totalDebt).toFixed(0)}
+- Monthly Burn Rate: $${avgBurn.toFixed(0)}/month
+- Cash Runway: ${runway > 12 ? '12+' : runway} months
+
+This Month's Cash Flow:
+- Income: $${thisMonthData.income.toFixed(0)}
+- Expenses: $${thisMonthData.expenses.toFixed(0)}
+- Net: $${thisMonthData.net.toFixed(0)}
+
+Top Expense Categories:
+${topExpenses.map(e => `- ${e.name}: $${e.total.toFixed(0)}`).join('\n')}`;
+        
+        enhancedData += bankingSection;
+      }
+
+      const hasBanking = bankingData.transactions?.length > 0;
+      
       const reportPrompt = `Generate a ${typeLabels[type]} INTELLIGENCE REPORT for "${storeName || 'Store'}".
 
 ${enhancedData}
@@ -11462,6 +11541,9 @@ ${inventoryAlerts.length > 0 ? `## 📦 Inventory Alerts
 
 ` : ''}${forecastInfo.upcoming.length > 0 ? `## 🔮 Forecast & Outlook
 (Analysis of upcoming Amazon forecasts and what to expect)
+
+` : ''}${hasBanking ? `## 💵 Cash Flow & Financial Health
+(Analysis of cash position, burn rate, runway, and expense trends. Note any concerns about cash flow or unusual expenses.)
 
 ` : ''}## 🎯 Recommendations
 (5 specific, prioritized action items with expected impact)
@@ -23015,67 +23097,37 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       )}
                     </div>
                   </div>
-                  <p className="text-xs text-slate-500 mb-4">💡 Use the dropdown to select a category, or type directly in the input field for custom categories.</p>
+                  <p className="text-xs text-slate-500 mb-4">💡 Click any transaction to edit its category</p>
                   <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 bg-slate-800 z-10">
                         <tr className="border-b border-slate-700">
-                          <th className="text-left text-slate-400 font-medium py-2 px-2">Date</th>
-                          <th className="text-left text-slate-400 font-medium py-2 px-2">Vendor</th>
-                          <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
-                          <th className="text-left text-slate-400 font-medium py-2 px-2">Account</th>
-                          <th className="text-right text-slate-400 font-medium py-2 px-2">Amount</th>
+                          <th className="text-left text-slate-400 font-medium py-2 px-3">Date</th>
+                          <th className="text-left text-slate-400 font-medium py-2 px-3">Vendor</th>
+                          <th className="text-left text-slate-400 font-medium py-2 px-3">Category</th>
+                          <th className="text-right text-slate-400 font-medium py-2 px-3">Amount</th>
                         </tr>
                       </thead>
                       <tbody>
                         {filteredTxns.slice(0, 300).map((txn, i) => {
                           const hasOverride = bankingData.categoryOverrides?.[txn.id];
                           return (
-                            <tr key={txn.id || i} className="border-b border-slate-700/50 hover:bg-slate-700/30 group">
-                              <td className="py-2 px-2 text-slate-400 whitespace-nowrap">{txn.dateDisplay}</td>
-                              <td className="py-2 px-2">
-                                <div className="text-white truncate max-w-[150px]" title={txn.vendor}>{txn.vendor}</div>
-                                <div className="text-slate-500 text-xs truncate max-w-[150px]" title={txn.memo}>{txn.memo?.slice(0, 30) || ''}</div>
+                            <tr 
+                              key={txn.id || i} 
+                              onClick={() => setEditingTransaction(txn)}
+                              className="border-b border-slate-700/50 hover:bg-slate-700/50 cursor-pointer transition-colors"
+                            >
+                              <td className="py-3 px-3 text-slate-400 whitespace-nowrap">{txn.dateDisplay}</td>
+                              <td className="py-3 px-3">
+                                <div className="text-white">{txn.vendor}</div>
+                                <div className="text-slate-500 text-xs truncate max-w-[200px]">{txn.memo?.slice(0, 40) || ''}</div>
                               </td>
-                              <td className="py-2 px-2">
-                                <div className="flex items-center gap-2">
-                                  <input
-                                    type="text"
-                                    defaultValue={txn.category}
-                                    onBlur={(e) => {
-                                      if (e.target.value !== txn.category) {
-                                        handleCategoryChange(txn.id, e.target.value);
-                                      }
-                                    }}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') {
-                                        e.target.blur();
-                                      }
-                                    }}
-                                    className={`bg-slate-900/50 border ${hasOverride ? 'border-violet-500/50 text-violet-300' : 'border-slate-600 text-slate-300'} rounded px-2 py-1 text-sm w-44 focus:outline-none focus:ring-1 focus:ring-violet-500`}
-                                    title="Type to edit category"
-                                  />
-                                  {hasOverride && (
-                                    <button 
-                                      onClick={() => {
-                                        const newOverrides = { ...bankingData.categoryOverrides };
-                                        delete newOverrides[txn.id];
-                                        setBankingData({ ...bankingData, categoryOverrides: newOverrides });
-                                        localStorage.setItem('ecommerce_banking_v1', JSON.stringify({ ...bankingData, categoryOverrides: newOverrides }));
-                                        queueCloudSave();
-                                      }}
-                                      className="text-slate-500 hover:text-rose-400 p-0.5"
-                                      title="Reset to original"
-                                    >
-                                      <X className="w-3 h-3" />
-                                    </button>
-                                  )}
-                                </div>
+                              <td className="py-3 px-3">
+                                <span className={`px-2 py-1 rounded text-xs ${hasOverride ? 'bg-violet-500/20 text-violet-300' : 'bg-slate-700 text-slate-300'}`}>
+                                  {txn.topCategory}
+                                </span>
                               </td>
-                              <td className="py-2 px-2 text-slate-500 text-xs truncate max-w-[100px]" title={txn.account}>
-                                {txn.accountType === 'credit_card' ? '💳' : '🏦'} {txn.account?.split(' ')[0]}
-                              </td>
-                              <td className={`py-2 px-2 text-right font-medium whitespace-nowrap ${txn.isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              <td className={`py-3 px-3 text-right font-medium whitespace-nowrap ${txn.isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
                                 {txn.isIncome ? '+' : '-'}{formatCurrency(txn.amount)}
                               </td>
                             </tr>
@@ -23086,6 +23138,102 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     {filteredTxns.length > 300 && (
                       <p className="text-center text-slate-500 py-4">Showing first 300 of {filteredTxns.length} transactions</p>
                     )}
+                  </div>
+                </div>
+              )}
+              
+              {/* Transaction Edit Modal */}
+              {editingTransaction && (
+                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={() => setEditingTransaction(null)}>
+                  <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+                    <div className="p-6 border-b border-slate-700">
+                      <div className="flex items-center justify-between">
+                        <h2 className="text-xl font-bold text-white">Edit Transaction</h2>
+                        <button onClick={() => setEditingTransaction(null)} className="text-slate-400 hover:text-white">
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="p-6 space-y-4">
+                      {/* Transaction Details */}
+                      <div className="bg-slate-900/50 rounded-lg p-4 space-y-2">
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Date</span>
+                          <span className="text-white">{editingTransaction.dateDisplay}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Vendor</span>
+                          <span className="text-white">{editingTransaction.vendor}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Amount</span>
+                          <span className={editingTransaction.isIncome ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                            {editingTransaction.isIncome ? '+' : '-'}{formatCurrency(editingTransaction.amount)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Account</span>
+                          <span className="text-white text-sm">{editingTransaction.account?.split('(')[0]}</span>
+                        </div>
+                        {editingTransaction.memo && (
+                          <div className="pt-2 border-t border-slate-700">
+                            <span className="text-slate-400 text-xs">Memo</span>
+                            <p className="text-slate-300 text-sm mt-1">{editingTransaction.memo}</p>
+                          </div>
+                        )}
+                      </div>
+                      
+                      {/* Category Edit */}
+                      <div>
+                        <label className="block text-sm font-medium text-slate-300 mb-2">Category</label>
+                        <input
+                          type="text"
+                          defaultValue={editingTransaction.category}
+                          id="txn-category-input"
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                          placeholder="Enter category..."
+                        />
+                        <p className="text-xs text-slate-500 mt-2">Original: {editingTransaction.originalCategory || editingTransaction.category}</p>
+                      </div>
+                      
+                      {/* Quick Categories */}
+                      <div>
+                        <label className="block text-sm font-medium text-slate-300 mb-2">Quick Select</label>
+                        <div className="flex flex-wrap gap-2">
+                          {['Advertising & marketing', 'Cost of goods sold', 'Shipping & delivery', 'Office expenses', 'Software & subscriptions', 'Payroll expenses', 'Channel Sales', 'Sales'].map(cat => (
+                            <button
+                              key={cat}
+                              onClick={() => {
+                                document.getElementById('txn-category-input').value = cat;
+                              }}
+                              className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-300"
+                            >
+                              {cat}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="p-6 border-t border-slate-700 flex gap-3">
+                      <button
+                        onClick={() => setEditingTransaction(null)}
+                        className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => {
+                          const newCat = document.getElementById('txn-category-input').value;
+                          if (newCat && newCat !== editingTransaction.category) {
+                            handleCategoryChange(editingTransaction.id, newCat);
+                          }
+                          setEditingTransaction(null);
+                        }}
+                        className="flex-1 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium"
+                      >
+                        Save Category
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
