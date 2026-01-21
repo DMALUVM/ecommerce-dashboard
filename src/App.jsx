@@ -1933,7 +1933,7 @@ useEffect(() => {
 }, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData]);
 
 const loadFromCloud = useCallback(async (storeId = null) => {
-  if (!supabase || !session?.user?.id) return false;
+  if (!supabase || !session?.user?.id) return { ok: false, stores: [] };
   setCloudStatus('Loading…');
   
   try {
@@ -1946,22 +1946,23 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (error) {
       console.error('Cloud load error:', error);
       setCloudStatus('');
-      return false;
+      return { ok: false, stores: [] };
     }
     if (!data?.data) {
       setCloudStatus('');
-      return false;
+      return { ok: false, stores: [] };
     }
 
     const cloudData = data.data || {};
-  
+    
     // Handle multi-store structure
-    if (cloudData.stores) {
-      setStores(cloudData.stores);
+    const loadedStores = cloudData.stores || [];
+    if (loadedStores.length > 0) {
+      setStores(loadedStores);
     }
     
     // Determine which store to load
-    const targetStoreId = storeId || cloudData.activeStoreId || (cloudData.stores?.[0]?.id) || 'default';
+    const targetStoreId = storeId || cloudData.activeStoreId || (loadedStores[0]?.id) || 'default';
     setActiveStoreId(targetStoreId);
     
     // Get store-specific data (support both old and new format)
@@ -2042,11 +2043,11 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages && cloud.aiMessages.length > 0) writeToLocal('ecommerce_ai_chat_history_v1', JSON.stringify(cloud.aiMessages));
 
     setCloudStatus('');
-    return true;
+    return { ok: true, stores: loadedStores };
   } catch (err) {
     console.error('Cloud load unexpected error:', err);
     setCloudStatus('');
-    return false;
+    return { ok: false, stores: [] };
   } finally {
     isLoadingDataRef.current = false;
   }
@@ -2296,16 +2297,25 @@ const StoreSelectorModal = () => {
           <div className="flex gap-2">
             <input
               type="text"
-              value={newStoreName}
-              onChange={(e) => setNewStoreName(e.target.value)}
+              id="modal-new-store-name"
               placeholder="Store name..."
-              className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
-              onKeyDown={(e) => e.key === 'Enter' && createStore(newStoreName)}
+              className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && e.target.value.trim()) {
+                  createStore(e.target.value.trim());
+                  e.target.value = '';
+                }
+              }}
             />
             <button
-              onClick={() => createStore(newStoreName)}
-              disabled={!newStoreName.trim()}
-              className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-lg text-white text-sm flex items-center gap-1"
+              onClick={() => {
+                const input = document.getElementById('modal-new-store-name');
+                if (input?.value?.trim()) {
+                  createStore(input.value.trim());
+                  input.value = '';
+                }
+              }}
+              className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white text-sm flex items-center gap-1"
             >
               <Plus className="w-4 h-4" />
               Create
@@ -2408,20 +2418,19 @@ useEffect(() => {
     
     try {
       if (session?.user?.id && supabase) {
-        const ok = await loadFromCloud();
-        if (!ok) {
+        const result = await loadFromCloud();
+        if (!result.ok) {
           // No cloud data yet: load local and push it up once.
           loadFromLocal();
           // Create default store if none exists
-          if (stores.length === 0) {
-            const defaultStore = {
-              id: `store_${Date.now()}`,
-              name: storeName || 'My Store',
-              createdAt: new Date().toISOString(),
-            };
-            setStores([defaultStore]);
-            setActiveStoreId(defaultStore.id);
-          }
+          const defaultStore = {
+            id: `store_${Date.now()}`,
+            name: storeName || 'My Store',
+            createdAt: new Date().toISOString(),
+          };
+          setStores([defaultStore]);
+          setActiveStoreId(defaultStore.id);
+          
           const localCombined = {
             sales: (() => { try { return JSON.parse(lsGet(STORAGE_KEY) || '{}'); } catch { return {}; } })(),
             dailySales: (() => { try { return JSON.parse(lsGet('ecommerce_daily_sales_v1') || '{}'); } catch { return {}; } })(),
@@ -2432,8 +2441,8 @@ useEffect(() => {
           };
           await pushToCloudNow(localCombined);
         } else {
-          // Create default store if loaded data has none
-          if (stores.length === 0) {
+          // Create default store if loaded data has no stores
+          if (result.stores.length === 0) {
             const defaultStore = {
               id: 'default',
               name: storeName || 'My Store',
@@ -7317,7 +7326,20 @@ Analyze the data and respond with ONLY this JSON:
       <button onClick={() => setShowGoalsModal(true)} className="px-2 py-1 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded text-xs text-amber-300 flex items-center gap-1"><Target className="w-3 h-3" />Goals</button>
       <div className="flex items-center gap-2">
         <span className="text-slate-400 text-sm">Store:</span>
-        <input value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="Your brand name"
+        <input 
+          key={`store-name-${activeStoreId || 'default'}`}
+          defaultValue={storeName} 
+          onBlur={(e) => {
+            if (e.target.value !== storeName) {
+              setStoreName(e.target.value);
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.target.blur();
+            }
+          }}
+          placeholder="Your brand name"
           className="bg-slate-900 border border-slate-600 rounded-lg px-2 py-1 text-sm text-white w-44" />
       </div>
       <div className="flex-1" />
@@ -7467,9 +7489,9 @@ Analyze the data and respond with ONLY this JSON:
                   <input 
                     type="number" 
                     step="0.01"
-                    value={dayAdSpendEdit.meta}
-                    onChange={(e) => setDayAdSpendEdit(prev => ({ ...prev, meta: e.target.value }))}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                    id="day-ad-spend-meta"
+                    defaultValue={dayAdSpendEdit.meta}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                     placeholder="0.00"
                   />
                 </div>
@@ -7478,16 +7500,21 @@ Analyze the data and respond with ONLY this JSON:
                   <input 
                     type="number" 
                     step="0.01"
-                    value={dayAdSpendEdit.google}
-                    onChange={(e) => setDayAdSpendEdit(prev => ({ ...prev, google: e.target.value }))}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                    id="day-ad-spend-google"
+                    defaultValue={dayAdSpendEdit.google}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                     placeholder="0.00"
                   />
                 </div>
               </div>
               <div className="flex gap-2">
                 <button 
-                  onClick={saveAdSpendEdit}
+                  onClick={() => {
+                    const meta = document.getElementById('day-ad-spend-meta')?.value || '0';
+                    const google = document.getElementById('day-ad-spend-google')?.value || '0';
+                    setDayAdSpendEdit({ meta, google });
+                    setTimeout(saveAdSpendEdit, 10);
+                  }}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm font-medium"
                 >
                   Save Changes
@@ -7696,14 +7723,16 @@ Analyze the data and respond with ONLY this JSON:
   );
 
   const GoalsModal = () => {
-    const [tempGoals, setTempGoals] = useState(goals);
-    
-    // Reset when goals change
-    useEffect(() => {
-      setTempGoals(goals);
-    }, [goals, showGoalsModal]);
-    
     if (!showGoalsModal) return null;
+    
+    const handleSave = () => {
+      const weeklyRev = parseFloat(document.getElementById('goal-weekly-rev')?.value) || 0;
+      const weeklyProf = parseFloat(document.getElementById('goal-weekly-prof')?.value) || 0;
+      const monthlyRev = parseFloat(document.getElementById('goal-monthly-rev')?.value) || 0;
+      const monthlyProf = parseFloat(document.getElementById('goal-monthly-prof')?.value) || 0;
+      saveGoals({ weeklyRevenue: weeklyRev, weeklyProfit: weeklyProf, monthlyRevenue: monthlyRev, monthlyProfit: monthlyProf });
+    };
+    
     return (
       <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
         <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
@@ -7712,23 +7741,23 @@ Analyze the data and respond with ONLY this JSON:
           <div className="space-y-4">
             <div>
               <label className="block text-sm text-slate-300 mb-1">Weekly Revenue Target</label>
-              <input type="number" value={tempGoals.weeklyRevenue || ''} onChange={(e) => setTempGoals(p => ({ ...p, weeklyRevenue: parseFloat(e.target.value) || 0 }))} placeholder="e.g., 5000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+              <input type="number" id="goal-weekly-rev" defaultValue={goals.weeklyRevenue || ''} placeholder="e.g., 5000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500" />
             </div>
             <div>
               <label className="block text-sm text-slate-300 mb-1">Weekly Profit Target</label>
-              <input type="number" value={tempGoals.weeklyProfit || ''} onChange={(e) => setTempGoals(p => ({ ...p, weeklyProfit: parseFloat(e.target.value) || 0 }))} placeholder="e.g., 1500" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+              <input type="number" id="goal-weekly-prof" defaultValue={goals.weeklyProfit || ''} placeholder="e.g., 1500" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500" />
             </div>
             <div>
               <label className="block text-sm text-slate-300 mb-1">Monthly Revenue Target</label>
-              <input type="number" value={tempGoals.monthlyRevenue || ''} onChange={(e) => setTempGoals(p => ({ ...p, monthlyRevenue: parseFloat(e.target.value) || 0 }))} placeholder="e.g., 20000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+              <input type="number" id="goal-monthly-rev" defaultValue={goals.monthlyRevenue || ''} placeholder="e.g., 20000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500" />
             </div>
             <div>
               <label className="block text-sm text-slate-300 mb-1">Monthly Profit Target</label>
-              <input type="number" value={tempGoals.monthlyProfit || ''} onChange={(e) => setTempGoals(p => ({ ...p, monthlyProfit: parseFloat(e.target.value) || 0 }))} placeholder="e.g., 6000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+              <input type="number" id="goal-monthly-prof" defaultValue={goals.monthlyProfit || ''} placeholder="e.g., 6000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500" />
             </div>
           </div>
           <div className="flex gap-3 mt-6">
-            <button onClick={() => saveGoals(tempGoals)} className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-semibold py-2 rounded-xl">Save Goals</button>
+            <button onClick={handleSave} className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-semibold py-2 rounded-xl">Save Goals</button>
             <button onClick={() => setShowGoalsModal(false)} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl">Cancel</button>
           </div>
         </div>
@@ -8217,24 +8246,37 @@ Analyze the data and respond with ONLY this JSON:
           <div className="space-y-4 mb-6">
             <div>
               <label className="block text-sm text-slate-400 mb-1">Ad Spend ($)</label>
-              <input type="number" value={breakEvenInputs.adSpend} onChange={e => setBreakEvenInputs(p => ({...p, adSpend: e.target.value}))}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" placeholder="500" />
+              <input type="number" id="be-adspend" defaultValue={breakEvenInputs.adSpend}
+                onBlur={e => setBreakEvenInputs(p => ({...p, adSpend: e.target.value}))}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500" placeholder="500" />
             </div>
             <div>
               <label className="block text-sm text-slate-400 mb-1">COGS per Unit ($)</label>
-              <input type="number" value={breakEvenInputs.cogs} onChange={e => setBreakEvenInputs(p => ({...p, cogs: e.target.value}))}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" placeholder="5" />
+              <input type="number" id="be-cogs" defaultValue={breakEvenInputs.cogs}
+                onBlur={e => setBreakEvenInputs(p => ({...p, cogs: e.target.value}))}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500" placeholder="5" />
             </div>
             <div>
               <label className="block text-sm text-slate-400 mb-1">Selling Price ($)</label>
-              <input type="number" value={breakEvenInputs.price} onChange={e => setBreakEvenInputs(p => ({...p, price: e.target.value}))}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" placeholder="25" />
+              <input type="number" id="be-price" defaultValue={breakEvenInputs.price}
+                onBlur={e => setBreakEvenInputs(p => ({...p, price: e.target.value}))}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500" placeholder="25" />
             </div>
             <div>
               <label className="block text-sm text-slate-400 mb-1">Conversion Rate (%)</label>
-              <input type="number" value={breakEvenInputs.conversionRate} onChange={e => setBreakEvenInputs(p => ({...p, conversionRate: e.target.value}))}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" placeholder="2" />
+              <input type="number" id="be-cvr" defaultValue={breakEvenInputs.conversionRate}
+                onBlur={e => setBreakEvenInputs(p => ({...p, conversionRate: e.target.value}))}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500" placeholder="2" />
             </div>
+            <button onClick={() => {
+              const adSpend = document.getElementById('be-adspend')?.value || '';
+              const cogs = document.getElementById('be-cogs')?.value || '';
+              const price = document.getElementById('be-price')?.value || '';
+              const conversionRate = document.getElementById('be-cvr')?.value || '';
+              setBreakEvenInputs({ adSpend, cogs, price, conversionRate });
+            }} className="w-full py-2 bg-amber-600 hover:bg-amber-500 rounded-lg text-white font-semibold">
+              Calculate
+            </button>
           </div>
           
           {result && parseFloat(breakEvenInputs.price) > parseFloat(breakEvenInputs.cogs) ? (
@@ -9294,26 +9336,41 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Vendor/Company *</label>
-                <input value={invoiceForm.vendor} onChange={e => setInvoiceForm(p => ({...p, vendor: e.target.value}))}
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="Amazon, Shopify, etc." />
+                <input 
+                  id="invoice-vendor"
+                  defaultValue={invoiceForm.vendor}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" 
+                  placeholder="Amazon, Shopify, etc." 
+                />
               </div>
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Amount *</label>
-                <input type="number" value={invoiceForm.amount} onChange={e => setInvoiceForm(p => ({...p, amount: e.target.value}))}
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="0.00" />
+                <input 
+                  type="number" 
+                  id="invoice-amount"
+                  defaultValue={invoiceForm.amount}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" 
+                  placeholder="0.00" 
+                />
               </div>
             </div>
             
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Due Date *</label>
-                <input type="date" value={invoiceForm.dueDate} onChange={e => setInvoiceForm(p => ({...p, dueDate: e.target.value}))}
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+                <input 
+                  type="date" 
+                  id="invoice-duedate"
+                  defaultValue={invoiceForm.dueDate}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" 
+                />
               </div>
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Category</label>
-                <select value={invoiceForm.category} onChange={e => setInvoiceForm(p => ({...p, category: e.target.value}))}
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm">
+                <select 
+                  id="invoice-category"
+                  defaultValue={invoiceForm.category}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500">
                   {categories.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
               </div>
@@ -9321,30 +9378,62 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
             
             <div className="mb-3">
               <label className="block text-xs text-slate-400 mb-1">Description</label>
-              <input value={invoiceForm.description} onChange={e => setInvoiceForm(p => ({...p, description: e.target.value}))}
-                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="Monthly subscription, inventory purchase, etc." />
+              <input 
+                id="invoice-description"
+                defaultValue={invoiceForm.description}
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" 
+                placeholder="Monthly subscription, inventory purchase, etc." 
+              />
             </div>
             
             <div className="flex items-center gap-4 mb-3">
               <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={invoiceForm.recurring} onChange={e => setInvoiceForm(p => ({...p, recurring: e.target.checked}))}
-                  className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500" />
+                <input 
+                  type="checkbox" 
+                  id="invoice-recurring"
+                  defaultChecked={invoiceForm.recurring}
+                  className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500" 
+                />
                 <span className="text-sm text-slate-300">Recurring bill</span>
               </label>
-              {invoiceForm.recurring && (
-                <select value={invoiceForm.frequency} onChange={e => setInvoiceForm(p => ({...p, frequency: e.target.value}))}
-                  className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1 text-white text-sm">
-                  <option value="weekly">Weekly</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="quarterly">Quarterly</option>
-                  <option value="yearly">Yearly</option>
-                </select>
-              )}
+              <select 
+                id="invoice-frequency"
+                defaultValue={invoiceForm.frequency}
+                className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1 text-white text-sm">
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="yearly">Yearly</option>
+              </select>
             </div>
             
             <div className="flex gap-2">
-              <button onClick={handleSave} disabled={!invoiceForm.vendor || !invoiceForm.amount || !invoiceForm.dueDate}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-2 rounded-lg text-sm">
+              <button onClick={() => {
+                const vendor = document.getElementById('invoice-vendor')?.value || '';
+                const amount = document.getElementById('invoice-amount')?.value || '';
+                const dueDate = document.getElementById('invoice-duedate')?.value || '';
+                const category = document.getElementById('invoice-category')?.value || 'operations';
+                const description = document.getElementById('invoice-description')?.value || '';
+                const recurring = document.getElementById('invoice-recurring')?.checked || false;
+                const frequency = document.getElementById('invoice-frequency')?.value || 'monthly';
+                
+                if (!vendor || !amount || !dueDate) return;
+                
+                const invoice = {
+                  id: editingInvoice?.id || Date.now().toString(),
+                  vendor, description, amount: parseFloat(amount), dueDate, recurring, frequency, category,
+                  createdAt: editingInvoice?.createdAt || new Date().toISOString(),
+                  paid: editingInvoice?.paid || false,
+                };
+                
+                if (editingInvoice) {
+                  setInvoices(prev => prev.map(i => i.id === editingInvoice.id ? invoice : i));
+                } else {
+                  setInvoices(prev => [...prev, invoice]);
+                }
+                resetForm();
+              }}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 rounded-lg text-sm">
                 {editingInvoice ? 'Update' : 'Add Invoice'}
               </button>
               {editingInvoice && (
@@ -13239,10 +13328,11 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                   <input 
                     type="number" 
                     step="0.01" 
-                    value={dailyAdSpend.meta} 
-                    onChange={(e) => setDailyAdSpend(prev => ({ ...prev, meta: e.target.value }))} 
+                    id="daily-meta-ad"
+                    defaultValue={dailyAdSpend.meta} 
+                    onBlur={(e) => setDailyAdSpend(prev => ({ ...prev, meta: e.target.value }))} 
                     placeholder="0.00" 
-                    className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" 
+                    className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-cyan-500" 
                   />
                 </div>
                 <div>
@@ -13250,10 +13340,11 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                   <input 
                     type="number" 
                     step="0.01" 
-                    value={dailyAdSpend.google} 
-                    onChange={(e) => setDailyAdSpend(prev => ({ ...prev, google: e.target.value }))} 
+                    id="daily-google-ad"
+                    defaultValue={dailyAdSpend.google} 
+                    onBlur={(e) => setDailyAdSpend(prev => ({ ...prev, google: e.target.value }))} 
                     placeholder="0.00" 
-                    className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" 
+                    className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-cyan-500" 
                   />
                 </div>
               </div>
@@ -13498,8 +13589,8 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               </div>
               
               <div className="grid grid-cols-2 gap-4 mb-4">
-                <div><label className="block text-sm text-slate-400 mb-2">Meta Ad Spend</label><input type="number" value={adSpend.meta} onChange={(e) => setAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
-                <div><label className="block text-sm text-slate-400 mb-2">Google Ad Spend</label><input type="number" value={adSpend.google} onChange={(e) => setAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
+                <div><label className="block text-sm text-slate-400 mb-2">Meta Ad Spend</label><input type="number" id="weekly-meta-ad" defaultValue={adSpend.meta} onBlur={(e) => setAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-violet-500" /></div>
+                <div><label className="block text-sm text-slate-400 mb-2">Google Ad Spend</label><input type="number" id="weekly-google-ad" defaultValue={adSpend.google} onBlur={(e) => setAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-violet-500" /></div>
               </div>
               
               {/* Ads Bulk Upload Banner */}
@@ -13536,7 +13627,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               
               <div className="mb-6">
                 <label className="block text-sm font-medium text-slate-300 mb-2">Period Label <span className="text-rose-400">*</span></label>
-                <input type="text" value={periodLabel} onChange={(e) => setPeriodLabel(e.target.value)} placeholder="e.g., 2024, Q1 2025, January 2025" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+                <input type="text" id="period-label-input" defaultValue={periodLabel} onBlur={(e) => setPeriodLabel(e.target.value)} placeholder="e.g., 2024, Q1 2025, January 2025" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
                 <p className="text-slate-500 text-xs mt-1">Tip: Use "2024" or "2025" for YoY comparisons</p>
               </div>
               
@@ -13597,8 +13688,8 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
               </div>
               
               <div className="grid grid-cols-2 gap-4 mb-6">
-                <div><label className="block text-sm text-slate-400 mb-2">Meta Ad Spend</label><input type="number" value={periodAdSpend.meta} onChange={(e) => setPeriodAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
-                <div><label className="block text-sm text-slate-400 mb-2">Google Ad Spend</label><input type="number" value={periodAdSpend.google} onChange={(e) => setPeriodAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
+                <div><label className="block text-sm text-slate-400 mb-2">Meta Ad Spend</label><input type="number" id="period-meta-ad" defaultValue={periodAdSpend.meta} onBlur={(e) => setPeriodAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-teal-500" /></div>
+                <div><label className="block text-sm text-slate-400 mb-2">Google Ad Spend</label><input type="number" id="period-google-ad" defaultValue={periodAdSpend.google} onBlur={(e) => setPeriodAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-teal-500" /></div>
               </div>
               
               {!hasCogs && <div className="bg-amber-900/30 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" /><div><p className="text-amber-300 font-medium">COGS not set up</p><p className="text-amber-200/70 text-sm">Upload a COGS file or configure in settings for profit tracking</p></div></div>}
@@ -14519,7 +14610,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     </label>
                     <div className="relative">
                       <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">$</span>
-                      <input type="number" value={editAdSpend.meta} onChange={(e) => setEditAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl pl-8 pr-4 py-3 text-white" />
+                      <input type="number" id="edit-ad-meta" defaultValue={editAdSpend.meta} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl pl-8 pr-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                     </div>
                   </div>
                   <div>
@@ -14528,7 +14619,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     </label>
                     <div className="relative">
                       <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">$</span>
-                      <input type="number" value={editAdSpend.google} onChange={(e) => setEditAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl pl-8 pr-4 py-3 text-white" />
+                      <input type="number" id="edit-ad-google" defaultValue={editAdSpend.google} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl pl-8 pr-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                     </div>
                   </div>
                 </div>
@@ -14544,7 +14635,11 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                 <p className="text-slate-500 text-xs mb-4">💡 Tip: Amazon ad spend is included automatically from SKU Economics report</p>
                 
                 <div className="flex gap-3">
-                  <button onClick={() => updateWeekAdSpend(selectedWeek, editAdSpend.meta, editAdSpend.google)} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-xl">Save</button>
+                  <button onClick={() => {
+                    const meta = document.getElementById('edit-ad-meta')?.value || '0';
+                    const google = document.getElementById('edit-ad-google')?.value || '0';
+                    updateWeekAdSpend(selectedWeek, meta, google);
+                  }} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-xl">Save</button>
                   <button onClick={() => setShowEditAdSpend(false)} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl">Cancel</button>
                 </div>
               </div>
@@ -14594,13 +14689,14 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                 {/* Option 2: Enter Amount Manually */}
                 <div className="mb-6">
                   <label className="block text-sm font-medium text-slate-300 mb-2">Option 2: Enter Total Manually</label>
-                  <input type="number" value={edit3PLCost} onChange={(e) => setEdit3PLCost(e.target.value)} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+                  <input type="number" id="edit-3pl-cost" defaultValue={edit3PLCost} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   <p className="text-slate-500 text-xs mt-2">Total fulfillment costs (shipping, pick & pack, storage, etc.)</p>
                 </div>
                 
                 <div className="flex gap-3">
                   <button onClick={() => {
-                    updateWeek3PL(selectedWeek, edit3PLCost);
+                    const cost = document.getElementById('edit-3pl-cost')?.value || '0';
+                    updateWeek3PL(selectedWeek, cost);
                     setReprocessFiles(p => ({ ...p, threepl: null }));
                     setReprocessFileNames(p => ({ ...p, threepl: '' }));
                   }} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-xl">Save</button>
@@ -14651,12 +14747,17 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><label className="block text-sm text-slate-400 mb-2">Meta Ads</label><input type="number" value={reprocessAdSpend.meta} onChange={(e) => setReprocessAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
-                    <div><label className="block text-sm text-slate-400 mb-2">Google Ads</label><input type="number" value={reprocessAdSpend.google} onChange={(e) => setReprocessAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" /></div>
+                    <div><label className="block text-sm text-slate-400 mb-2">Meta Ads</label><input type="number" id="reprocess-meta-ad" defaultValue={reprocessAdSpend.meta} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-violet-500" /></div>
+                    <div><label className="block text-sm text-slate-400 mb-2">Google Ads</label><input type="number" id="reprocess-google-ad" defaultValue={reprocessAdSpend.google} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-violet-500" /></div>
                   </div>
                 </div>
                 <div className="flex gap-3">
-                  <button onClick={() => reprocessWeek(selectedWeek)} disabled={!reprocessFiles.amazon || !reprocessFiles.shopify} className="flex-1 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 text-white font-semibold py-2 rounded-xl">Re-process</button>
+                  <button onClick={() => {
+                    const meta = document.getElementById('reprocess-meta-ad')?.value || '';
+                    const google = document.getElementById('reprocess-google-ad')?.value || '';
+                    setReprocessAdSpend({ meta, google });
+                    setTimeout(() => reprocessWeek(selectedWeek), 10);
+                  }} disabled={!reprocessFiles.amazon || !reprocessFiles.shopify} className="flex-1 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 text-white font-semibold py-2 rounded-xl">Re-process</button>
                   <button onClick={() => { setShowReprocess(false); setReprocessFiles({ amazon: null, shopify: null, threepl: null }); setReprocessFileNames({ amazon: '', shopify: '', threepl: '' }); setReprocessAdSpend({ meta: '', google: '' }); }} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl">Cancel</button>
                 </div>
               </div>
@@ -14988,6 +15089,15 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
     const dates = Object.keys(invHistory).sort().reverse();
     const data = invHistory[selectedInvDate];
     const idx = dates.indexOf(selectedInvDate);
+    
+    // Defensive defaults for summary
+    const summary = data.summary || {
+      totalUnits: 0, totalValue: 0, amazonUnits: 0, amazonValue: 0, 
+      amazonInbound: 0, threeplUnits: 0, threeplValue: 0, threeplInbound: 0,
+      critical: 0, low: 0, healthy: 0, overstock: 0, skuCount: 0
+    };
+    const items = data.items || [];
+    
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
@@ -15007,10 +15117,10 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
             </div>
           )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <MetricCard label="Total Units" value={formatNumber(data.summary.totalUnits)} sub={data.summary.skuCount + ' SKUs'} icon={Package} color="blue" />
-            <MetricCard label="Total Value" value={formatCurrency(data.summary.totalValue)} icon={DollarSign} color="emerald" />
-            <MetricCard label="Amazon FBA" value={formatNumber(data.summary.amazonUnits)} sub={formatCurrency(data.summary.amazonValue)} icon={ShoppingCart} color="orange" />
-            <MetricCard label="3PL" value={formatNumber(data.summary.threeplUnits)} sub={formatCurrency(data.summary.threeplValue)} icon={Boxes} color="violet" />
+            <MetricCard label="Total Units" value={formatNumber(summary.totalUnits)} sub={summary.skuCount + ' SKUs'} icon={Package} color="blue" />
+            <MetricCard label="Total Value" value={formatCurrency(summary.totalValue)} icon={DollarSign} color="emerald" />
+            <MetricCard label="Amazon FBA" value={formatNumber(summary.amazonUnits)} sub={formatCurrency(summary.amazonValue)} icon={ShoppingCart} color="orange" />
+            <MetricCard label="3PL" value={formatNumber(summary.threeplUnits)} sub={formatCurrency(summary.threeplValue)} icon={Boxes} color="violet" />
           </div>
           {data.velocitySource && <div className="bg-cyan-900/20 border border-cyan-500/30 rounded-xl p-3 mb-6"><p className="text-cyan-400 text-sm"><span className="font-semibold">Velocity:</span> {data.velocitySource}</p></div>}
           
@@ -15042,14 +15152,14 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
             </div>
           )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><AlertCircle className="w-5 h-5 text-rose-400" /><span className="text-rose-400 font-medium">Critical</span></div><p className="text-2xl font-bold text-white">{data.summary.critical}</p><p className="text-xs text-slate-400">&lt;14 days</p></div>
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><AlertTriangle className="w-5 h-5 text-amber-400" /><span className="text-amber-400 font-medium">Low</span></div><p className="text-2xl font-bold text-white">{data.summary.low}</p><p className="text-xs text-slate-400">14-30 days</p></div>
-            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><CheckCircle className="w-5 h-5 text-emerald-400" /><span className="text-emerald-400 font-medium">Healthy</span></div><p className="text-2xl font-bold text-white">{data.summary.healthy}</p><p className="text-xs text-slate-400">30-90 days</p></div>
-            <div className="bg-violet-500/10 border border-violet-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><Clock className="w-5 h-5 text-violet-400" /><span className="text-violet-400 font-medium">Overstock</span></div><p className="text-2xl font-bold text-white">{data.summary.overstock}</p><p className="text-xs text-slate-400">&gt;90 days</p></div>
+            <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><AlertCircle className="w-5 h-5 text-rose-400" /><span className="text-rose-400 font-medium">Critical</span></div><p className="text-2xl font-bold text-white">{summary.critical}</p><p className="text-xs text-slate-400">&lt;14 days</p></div>
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><AlertTriangle className="w-5 h-5 text-amber-400" /><span className="text-amber-400 font-medium">Low</span></div><p className="text-2xl font-bold text-white">{summary.low}</p><p className="text-xs text-slate-400">14-30 days</p></div>
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><CheckCircle className="w-5 h-5 text-emerald-400" /><span className="text-emerald-400 font-medium">Healthy</span></div><p className="text-2xl font-bold text-white">{summary.healthy}</p><p className="text-xs text-slate-400">30-90 days</p></div>
+            <div className="bg-violet-500/10 border border-violet-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><Clock className="w-5 h-5 text-violet-400" /><span className="text-violet-400 font-medium">Overstock</span></div><p className="text-2xl font-bold text-white">{summary.overstock}</p><p className="text-xs text-slate-400">&gt;90 days</p></div>
           </div>
           {/* Reorder Alert - Items with less than 120 days supply */}
           {(() => {
-            const lowStock = data.items.filter(item => item.daysOfSupply !== 999 && item.daysOfSupply < 120 && item.daysOfSupply > 0);
+            const lowStock = items.filter(item => item.daysOfSupply !== 999 && item.daysOfSupply < 120 && item.daysOfSupply > 0);
             if (lowStock.length === 0) return null;
             const criticalItems = lowStock.filter(i => i.daysOfSupply < 30);
             const warningItems = lowStock.filter(i => i.daysOfSupply >= 30 && i.daysOfSupply < 60);
@@ -15104,7 +15214,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
             );
           })()}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
-            <div className="p-4 border-b border-slate-700"><h3 className="text-lg font-semibold text-white">Products ({data.items.length})</h3></div>
+            <div className="p-4 border-b border-slate-700"><h3 className="text-lg font-semibold text-white">Products ({items.length})</h3></div>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-slate-900/50"><tr>
@@ -15120,7 +15230,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                   <th className="text-center text-xs font-medium text-slate-400 uppercase px-4 py-3">Status</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-700/50">
-                  {data.items.map((item) => (
+                  {items.map((item) => (
                     <tr key={item.sku} className={`hover:bg-slate-700/30 ${item.health === 'critical' ? 'bg-rose-950/20' : item.health === 'low' ? 'bg-amber-950/20' : ''}`}>
                       <td className="px-4 py-3"><div className="max-w-xs"><p className="text-white text-sm font-medium truncate">{item.name}</p><p className="text-slate-500 text-xs">{item.sku}</p></div></td>
                       <td className="text-right px-4 py-3 text-white text-sm">{formatNumber(item.amazonQty)}</td>
@@ -15155,7 +15265,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                   setAiLoading(true);
                   
                   // Gather all the data for AI analysis
-                  const inventoryItems = data.items || [];
+                  const inventoryItems = items;
                   const sortedWeeks = Object.keys(allWeeksData).sort();
                   const recentWeeks = sortedWeeks.slice(-12);
                   
@@ -15336,7 +15446,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             
             {/* Critical Items Quick View */}
             {(() => {
-              const criticalItems = data.items.filter(i => i.daysOfSupply < 30 && i.daysOfSupply !== 999 && i.daysOfSupply > 0);
+              const criticalItems = items.filter(i => i.daysOfSupply < 30 && i.daysOfSupply !== 999 && i.daysOfSupply > 0);
               const incomingForCritical = criticalItems.map(item => {
                 const incoming = productionPipeline.find(p => p.sku === item.sku && p.status !== 'received');
                 return { ...item, incoming };
@@ -16157,7 +16267,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Profit & Margin Charts */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
                 {/* Profit Trend */}
-                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 overflow-hidden">
                   <h3 className="text-lg font-semibold text-white mb-4">
                     {periodLabel} Profit Trend
                     {trendsChannel !== 'combined' && <span className="text-sm font-normal text-slate-400 ml-2">({trendsChannel === 'amazon' ? 'Amazon' : 'Shopify'})</span>}
@@ -16166,7 +16276,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     const chartMaxProfit = Math.max(...currentData.map(d => Math.abs(getFilteredValue(d, 'profit'))), 1);
                     return (
                       <>
-                        <div className="flex items-end gap-2 h-44 bg-slate-900/30 rounded-lg p-3">
+                        <div className="flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3 overflow-hidden">
                           {currentData.length === 0 ? (
                             <p className="text-slate-500 text-center w-full self-center">No data</p>
                           ) : currentData.map((d, i) => {
@@ -16178,7 +16288,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             return (
                               <div 
                                 key={d.key || i} 
-                                className={`flex-1 flex flex-col items-center justify-end group relative h-full min-w-[20px] ${isClickable ? 'cursor-pointer' : ''}`}
+                                className={`flex-1 flex flex-col items-center justify-end group relative h-full ${isClickable ? 'cursor-pointer' : ''}`}
+                                style={{ minWidth: currentData.length > 31 ? '2px' : '8px', maxWidth: '40px' }}
                                 onClick={() => isClickable && setViewingDayDetails(d.key)}
                               >
                                 <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
@@ -16193,10 +16304,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             );
                           })}
                         </div>
-                        <div className="flex justify-between px-3 mt-1">
-                          {currentData.map((d, i) => (
+                        <div className="flex justify-between px-3 mt-1 overflow-hidden">
+                          {currentData.length <= 14 ? currentData.map((d, i) => (
                             <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
-                          ))}
+                          )) : (
+                            <>
+                              <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
+                              <span className="text-[10px] text-slate-500">{currentData[currentData.length - 1]?.label}</span>
+                            </>
+                          )}
                         </div>
                       </>
                     );
@@ -16204,13 +16320,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 </div>
                 
                 {/* Margin Trend */}
-                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 overflow-hidden">
                   <h3 className="text-lg font-semibold text-white mb-4">{periodLabel} Margin Trend</h3>
                   {(() => {
                     const maxMargin = Math.max(...currentData.map(x => Math.abs(x.margin || 0)), 1);
                     return (
                       <>
-                        <div className="flex items-end gap-2 h-44 bg-slate-900/30 rounded-lg p-3">
+                        <div className="flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3 overflow-hidden">
                           {currentData.length === 0 ? (
                             <p className="text-slate-500 text-center w-full self-center">No data</p>
                           ) : currentData.map((d, i) => {
@@ -16218,7 +16334,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             const isPositive = d.margin >= 0;
                             const isLatest = i === currentData.length - 1;
                             return (
-                              <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[20px]">
+                              <div 
+                                key={d.key || i} 
+                                className="flex-1 flex flex-col items-center justify-end group relative h-full"
+                                style={{ minWidth: currentData.length > 31 ? '2px' : '8px', maxWidth: '40px' }}
+                              >
                                 <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
                                   {d.label}<br/>{formatPercent(d.margin)}
                                 </div>
@@ -16230,10 +16350,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             );
                           })}
                         </div>
-                        <div className="flex justify-between px-3 mt-1">
-                          {currentData.map((d, i) => (
+                        <div className="flex justify-between px-3 mt-1 overflow-hidden">
+                          {currentData.length <= 14 ? currentData.map((d, i) => (
                             <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
-                          ))}
+                          )) : (
+                            <>
+                              <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
+                              <span className="text-[10px] text-slate-500">{currentData[currentData.length - 1]?.label}</span>
+                            </>
+                          )}
                         </div>
                       </>
                     );
@@ -16242,14 +16367,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </div>
               
               {/* Profit Per Unit Trend */}
-              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6 overflow-hidden">
                 <h3 className="text-lg font-semibold text-white mb-4">💵 Profit Per Unit Trend</h3>
                 {(() => {
                   const ppuData = currentData.map(d => d.units > 0 ? d.profit / d.units : 0);
                   const maxPPU = Math.max(...ppuData.map(Math.abs), 1);
                   return (
                     <>
-                      <div className="flex items-end gap-2 h-44 bg-slate-900/30 rounded-lg p-3">
+                      <div className="flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3 overflow-hidden">
                         {currentData.length === 0 ? (
                           <p className="text-slate-500 text-center w-full self-center">No data</p>
                         ) : currentData.map((d, i) => {
@@ -16258,7 +16383,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           const isPositive = ppu >= 0;
                           const isLatest = i === currentData.length - 1;
                           return (
-                            <div key={d.key || i} className="flex-1 flex flex-col items-center justify-end group relative h-full min-w-[20px]">
+                            <div 
+                              key={d.key || i} 
+                              className="flex-1 flex flex-col items-center justify-end group relative h-full"
+                              style={{ minWidth: currentData.length > 31 ? '2px' : '8px', maxWidth: '40px' }}
+                            >
                               <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
                                 {d.label}<br/>{formatCurrency(ppu)}/unit
                               </div>
@@ -16270,10 +16399,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           );
                         })}
                       </div>
-                      <div className="flex justify-between px-3 mt-1">
-                        {currentData.map((d, i) => (
+                      <div className="flex justify-between px-3 mt-1 overflow-hidden">
+                        {currentData.length <= 14 ? currentData.map((d, i) => (
                           <span key={d.key || i} className="flex-1 text-[10px] text-slate-500 text-center truncate">{d.label}</span>
-                        ))}
+                        )) : (
+                          <>
+                            <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
+                            <span className="text-[10px] text-slate-500">{currentData[currentData.length - 1]?.label}</span>
+                          </>
+                        )}
                       </div>
                       <div className="flex justify-between text-xs text-slate-500 mt-2 px-2">
                         <span>Avg: {formatCurrency(ppuData.reduce((a, b) => a + b, 0) / (ppuData.length || 1))}/unit</span>
@@ -17739,19 +17873,22 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             </div>
                           </div>
                           {/* Mini sparkline chart */}
-                          <div className="flex items-end gap-1 h-12">
+                          <div className="flex items-end gap-0.5 h-12 overflow-hidden">
                             {s.weeklyData.map((w, i) => {
                               const maxPPU = Math.max(...s.weeklyData.map(x => Math.abs(x.profitPerUnit))) || 1;
                               const height = Math.abs(w.profitPerUnit) / maxPPU * 100;
                               const isPositive = w.profitPerUnit >= 0;
+                              const showLabel = i === 0 || i === s.weeklyData.length - 1;
                               return (
-                                <div key={i} className="flex-1 flex flex-col items-center">
+                                <div key={i} className="flex-1 flex flex-col items-center group relative" style={{ minWidth: '16px', maxWidth: '40px' }}>
+                                  <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-700 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap z-10">
+                                    {w.week.slice(5)}: {formatCurrency(w.profitPerUnit)}/unit
+                                  </div>
                                   <div 
                                     className={`w-full rounded-t ${isPositive ? 'bg-emerald-500/60' : 'bg-rose-500/60'}`}
                                     style={{ height: `${Math.max(height, 5)}%` }}
-                                    title={`${w.week}: ${formatCurrency(w.profitPerUnit)}/unit`}
                                   />
-                                  <span className="text-[8px] text-slate-600 mt-1">{w.week.slice(5)}</span>
+                                  {showLabel && <span className="text-[9px] text-slate-500 mt-1 whitespace-nowrap">{w.week.slice(5)}</span>}
                                 </div>
                               );
                             })}
@@ -17794,19 +17931,22 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             </div>
                           </div>
                           {/* Mini sparkline chart */}
-                          <div className="flex items-end gap-1 h-12">
+                          <div className="flex items-end gap-0.5 h-12 overflow-hidden">
                             {s.weeklyData.map((w, i) => {
                               const maxPPU = Math.max(...s.weeklyData.map(x => Math.abs(x.profitPerUnit))) || 1;
                               const height = Math.abs(w.profitPerUnit) / maxPPU * 100;
                               const isPositive = w.profitPerUnit >= 0;
+                              const showLabel = i === 0 || i === s.weeklyData.length - 1;
                               return (
-                                <div key={i} className="flex-1 flex flex-col items-center">
+                                <div key={i} className="flex-1 flex flex-col items-center group relative" style={{ minWidth: '16px', maxWidth: '40px' }}>
+                                  <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-700 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap z-10">
+                                    {w.week.slice(5)}: {formatCurrency(w.profitPerUnit)}/unit
+                                  </div>
                                   <div 
                                     className={`w-full rounded-t ${isPositive ? 'bg-emerald-500/60' : 'bg-rose-500/60'}`}
                                     style={{ height: `${Math.max(height, 5)}%` }}
-                                    title={`${w.week}: ${formatCurrency(w.profitPerUnit)}/unit`}
                                   />
-                                  <span className="text-[8px] text-slate-600 mt-1">{w.week.slice(5)}</span>
+                                  {showLabel && <span className="text-[9px] text-slate-500 mt-1 whitespace-nowrap">{w.week.slice(5)}</span>}
                                 </div>
                               );
                             })}
