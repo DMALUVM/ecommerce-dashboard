@@ -12276,14 +12276,12 @@ ${forecastInfo.upcoming.map(f => `- ${f.week}: $${f.sales.toFixed(0)} projected 
 ${forecastInfo.alerts.map(a => `- ${a}`).join('\n')}`;
       }
       
-      // Add banking/cash flow data if available
-      let bankingSection = '';
+      // Add banking/cash flow data if available (simplified)
+      let bankingSummary = '';
       if (bankingData.transactions?.length > 0) {
-        // Filter to real bank accounts only
         const strictFilter = (name) => {
           if (!/\(\d{4}\)\s*-\s*\d+$/.test(name)) return false;
           if (name.includes('"') || name.length > 60) return false;
-          if (!/^[A-Za-z]/.test(name.trim())) return false;
           return true;
         };
         const accts = Object.entries(bankingData.accounts || {}).filter(([name, _]) => strictFilter(name));
@@ -12297,70 +12295,28 @@ ${forecastInfo.alerts.map(a => `- ${a}`).join('\n')}`;
           : 0;
         const runway = avgBurn > 0 ? Math.floor(totalCash / avgBurn) : 99;
         
-        // Get this month's data
-        const now = new Date();
-        const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        const thisMonthData = bankingData.monthlySnapshots?.[thisMonth] || { income: 0, expenses: 0, net: 0 };
-        
-        // Top expenses
-        const topExpenses = Object.entries(bankingData.categories || {})
-          .filter(([_, c]) => c.totalOut > 0)
-          .sort((a, b) => b[1].totalOut - a[1].totalOut)
-          .slice(0, 5)
-          .map(([name, data]) => ({ name, total: data.totalOut }));
-        
-        bankingSection = `
-
-💰 CASH FLOW & BANKING (Note: Cash flow ≠ profit - doesn't include COGS):
-- Cash Available: $${totalCash.toFixed(0)}
-- Credit Card Debt: $${totalDebt.toFixed(0)}
-- Net Position: $${(totalCash - totalDebt).toFixed(0)}
-- Monthly Burn Rate: $${avgBurn.toFixed(0)}/month
-- Cash Runway: ${runway > 12 ? '12+' : runway} months
-
-This Month's Cash Flow:
-- Income: $${thisMonthData.income.toFixed(0)}
-- Expenses: $${thisMonthData.expenses.toFixed(0)}
-- Net: $${thisMonthData.net.toFixed(0)}
-
-Top Expense Categories:
-${topExpenses.map(e => `- ${e.name}: $${e.total.toFixed(0)}`).join('\n')}`;
-        
-        enhancedData += bankingSection;
+        bankingSummary = `Cash: $${totalCash.toFixed(0)}, Debt: $${totalDebt.toFixed(0)}, Burn: $${avgBurn.toFixed(0)}/mo, Runway: ${runway}mo`;
       }
 
       const hasBanking = bankingData.transactions?.length > 0;
       
-      // Use the SAME comprehensive context as the AI chat
-      const ctx = prepareDataContext();
-      
-      // Build alerts summary for AI
-      const alertsSummary = [];
-      if (ctx.inventory?.lowStockItems?.length > 0) {
-        alertsSummary.push(`LOW STOCK ALERT: ${ctx.inventory.lowStockItems.length} products need reorder`);
-      }
-      
-      // Get Multi-Signal AI Forecast (same as dashboard widget)
+      // Get Multi-Signal AI Forecast
       const multiSignalForecast = aiForecasts?.salesForecast ? {
         nextWeek: aiForecasts.salesForecast.next4Weeks?.[0] || null,
         next4Weeks: aiForecasts.salesForecast.next4Weeks || [],
-        signals: aiForecasts.calculatedSignals || {},
-        confidence: aiForecasts.salesForecast.next4Weeks?.[0]?.confidence || 'N/A',
+        momentum: aiForecasts.calculatedSignals?.momentum || 0,
       } : null;
       
-      // Get inventory with velocity and FBA needs analysis
-      const inventoryAnalysis = (() => {
+      // Get critical inventory items only (limit to 5)
+      const criticalInventory = (() => {
         const latestInvKey = Object.keys(invHistory).sort().pop();
         const latestInv = latestInvKey ? invHistory[latestInvKey] : null;
-        if (!latestInv?.items) return null;
+        if (!latestInv?.items) return [];
         
-        // Calculate weekly velocity for each SKU
         const skuVelocity = {};
-        const recentWeeks = Object.keys(allWeeksData).sort().slice(-4);
-        recentWeeks.forEach(w => {
+        Object.keys(allWeeksData).sort().slice(-4).forEach(w => {
           const amazon = allWeeksData[w]?.amazon?.skuData || [];
-          const shopify = allWeeksData[w]?.shopify?.skuData || [];
-          [...amazon, ...shopify].forEach(s => {
+          amazon.forEach(s => {
             const sku = s.sku || s.msku;
             if (!skuVelocity[sku]) skuVelocity[sku] = [];
             skuVelocity[sku].push(s.unitsSold || s.units || 0);
@@ -12371,139 +12327,35 @@ ${topExpenses.map(e => `- ${e.name}: $${e.total.toFixed(0)}`).join('\n')}`;
           const velocity = skuVelocity[item.sku];
           const avgWeekly = velocity ? velocity.reduce((s, u) => s + u, 0) / velocity.length : 0;
           const daysOfSupply = avgWeekly > 0 ? Math.round((item.totalUnits || 0) / (avgWeekly / 7)) : 999;
-          const fbaStock = item.fulfillableQuantity || item.fbaUnits || 0;
-          const threeplStock = item.threeplUnits || item.warehouseUnits || (item.totalUnits - fbaStock) || 0;
-          
-          return {
-            sku: item.sku,
-            name: item.productName || item.name || item.sku,
-            totalUnits: item.totalUnits || 0,
-            fbaStock,
-            threeplStock,
-            avgWeeklyVelocity: avgWeekly,
-            daysOfSupply,
-            needsRestock: daysOfSupply < 30,
-            needsManufacturing: daysOfSupply < 60,
-            suggestedFBATransfer: threeplStock > 0 && daysOfSupply < 45 ? Math.min(threeplStock, Math.round(avgWeekly * 4)) : 0,
-            suggestedManufacturingOrder: daysOfSupply < 60 ? Math.round(avgWeekly * 12) : 0,
-          };
-        }).filter(i => i.totalUnits > 0 || i.avgWeeklyVelocity > 0);
+          return { sku: item.sku, days: daysOfSupply, total: item.totalUnits || 0, fba: item.fulfillableQuantity || 0 };
+        }).filter(i => i.days < 60 && i.days > 0).sort((a, b) => a.days - b.days).slice(0, 5);
       })();
-      
-      // 3PL Summary
-      const threeplSummary = (() => {
-        const ledgerOrders = Object.values(threeplLedger.orders || {});
-        if (ledgerOrders.length === 0) return null;
-        let totalCost = 0;
-        let totalUnits = 0;
-        ledgerOrders.forEach(o => {
-          const c = o.charges || {};
-          totalCost += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0);
-          totalUnits += (c.firstPickQty || 0) + (c.additionalPickQty || 0);
-        });
-        return {
-          totalOrders: ledgerOrders.length,
-          totalCost,
-          avgCostPerOrder: totalCost / ledgerOrders.length,
-        };
-      })();
-      
-      // Production Pipeline
-      const pipelineSummary = productionPipeline.length > 0 ? productionPipeline.map(p => ({
-        sku: p.sku,
-        product: p.productName,
-        quantity: p.quantity,
-        expectedDate: p.expectedDate,
-        status: p.status,
-      })) : null;
-      
-      // Build comprehensive report prompt (optimized for size)
-      const reportPrompt = `Generate a ${typeLabels[type]} INTELLIGENCE REPORT for "${storeName || 'Store'}".
 
-=== ${typeLabels[type]} REPORT: ${periodLabel.toUpperCase()} ===
+      // Build MINIMAL prompt
+      const reportPrompt = `${typeLabels[type]} REPORT: ${periodLabel}
 
-PERFORMANCE:
-- Revenue: $${reportData.total.revenue.toFixed(0)}${comparisonData ? ` (${changes.revenue >= 0 ? '+' : ''}${changes.revenue.toFixed(1)}% ${comparisonLabel})` : ''}
-- Profit: $${reportData.total.netProfit.toFixed(0)}${comparisonData ? ` (${changes.profit >= 0 ? '+' : ''}${changes.profit.toFixed(1)}%)` : ''}
-- Units: ${reportData.total.units}${comparisonData ? ` (${changes.units >= 0 ? '+' : ''}${changes.units.toFixed(1)}%)` : ''}
-- Margin: ${reportData.total.netMargin.toFixed(1)}%${comparisonData ? ` (${changes.margin >= 0 ? '+' : ''}${changes.margin.toFixed(1)} pts)` : ''}
-- Ad Spend: $${reportData.total.adSpend.toFixed(0)}
+METRICS: Rev $${reportData.total.revenue.toFixed(0)}${comparisonData ? ` (${changes.revenue >= 0 ? '+' : ''}${changes.revenue.toFixed(1)}%)` : ''}, Profit $${reportData.total.netProfit.toFixed(0)}${comparisonData ? ` (${changes.profit >= 0 ? '+' : ''}${changes.profit.toFixed(1)}%)` : ''}, Units ${reportData.total.units}, Margin ${reportData.total.netMargin.toFixed(1)}%, AdSpend $${reportData.total.adSpend.toFixed(0)}
 
-CHANNELS:
-Amazon: $${reportData.amazon.revenue.toFixed(0)} rev (${reportData.total.amazonShare.toFixed(0)}%), $${reportData.amazon.netProfit.toFixed(0)} profit, ${reportData.amazon.roas.toFixed(1)}x ROAS
-Shopify: $${reportData.shopify.revenue.toFixed(0)} rev (${reportData.total.shopifyShare.toFixed(0)}%), $${reportData.shopify.netProfit.toFixed(0)} profit, ${reportData.shopify.roas.toFixed(1)}x ROAS
+AMAZON: $${reportData.amazon.revenue.toFixed(0)} (${reportData.total.amazonShare.toFixed(0)}%), ${reportData.amazon.roas.toFixed(1)}x ROAS
+SHOPIFY: $${reportData.shopify.revenue.toFixed(0)} (${reportData.total.shopifyShare.toFixed(0)}%), ${reportData.shopify.roas.toFixed(1)}x ROAS
 
-🧠 AI FORECAST:
-${multiSignalForecast ? `Next Week: $${multiSignalForecast.nextWeek?.predictedRevenue?.toFixed(0) || 0} rev, $${multiSignalForecast.nextWeek?.predictedProfit?.toFixed(0) || 0} profit (${multiSignalForecast.confidence} confidence)
-Momentum: ${multiSignalForecast.signals?.momentum?.toFixed(1) || 0}%
-4-Week: ${multiSignalForecast.next4Weeks.map(w => '$' + (w.predictedRevenue?.toFixed(0) || 0)).join(' → ')}` : 'Not available'}
+${multiSignalForecast ? `AI FORECAST: Next week $${multiSignalForecast.nextWeek?.predictedRevenue?.toFixed(0) || 0} rev, Momentum ${multiSignalForecast.momentum?.toFixed(1) || 0}%` : ''}
 
-📦 INVENTORY (${inventoryAnalysis?.length || 0} SKUs):
-${inventoryAnalysis ? `
-CRITICAL (<30 days): ${inventoryAnalysis.filter(i => i.needsRestock).map(i => 
-  `${i.sku}: ${i.daysOfSupply}d supply, ${i.fbaStock} FBA/${i.threeplStock} 3PL → Transfer ${i.suggestedFBATransfer} to FBA${i.needsManufacturing ? `, Order ${i.suggestedManufacturingOrder}` : ''}`
-).join('; ') || 'None'}
-WATCH (30-60d): ${inventoryAnalysis.filter(i => !i.needsRestock && i.needsManufacturing).map(i => `${i.sku}: ${i.daysOfSupply}d`).join(', ') || 'None'}
-HEALTHY (60+d): ${inventoryAnalysis.filter(i => !i.needsManufacturing).length} SKUs` : 'No inventory data'}
+${criticalInventory.length > 0 ? `INVENTORY ALERTS: ${criticalInventory.map(i => `${i.sku}: ${i.days}d supply (${i.total} units, ${i.fba} FBA)`).join('; ')}` : 'INVENTORY: Healthy'}
 
-🏭 PRODUCTION PIPELINE: ${pipelineSummary ? pipelineSummary.map(p => `${p.sku}: ${p.quantity} units by ${p.expectedDate}`).join('; ') : 'None'}
+${amazonCampaigns.campaigns?.length > 0 ? `PPC: ${amazonCampaigns.campaigns.length} campaigns, $${(amazonCampaigns.summary?.totalSpend || 0).toFixed(0)} spend, ${(amazonCampaigns.summary?.roas || 0).toFixed(1)}x ROAS` : ''}
 
-🚚 3PL: ${threeplSummary ? `${threeplSummary.totalOrders} orders, $${threeplSummary.totalCost.toFixed(0)} total, $${threeplSummary.avgCostPerOrder.toFixed(2)}/order avg` : 'No data'}
+${hasBanking ? `CASH: ${bankingSummary}` : ''}
 
-📊 AMAZON FORECASTS: ${forecastInfo.upcoming.length > 0 ? forecastInfo.upcoming.map(f => `${f.week}: $${f.sales.toFixed(0)}`).join(', ') : 'None uploaded'}
-${forecastInfo.alerts.length > 0 ? `ALERTS: ${forecastInfo.alerts.join('; ')}` : ''}
+${forecastInfo.alerts.length > 0 ? `ALERTS: ${forecastInfo.alerts.slice(0, 2).join('; ')}` : ''}
 
-📈 PPC CAMPAIGNS: ${amazonCampaigns.campaigns?.length > 0 ? `${amazonCampaigns.campaigns.length} campaigns, $${(amazonCampaigns.summary?.totalSpend || 0).toFixed(0)} spend, ${(amazonCampaigns.summary?.roas || 0).toFixed(2)}x ROAS, ${(amazonCampaigns.summary?.acos || 0).toFixed(1)}% ACOS
-Top: ${amazonCampaigns.campaigns?.filter(c => c.spend > 50).sort((a,b) => b.roas - a.roas).slice(0,3).map(c => `${c.name?.substring(0,25)}: ${c.roas?.toFixed(1)}x`).join('; ') || 'N/A'}
-Underperforming: ${amazonCampaigns.campaigns?.filter(c => c.spend > 50 && c.roas < 2).slice(0,3).map(c => `${c.name?.substring(0,25)}: ${c.roas?.toFixed(1)}x`).join('; ') || 'None'}` : 'No PPC data'}
-
-${bankingSection}
-
-📅 PATTERNS: ${ctx.dayOfWeekPatterns ? `Best days: ${Object.entries(ctx.dayOfWeekPatterns).sort((a,b) => b[1].avgRevenue - a[1].avgRevenue).slice(0,2).map(([d, data]) => `${d} ($${data.avgRevenue?.toFixed(0)})`).join(', ')}` : 'Need more daily data'}
-${ctx.seasonalPatterns ? `Strong months: ${ctx.seasonalPatterns.strongMonths?.join(', ') || 'TBD'}` : ''}
-
-Create markdown report:
-
-# 📊 ${typeLabels[type]} Intelligence Report
-**${periodLabel}**
-
-## Executive Summary (3-4 sentences)
-
-## 💰 Key Metrics Table (Revenue, Profit, Units, Margin with ✅⚠️❌ status)
-
-## 🏆 Wins (3-4 specific wins)
-
-## ⚠️ Areas Needing Attention (3-4 items)
-
-## 📈 Channel Performance (Amazon vs Shopify with ROAS)
-
-${amazonCampaigns.campaigns?.length > 0 ? '## 🎯 Amazon PPC Analysis (top/bottom campaigns, optimization suggestions)\n' : ''}
-## 📦 Inventory & Supply Chain (specific transfer/order recommendations with quantities)
-
-## 🔮 AI Forecast & Outlook (use the forecast data above)
-
-${hasBanking ? '## 💵 Cash Flow (position, runway, concerns)\n' : ''}
-## 🎯 Recommendations (5-7 prioritized actions with expected impact)
-
-Be specific with numbers. Include exact SKUs and quantities for inventory actions.`;
+Generate markdown report with: Executive Summary, Key Metrics Table (✅⚠️❌), Wins, Areas of Concern, Channel Analysis, ${criticalInventory.length > 0 ? 'Inventory Actions (specific SKU transfers/orders), ' : ''}${hasBanking ? 'Cash Flow, ' : ''}Recommendations (5 prioritized actions).`;
 
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          system: `You are an expert e-commerce analyst generating intelligence reports for "${storeName || 'Store'}". 
-
-CRITICAL INSTRUCTIONS:
-1. Use the MULTI-SIGNAL AI FORECAST for all predictions - it's the most accurate forecast
-2. Be SPECIFIC about inventory actions - include exact SKUs, quantities, and what to do
-3. Cross-reference inventory velocity with current stock to identify risks
-4. Include actionable recommendations with expected impact
-5. Use actual numbers, not generalities
-
-For inventory recommendations:
-- If FBA stock is low but 3PL has inventory → Recommend specific transfer quantity
-- If total inventory is low → Recommend manufacturing order with quantity
-- Consider velocity trends and lead times`,
+          system: `Expert e-commerce analyst for "${storeName || 'Store'}". Generate data-driven reports. Be specific with numbers. For inventory, recommend exact transfer quantities.`,
           messages: [{ role: 'user', content: reportPrompt }]
         }),
       });
