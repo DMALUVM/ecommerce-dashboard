@@ -16356,7 +16356,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </div>
               
               {/* Revenue Trend Chart */}
-              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6 overflow-hidden">
                 <h3 className="text-lg font-semibold text-white mb-4">
                   {periodLabel} Revenue Trend
                   {trendsChannel !== 'combined' && <span className="text-sm font-normal text-slate-400 ml-2">({trendsChannel === 'amazon' ? 'Amazon' : 'Shopify'})</span>}
@@ -16365,7 +16365,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   const chartMaxRevenue = Math.max(...currentData.map(d => getFilteredValue(d, 'revenue')), 1);
                   return (
                     <>
-                      <div className="flex items-end gap-1 h-52 bg-slate-900/30 rounded-lg p-3 overflow-hidden">
+                      <div className="relative flex items-end gap-1 h-52 bg-slate-900/30 rounded-lg p-3">
                         {currentData.length === 0 ? (
                           <p className="text-slate-500 text-center w-full self-center">No data available</p>
                         ) : currentData.map((d, i) => {
@@ -16382,7 +16382,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               style={{ flex: '1 1 0', minWidth: barMinWidth, maxWidth: '60px' }}
                               onClick={() => isClickable && setViewingDayDetails(d.key)}
                             >
-                              <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                              <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                                 {d.label}<br/>{formatCurrency(value)}
                                 {d.source && <span className="text-slate-400"> ({d.source})</span>}
                                 {isClickable && <span className="text-cyan-400 block text-center mt-1">Click for details</span>}
@@ -16427,7 +16427,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     const chartMaxProfit = Math.max(...currentData.map(d => Math.abs(getFilteredValue(d, 'profit'))), 1);
                     return (
                       <>
-                        <div className="flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3 overflow-hidden">
+                        <div className="relative flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3">
                           {currentData.length === 0 ? (
                             <p className="text-slate-500 text-center w-full self-center">No data</p>
                           ) : currentData.map((d, i) => {
@@ -16443,7 +16443,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                 style={{ minWidth: currentData.length > 31 ? '2px' : '8px', maxWidth: '40px' }}
                                 onClick={() => isClickable && setViewingDayDetails(d.key)}
                               >
-                                <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                                <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                                   {d.label}<br/>{formatCurrency(value)}
                                   {isClickable && <span className="text-cyan-400 block text-center mt-1">Click for details</span>}
                                 </div>
@@ -16461,6 +16461,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           )) : (
                             <>
                               <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
+                              <span className="flex-1" />
                               <span className="text-[10px] text-slate-500">{currentData[currentData.length - 1]?.label}</span>
                             </>
                           )}
@@ -16477,7 +16478,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     const maxMargin = Math.max(...currentData.map(x => Math.abs(x.margin || 0)), 1);
                     return (
                       <>
-                        <div className="flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3 overflow-hidden">
+                        <div className="relative flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3">
                           {currentData.length === 0 ? (
                             <p className="text-slate-500 text-center w-full self-center">No data</p>
                           ) : currentData.map((d, i) => {
@@ -16490,7 +16491,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                 className="flex-1 flex flex-col items-center justify-end group relative h-full"
                                 style={{ minWidth: currentData.length > 31 ? '2px' : '8px', maxWidth: '40px' }}
                               >
-                                <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                                <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                                   {d.label}<br/>{formatPercent(d.margin)}
                                 </div>
                                 <div 
@@ -16507,6 +16508,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           )) : (
                             <>
                               <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
+                              <span className="flex-1" />
                               <span className="text-[10px] text-slate-500">{currentData[currentData.length - 1]?.label}</span>
                             </>
                           )}
@@ -16525,7 +16527,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   const maxPPU = Math.max(...ppuData.map(Math.abs), 1);
                   return (
                     <>
-                      <div className="flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3 overflow-hidden">
+                      <div className="relative flex items-end gap-0.5 h-44 bg-slate-900/30 rounded-lg p-3">
                         {currentData.length === 0 ? (
                           <p className="text-slate-500 text-center w-full self-center">No data</p>
                         ) : currentData.map((d, i) => {
@@ -16539,7 +16541,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               className="flex-1 flex flex-col items-center justify-end group relative h-full"
                               style={{ minWidth: currentData.length > 31 ? '2px' : '8px', maxWidth: '40px' }}
                             >
-                              <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                              <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                                 {d.label}<br/>{formatCurrency(ppu)}/unit
                               </div>
                               <div 
@@ -16556,6 +16558,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         )) : (
                           <>
                             <span className="text-[10px] text-slate-500">{currentData[0]?.label}</span>
+                            <span className="flex-1" />
                             <span className="text-[10px] text-slate-500">{currentData[currentData.length - 1]?.label}</span>
                           </>
                         )}
@@ -16946,15 +16949,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   const prevHeight = maxMonthlyRev > 0 ? (prevRev / maxMonthlyRev) * 100 : 0;
                   return (
                     <div key={m} className="flex-1 flex flex-col items-center">
-                      <div className="flex gap-0.5 items-end h-48 w-full">
+                      <div className="relative flex gap-0.5 items-end h-48 w-full">
                         <div className="flex-1 flex flex-col justify-end group relative">
-                          <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                          <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                             {previousYear}: {formatCurrency(prevRev)}
                           </div>
                           <div className="w-full bg-slate-600 rounded-t transition-all hover:bg-slate-500" style={{ height: `${Math.max(prevHeight, 1)}%` }} />
                         </div>
                         <div className="flex-1 flex flex-col justify-end group relative">
-                          <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                          <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                             {currentYear}: {formatCurrency(currRev)}
                           </div>
                           <div className="w-full bg-violet-500 rounded-t transition-all hover:bg-violet-400" style={{ height: `${Math.max(currHeight, 1)}%` }} />
@@ -17510,11 +17513,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           </div>
           
           {/* Cost Trend Chart */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6 overflow-hidden">
             <h3 className="text-lg font-semibold text-white mb-4">
               {timeView === 'weekly' ? 'Weekly' : 'Monthly'} 3PL Costs
             </h3>
-            <div className="flex items-end gap-1 h-48">
+            <div className="relative flex items-end gap-1 h-48">
               {(timeView === 'weekly' ? weeklyData.slice(-12) : months.slice(-12)).map((d, i) => {
                 const data = d;
                 const height = timeView === 'weekly' 
@@ -17525,7 +17528,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   : new Date(data.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
                 return (
                   <div key={timeView === 'weekly' ? data.week : data.month} className="flex-1 flex flex-col items-center group relative">
-                    <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                    <div className="absolute -top-14 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                       {label}<br/>
                       Total: {formatCurrency(data.totalCost)}<br/>
                       Orders: {formatNumber(data.orderCount)}<br/>
@@ -17587,7 +17590,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       <p className="text-slate-500 text-xs mt-1">vs last {timeView === 'weekly' ? 'week' : 'month'}</p>
                     </div>
                   </div>
-                  <div className="flex items-end gap-1 h-20">
+                  <div className="relative flex items-end gap-1 h-20">
                     {data.map((d, i) => {
                       const val = getValue(d) || 0;
                       const height = maxVal > 0 ? (val / maxVal) * 100 : 0;
@@ -17596,7 +17599,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       const color = colorFn ? colorFn(val) : defaultColor;
                       return (
                         <div key={i} className="flex-1 flex flex-col items-center group relative">
-                          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-900 border border-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 shadow-lg">
+                          <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-900 border border-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 shadow-lg pointer-events-none">
                             <p className="font-medium">{getLabel(d)}</p>
                             <p className="text-slate-300">{format === 'currency' ? formatCurrency(val) : format === 'percent' ? `${val.toFixed(1)}%` : val.toFixed(0)}</p>
                           </div>
@@ -18024,7 +18027,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             </div>
                           </div>
                           {/* Mini sparkline chart */}
-                          <div className="flex items-end gap-0.5 h-12 overflow-hidden">
+                          <div className="relative flex items-end gap-0.5 h-12">
                             {s.weeklyData.map((w, i) => {
                               const maxPPU = Math.max(...s.weeklyData.map(x => Math.abs(x.profitPerUnit))) || 1;
                               const height = Math.abs(w.profitPerUnit) / maxPPU * 100;
@@ -18032,7 +18035,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               const showLabel = i === 0 || i === s.weeklyData.length - 1;
                               return (
                                 <div key={i} className="flex-1 flex flex-col items-center group relative" style={{ minWidth: '16px', maxWidth: '40px' }}>
-                                  <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-700 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap z-10">
+                                  <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                                     {w.week.slice(5)}: {formatCurrency(w.profitPerUnit)}/unit
                                   </div>
                                   <div 
@@ -18082,7 +18085,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             </div>
                           </div>
                           {/* Mini sparkline chart */}
-                          <div className="flex items-end gap-0.5 h-12 overflow-hidden">
+                          <div className="relative flex items-end gap-0.5 h-12">
                             {s.weeklyData.map((w, i) => {
                               const maxPPU = Math.max(...s.weeklyData.map(x => Math.abs(x.profitPerUnit))) || 1;
                               const height = Math.abs(w.profitPerUnit) / maxPPU * 100;
@@ -18090,7 +18093,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               const showLabel = i === 0 || i === s.weeklyData.length - 1;
                               return (
                                 <div key={i} className="flex-1 flex flex-col items-center group relative" style={{ minWidth: '16px', maxWidth: '40px' }}>
-                                  <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-700 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap z-10">
+                                  <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                                     {w.week.slice(5)}: {formatCurrency(w.profitPerUnit)}/unit
                                   </div>
                                   <div 
