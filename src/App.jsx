@@ -8257,16 +8257,16 @@ Analyze the data and respond with ONLY this JSON:
           </div>
           
           {/* Google Ads data if present (without full sales data) */}
-          {(dayData.googleAds || dayData.googleSpend || dayData.googleImpressions) && (
-            <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4 mb-6">
-              <h3 className="text-lg font-semibold text-blue-400 mb-3">Google Ads Metrics</h3>
+          {(dayData.googleAds || dayData.googleSpend || dayData.googleImpressions || shopify.googleSpend || shopify.adsMetrics?.googleImpressions) && (
+            <div className="bg-red-900/20 border border-red-500/30 rounded-xl p-4 mb-6">
+              <h3 className="text-lg font-semibold text-red-400 mb-3">Google Ads Metrics</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div><p className="text-slate-400 text-xs">Spend</p><p className="text-white font-medium">{formatCurrency(dayData.googleSpend || dayData.googleAds || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">Clicks</p><p className="text-white font-medium">{formatNumber(dayData.googleClicks || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">Impressions</p><p className="text-white font-medium">{formatNumber(dayData.googleImpressions || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">Conversions</p><p className="text-white font-medium">{formatNumber(dayData.googleConversions || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">CPC</p><p className="text-white font-medium">{formatCurrency(dayData.googleCpc || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">CPA</p><p className="text-white font-medium">{formatCurrency(dayData.googleCpa || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">Spend</p><p className="text-white font-medium">{formatCurrency(shopify.googleSpend || dayData.googleSpend || dayData.googleAds || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">Clicks</p><p className="text-white font-medium">{formatNumber(shopify.adsMetrics?.googleClicks || dayData.googleClicks || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">Impressions</p><p className="text-white font-medium">{formatNumber(shopify.adsMetrics?.googleImpressions || dayData.googleImpressions || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">Conversions</p><p className="text-white font-medium">{formatNumber(shopify.adsMetrics?.googleConversions || dayData.googleConversions || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">CPC</p><p className="text-white font-medium">{formatCurrency(shopify.adsMetrics?.googleCPC || dayData.googleCpc || 0)}</p></div>
+                <div><p className="text-slate-400 text-xs">Cost/Conv</p><p className="text-white font-medium">{formatCurrency(shopify.adsMetrics?.googleCostPerConv || dayData.googleCpa || 0)}</p></div>
               </div>
             </div>
           )}
