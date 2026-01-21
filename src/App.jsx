@@ -42,13 +42,16 @@ const parseCSVLine = (line) => {
 };
 
 // Parse QBO Transaction Detail CSV
-const parseQBOTransactions = (content) => {
+const parseQBOTransactions = (content, categoryOverrides = {}) => {
   const lines = content.split(/\r?\n/).filter(l => l.trim());
   const transactions = [];
   const accounts = {};
   const categories = {};
   let currentAccount = null;
   let currentAccountType = 'checking'; // 'checking' | 'credit_card'
+  
+  // Track last balance for each account
+  const accountBalances = {};
   
   // Skip header rows (first 5 lines typically)
   let dataStartIndex = 0;
@@ -66,21 +69,33 @@ const parseQBOTransactions = (content) => {
     const cols = parseCSVLine(line);
     
     // Check for section headers (account names like "General Operations (5983) - 1")
-    if (cols[0] && !cols[1] && !cols[0].startsWith('Total for') && !cols[0].startsWith(',TOTAL')) {
+    // These have content in first column but nothing in second column (date)
+    if (cols[0] && cols[0].trim() && !cols[1]?.trim() && !cols[0].startsWith('Total for') && !cols[0].includes(',TOTAL')) {
       currentAccount = cols[0].trim();
       // Detect if this is a credit card account
-      currentAccountType = (currentAccount.toLowerCase().includes('card') || 
-                           currentAccount.toLowerCase().includes('credit') ||
-                           currentAccount.toLowerCase().includes('amex') ||
-                           currentAccount.toLowerCase().includes('visa') ||
-                           currentAccount.toLowerCase().includes('mastercard')) ? 'credit_card' : 'checking';
+      const lowerName = currentAccount.toLowerCase();
+      currentAccountType = (lowerName.includes('card') || 
+                           lowerName.includes('credit') ||
+                           lowerName.includes('amex') ||
+                           lowerName.includes('visa') ||
+                           lowerName.includes('mastercard') ||
+                           lowerName.includes('platinum') ||
+                           lowerName.includes('1003') ||
+                           lowerName.includes('1009')) ? 'credit_card' : 'checking';
       if (!accounts[currentAccount]) {
-        accounts[currentAccount] = { name: currentAccount, type: currentAccountType, transactions: 0, totalIn: 0, totalOut: 0 };
+        accounts[currentAccount] = { 
+          name: currentAccount, 
+          type: currentAccountType, 
+          transactions: 0, 
+          totalIn: 0, 
+          totalOut: 0,
+          balance: 0
+        };
       }
       continue;
     }
     
-    // Skip total rows and empty rows
+    // Skip total rows and metadata rows
     if (cols[0]?.startsWith('Total for') || cols[0]?.includes(',TOTAL') || cols[0]?.includes('Cash Basis')) continue;
     
     // Parse transaction row - format: empty, date, type, num, name, store, memo, category, amount, balance
@@ -94,22 +109,30 @@ const parseQBOTransactions = (content) => {
     const memo = cols[6]?.trim() || '';
     const category = cols[7]?.trim() || 'Uncategorized';
     
-    // Parse amount - remove commas, handle negatives
+    // Parse amount - remove commas, quotes, handle negatives
     let amountStr = cols[8]?.trim().replace(/,/g, '').replace(/"/g, '') || '0';
     const amount = parseFloat(amountStr) || 0;
+    
+    // Parse balance - this is the running balance after this transaction
+    let balanceStr = cols[9]?.trim().replace(/,/g, '').replace(/"/g, '') || '0';
+    const balance = parseFloat(balanceStr) || 0;
+    
+    // Update account balance (last transaction's balance is current balance)
+    if (currentAccount) {
+      accountBalances[currentAccount] = balance;
+    }
     
     // Parse date (MM/DD/YYYY to YYYY-MM-DD)
     const dateParts = dateStr.split('/');
     const dateKey = `${dateParts[2]}-${dateParts[0].padStart(2, '0')}-${dateParts[1].padStart(2, '0')}`;
     
-    // CRITICAL: Skip Credit Card Payment transactions - they are transfers, not income/expense
-    // The actual expenses are recorded on the credit card itself
-    if (txnType === 'Credit Card Payment') {
-      continue; // Skip entirely to avoid double-counting
-    }
+    // Generate unique transaction ID for category overrides
+    const txnId = `${dateKey}-${currentAccount}-${amount}-${memo.slice(0,20)}`.replace(/[^a-zA-Z0-9-]/g, '');
     
-    // Also skip transfers between accounts (not income/expense)
-    if (txnType === 'Transfer' && category.includes('Card')) {
+    // SKIP Credit Card Payment transactions - they are transfers between accounts
+    // On checking: "Credit Card Payment" with negative amount = paying the card
+    // On credit card: "Credit Card Payment" with negative amount = receiving payment from checking
+    if (txnType === 'Credit Card Payment') {
       continue;
     }
     
@@ -118,61 +141,71 @@ const parseQBOTransactions = (content) => {
     let isExpense = false;
     
     if (currentAccountType === 'credit_card') {
-      // On credit cards: Expense type = real expense, positive amount
-      // Payments to the card are already filtered out above
-      if (txnType === 'Expense' || txnType === 'Check') {
+      // On credit cards: Expense with POSITIVE amount = real business expense
+      if (txnType === 'Expense' && amount > 0) {
         isExpense = true;
       }
+      // Skip everything else on credit cards (payments, adjustments)
     } else {
       // On checking accounts:
-      // Deposits with positive amounts = income
-      // Expenses with negative amounts = expense (but NOT credit card payments)
       if (txnType === 'Deposit' && amount > 0) {
         isIncome = true;
-      } else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) {
+      } else if (txnType === 'Expense' && amount < 0) {
         isExpense = true;
-      } else if (txnType === 'Transfer' && amount > 0 && !category.includes('Card')) {
-        // Transfer in (not from credit card) could be income like partner investment
+      } else if (txnType === 'Check' && amount < 0) {
+        isExpense = true;
+      } else if (txnType === 'Transfer' && amount > 0) {
+        // Incoming transfer (not from credit card) = income
         isIncome = true;
-      }
-    }
-    
-    // Skip if neither income nor expense (e.g., interest, adjustments we don't care about)
-    if (!isIncome && !isExpense) {
-      // Allow interest earned as income
-      if (memo.includes('Interest') && amount > 0) {
-        isIncome = true;
-      } else if (txnType === 'Journal Entry' || txnType === 'Payroll Check') {
-        // Payroll is an expense
+      } else if (txnType === 'Transfer' && amount < 0) {
+        // Outgoing transfer - check if it's to a credit card (skip) or real expense
+        if (!category.toLowerCase().includes('card') && !category.includes('1003') && !category.includes('1009')) {
+          isExpense = true;
+        }
+      } else if (txnType === 'Journal Entry') {
+        // Journal entries - check category
         if (category.includes('Payroll') || category.includes('Wages')) {
           isExpense = true;
         }
-      } else {
-        continue; // Skip transactions we can't classify
+      } else if (txnType === 'Payroll Check') {
+        isExpense = true;
       }
     }
     
+    // Skip if we couldn't classify it
+    if (!isIncome && !isExpense) continue;
+    
+    // Apply category override if exists
+    const finalCategory = categoryOverrides[txnId] || category;
+    
     // Extract top-level category (before the colon)
-    const topCategory = category.split(':')[0].trim();
-    const subCategory = category.includes(':') ? category.split(':').slice(1).join(':').trim() : '';
+    const topCategory = finalCategory.split(':')[0].trim();
+    const subCategory = finalCategory.includes(':') ? finalCategory.split(':').slice(1).join(':').trim() : '';
     
     // Get vendor name from various sources
     let vendor = vendorName;
     if (!vendor && memo) {
       // Try to extract vendor from memo
-      if (memo.includes('Credit ')) vendor = memo.split('Credit ')[1]?.split(' ')[0] || '';
-      else if (memo.includes('Debit ')) vendor = memo.split('Debit ')[1]?.split(' ')[0] || '';
-      else if (memo.includes('to ')) vendor = memo.split('to ')[1]?.split(' - ')[0] || '';
+      const memoUpper = memo.toUpperCase();
+      if (memoUpper.includes('AMAZON')) vendor = 'Amazon';
+      else if (memoUpper.includes('SHOPIFY')) vendor = 'Shopify';
+      else if (memoUpper.includes('GOOGLE')) vendor = 'Google';
+      else if (memoUpper.includes('META') || memoUpper.includes('FACEBOOK')) vendor = 'Meta';
+      else if (memo.includes('Credit ')) vendor = memo.split('Credit ')[1]?.split(' ')[0] || '';
+      else if (memo.includes('Debit to ')) vendor = memo.split('Debit to ')[1]?.split(' - ')[0] || '';
+      else vendor = memo.split(' ')[0] || 'Unknown';
     }
     if (!vendor) vendor = 'Unknown';
     
     const txn = {
+      id: txnId,
       date: dateKey,
       dateDisplay: dateStr,
       type: txnType,
       vendor,
       memo,
-      category,
+      category: finalCategory,
+      originalCategory: category,
       topCategory,
       subCategory,
       amount: Math.abs(amount),
@@ -209,6 +242,13 @@ const parseQBOTransactions = (content) => {
       if (txn.isExpense) categories[topCategory].subCategories[subCategory].totalOut += txn.amount;
     }
   }
+  
+  // Update account balances
+  Object.keys(accountBalances).forEach(acct => {
+    if (accounts[acct]) {
+      accounts[acct].balance = accountBalances[acct];
+    }
+  });
   
   // Sort by date
   transactions.sort((a, b) => a.date.localeCompare(b.date));
@@ -1041,6 +1081,7 @@ const handleLogout = async () => {
         accounts: {},
         categories: {},
         monthlySnapshots: {},
+        categoryOverrides: {},
         settings: { reminderEnabled: true, reminderTime: '09:00' }
       }; 
     } catch { 
@@ -1050,6 +1091,7 @@ const handleLogout = async () => {
         accounts: {},
         categories: {},
         monthlySnapshots: {},
+        categoryOverrides: {},
         settings: { reminderEnabled: true, reminderTime: '09:00' }
       }; 
     }
@@ -2428,20 +2470,37 @@ const switchStore = useCallback(async (storeId) => {
 }, [activeStoreId, stores, combinedData, pushToCloudNow, loadFromCloud, storeName]);
 
 const deleteStore = useCallback(async (storeId) => {
+  console.log('deleteStore called with:', storeId, 'stores:', stores.length);
+  
   if (stores.length <= 1) {
     setToast({ message: 'Cannot delete the only store', type: 'error' });
     return;
   }
   
   const store = stores.find(s => s.id === storeId);
-  if (!confirm(`Delete store "${store?.name}"? All data will be permanently lost.`)) return;
+  if (!store) {
+    setToast({ message: 'Store not found', type: 'error' });
+    return;
+  }
+  
+  // Use window.confirm to ensure it works
+  const confirmed = window.confirm(`Delete store "${store.name}"? All data will be permanently lost.`);
+  if (!confirmed) return;
   
   const updatedStores = stores.filter(s => s.id !== storeId);
   
   // Determine new active store
   let newActiveId = activeStoreId;
-  if (storeId === activeStoreId) {
+  if (storeId === activeStoreId && updatedStores.length > 0) {
     newActiveId = updatedStores[0].id;
+  }
+  
+  // Update local state first
+  setStores(updatedStores);
+  
+  // If deleting active store, switch to another
+  if (storeId === activeStoreId && updatedStores.length > 0) {
+    setActiveStoreId(newActiveId);
   }
   
   // Save updated stores list to cloud
@@ -2468,20 +2527,20 @@ const deleteStore = useCallback(async (storeId) => {
       };
       
       await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
+      console.log('Store deleted from cloud');
     } catch (err) {
       console.error('Failed to delete store from cloud:', err);
+      setToast({ message: 'Deleted locally but cloud sync failed', type: 'warning' });
+      return;
     }
   }
   
-  setStores(updatedStores);
-  
-  // If deleting active store, switch to another
-  if (storeId === activeStoreId) {
-    setActiveStoreId(newActiveId);
+  // Load new store data if we switched
+  if (storeId === activeStoreId && updatedStores.length > 0) {
     await loadFromCloud(newActiveId);
   }
   
-  setToast({ message: `Deleted store "${store?.name}"`, type: 'success' });
+  setToast({ message: `Deleted store "${store.name}"`, type: 'success' });
 }, [stores, activeStoreId, loadFromCloud, session]);
 
 // Store Selector Modal
@@ -2536,8 +2595,14 @@ const StoreSelectorModal = () => {
                     )}
                     {stores.length > 1 && (
                       <button 
-                        onClick={(e) => { e.stopPropagation(); deleteStore(store.id); }}
-                        className="p-1 text-slate-400 hover:text-rose-400"
+                        onClick={(e) => { 
+                          e.preventDefault();
+                          e.stopPropagation(); 
+                          console.log('Delete button clicked for store:', store.id);
+                          deleteStore(store.id); 
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/20 rounded transition-colors"
+                        title={`Delete ${store.name}`}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -22334,7 +22399,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       setBankingProcessing(true);
       try {
         const content = await file.text();
-        const parsed = parseQBOTransactions(content);
+        // Pass existing category overrides to parser
+        const parsed = parseQBOTransactions(content, bankingData.categoryOverrides || {});
         
         if (parsed.transactions.length === 0) {
           setToast({ message: 'No transactions found in file', type: 'error' });
@@ -22345,6 +22411,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         const newBankingData = {
           ...parsed,
           lastUpload: new Date().toISOString(),
+          categoryOverrides: bankingData.categoryOverrides || {},
           settings: bankingData.settings,
         };
         
@@ -22361,6 +22428,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       }
       setBankingProcessing(false);
       e.target.value = '';
+    };
+    
+    // Handle category override for a transaction
+    const handleCategoryChange = (txnId, newCategory) => {
+      const newOverrides = { ...bankingData.categoryOverrides, [txnId]: newCategory };
+      const newBankingData = {
+        ...bankingData,
+        categoryOverrides: newOverrides,
+      };
+      // Re-parse to update category stats (ideally we'd just update the transaction, but this ensures consistency)
+      // For now just update the override and let next upload recalculate
+      setBankingData(newBankingData);
+      localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+      queueCloudSave();
+      setToast({ message: 'Category updated', type: 'success' });
     };
     
     return (
@@ -22466,6 +22548,44 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   <p className="text-slate-400 text-xs mt-1">Last {monthKeys.length} months</p>
                 </div>
               </div>
+              
+              {/* Account Balances */}
+              {Object.keys(bankingData.accounts || {}).length > 0 && (
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+                  <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                    <Building className="w-5 h-5 text-green-400" />
+                    Account Balances <span className="text-sm font-normal text-slate-400">(as of last upload)</span>
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {Object.entries(bankingData.accounts).map(([name, acct]) => {
+                      const isCard = acct.type === 'credit_card';
+                      const balance = acct.balance || 0;
+                      return (
+                        <div 
+                          key={name} 
+                          className={`p-4 rounded-lg border ${isCard ? 'bg-rose-900/20 border-rose-500/30' : 'bg-emerald-900/20 border-emerald-500/30'}`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              {isCard ? <CreditCard className="w-4 h-4 text-rose-400 flex-shrink-0" /> : <Wallet className="w-4 h-4 text-emerald-400 flex-shrink-0" />}
+                              <span className="text-white font-medium text-sm truncate">{name.split(' - ')[0]}</span>
+                            </div>
+                            <span className={`text-lg font-bold ${isCard ? 'text-rose-400' : 'text-emerald-400'}`}>
+                              {isCard ? '-' : ''}{formatCurrency(Math.abs(balance))}
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-500 mt-2">
+                            {acct.transactions} transactions • {isCard ? 'Credit Card' : 'Checking'}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-3">
+                    💡 Balances shown are from the last transaction in each account from your QBO export.
+                  </p>
+                </div>
+              )}
               
               {/* Tabs */}
               <div className="flex gap-2 mb-6 border-b border-slate-700 pb-2">
@@ -22766,33 +22886,97 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-semibold text-white">Recent Transactions</h3>
-                    <span className="text-slate-400 text-sm">{filteredTxns.length} transactions</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-slate-400 text-sm">{filteredTxns.length} transactions</span>
+                      {Object.keys(bankingData.categoryOverrides || {}).length > 0 && (
+                        <span className="text-xs bg-violet-500/20 text-violet-300 px-2 py-1 rounded">
+                          {Object.keys(bankingData.categoryOverrides).length} custom categories
+                        </span>
+                      )}
+                    </div>
                   </div>
+                  <p className="text-xs text-slate-500 mb-4">💡 Click on a category to change it. Changes will be applied on next upload.</p>
                   <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
                     <table className="w-full text-sm">
-                      <thead className="sticky top-0 bg-slate-800">
+                      <thead className="sticky top-0 bg-slate-800 z-10">
                         <tr className="border-b border-slate-700">
                           <th className="text-left text-slate-400 font-medium py-2 px-2">Date</th>
                           <th className="text-left text-slate-400 font-medium py-2 px-2">Vendor</th>
+                          <th className="text-left text-slate-400 font-medium py-2 px-2">Memo</th>
                           <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
+                          <th className="text-left text-slate-400 font-medium py-2 px-2">Account</th>
                           <th className="text-right text-slate-400 font-medium py-2 px-2">Amount</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredTxns.slice(0, 200).map((txn, i) => (
-                          <tr key={i} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                            <td className="py-2 px-2 text-slate-400 whitespace-nowrap">{txn.dateDisplay}</td>
-                            <td className="py-2 px-2 text-white truncate max-w-[200px]" title={txn.vendor}>{txn.vendor}</td>
-                            <td className="py-2 px-2 text-slate-300 truncate max-w-[200px]" title={txn.category}>{txn.topCategory}</td>
-                            <td className={`py-2 px-2 text-right font-medium whitespace-nowrap ${txn.isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {txn.isIncome ? '+' : '-'}{formatCurrency(txn.amount)}
-                            </td>
-                          </tr>
-                        ))}
+                        {filteredTxns.slice(0, 300).map((txn, i) => {
+                          const hasOverride = bankingData.categoryOverrides?.[txn.id];
+                          return (
+                            <tr key={txn.id || i} className="border-b border-slate-700/50 hover:bg-slate-700/30 group">
+                              <td className="py-2 px-2 text-slate-400 whitespace-nowrap">{txn.dateDisplay}</td>
+                              <td className="py-2 px-2 text-white truncate max-w-[150px]" title={txn.vendor}>{txn.vendor}</td>
+                              <td className="py-2 px-2 text-slate-500 truncate max-w-[200px] text-xs" title={txn.memo}>{txn.memo?.slice(0, 40) || '-'}</td>
+                              <td className="py-2 px-2">
+                                <div className="flex items-center gap-1">
+                                  <select
+                                    value={txn.category}
+                                    onChange={(e) => handleCategoryChange(txn.id, e.target.value)}
+                                    className={`bg-transparent border-0 ${hasOverride ? 'text-violet-300' : 'text-slate-300'} text-sm cursor-pointer hover:bg-slate-700 rounded px-1 py-0.5 max-w-[180px] truncate`}
+                                    title={txn.category}
+                                  >
+                                    <option value={txn.originalCategory || txn.category}>{txn.originalCategory || txn.category}</option>
+                                    {/* Common expense categories */}
+                                    <optgroup label="Common Expenses">
+                                      <option value="Advertising & marketing">Advertising & marketing</option>
+                                      <option value="Cost of goods sold">Cost of goods sold</option>
+                                      <option value="Office expenses">Office expenses</option>
+                                      <option value="Payroll expenses">Payroll expenses</option>
+                                      <option value="Professional services">Professional services</option>
+                                      <option value="Shipping & delivery">Shipping & delivery</option>
+                                      <option value="Software & subscriptions">Software & subscriptions</option>
+                                      <option value="Utilities">Utilities</option>
+                                      <option value="3PL Services">3PL Services</option>
+                                      <option value="General business expenses">General business expenses</option>
+                                    </optgroup>
+                                    {/* Common income categories */}
+                                    <optgroup label="Income">
+                                      <option value="Channel Sales:Amazon Sales">Amazon Sales</option>
+                                      <option value="Channel Sales:Shopify Sales">Shopify Sales</option>
+                                      <option value="Sales">Sales</option>
+                                      <option value="Partner investments">Partner investments</option>
+                                      <option value="Interest earned">Interest earned</option>
+                                    </optgroup>
+                                  </select>
+                                  {hasOverride && (
+                                    <button 
+                                      onClick={() => {
+                                        const newOverrides = { ...bankingData.categoryOverrides };
+                                        delete newOverrides[txn.id];
+                                        setBankingData({ ...bankingData, categoryOverrides: newOverrides });
+                                        localStorage.setItem('ecommerce_banking_v1', JSON.stringify({ ...bankingData, categoryOverrides: newOverrides }));
+                                        queueCloudSave();
+                                      }}
+                                      className="text-slate-500 hover:text-rose-400 p-0.5"
+                                      title="Reset to original category"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-2 px-2 text-slate-500 text-xs truncate max-w-[120px]" title={txn.account}>
+                                {txn.accountType === 'credit_card' ? '💳' : '🏦'} {txn.account?.split(' ')[0]}
+                              </td>
+                              <td className={`py-2 px-2 text-right font-medium whitespace-nowrap ${txn.isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {txn.isIncome ? '+' : '-'}{formatCurrency(txn.amount)}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
-                    {filteredTxns.length > 200 && (
-                      <p className="text-center text-slate-500 py-4">Showing first 200 of {filteredTxns.length} transactions</p>
+                    {filteredTxns.length > 300 && (
+                      <p className="text-center text-slate-500 py-4">Showing first 300 of {filteredTxns.length} transactions</p>
                     )}
                   </div>
                 </div>
@@ -22980,7 +23164,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         )}
                         {stores.length > 1 && (
                           <button 
-                            onClick={() => deleteStore(store.id)}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              console.log('Delete button clicked in modal for store:', store.id);
+                              deleteStore(store.id);
+                            }}
                             className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
                             title="Delete store"
                           >
