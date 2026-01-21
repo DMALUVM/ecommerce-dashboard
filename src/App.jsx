@@ -1133,7 +1133,17 @@ const handleLogout = async () => {
   const [showBankingUpload, setShowBankingUpload] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState(null); // Transaction being edited
   const [bankingDrilldown, setBankingDrilldown] = useState(null); // { category: string, type: 'expense'|'income' } for drill-down view
+  const [confirmedRecurring, setConfirmedRecurring] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('ecommerce_recurring_v1')) || {};
+    } catch { return {}; }
+  });
   const [skuDateRange, setSkuDateRange] = useState('all'); // 'all' | '4weeks' | 'ytd' | '2025' | '2024'
+  
+  // Save confirmed recurring to localStorage
+  useEffect(() => {
+    localStorage.setItem('ecommerce_recurring_v1', JSON.stringify(confirmedRecurring));
+  }, [confirmedRecurring]);
   
   // Sales Tax Management
   const [salesTaxConfig, setSalesTaxConfig] = useState({
@@ -1206,10 +1216,34 @@ const handleLogout = async () => {
   });
   const [showAddProduction, setShowAddProduction] = useState(false);
   const [editingProduction, setEditingProduction] = useState(null);
-  const [productionForm, setProductionForm] = useState({ sku: '', productName: '', quantity: '', expectedDate: '', notes: '' });
+  const [productionForm, setProductionForm] = useState({ 
+    sku: '', 
+    productName: '', 
+    quantity: '', 
+    expectedDate: '', 
+    notes: '',
+    // Enhanced PO fields
+    poNumber: '',
+    vendor: '',
+    unitCost: '',
+    paymentTerms: '50-50', // '30-70-ship' | '50-50' | 'net30' | 'custom'
+    depositPercent: 50,
+    depositPaid: false,
+    depositPaidDate: '',
+    balancePaid: false,
+    balancePaidDate: '',
+    shipments: [], // [{ date, units, paid }]
+    // Net terms
+    depositNetDays: 0, // Days after PO to pay deposit (0 = immediate)
+    balanceNetDays: 0, // Days after shipment to pay balance (0 = on shipment)
+    // Cure time (for soaps)
+    cureTimeDays: 0, // Days product needs before sellable
+  });
   const [productionFile, setProductionFile] = useState(null);
   const [productionFileName, setProductionFileName] = useState('');
   const [extractingProduction, setExtractingProduction] = useState(false);
+  const [showAddShipment, setShowAddShipment] = useState(null); // PO id for adding shipment
+  const [shipmentForm, setShipmentForm] = useState({ date: '', units: '', notes: '' });
   
   // Lead Time Settings
   const [leadTimeSettings, setLeadTimeSettings] = useState(() => {
@@ -17185,19 +17219,27 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             })()}
           </div>
           
-          {/* Production Pipeline Section */}
+          {/* Production Pipeline / Purchase Orders Section */}
           <div className="mt-8">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">
                   <Truck className="w-6 h-6 text-cyan-400" />
-                  Production Pipeline
+                  Purchase Orders & Production
                 </h2>
-                <p className="text-slate-400 text-sm">Track upcoming inventory from manufacturers</p>
+                <p className="text-slate-400 text-sm">Track open POs, payment terms, and incoming inventory</p>
               </div>
               <div className="flex gap-2">
-                <button onClick={() => { setProductionForm({ sku: '', productName: '', quantity: '', expectedDate: '', notes: '' }); setEditingProduction(null); setShowAddProduction(true); }} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm text-white flex items-center gap-2">
-                  <Plus className="w-4 h-4" />Add Production
+                <button onClick={() => { 
+                  setProductionForm({ 
+                    sku: '', productName: '', quantity: '', expectedDate: '', notes: '',
+                    poNumber: '', vendor: '', unitCost: '', paymentTerms: '50-50', depositPercent: 50,
+                    depositPaid: false, depositPaidDate: '', balancePaid: false, balancePaidDate: '', shipments: []
+                  }); 
+                  setEditingProduction(null); 
+                  setShowAddProduction(true); 
+                }} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm text-white flex items-center gap-2">
+                  <Plus className="w-4 h-4" />Add Purchase Order
                 </button>
               </div>
             </div>
@@ -17282,10 +17324,70 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             
             {/* Add/Edit Production Modal */}
             {showAddProduction && (
-              <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-                <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
-                  <h3 className="text-lg font-semibold text-white mb-4">{editingProduction ? 'Edit Production' : 'Add Production'}</h3>
-                  <div className="space-y-4">
+              <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 overflow-y-auto">
+                <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-2xl w-full my-8">
+                  <h3 className="text-lg font-semibold text-white mb-4">{editingProduction ? 'Edit Purchase Order' : 'Add Purchase Order'}</h3>
+                  
+                  {/* Product Preset - Quick Fill */}
+                  <div className="bg-gradient-to-r from-cyan-900/30 to-blue-900/30 rounded-xl p-4 mb-4 border border-cyan-500/30">
+                    <label className="block text-sm text-cyan-400 mb-2">Quick Fill — Product Type</label>
+                    <select 
+                      onChange={(e) => {
+                        const preset = e.target.value;
+                        if (preset === 'lip-balm') {
+                          setProductionForm(p => ({ 
+                            ...p, 
+                            paymentTerms: '30-70-ship', 
+                            depositPercent: 30,
+                            depositNetDays: 30,
+                            balanceNetDays: 60,
+                            cureTimeDays: 0,
+                          }));
+                        } else if (preset === 'tallow-balm' || preset === 'deodorant') {
+                          setProductionForm(p => ({ 
+                            ...p, 
+                            paymentTerms: '50-50', 
+                            depositPercent: 50,
+                            depositNetDays: 0,
+                            balanceNetDays: 0,
+                            cureTimeDays: 0,
+                          }));
+                        } else if (preset === 'soap') {
+                          setProductionForm(p => ({ 
+                            ...p, 
+                            paymentTerms: '50-50', 
+                            depositPercent: 50,
+                            depositNetDays: 0,
+                            balanceNetDays: 0,
+                            cureTimeDays: 21, // 3 weeks default cure time
+                          }));
+                        }
+                      }}
+                      className="w-full bg-slate-800 border border-cyan-500/50 rounded-lg px-3 py-2 text-white"
+                      defaultValue=""
+                    >
+                      <option value="" disabled>Select product type to auto-fill terms...</option>
+                      <option value="lip-balm">🧴 Lip Balm — 30% deposit (Net 30), 70% on ship (Net 60)</option>
+                      <option value="tallow-balm">🫙 Tallow Balm — 50/50, due immediately</option>
+                      <option value="deodorant">🧴 Deodorant — 50/50, due immediately</option>
+                      <option value="soap">🧼 Soap — 50/50, due immediately + 3 week cure time</option>
+                    </select>
+                  </div>
+                  
+                  {/* Basic Info */}
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">PO Number</label>
+                      <input type="text" value={productionForm.poNumber || ''} onChange={(e) => setProductionForm(p => ({ ...p, poNumber: e.target.value }))} placeholder="PO-2025-001" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Vendor/Manufacturer</label>
+                      <input type="text" value={productionForm.vendor || ''} onChange={(e) => setProductionForm(p => ({ ...p, vendor: e.target.value }))} placeholder="Manufacturer name" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                    </div>
+                  </div>
+                  
+                  {/* Product Info */}
+                  <div className="grid grid-cols-2 gap-4 mb-4">
                     <div>
                       <label className="block text-sm text-slate-400 mb-1">SKU</label>
                       <input type="text" value={productionForm.sku} onChange={(e) => setProductionForm(p => ({ ...p, sku: e.target.value }))} placeholder="ABC-123" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
@@ -17294,43 +17396,206 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       <label className="block text-sm text-slate-400 mb-1">Product Name</label>
                       <input type="text" value={productionForm.productName} onChange={(e) => setProductionForm(p => ({ ...p, productName: e.target.value }))} placeholder="Product description" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
                     </div>
+                  </div>
+                  
+                  {/* Quantity & Cost */}
+                  <div className="grid grid-cols-3 gap-4 mb-4">
                     <div>
-                      <label className="block text-sm text-slate-400 mb-1">Quantity Being Made</label>
-                      <input type="number" value={productionForm.quantity} onChange={(e) => setProductionForm(p => ({ ...p, quantity: e.target.value }))} placeholder="1000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                      <label className="block text-sm text-slate-400 mb-1">Total Quantity</label>
+                      <input type="number" value={productionForm.quantity} onChange={(e) => setProductionForm(p => ({ ...p, quantity: e.target.value }))} placeholder="75000" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
                     </div>
                     <div>
-                      <label className="block text-sm text-slate-400 mb-1">Expected Ready Date</label>
+                      <label className="block text-sm text-slate-400 mb-1">Unit Cost ($)</label>
+                      <input type="number" step="0.01" value={productionForm.unitCost || ''} onChange={(e) => setProductionForm(p => ({ ...p, unitCost: e.target.value }))} placeholder="0.45" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Total PO Value</label>
+                      <div className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-emerald-400 font-medium">
+                        {formatCurrency((parseFloat(productionForm.quantity) || 0) * (parseFloat(productionForm.unitCost) || 0))}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Payment Terms */}
+                  <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
+                    <h4 className="text-white font-medium mb-3">Payment Terms</h4>
+                    <div className="grid grid-cols-3 gap-4 mb-3">
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">Payment Structure</label>
+                        <select 
+                          value={productionForm.paymentTerms || '50-50'} 
+                          onChange={(e) => {
+                            const terms = e.target.value;
+                            let deposit = 50;
+                            if (terms === '30-70-ship') deposit = 30;
+                            else if (terms === 'net30') deposit = 0;
+                            else if (terms === '100-upfront') deposit = 100;
+                            setProductionForm(p => ({ ...p, paymentTerms: terms, depositPercent: deposit }));
+                          }}
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                        >
+                          <option value="30-70-ship">30% Deposit, 70% As Ships</option>
+                          <option value="50-50">50% Deposit, 50% At Completion</option>
+                          <option value="net30">Net 30 (Pay on Delivery)</option>
+                          <option value="100-upfront">100% Upfront</option>
+                          <option value="custom">Custom Terms</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">Deposit %</label>
+                        <input 
+                          type="number" 
+                          value={productionForm.depositPercent || 50} 
+                          onChange={(e) => setProductionForm(p => ({ ...p, depositPercent: parseInt(e.target.value) || 0 }))} 
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                          disabled={productionForm.paymentTerms !== 'custom'}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">Cure Time (days)</label>
+                        <input 
+                          type="number" 
+                          value={productionForm.cureTimeDays || 0} 
+                          onChange={(e) => setProductionForm(p => ({ ...p, cureTimeDays: parseInt(e.target.value) || 0 }))} 
+                          placeholder="0"
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                        />
+                        <p className="text-slate-500 text-xs mt-1">For soaps needing cure time</p>
+                      </div>
+                    </div>
+                    
+                    {/* Net Terms Row */}
+                    <div className="grid grid-cols-2 gap-4 mb-3">
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">Deposit Due (Net Days)</label>
+                        <input 
+                          type="number" 
+                          value={productionForm.depositNetDays || 0} 
+                          onChange={(e) => setProductionForm(p => ({ ...p, depositNetDays: parseInt(e.target.value) || 0 }))} 
+                          placeholder="0 = immediately"
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                        />
+                        <p className="text-slate-500 text-xs mt-1">{productionForm.depositNetDays > 0 ? `Due ${productionForm.depositNetDays} days after PO` : 'Due immediately'}</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">Balance Due (Net Days)</label>
+                        <input 
+                          type="number" 
+                          value={productionForm.balanceNetDays || 0} 
+                          onChange={(e) => setProductionForm(p => ({ ...p, balanceNetDays: parseInt(e.target.value) || 0 }))} 
+                          placeholder="0 = on shipment"
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                        />
+                        <p className="text-slate-500 text-xs mt-1">{productionForm.balanceNetDays > 0 ? `Due ${productionForm.balanceNetDays} days after shipment` : 'Due on shipment/completion'}</p>
+                      </div>
+                    </div>
+                    
+                    {/* Payment Status */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-slate-800 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-slate-400 text-sm">Deposit ({productionForm.depositPercent || 50}%)</span>
+                          <span className="text-amber-400 font-medium">
+                            {formatCurrency((parseFloat(productionForm.quantity) || 0) * (parseFloat(productionForm.unitCost) || 0) * ((productionForm.depositPercent || 50) / 100))}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={productionForm.depositPaid || false}
+                              onChange={(e) => setProductionForm(p => ({ ...p, depositPaid: e.target.checked, depositPaidDate: e.target.checked ? new Date().toISOString().split('T')[0] : '' }))}
+                              className="w-4 h-4 rounded"
+                            />
+                            <span className="text-white text-sm">Paid</span>
+                          </label>
+                          {productionForm.depositPaid && (
+                            <input 
+                              type="date" 
+                              value={productionForm.depositPaidDate || ''} 
+                              onChange={(e) => setProductionForm(p => ({ ...p, depositPaidDate: e.target.value }))}
+                              className="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-sm flex-1"
+                            />
+                          )}
+                        </div>
+                      </div>
+                      <div className="bg-slate-800 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-slate-400 text-sm">Balance ({100 - (productionForm.depositPercent || 50)}%)</span>
+                          <span className="text-rose-400 font-medium">
+                            {formatCurrency((parseFloat(productionForm.quantity) || 0) * (parseFloat(productionForm.unitCost) || 0) * ((100 - (productionForm.depositPercent || 50)) / 100))}
+                          </span>
+                        </div>
+                        {productionForm.paymentTerms !== '30-70-ship' ? (
+                          <div className="flex items-center gap-3">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input 
+                                type="checkbox" 
+                                checked={productionForm.balancePaid || false}
+                                onChange={(e) => setProductionForm(p => ({ ...p, balancePaid: e.target.checked, balancePaidDate: e.target.checked ? new Date().toISOString().split('T')[0] : '' }))}
+                                className="w-4 h-4 rounded"
+                              />
+                              <span className="text-white text-sm">Paid</span>
+                            </label>
+                            {productionForm.balancePaid && (
+                              <input 
+                                type="date" 
+                                value={productionForm.balancePaidDate || ''} 
+                                onChange={(e) => setProductionForm(p => ({ ...p, balancePaidDate: e.target.value }))}
+                                className="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-sm flex-1"
+                              />
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-slate-500 text-xs">Paid as units ship (tracked via shipments)</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Expected Date & Notes */}
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Expected Completion Date</label>
                       <input type="date" value={productionForm.expectedDate} onChange={(e) => setProductionForm(p => ({ ...p, expectedDate: e.target.value }))} className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
                     </div>
                     <div>
-                      <label className="block text-sm text-slate-400 mb-1">Notes (optional)</label>
-                      <textarea value={productionForm.notes} onChange={(e) => setProductionForm(p => ({ ...p, notes: e.target.value }))} placeholder="Manufacturer, PO number, etc." rows={2} className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
+                      <label className="block text-sm text-slate-400 mb-1">Notes</label>
+                      <input type="text" value={productionForm.notes} onChange={(e) => setProductionForm(p => ({ ...p, notes: e.target.value }))} placeholder="Additional notes..." className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white" />
                     </div>
                   </div>
+                  
                   <div className="flex gap-3 mt-6">
                     <button onClick={() => {
                       if (!productionForm.sku && !productionForm.productName) {
                         setToast({ message: 'SKU or Product Name required', type: 'error' });
                         return;
                       }
+                      const poData = {
+                        ...productionForm,
+                        quantity: parseInt(productionForm.quantity) || 0,
+                        unitCost: parseFloat(productionForm.unitCost) || 0,
+                        depositPercent: parseInt(productionForm.depositPercent) || 50,
+                        totalValue: (parseInt(productionForm.quantity) || 0) * (parseFloat(productionForm.unitCost) || 0),
+                        shipments: productionForm.shipments || [],
+                      };
                       if (editingProduction) {
-                        setProductionPipeline(prev => prev.map(p => p.id === editingProduction ? { ...p, ...productionForm, quantity: parseInt(productionForm.quantity) || 0 } : p));
-                        setToast({ message: 'Production updated', type: 'success' });
+                        setProductionPipeline(prev => prev.map(p => p.id === editingProduction ? { ...p, ...poData } : p));
+                        setToast({ message: 'Purchase Order updated', type: 'success' });
                       } else {
                         const newItem = {
                           id: Date.now(),
-                          ...productionForm,
-                          quantity: parseInt(productionForm.quantity) || 0,
+                          ...poData,
                           status: 'pending',
                           createdAt: new Date().toISOString()
                         };
                         setProductionPipeline(prev => [...prev, newItem]);
-                        setToast({ message: 'Production added', type: 'success' });
+                        setToast({ message: 'Purchase Order added', type: 'success' });
                       }
                       setShowAddProduction(false);
                       setEditingProduction(null);
                     }} className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white font-semibold py-2 rounded-lg">
-                      {editingProduction ? 'Save Changes' : 'Add to Pipeline'}
+                      {editingProduction ? 'Save Changes' : 'Add Purchase Order'}
                     </button>
                     <button onClick={() => { setShowAddProduction(false); setEditingProduction(null); }} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-lg">Cancel</button>
                   </div>
@@ -17341,32 +17606,181 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             {/* Production Pipeline Table */}
             {productionPipeline.length > 0 ? (
               <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
+                {/* Cash Flow Summary */}
+                {(() => {
+                  const totalPOValue = productionPipeline.reduce((s, p) => s + (p.totalValue || (p.quantity * (p.unitCost || 0))), 0);
+                  const totalDeposits = productionPipeline.reduce((s, p) => {
+                    const value = p.totalValue || (p.quantity * (p.unitCost || 0));
+                    const depositAmt = value * ((p.depositPercent || 50) / 100);
+                    return s + (p.depositPaid ? depositAmt : 0);
+                  }, 0);
+                  const totalBalancePaid = productionPipeline.reduce((s, p) => {
+                    if (p.paymentTerms === '30-70-ship') {
+                      // For rolling payments, sum shipment payments
+                      const shippedUnits = (p.shipments || []).reduce((su, sh) => su + (sh.units || 0), 0);
+                      const shippedValue = shippedUnits * (p.unitCost || 0);
+                      const balancePercent = (100 - (p.depositPercent || 30)) / 100;
+                      return s + (shippedValue * balancePercent);
+                    } else {
+                      const value = p.totalValue || (p.quantity * (p.unitCost || 0));
+                      const balanceAmt = value * ((100 - (p.depositPercent || 50)) / 100);
+                      return s + (p.balancePaid ? balanceAmt : 0);
+                    }
+                  }, 0);
+                  const totalPaid = totalDeposits + totalBalancePaid;
+                  const totalOutstanding = totalPOValue - totalPaid;
+                  const totalUnitsOrdered = productionPipeline.reduce((s, p) => s + (p.quantity || 0), 0);
+                  const totalUnitsReceived = productionPipeline.reduce((s, p) => {
+                    if (p.status === 'received') return s + (p.quantity || 0);
+                    return s + (p.shipments || []).reduce((su, sh) => su + (sh.units || 0), 0);
+                  }, 0);
+                  
+                  return (
+                    <div className="bg-slate-900/50 p-4 border-b border-slate-700">
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+                        <div>
+                          <p className="text-slate-500 text-xs">Total PO Value</p>
+                          <p className="text-white font-bold">{formatCurrency(totalPOValue)}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 text-xs">Paid to Date</p>
+                          <p className="text-emerald-400 font-bold">{formatCurrency(totalPaid)}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 text-xs">Outstanding</p>
+                          <p className="text-rose-400 font-bold">{formatCurrency(totalOutstanding)}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 text-xs">Units Ordered</p>
+                          <p className="text-cyan-400 font-bold">{formatNumber(totalUnitsOrdered)}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 text-xs">Units Received</p>
+                          <p className="text-white font-bold">{formatNumber(totalUnitsReceived)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+                
                 <table className="w-full">
                   <thead className="bg-slate-900/50">
                     <tr>
-                      <th className="text-left px-4 py-3 text-slate-400 text-xs uppercase">SKU</th>
-                      <th className="text-left px-4 py-3 text-slate-400 text-xs uppercase">Product</th>
-                      <th className="text-right px-4 py-3 text-slate-400 text-xs uppercase">Quantity</th>
-                      <th className="text-left px-4 py-3 text-slate-400 text-xs uppercase">Expected Date</th>
+                      <th className="text-left px-4 py-3 text-slate-400 text-xs uppercase">PO / Product</th>
+                      <th className="text-right px-4 py-3 text-slate-400 text-xs uppercase">Qty</th>
+                      <th className="text-right px-4 py-3 text-slate-400 text-xs uppercase">Unit Cost</th>
+                      <th className="text-right px-4 py-3 text-slate-400 text-xs uppercase">Total Value</th>
+                      <th className="text-center px-4 py-3 text-slate-400 text-xs uppercase">Payment</th>
                       <th className="text-left px-4 py-3 text-slate-400 text-xs uppercase">Status</th>
                       <th className="text-center px-4 py-3 text-slate-400 text-xs uppercase">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {productionPipeline.sort((a, b) => new Date(a.expectedDate || '9999-12-31') - new Date(b.expectedDate || '9999-12-31')).map(item => {
-                      const daysUntil = item.expectedDate ? Math.ceil((new Date(item.expectedDate) - new Date()) / (1000 * 60 * 60 * 24)) : null;
+                      const totalValue = item.totalValue || (item.quantity * (item.unitCost || 0));
+                      const depositAmt = totalValue * ((item.depositPercent || 50) / 100);
+                      const balanceAmt = totalValue - depositAmt;
+                      const shippedUnits = (item.shipments || []).reduce((s, sh) => s + (sh.units || 0), 0);
+                      const unitsRemaining = item.quantity - shippedUnits;
+                      
+                      // Calculate payment status
+                      let paidAmt = item.depositPaid ? depositAmt : 0;
+                      if (item.paymentTerms === '30-70-ship') {
+                        paidAmt += shippedUnits * (item.unitCost || 0) * ((100 - (item.depositPercent || 30)) / 100);
+                      } else if (item.balancePaid) {
+                        paidAmt += balanceAmt;
+                      }
+                      const paidPercent = totalValue > 0 ? (paidAmt / totalValue * 100) : 0;
+                      
+                      // Calculate payment due dates based on Net terms
+                      const poDate = item.createdAt ? new Date(item.createdAt) : new Date();
+                      const depositNetDays = item.depositNetDays || 0;
+                      const balanceNetDays = item.balanceNetDays || 0;
+                      const depositDueDate = depositNetDays > 0 ? new Date(poDate.getTime() + depositNetDays * 24*60*60*1000) : null;
+                      
+                      // For balance due date, calculate from last shipment or expected date
+                      const lastShipment = item.shipments?.length > 0 ? item.shipments[item.shipments.length - 1] : null;
+                      const shipDate = lastShipment ? new Date(lastShipment.date) : (item.expectedDate ? new Date(item.expectedDate) : null);
+                      const balanceDueDate = balanceNetDays > 0 && shipDate ? new Date(shipDate.getTime() + balanceNetDays * 24*60*60*1000) : null;
+                      
+                      // Calculate cure time (for soaps)
+                      const cureTimeDays = item.cureTimeDays || 0;
+                      let cureEndDate = null;
+                      let cureRemaining = null;
+                      if (cureTimeDays > 0 && item.status === 'received') {
+                        // Assume cure starts when received - use last shipment date or today
+                        const receiveDate = lastShipment ? new Date(lastShipment.date) : new Date();
+                        cureEndDate = new Date(receiveDate.getTime() + cureTimeDays * 24*60*60*1000);
+                        cureRemaining = Math.ceil((cureEndDate - new Date()) / (24*60*60*1000));
+                      }
+                      
+                      // Check if deposit is overdue
+                      const isDepositOverdue = !item.depositPaid && depositDueDate && new Date() > depositDueDate;
+                      const daysUntilDepositDue = depositDueDate && !item.depositPaid ? Math.ceil((depositDueDate - new Date()) / (24*60*60*1000)) : null;
+                      
                       return (
                         <tr key={item.id} className="border-t border-slate-700/50 hover:bg-slate-700/20">
-                          <td className="px-4 py-3 text-white font-mono text-sm">{item.sku || '—'}</td>
-                          <td className="px-4 py-3 text-white text-sm max-w-[200px] truncate" title={item.productName}>{item.productName || '—'}</td>
-                          <td className="px-4 py-3 text-right text-cyan-400 font-semibold">{formatNumber(item.quantity)}</td>
-                          <td className="px-4 py-3 text-sm">
-                            {item.expectedDate ? (
-                              <span className={daysUntil <= 7 ? 'text-emerald-400' : daysUntil <= 30 ? 'text-amber-400' : 'text-slate-300'}>
-                                {new Date(item.expectedDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                {daysUntil !== null && <span className="text-slate-500 text-xs ml-2">({daysUntil <= 0 ? 'Due!' : `${daysUntil}d`})</span>}
-                              </span>
-                            ) : <span className="text-slate-500">TBD</span>}
+                          <td className="px-4 py-3">
+                            <div>
+                              <p className="text-white font-medium">{item.productName || item.sku || '—'}</p>
+                              <div className="flex flex-wrap gap-2 mt-1">
+                                {item.poNumber && <span className="text-slate-500 text-xs">PO: {item.poNumber}</span>}
+                                {item.vendor && <span className="text-slate-500 text-xs">• {item.vendor}</span>}
+                                {/* Payment terms badge */}
+                                {(depositNetDays > 0 || balanceNetDays > 0) && (
+                                  <span className="text-amber-400/70 text-xs">
+                                    Net {depositNetDays}/{balanceNetDays}
+                                  </span>
+                                )}
+                                {/* Cure time badge */}
+                                {cureTimeDays > 0 && (
+                                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                    cureRemaining !== null 
+                                      ? cureRemaining <= 0 
+                                        ? 'bg-emerald-500/20 text-emerald-400' 
+                                        : 'bg-amber-500/20 text-amber-400'
+                                      : 'bg-slate-600 text-slate-400'
+                                  }`}>
+                                    🧼 {cureRemaining !== null 
+                                      ? cureRemaining <= 0 
+                                        ? 'Cured ✓' 
+                                        : `${cureRemaining}d cure left`
+                                      : `${cureTimeDays}d cure`}
+                                  </span>
+                                )}
+                                {/* Deposit due alert */}
+                                {isDepositOverdue && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400">
+                                    ⚠️ Deposit overdue!
+                                  </span>
+                                )}
+                                {daysUntilDepositDue !== null && daysUntilDepositDue > 0 && daysUntilDepositDue <= 7 && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">
+                                    Deposit due in {daysUntilDepositDue}d
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <p className="text-cyan-400 font-semibold">{formatNumber(item.quantity)}</p>
+                            {shippedUnits > 0 && item.status !== 'received' && (
+                              <p className="text-slate-500 text-xs">{formatNumber(shippedUnits)} shipped</p>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-300">{item.unitCost ? formatCurrency(item.unitCost) : '—'}</td>
+                          <td className="px-4 py-3 text-right text-white font-medium">{totalValue > 0 ? formatCurrency(totalValue) : '—'}</td>
+                          <td className="px-4 py-3">
+                            {totalValue > 0 ? (
+                              <div className="flex flex-col items-center">
+                                <div className="w-full bg-slate-700 rounded-full h-2 mb-1">
+                                  <div className="bg-emerald-500 h-2 rounded-full" style={{ width: `${Math.min(100, paidPercent)}%` }} />
+                                </div>
+                                <span className="text-xs text-slate-400">{paidPercent.toFixed(0)}% paid</span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-500 text-xs">No cost set</span>
+                            )}
                           </td>
                           <td className="px-4 py-3">
                             <select 
@@ -17381,19 +17795,42 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             >
                               <option value="pending">Pending</option>
                               <option value="in_production">In Production</option>
+                              <option value="partial">Partial Ship</option>
                               <option value="shipped">Shipped</option>
                               <option value="received">Received</option>
                             </select>
                           </td>
                           <td className="px-4 py-3 text-center">
                             <div className="flex items-center justify-center gap-1">
+                              {item.paymentTerms === '30-70-ship' && (
+                                <button 
+                                  onClick={() => { setShowAddShipment(item.id); setShipmentForm({ date: new Date().toISOString().split('T')[0], units: '', notes: '' }); }}
+                                  className="p-1.5 hover:bg-cyan-900/50 rounded text-cyan-400 hover:text-cyan-300"
+                                  title="Log Shipment"
+                                >
+                                  <Package className="w-4 h-4" />
+                                </button>
+                              )}
                               <button onClick={() => {
                                 setProductionForm({
                                   sku: item.sku || '',
                                   productName: item.productName || '',
                                   quantity: item.quantity?.toString() || '',
                                   expectedDate: item.expectedDate || '',
-                                  notes: item.notes || ''
+                                  notes: item.notes || '',
+                                  poNumber: item.poNumber || '',
+                                  vendor: item.vendor || '',
+                                  unitCost: item.unitCost?.toString() || '',
+                                  paymentTerms: item.paymentTerms || '50-50',
+                                  depositPercent: item.depositPercent || 50,
+                                  depositPaid: item.depositPaid || false,
+                                  depositPaidDate: item.depositPaidDate || '',
+                                  balancePaid: item.balancePaid || false,
+                                  balancePaidDate: item.balancePaidDate || '',
+                                  shipments: item.shipments || [],
+                                  depositNetDays: item.depositNetDays || 0,
+                                  balanceNetDays: item.balanceNetDays || 0,
+                                  cureTimeDays: item.cureTimeDays || 0,
                                 });
                                 setEditingProduction(item.id);
                                 setShowAddProduction(true);
@@ -17401,9 +17838,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                 <Settings className="w-4 h-4" />
                               </button>
                               <button onClick={() => {
-                                if (confirm('Delete this production item?')) {
+                                if (confirm('Delete this purchase order?')) {
                                   setProductionPipeline(prev => prev.filter(p => p.id !== item.id));
-                                  setToast({ message: 'Production item deleted', type: 'success' });
+                                  setToast({ message: 'Purchase order deleted', type: 'success' });
                                 }
                               }} className="p-1.5 hover:bg-rose-900/50 rounded text-slate-400 hover:text-rose-400">
                                 <Trash2 className="w-4 h-4" />
@@ -17418,16 +17855,239 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 {/* Summary */}
                 <div className="bg-slate-900/50 px-4 py-3 border-t border-slate-700">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-400">{productionPipeline.length} production orders</span>
-                    <span className="text-cyan-400 font-semibold">{formatNumber(productionPipeline.reduce((s, p) => s + (p.quantity || 0), 0))} total units incoming</span>
+                    <span className="text-slate-400">{productionPipeline.length} purchase orders</span>
+                    <span className="text-cyan-400 font-semibold">{formatNumber(productionPipeline.reduce((s, p) => s + (p.quantity || 0), 0))} total units on order</span>
                   </div>
                 </div>
               </div>
             ) : (
               <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-8 text-center">
                 <Truck className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                <p className="text-slate-400 mb-2">No production orders tracked</p>
-                <p className="text-slate-500 text-sm">Add upcoming manufacturing runs to track incoming inventory</p>
+                <p className="text-slate-400 mb-2">No purchase orders tracked</p>
+                <p className="text-slate-500 text-sm">Add open POs to track incoming inventory and cash flow</p>
+              </div>
+            )}
+            
+            {/* Add Shipment Modal */}
+            {showAddShipment && (() => {
+              const po = productionPipeline.find(p => p.id === showAddShipment);
+              if (!po) return null;
+              const totalShipped = (po.shipments || []).reduce((s, sh) => s + (sh.units || 0), 0);
+              const remaining = (po.quantity || 0) - totalShipped;
+              const unitCost = po.unitCost || 0;
+              const balancePercent = (100 - (po.depositPercent || 30)) / 100;
+              
+              return (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                  <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
+                    <h3 className="text-lg font-semibold text-white mb-2">Log Shipment</h3>
+                    <p className="text-slate-400 text-sm mb-4">{po.productName || po.sku} — {formatNumber(remaining)} units remaining</p>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">Units Received</label>
+                        <input 
+                          type="number" 
+                          value={shipmentForm.units} 
+                          onChange={(e) => setShipmentForm(f => ({ ...f, units: e.target.value }))}
+                          max={remaining}
+                          placeholder={`Max: ${formatNumber(remaining)}`}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">Date Received</label>
+                        <input 
+                          type="date" 
+                          value={shipmentForm.date} 
+                          onChange={(e) => setShipmentForm(f => ({ ...f, date: e.target.value }))}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                        />
+                      </div>
+                      <div className="bg-slate-900/50 rounded-lg p-3">
+                        <p className="text-slate-400 text-sm mb-1">Payment Due for This Shipment</p>
+                        <p className="text-rose-400 font-bold text-lg">
+                          {formatCurrency((parseInt(shipmentForm.units) || 0) * unitCost * balancePercent)}
+                        </p>
+                        <p className="text-slate-500 text-xs">{formatNumber(shipmentForm.units || 0)} units × {formatCurrency(unitCost)} × {(balancePercent * 100).toFixed(0)}%</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">Notes (optional)</label>
+                        <input 
+                          type="text" 
+                          value={shipmentForm.notes} 
+                          onChange={(e) => setShipmentForm(f => ({ ...f, notes: e.target.value }))}
+                          placeholder="Shipment tracking, notes..."
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-3 mt-6">
+                      <button 
+                        onClick={() => {
+                          const units = parseInt(shipmentForm.units) || 0;
+                          if (units <= 0) {
+                            setToast({ message: 'Enter units received', type: 'error' });
+                            return;
+                          }
+                          if (units > remaining) {
+                            setToast({ message: `Cannot exceed ${formatNumber(remaining)} remaining units`, type: 'error' });
+                            return;
+                          }
+                          
+                          const newShipment = {
+                            id: Date.now(),
+                            date: shipmentForm.date || new Date().toISOString().split('T')[0],
+                            units: units,
+                            amountPaid: units * unitCost * balancePercent,
+                            notes: shipmentForm.notes,
+                          };
+                          
+                          setProductionPipeline(prev => prev.map(p => {
+                            if (p.id !== showAddShipment) return p;
+                            const updatedShipments = [...(p.shipments || []), newShipment];
+                            const totalShippedNow = updatedShipments.reduce((s, sh) => s + (sh.units || 0), 0);
+                            const newStatus = totalShippedNow >= p.quantity ? 'received' : 'partial';
+                            return { ...p, shipments: updatedShipments, status: newStatus };
+                          }));
+                          
+                          setToast({ message: `Logged ${formatNumber(units)} units received`, type: 'success' });
+                          setShowAddShipment(null);
+                          setShipmentForm({ date: '', units: '', notes: '' });
+                        }}
+                        className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white font-semibold py-2 rounded-lg"
+                      >
+                        Log Shipment
+                      </button>
+                      <button 
+                        onClick={() => { setShowAddShipment(null); setShipmentForm({ date: '', units: '', notes: '' }); }}
+                        className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-lg"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+            
+            {/* Inventory Planning Section */}
+            {productionPipeline.length > 0 && (
+              <div className="bg-gradient-to-r from-cyan-900/30 to-blue-900/30 rounded-xl border border-cyan-500/30 p-5 mt-6">
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <Brain className="w-5 h-5 text-cyan-400" />
+                  Inventory Planning & Reorder Timing
+                </h3>
+                
+                {(() => {
+                  // Calculate velocity for SKUs in POs
+                  const sortedWeeks = Object.keys(allWeeksData).sort().slice(-8);
+                  const skuVelocity = {};
+                  
+                  sortedWeeks.forEach(w => {
+                    const shopify = allWeeksData[w]?.shopify?.skuData || [];
+                    const amazon = allWeeksData[w]?.amazon?.skuData || [];
+                    [...shopify, ...amazon].forEach(s => {
+                      const sku = s.sku || s.msku;
+                      if (!skuVelocity[sku]) skuVelocity[sku] = [];
+                      skuVelocity[sku].push(s.unitsSold || s.units || 0);
+                    });
+                  });
+                  
+                  // Get current inventory
+                  const latestInvKey = Object.keys(invHistory).sort().reverse()[0];
+                  const currentInv = latestInvKey ? (invHistory[latestInvKey]?.items || []) : [];
+                  const invBySku = {};
+                  currentInv.forEach(item => { invBySku[item.sku] = item.totalQty || 0; });
+                  
+                  // Calculate for each PO's SKU
+                  const poAnalysis = productionPipeline.filter(po => po.status !== 'received').map(po => {
+                    const sku = po.sku;
+                    const weeklyVel = skuVelocity[sku]?.length > 0 
+                      ? skuVelocity[sku].reduce((s, u) => s + u, 0) / skuVelocity[sku].length 
+                      : 0;
+                    const currentStock = invBySku[sku] || 0;
+                    const totalShipped = (po.shipments || []).reduce((s, sh) => s + (sh.units || 0), 0);
+                    const incomingFromPO = (po.quantity || 0) - totalShipped;
+                    const totalAvailable = currentStock + incomingFromPO;
+                    const weeksOfSupply = weeklyVel > 0 ? totalAvailable / weeklyVel : Infinity;
+                    const monthsOfSupply = weeksOfSupply / 4.33;
+                    
+                    // Calculate when to reorder for 6 months coverage
+                    const targetMonths = 6;
+                    const targetUnits = weeklyVel * 4.33 * targetMonths;
+                    const unitsNeeded = Math.max(0, targetUnits - totalAvailable);
+                    
+                    return {
+                      ...po,
+                      weeklyVel,
+                      currentStock,
+                      incomingFromPO,
+                      totalAvailable,
+                      weeksOfSupply,
+                      monthsOfSupply,
+                      targetUnits,
+                      unitsNeeded,
+                    };
+                  });
+                  
+                  return (
+                    <div className="space-y-4">
+                      {poAnalysis.map(po => (
+                        <div key={po.id} className="bg-slate-800/50 rounded-lg p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <div>
+                              <p className="text-white font-medium">{po.productName || po.sku}</p>
+                              <p className="text-slate-500 text-xs">Velocity: {formatNumber(Math.round(po.weeklyVel))}/week • {formatNumber(Math.round(po.weeklyVel * 4.33))}/month</p>
+                            </div>
+                            <div className={`px-3 py-1 rounded-lg text-sm font-medium ${
+                              po.monthsOfSupply >= 6 ? 'bg-emerald-500/20 text-emerald-400' :
+                              po.monthsOfSupply >= 3 ? 'bg-amber-500/20 text-amber-400' :
+                              'bg-rose-500/20 text-rose-400'
+                            }`}>
+                              {po.monthsOfSupply === Infinity ? '∞' : po.monthsOfSupply.toFixed(1)} months supply
+                            </div>
+                          </div>
+                          
+                          <div className="grid grid-cols-4 gap-3 text-sm">
+                            <div>
+                              <p className="text-slate-500 text-xs">Current Stock</p>
+                              <p className="text-white font-medium">{formatNumber(po.currentStock)}</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-500 text-xs">Incoming (PO)</p>
+                              <p className="text-cyan-400 font-medium">{formatNumber(po.incomingFromPO)}</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-500 text-xs">Total Available</p>
+                              <p className="text-white font-medium">{formatNumber(po.totalAvailable)}</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-500 text-xs">Need for 6mo</p>
+                              <p className={`font-medium ${po.unitsNeeded > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                {po.unitsNeeded > 0 ? formatNumber(Math.round(po.unitsNeeded)) : '✓ Covered'}
+                              </p>
+                            </div>
+                          </div>
+                          
+                          {po.unitsNeeded > 0 && po.unitCost > 0 && (
+                            <div className="mt-3 pt-3 border-t border-slate-700">
+                              <p className="text-slate-400 text-sm">
+                                💡 <strong>Suggested Reorder:</strong> {formatNumber(Math.ceil(po.unitsNeeded / 1000) * 1000)} units 
+                                @ {formatCurrency(po.unitCost)}/unit = <span className="text-amber-400 font-medium">{formatCurrency(Math.ceil(po.unitsNeeded / 1000) * 1000 * po.unitCost)}</span> PO value
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      
+                      {poAnalysis.length === 0 && (
+                        <p className="text-slate-400 text-center py-4">All POs are fully received. Add new POs to see inventory planning.</p>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -17611,13 +18271,42 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     };
     
     // Get weekly data - filter out weeks with no meaningful revenue
+    // Also include forecast data for comparison
     const weeklyData = sortedWeeks.slice(-12).map(w => {
       const week = allWeeksData[w];
+      
+      // Find forecast for this week from various sources
+      let forecastRevenue = null;
+      let forecastSource = null;
+      
+      // 1. Check Amazon forecasts
+      const amazonForecast = amazonForecasts[w];
+      if (amazonForecast) {
+        forecastRevenue = amazonForecast.totals?.sales || amazonForecast.totals?.revenue || 0;
+        forecastSource = 'amazon';
+      }
+      
+      // 2. Check forecast accuracy history (has forecast vs actual)
+      const accuracyRecord = forecastAccuracyHistory.records?.find(r => r.weekEnding === w);
+      if (accuracyRecord && accuracyRecord.forecast?.revenue) {
+        forecastRevenue = accuracyRecord.forecast.revenue;
+        forecastSource = accuracyRecord.forecastSource || 'system';
+      }
+      
+      // Calculate accuracy if we have both forecast and actual
+      const actualRevenue = week.total?.revenue || 0;
+      let accuracy = null;
+      let variance = null;
+      if (forecastRevenue !== null && actualRevenue > 0) {
+        variance = actualRevenue - forecastRevenue;
+        accuracy = 100 - (Math.abs(variance) / actualRevenue * 100);
+      }
+      
       return {
         key: w,
         label: new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         source: 'weekly',
-        revenue: week.total?.revenue || 0,
+        revenue: actualRevenue,
         profit: week.total?.netProfit || 0,
         units: week.total?.units || 0,
         margin: week.total?.netMargin || 0,
@@ -17630,6 +18319,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         adSpend: week.total?.adSpend || 0,
         roas: week.total?.roas || 0,
         skuData: [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])],
+        // Forecast data for comparison
+        forecastRevenue,
+        forecastSource,
+        accuracy,
+        variance,
       };
     }).filter(w => w.revenue > 0); // Only show weeks with actual sales data
     
@@ -17898,27 +18592,63 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 </div>
               </div>
               
-              {/* Revenue Trend Chart */}
+              {/* Revenue Trend Chart - Actual vs Forecast */}
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6 overflow-hidden">
-                <h3 className="text-lg font-semibold text-white mb-4">
-                  {periodLabel} Revenue Trend
-                  {trendsChannel !== 'combined' && <span className="text-sm font-normal text-slate-400 ml-2">({trendsChannel === 'amazon' ? 'Amazon' : 'Shopify'})</span>}
-                </h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-white">
+                    {periodLabel} Revenue — Actual vs Forecast
+                    {trendsChannel !== 'combined' && <span className="text-sm font-normal text-slate-400 ml-2">({trendsChannel === 'amazon' ? 'Amazon' : 'Shopify'})</span>}
+                  </h3>
+                  {/* Legend */}
+                  <div className="flex items-center gap-4 text-xs">
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-violet-500 rounded" />Actual</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500/60 rounded" />Forecast</span>
+                  </div>
+                </div>
                 {(() => {
-                  const chartMaxRevenue = Math.max(...currentData.map(d => getFilteredValue(d, 'revenue')), 1);
-                  // Dynamic bar width based on data count
+                  // Include forecast values in max calculation for proper scaling
+                  const allValues = currentData.flatMap(d => [
+                    getFilteredValue(d, 'revenue'), 
+                    d.forecastRevenue || 0
+                  ]);
+                  const chartMaxRevenue = Math.max(...allValues, 1);
                   const barMinWidth = currentData.length > 30 ? '4px' : currentData.length > 20 ? '8px' : '16px';
+                  
+                  // Calculate overall forecast accuracy
+                  const weeksWithForecasts = currentData.filter(d => d.forecastRevenue !== null && d.revenue > 0);
+                  const avgAccuracy = weeksWithForecasts.length > 0 
+                    ? weeksWithForecasts.reduce((s, d) => s + (d.accuracy || 0), 0) / weeksWithForecasts.length 
+                    : null;
+                  
                   return (
                     <>
-                      {/* Chart bars */}
+                      {/* Accuracy Summary */}
+                      {avgAccuracy !== null && (
+                        <div className="flex items-center gap-4 mb-3 text-sm">
+                          <span className="text-slate-400">
+                            Forecast Accuracy: <span className={`font-medium ${avgAccuracy >= 90 ? 'text-emerald-400' : avgAccuracy >= 80 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {avgAccuracy.toFixed(1)}%
+                            </span>
+                          </span>
+                          <span className="text-slate-500">({weeksWithForecasts.length} weeks with forecasts)</span>
+                        </div>
+                      )}
+                      
+                      {/* Chart bars - stacked/grouped for forecast vs actual */}
                       <div className="relative flex items-end gap-1 h-48 bg-slate-900/30 rounded-lg p-3">
                         {currentData.length === 0 ? (
                           <p className="text-slate-500 text-center w-full self-center">No data available</p>
                         ) : currentData.map((d, i) => {
-                          const value = getFilteredValue(d, 'revenue');
-                          const height = chartMaxRevenue > 0 ? (value / chartMaxRevenue) * 100 : 0;
+                          const actualValue = getFilteredValue(d, 'revenue');
+                          const forecastValue = d.forecastRevenue || 0;
+                          const actualHeight = chartMaxRevenue > 0 ? (actualValue / chartMaxRevenue) * 100 : 0;
+                          const forecastHeight = chartMaxRevenue > 0 ? (forecastValue / chartMaxRevenue) * 100 : 0;
                           const isLatest = i === currentData.length - 1;
                           const isClickable = trendsTab === 'daily' && d.key;
+                          const hasForecast = forecastValue > 0;
+                          const variance = hasForecast ? actualValue - forecastValue : null;
+                          const variancePct = hasForecast && forecastValue > 0 ? ((variance / forecastValue) * 100) : null;
+                          
                           return (
                             <div 
                               key={d.key || i} 
@@ -17926,15 +18656,38 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               style={{ minWidth: barMinWidth, maxWidth: '60px' }}
                               onClick={() => isClickable && setViewingDayDetails(d.key)}
                             >
-                              <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
-                                {d.label}<br/>{formatCurrency(value)}
-                                {d.source && <span className="text-slate-400"> ({d.source})</span>}
+                              {/* Tooltip */}
+                              <div className="absolute -top-16 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1.5 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
+                                <p className="font-medium">{d.label}</p>
+                                <p>Actual: {formatCurrency(actualValue)}</p>
+                                {hasForecast && (
+                                  <>
+                                    <p className="text-amber-400">Forecast: {formatCurrency(forecastValue)}</p>
+                                    <p className={variance >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                      {variance >= 0 ? '▲' : '▼'} {formatCurrency(Math.abs(variance))} ({variancePct >= 0 ? '+' : ''}{variancePct?.toFixed(1)}%)
+                                    </p>
+                                  </>
+                                )}
                                 {isClickable && <span className="text-cyan-400 block text-center mt-1">Click for details</span>}
                               </div>
-                              <div 
-                                className={`w-full rounded-t transition-all ${isLatest ? 'bg-violet-500' : 'bg-violet-500/70'} hover:bg-violet-400`}
-                                style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
-                              />
+                              
+                              {/* Bars container */}
+                              <div className="w-full flex items-end justify-center gap-0.5 h-full">
+                                {/* Forecast bar (behind, wider, more transparent) */}
+                                {hasForecast && (
+                                  <div 
+                                    className="absolute bottom-0 w-full bg-amber-500/40 rounded-t"
+                                    style={{ height: `${forecastHeight}%`, minHeight: forecastHeight > 0 ? '4px' : '0' }}
+                                  />
+                                )}
+                                {/* Actual bar (front, narrower or same width) */}
+                                <div 
+                                  className={`w-3/4 rounded-t transition-all relative z-10 ${
+                                    isLatest ? 'bg-violet-500' : 'bg-violet-500/80'
+                                  } hover:bg-violet-400`}
+                                  style={{ height: `${actualHeight}%`, minHeight: actualHeight > 0 ? '4px' : '0' }}
+                                />
+                              </div>
                             </div>
                           );
                         })}
@@ -17962,6 +18715,105 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   );
                 })()}
               </div>
+              
+              {/* Forecast Accuracy History Panel - only show if we have forecast data */}
+              {trendsTab === 'weekly' && currentData.some(d => d.forecastRevenue !== null) && (
+                <div className="bg-gradient-to-r from-amber-900/20 to-orange-900/20 rounded-xl border border-amber-500/30 p-5 mb-6">
+                  <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                    <Target className="w-5 h-5 text-amber-400" />
+                    Forecast Accuracy History
+                  </h3>
+                  
+                  {(() => {
+                    const weeksWithForecasts = currentData.filter(d => d.forecastRevenue !== null && d.revenue > 0);
+                    if (weeksWithForecasts.length === 0) return <p className="text-slate-400">No forecast data available yet.</p>;
+                    
+                    // Calculate stats
+                    const accuracies = weeksWithForecasts.map(d => d.accuracy || 0);
+                    const avgAccuracy = accuracies.reduce((s, a) => s + a, 0) / accuracies.length;
+                    const variances = weeksWithForecasts.map(d => d.variance || 0);
+                    const avgVariance = variances.reduce((s, v) => s + v, 0) / variances.length;
+                    const bias = avgVariance > 0 ? 'under-forecasting' : avgVariance < 0 ? 'over-forecasting' : 'neutral';
+                    
+                    // Trend - compare recent vs older
+                    const recentAccuracies = accuracies.slice(-3);
+                    const olderAccuracies = accuracies.slice(0, -3);
+                    const recentAvg = recentAccuracies.length > 0 ? recentAccuracies.reduce((s, a) => s + a, 0) / recentAccuracies.length : avgAccuracy;
+                    const olderAvg = olderAccuracies.length > 0 ? olderAccuracies.reduce((s, a) => s + a, 0) / olderAccuracies.length : avgAccuracy;
+                    const improving = recentAvg > olderAvg;
+                    
+                    return (
+                      <>
+                        {/* Stats Row */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                          <div className="bg-slate-800/50 rounded-lg p-3">
+                            <p className="text-slate-400 text-xs mb-1">Average Accuracy</p>
+                            <p className={`text-2xl font-bold ${avgAccuracy >= 90 ? 'text-emerald-400' : avgAccuracy >= 80 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {avgAccuracy.toFixed(1)}%
+                            </p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-3">
+                            <p className="text-slate-400 text-xs mb-1">Avg Variance</p>
+                            <p className={`text-2xl font-bold ${avgVariance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {avgVariance >= 0 ? '+' : ''}{formatCurrency(avgVariance)}
+                            </p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-3">
+                            <p className="text-slate-400 text-xs mb-1">Bias Direction</p>
+                            <p className={`text-lg font-bold ${bias === 'under-forecasting' ? 'text-emerald-400' : bias === 'over-forecasting' ? 'text-rose-400' : 'text-slate-400'}`}>
+                              {bias === 'under-forecasting' ? '📈 Under' : bias === 'over-forecasting' ? '📉 Over' : '⚖️ Neutral'}
+                            </p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-3">
+                            <p className="text-slate-400 text-xs mb-1">Trend</p>
+                            <p className={`text-lg font-bold ${improving ? 'text-emerald-400' : 'text-amber-400'}`}>
+                              {improving ? '📈 Improving' : '📉 Declining'}
+                            </p>
+                          </div>
+                        </div>
+                        
+                        {/* History Table */}
+                        <div className="overflow-x-auto max-h-48">
+                          <table className="w-full text-sm">
+                            <thead className="sticky top-0 bg-slate-800">
+                              <tr className="border-b border-slate-700">
+                                <th className="text-left text-slate-400 py-2 px-2">Week</th>
+                                <th className="text-right text-slate-400 py-2 px-2">Forecast</th>
+                                <th className="text-right text-slate-400 py-2 px-2">Actual</th>
+                                <th className="text-right text-slate-400 py-2 px-2">Variance</th>
+                                <th className="text-right text-slate-400 py-2 px-2">Accuracy</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {weeksWithForecasts.slice().reverse().map(d => (
+                                <tr key={d.key} className="border-b border-slate-700/50">
+                                  <td className="py-2 px-2 text-white">{d.label}</td>
+                                  <td className="py-2 px-2 text-right text-amber-400">{formatCurrency(d.forecastRevenue)}</td>
+                                  <td className="py-2 px-2 text-right text-violet-400">{formatCurrency(d.revenue)}</td>
+                                  <td className={`py-2 px-2 text-right ${d.variance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    {d.variance >= 0 ? '+' : ''}{formatCurrency(d.variance)}
+                                  </td>
+                                  <td className={`py-2 px-2 text-right font-medium ${d.accuracy >= 90 ? 'text-emerald-400' : d.accuracy >= 80 ? 'text-amber-400' : 'text-rose-400'}`}>
+                                    {d.accuracy?.toFixed(1)}%
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        
+                        <p className="text-slate-400 text-sm mt-3">
+                          💡 <strong>Insight:</strong> {bias === 'under-forecasting' 
+                            ? 'Forecasts are typically lower than actual — consider adjusting models upward or you\'re outperforming expectations!' 
+                            : bias === 'over-forecasting' 
+                              ? 'Forecasts are typically higher than actual — consider adjusting models downward or review what\'s impacting sales.'
+                              : 'Forecasts are well-calibrated to actual results.'}
+                        </p>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
               
               {/* Profit & Margin Charts */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -24011,6 +24863,96 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const topExpenseCategories = Object.entries(expensesByCategory).sort((a, b) => b[1] - a[1]);
     const topIncomeCategories = Object.entries(incomeByCategory).sort((a, b) => b[1] - a[1]);
     
+    // ==================== RECURRING EXPENSE DETECTION ====================
+    // Detect recurring expenses by looking for same vendor + similar amount across multiple months
+    const detectRecurringExpenses = () => {
+      // Group all expenses by vendor (from description) and track monthly occurrences
+      const vendorPatterns = {};
+      
+      sortedTxns.filter(t => t.isExpense && t.amount > 50).forEach(t => {
+        // Extract vendor from description (first part before common separators)
+        const desc = (t.description || '').toUpperCase();
+        const vendor = desc.split(/\s+(PAYMENT|AUTOPAY|ACH|DEBIT|BILL|#|\d{4,})/)[0].trim().substring(0, 40);
+        if (!vendor || vendor.length < 3) return;
+        
+        const month = t.date.substring(0, 7); // YYYY-MM
+        const key = vendor;
+        
+        if (!vendorPatterns[key]) {
+          vendorPatterns[key] = {
+            vendor: vendor,
+            category: t.topCategory,
+            months: {},
+            amounts: [],
+            descriptions: new Set(),
+          };
+        }
+        
+        if (!vendorPatterns[key].months[month]) {
+          vendorPatterns[key].months[month] = { total: 0, count: 0, amounts: [] };
+        }
+        vendorPatterns[key].months[month].total += t.amount;
+        vendorPatterns[key].months[month].count++;
+        vendorPatterns[key].months[month].amounts.push(t.amount);
+        vendorPatterns[key].amounts.push(t.amount);
+        vendorPatterns[key].descriptions.add(t.description?.substring(0, 50));
+      });
+      
+      // Analyze patterns - look for charges appearing 3+ months with consistent amounts
+      const recurring = [];
+      const allMonths = [...new Set(sortedTxns.map(t => t.date.substring(0, 7)))].sort();
+      const recentMonths = allMonths.slice(-6); // Look at last 6 months
+      
+      Object.entries(vendorPatterns).forEach(([key, pattern]) => {
+        const monthsWithCharges = Object.keys(pattern.months).filter(m => recentMonths.includes(m));
+        if (monthsWithCharges.length < 3) return; // Need at least 3 months
+        
+        // Calculate typical monthly amount (median to avoid outliers)
+        const monthlyAmounts = monthsWithCharges.map(m => pattern.months[m].total).sort((a, b) => a - b);
+        const medianAmount = monthlyAmounts[Math.floor(monthlyAmounts.length / 2)];
+        
+        // Check consistency - amounts should be within 20% of median
+        const isConsistent = monthlyAmounts.every(a => Math.abs(a - medianAmount) / medianAmount < 0.2);
+        
+        // Calculate average amount
+        const avgAmount = monthlyAmounts.reduce((s, a) => s + a, 0) / monthlyAmounts.length;
+        
+        // Only include if reasonably consistent
+        if (avgAmount >= 100 && (isConsistent || monthlyAmounts.length >= 4)) {
+          const isConfirmed = confirmedRecurring[key]?.confirmed;
+          const isIgnored = confirmedRecurring[key]?.ignored;
+          
+          recurring.push({
+            key,
+            vendor: pattern.vendor,
+            category: pattern.category,
+            monthlyAmount: Math.round(avgAmount),
+            frequency: monthsWithCharges.length,
+            totalMonths: recentMonths.length,
+            consistency: isConsistent ? 'high' : 'medium',
+            description: [...pattern.descriptions][0] || pattern.vendor,
+            confirmed: isConfirmed || false,
+            ignored: isIgnored || false,
+            annualCost: Math.round(avgAmount * 12),
+          });
+        }
+      });
+      
+      // Sort by annual cost
+      return recurring.sort((a, b) => b.annualCost - a.annualCost);
+    };
+    
+    const detectedRecurring = detectRecurringExpenses();
+    const confirmedRecurringList = detectedRecurring.filter(r => r.confirmed);
+    const pendingRecurringList = detectedRecurring.filter(r => !r.confirmed && !r.ignored);
+    const totalMonthlyRecurring = confirmedRecurringList.reduce((s, r) => s + r.monthlyAmount, 0);
+    const totalAnnualRecurring = totalMonthlyRecurring * 12;
+    
+    // Calculate EOY projection using recurring expenses
+    const currentMonth = today.getMonth(); // 0-11
+    const remainingMonths = 12 - currentMonth - 1; // Months left in year (not counting current)
+    const projectedRecurringCosts = totalMonthlyRecurring * remainingMonths;
+    
     // Get period label for headers
     const getPeriodLabel = () => {
       switch (bankingDateRange) {
@@ -24340,6 +25282,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   { key: 'overview', label: 'Overview', icon: BarChart3 },
                   { key: 'cfo', label: 'CFO Dashboard', icon: Target },
                   { key: 'cards', label: 'Credit Cards', icon: CreditCard },
+                  { key: 'recurring', label: 'Recurring', icon: RefreshCw },
                   { key: 'expenses', label: 'Expenses', icon: TrendingDown },
                   { key: 'income', label: 'Income', icon: Wallet },
                   { key: 'trends', label: 'Trends', icon: TrendingUp },
@@ -24480,6 +25423,161 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         </>
                       );
                     })()}
+                  </div>
+                </div>
+              )}
+              
+              {/* Recurring Expenses Tab */}
+              {bankingTab === 'recurring' && (
+                <div className="space-y-6">
+                  {/* Summary Cards */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="bg-gradient-to-br from-purple-900/40 to-purple-800/20 rounded-xl border border-purple-500/30 p-5">
+                      <p className="text-purple-400 text-sm font-medium mb-1">Confirmed Monthly Recurring</p>
+                      <p className="text-3xl font-bold text-white">{formatCurrency(totalMonthlyRecurring)}</p>
+                      <p className="text-slate-400 text-sm mt-1">{confirmedRecurringList.length} recurring expenses</p>
+                    </div>
+                    <div className="bg-gradient-to-br from-rose-900/40 to-rose-800/20 rounded-xl border border-rose-500/30 p-5">
+                      <p className="text-rose-400 text-sm font-medium mb-1">Annual Recurring Cost</p>
+                      <p className="text-3xl font-bold text-white">{formatCurrency(totalAnnualRecurring)}</p>
+                      <p className="text-slate-400 text-sm mt-1">Fixed costs per year</p>
+                    </div>
+                    <div className="bg-gradient-to-br from-amber-900/40 to-amber-800/20 rounded-xl border border-amber-500/30 p-5">
+                      <p className="text-amber-400 text-sm font-medium mb-1">Remaining This Year</p>
+                      <p className="text-3xl font-bold text-white">{formatCurrency(projectedRecurringCosts)}</p>
+                      <p className="text-slate-400 text-sm mt-1">{remainingMonths} months × {formatCurrency(totalMonthlyRecurring)}</p>
+                    </div>
+                  </div>
+                  
+                  {/* Pending Detection - Needs Confirmation */}
+                  {pendingRecurringList.length > 0 && (
+                    <div className="bg-slate-800/50 rounded-xl border border-amber-500/30 p-5">
+                      <h3 className="text-lg font-semibold text-amber-400 mb-4 flex items-center gap-2">
+                        <AlertTriangle className="w-5 h-5" />
+                        Detected Recurring Expenses — Please Review
+                      </h3>
+                      <p className="text-slate-400 text-sm mb-4">
+                        These expenses appear regularly in your banking data. Confirm which ones are truly recurring to improve EOY projections.
+                      </p>
+                      <div className="space-y-3">
+                        {pendingRecurringList.map(item => (
+                          <div key={item.key} className="bg-slate-700/50 rounded-lg p-4 flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-3">
+                                <p className="text-white font-medium">{item.vendor}</p>
+                                <span className={`px-2 py-0.5 rounded text-xs ${
+                                  item.consistency === 'high' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'
+                                }`}>
+                                  {item.consistency === 'high' ? 'Very Consistent' : 'Somewhat Consistent'}
+                                </span>
+                              </div>
+                              <p className="text-slate-400 text-sm mt-1">{item.category} • Found in {item.frequency} of last {item.totalMonths} months</p>
+                            </div>
+                            <div className="text-right mr-4">
+                              <p className="text-rose-400 font-bold">{formatCurrency(item.monthlyAmount)}/mo</p>
+                              <p className="text-slate-500 text-xs">{formatCurrency(item.annualCost)}/year</p>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setConfirmedRecurring(prev => ({ ...prev, [item.key]: { confirmed: true, amount: item.monthlyAmount } }))}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm"
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                onClick={() => setConfirmedRecurring(prev => ({ ...prev, [item.key]: { ignored: true } }))}
+                                className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded-lg text-white text-sm"
+                              >
+                                Ignore
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Confirmed Recurring */}
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                    <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <Check className="w-5 h-5 text-emerald-400" />
+                      Confirmed Recurring Expenses
+                    </h3>
+                    {confirmedRecurringList.length > 0 ? (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-700">
+                              <th className="text-left text-slate-400 font-medium py-2 px-2">Vendor</th>
+                              <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
+                              <th className="text-right text-slate-400 font-medium py-2 px-2">Monthly</th>
+                              <th className="text-right text-slate-400 font-medium py-2 px-2">Annual</th>
+                              <th className="text-right text-slate-400 font-medium py-2 px-2">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {confirmedRecurringList.map(item => (
+                              <tr key={item.key} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                <td className="py-3 px-2 text-white">{item.vendor}</td>
+                                <td className="py-3 px-2 text-slate-400">{item.category}</td>
+                                <td className="py-3 px-2 text-right text-rose-400 font-medium">{formatCurrency(item.monthlyAmount)}</td>
+                                <td className="py-3 px-2 text-right text-slate-300">{formatCurrency(item.annualCost)}</td>
+                                <td className="py-3 px-2 text-right">
+                                  <button
+                                    onClick={() => setConfirmedRecurring(prev => {
+                                      const updated = { ...prev };
+                                      delete updated[item.key];
+                                      return updated;
+                                    })}
+                                    className="text-slate-500 hover:text-rose-400"
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 border-slate-600">
+                              <td className="py-3 px-2 font-bold text-white" colSpan={2}>Total</td>
+                              <td className="py-3 px-2 text-right font-bold text-rose-400">{formatCurrency(totalMonthlyRecurring)}</td>
+                              <td className="py-3 px-2 text-right font-bold text-white">{formatCurrency(totalAnnualRecurring)}</td>
+                              <td></td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="text-center py-8">
+                        <RefreshCw className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                        <p className="text-slate-400">No confirmed recurring expenses yet.</p>
+                        <p className="text-slate-500 text-sm mt-1">Review the detected expenses above and confirm which ones recur monthly.</p>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* EOY Impact */}
+                  <div className="bg-gradient-to-r from-purple-900/30 to-indigo-900/30 rounded-xl border border-purple-500/30 p-5">
+                    <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+                      <Brain className="w-5 h-5 text-purple-400" />
+                      EOY Profit Impact
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="bg-slate-800/50 rounded-lg p-4">
+                        <p className="text-slate-400 text-sm mb-1">Known Fixed Costs (Remaining)</p>
+                        <p className="text-2xl font-bold text-rose-400">{formatCurrency(projectedRecurringCosts)}</p>
+                        <p className="text-slate-500 text-xs mt-1">{remainingMonths} months of confirmed recurring</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-lg p-4">
+                        <p className="text-slate-400 text-sm mb-1">Monthly Overhead Rate</p>
+                        <p className="text-2xl font-bold text-white">{formatCurrency(totalMonthlyRecurring)}</p>
+                        <p className="text-slate-500 text-xs mt-1">Before variable costs & COGS</p>
+                      </div>
+                    </div>
+                    <p className="text-slate-400 text-sm mt-4">
+                      💡 <strong>Tip:</strong> Your recurring expenses are predictable costs that will hit regardless of sales volume. 
+                      Factor these in when setting monthly profit targets — you need to clear {formatCurrency(totalMonthlyRecurring)} in gross profit just to break even on fixed costs.
+                    </p>
                   </div>
                 </div>
               )}
@@ -25036,6 +26134,48 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   trendProjection = ytdCashFlow + (recentAvgNet * monthsRemaining);
                 }
                 
+                // ==================== OPEN PO CASH FLOW ====================
+                // Calculate outstanding PO payments
+                const openPOs = productionPipeline.filter(po => po.status !== 'received');
+                const poAnalysis = openPOs.map(po => {
+                  const totalValue = po.totalValue || ((po.quantity || 0) * (po.unitCost || 0));
+                  const depositPercent = po.depositPercent || 50;
+                  const depositAmt = totalValue * (depositPercent / 100);
+                  const balancePercent = (100 - depositPercent) / 100;
+                  
+                  // Calculate what's been paid
+                  let paidSoFar = po.depositPaid ? depositAmt : 0;
+                  
+                  if (po.paymentTerms === '30-70-ship') {
+                    // Rolling payments - sum shipment payments
+                    const shippedUnits = (po.shipments || []).reduce((s, sh) => s + (sh.units || 0), 0);
+                    paidSoFar += shippedUnits * (po.unitCost || 0) * balancePercent;
+                  } else if (po.balancePaid) {
+                    paidSoFar += totalValue * balancePercent;
+                  }
+                  
+                  const outstanding = totalValue - paidSoFar;
+                  const unitsRemaining = (po.quantity || 0) - (po.shipments || []).reduce((s, sh) => s + (sh.units || 0), 0);
+                  
+                  return {
+                    ...po,
+                    totalValue,
+                    paidSoFar,
+                    outstanding,
+                    unitsRemaining,
+                  };
+                });
+                
+                const totalPOValue = poAnalysis.reduce((s, po) => s + po.totalValue, 0);
+                const totalPOPaid = poAnalysis.reduce((s, po) => s + po.paidSoFar, 0);
+                const totalPOOutstanding = poAnalysis.reduce((s, po) => s + po.outstanding, 0);
+                
+                // Projected COGS from open POs (when goods arrive and sell)
+                const totalUnitsIncoming = poAnalysis.reduce((s, po) => s + po.unitsRemaining, 0);
+                const avgUnitCost = totalUnitsIncoming > 0 
+                  ? poAnalysis.reduce((s, po) => s + (po.unitsRemaining * (po.unitCost || 0)), 0) / totalUnitsIncoming 
+                  : 0;
+                
                 // Tooltip component
                 const KPICard = ({ label, value, subLabel, color, tooltip }) => (
                   <div className="bg-slate-700/50 rounded-lg p-4 relative group cursor-help">
@@ -25146,6 +26286,62 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         </p>
                       </div>
                     </div>
+                    
+                    {/* Open PO Cash Flow */}
+                    {openPOs.length > 0 && totalPOOutstanding > 0 && (
+                      <div className="bg-gradient-to-r from-amber-900/30 to-orange-900/30 rounded-xl border border-amber-500/30 p-5">
+                        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                          <Package className="w-5 h-5 text-amber-400" />
+                          Open Purchase Orders — Cash Flow Impact
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                          <div className="bg-slate-800/50 rounded-lg p-4">
+                            <p className="text-slate-400 text-xs mb-1">Total PO Value</p>
+                            <p className="text-2xl font-bold text-white">{formatCurrency(totalPOValue)}</p>
+                            <p className="text-slate-500 text-xs">{openPOs.length} open POs</p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-4">
+                            <p className="text-slate-400 text-xs mb-1">Paid to Date</p>
+                            <p className="text-2xl font-bold text-emerald-400">{formatCurrency(totalPOPaid)}</p>
+                            <p className="text-slate-500 text-xs">{totalPOValue > 0 ? ((totalPOPaid / totalPOValue * 100).toFixed(0)) : 0}% complete</p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-4 border border-rose-500/30">
+                            <p className="text-rose-400 text-xs mb-1">Outstanding Balance</p>
+                            <p className="text-2xl font-bold text-rose-400">{formatCurrency(totalPOOutstanding)}</p>
+                            <p className="text-slate-500 text-xs">Payments still due</p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-4">
+                            <p className="text-slate-400 text-xs mb-1">Units Incoming</p>
+                            <p className="text-2xl font-bold text-cyan-400">{formatNumber(totalUnitsIncoming)}</p>
+                            <p className="text-slate-500 text-xs">@ avg {formatCurrency(avgUnitCost)}/unit</p>
+                          </div>
+                        </div>
+                        
+                        {/* Per-PO breakdown */}
+                        <div className="space-y-2">
+                          {poAnalysis.map(po => (
+                            <div key={po.id} className="bg-slate-800/30 rounded-lg p-3 flex items-center justify-between">
+                              <div className="flex-1">
+                                <p className="text-white font-medium">{po.productName || po.sku}</p>
+                                <p className="text-slate-500 text-xs">
+                                  {po.paymentTerms === '30-70-ship' ? '30/70 rolling' : po.paymentTerms === '50-50' ? '50/50 at completion' : po.paymentTerms}
+                                  {po.vendor && ` • ${po.vendor}`}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-rose-400 font-medium">{formatCurrency(po.outstanding)} due</p>
+                                <p className="text-slate-500 text-xs">{formatNumber(po.unitsRemaining)} units remaining</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        
+                        <p className="text-slate-400 text-sm mt-4 pt-3 border-t border-slate-700">
+                          💡 <strong>Cash Flow Note:</strong> Outstanding PO balance ({formatCurrency(totalPOOutstanding)}) represents future cash outflows as goods ship. 
+                          Factor this into your cash reserves planning. When goods arrive and sell, the unit cost becomes COGS on your P&L.
+                        </p>
+                      </div>
+                    )}
                     
                     {/* Cash Flow Analysis */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
