@@ -2061,11 +2061,78 @@ const createStore = useCallback(async (name) => {
     createdAt: new Date().toISOString(),
   };
   const updatedStores = [...stores, newStore];
+  
+  // Clear current data for new store
+  const emptyData = {
+    sales: {},
+    dailySales: {},
+    inventory: {},
+    cogs: { lookup: {}, updatedAt: null },
+    periods: {},
+    storeName: name.trim(),
+    storeLogo: '',
+    salesTax: { nexusStates: {}, hiddenStates: [], filingHistory: {} },
+    settings: appSettings,
+    invoices: [],
+    amazonForecasts: {},
+    forecastMeta: { lastUploads: {}, history: [] },
+    weekNotes: {},
+    goals,
+    productNames: {},
+    theme,
+    widgetConfig: null,
+    productionPipeline: [],
+    threeplLedger: { orders: [], importedFiles: [], summaryCharges: {} },
+    amazonCampaigns: { campaigns: [], history: [], lastUpdated: null },
+    forecastAccuracyHistory: { records: [], lastUpdated: null, modelVersion: '1.0' },
+    forecastCorrections: {},
+    aiForecasts: {},
+    leadTimeSettings: {},
+    aiForecastModule: null,
+    aiLearningHistory: [],
+    weeklyReports: {},
+    aiMessages: [],
+  };
+  
+  // Save to cloud immediately with the new stores list
+  if (supabase && session?.user?.id) {
+    setCloudStatus('Creating store…');
+    try {
+      // Get existing data first
+      const { data: existingData } = await supabase
+        .from('app_data')
+        .select('data')
+        .eq('user_id', session.user.id)
+        .maybeSingle();
+      
+      const payload = {
+        user_id: session.user.id,
+        data: {
+          stores: updatedStores,
+          activeStoreId: newStore.id,
+          storeData: {
+            ...(existingData?.data?.storeData || {}),
+            [newStore.id]: emptyData
+          }
+        },
+        updated_at: new Date().toISOString(),
+      };
+      
+      const { error } = await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
+      if (error) throw error;
+      
+      setCloudStatus('Store created');
+      setTimeout(() => setCloudStatus(''), 1500);
+    } catch (err) {
+      console.error('Failed to save new store:', err);
+      setCloudStatus('Save failed');
+    }
+  }
+  
+  // Update local state
   setStores(updatedStores);
   setActiveStoreId(newStore.id);
   setNewStoreName('');
-  
-  // Clear current data for new store
   setAllWeeksData({});
   setAllDaysData({});
   setAllPeriodsData({});
@@ -2074,10 +2141,14 @@ const createStore = useCallback(async (name) => {
   setInvoices([]);
   setAmazonForecasts({});
   setThreeplLedger({ orders: [], importedFiles: [], summaryCharges: {} });
+  setSavedCogs({});
+  setSavedProductNames({});
+  setStoreLogo('');
   
   setToast({ message: `Created store "${name}"`, type: 'success' });
   setShowStoreSelector(false);
-}, [stores]);
+  setShowStoreModal(false);
+}, [stores, session, appSettings, goals, theme]);
 
 const switchStore = useCallback(async (storeId) => {
   if (storeId === activeStoreId) {
@@ -2107,17 +2178,52 @@ const deleteStore = useCallback(async (storeId) => {
   if (!confirm(`Delete store "${store?.name}"? All data will be permanently lost.`)) return;
   
   const updatedStores = stores.filter(s => s.id !== storeId);
+  
+  // Determine new active store
+  let newActiveId = activeStoreId;
+  if (storeId === activeStoreId) {
+    newActiveId = updatedStores[0].id;
+  }
+  
+  // Save updated stores list to cloud
+  if (supabase && session?.user?.id) {
+    try {
+      const { data: existingData } = await supabase
+        .from('app_data')
+        .select('data')
+        .eq('user_id', session.user.id)
+        .maybeSingle();
+      
+      // Remove deleted store's data and update stores list
+      const storeData = { ...(existingData?.data?.storeData || {}) };
+      delete storeData[storeId];
+      
+      const payload = {
+        user_id: session.user.id,
+        data: {
+          stores: updatedStores,
+          activeStoreId: newActiveId,
+          storeData
+        },
+        updated_at: new Date().toISOString(),
+      };
+      
+      await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
+    } catch (err) {
+      console.error('Failed to delete store from cloud:', err);
+    }
+  }
+  
   setStores(updatedStores);
   
   // If deleting active store, switch to another
   if (storeId === activeStoreId) {
-    const newActive = updatedStores[0].id;
-    setActiveStoreId(newActive);
-    await loadFromCloud(newActive);
+    setActiveStoreId(newActiveId);
+    await loadFromCloud(newActiveId);
   }
   
   setToast({ message: `Deleted store "${store?.name}"`, type: 'success' });
-}, [stores, activeStoreId, loadFromCloud]);
+}, [stores, activeStoreId, loadFromCloud, session]);
 
 // Store Selector Modal
 const StoreSelectorModal = () => {
@@ -12593,30 +12699,82 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5 mb-6">
                   <h3 className="text-sm font-semibold text-amber-400 uppercase mb-4 flex items-center gap-2"><Target className="w-4 h-4" />Goals Progress</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {goals.weeklyRevenue > 0 && sortedWeeks.length > 0 && (
-                      <div>
-                        <div className="flex justify-between text-sm mb-1">
-                          <span className="text-slate-400">Weekly Revenue</span>
-                          <span className="text-white">{formatCurrency(allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.revenue || 0)} / {formatCurrency(goals.weeklyRevenue)}</span>
+                    {goals.weeklyRevenue > 0 && sortedWeeks.length > 0 && (() => {
+                      // Calculate current calendar week revenue from daily data
+                      const now = new Date();
+                      const dayOfWeek = now.getDay(); // 0 = Sunday
+                      const daysIntoWeek = dayOfWeek === 0 ? 7 : dayOfWeek;
+                      const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysIntoWeek + 1);
+                      
+                      let weeklyRevenue = 0;
+                      for (let i = 0; i < 7; i++) {
+                        const d = new Date(weekStart);
+                        d.setDate(weekStart.getDate() + i);
+                        const dateKey = formatDateKey(d);
+                        const dayData = allDaysData[dateKey];
+                        if (dayData?.total?.revenue) {
+                          weeklyRevenue += dayData.total.revenue;
+                        }
+                      }
+                      
+                      // If no daily data, fall back to last week's uploaded data
+                      if (weeklyRevenue === 0) {
+                        const currentWeekKey = getSunday(now);
+                        weeklyRevenue = allWeeksData[currentWeekKey]?.total?.revenue || 
+                                       allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.revenue || 0;
+                      }
+                      
+                      return (
+                        <div>
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="text-slate-400">Weekly Revenue</span>
+                            <span className="text-white">{formatCurrency(weeklyRevenue)} / {formatCurrency(goals.weeklyRevenue)}</span>
+                          </div>
+                          <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                            <div className={`h-full ${weeklyRevenue >= goals.weeklyRevenue ? 'bg-emerald-500' : 'bg-amber-500'}`} 
+                              style={{ width: `${Math.min(100, (weeklyRevenue / goals.weeklyRevenue) * 100)}%` }} />
+                          </div>
                         </div>
-                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                          <div className={`h-full ${(allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.revenue || 0) >= goals.weeklyRevenue ? 'bg-emerald-500' : 'bg-amber-500'}`} 
-                            style={{ width: `${Math.min(100, ((allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.revenue || 0) / goals.weeklyRevenue) * 100)}%` }} />
+                      );
+                    })()}
+                    {goals.weeklyProfit > 0 && sortedWeeks.length > 0 && (() => {
+                      // Calculate current calendar week profit from daily data
+                      const now = new Date();
+                      const dayOfWeek = now.getDay();
+                      const daysIntoWeek = dayOfWeek === 0 ? 7 : dayOfWeek;
+                      const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysIntoWeek + 1);
+                      
+                      let weeklyProfit = 0;
+                      for (let i = 0; i < 7; i++) {
+                        const d = new Date(weekStart);
+                        d.setDate(weekStart.getDate() + i);
+                        const dateKey = formatDateKey(d);
+                        const dayData = allDaysData[dateKey];
+                        if (dayData?.total?.netProfit !== undefined) {
+                          weeklyProfit += dayData.total.netProfit;
+                        }
+                      }
+                      
+                      // If no daily data, fall back to last week's uploaded data
+                      if (weeklyProfit === 0) {
+                        const currentWeekKey = getSunday(now);
+                        weeklyProfit = allWeeksData[currentWeekKey]?.total?.netProfit || 
+                                      allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.netProfit || 0;
+                      }
+                      
+                      return (
+                        <div>
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="text-slate-400">Weekly Profit</span>
+                            <span className="text-white">{formatCurrency(weeklyProfit)} / {formatCurrency(goals.weeklyProfit)}</span>
+                          </div>
+                          <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                            <div className={`h-full ${weeklyProfit >= goals.weeklyProfit ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                              style={{ width: `${Math.min(100, Math.max(0, (weeklyProfit / goals.weeklyProfit) * 100))}%` }} />
+                          </div>
                         </div>
-                      </div>
-                    )}
-                    {goals.weeklyProfit > 0 && sortedWeeks.length > 0 && (
-                      <div>
-                        <div className="flex justify-between text-sm mb-1">
-                          <span className="text-slate-400">Weekly Profit</span>
-                          <span className="text-white">{formatCurrency(allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.netProfit || 0)} / {formatCurrency(goals.weeklyProfit)}</span>
-                        </div>
-                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                          <div className={`h-full ${(allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.netProfit || 0) >= goals.weeklyProfit ? 'bg-emerald-500' : 'bg-amber-500'}`}
-                            style={{ width: `${Math.min(100, Math.max(0, ((allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.netProfit || 0) / goals.weeklyProfit) * 100))}%` }} />
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                     {goals.monthlyRevenue > 0 && (
                       <div>
                         <div className="flex justify-between text-sm mb-1">
