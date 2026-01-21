@@ -49,11 +49,15 @@ const formatPercent = (num) => (num === null || num === undefined || isNaN(num))
 const formatNumber = (num) => (num === null || num === undefined || isNaN(num)) ? '0' : Math.round(num).toLocaleString('en-US');
 
 // Helper: Check if a day has REAL sales data (not just Google/Meta Ads data)
-// Real daily data has: total, amazon, shopify objects from Shopify/Amazon CSV uploads
-// Ads-only data just has: googleAds, googleSpend, metaSpend, etc.
+// Real daily data has revenue > 0 from actual sales uploads
+// Ads-only data may have total/shopify objects but with no revenue
 const hasDailySalesData = (dayData) => {
   if (!dayData) return false;
-  return !!(dayData.total || dayData.amazon || dayData.shopify || dayData.orders || dayData.totalSales);
+  // Check for actual revenue - ads-only days have total/shopify but revenue is 0 or undefined
+  const totalRevenue = dayData.total?.revenue || 0;
+  const shopifyRevenue = dayData.shopify?.revenue || 0;
+  const amazonRevenue = dayData.amazon?.revenue || 0;
+  return totalRevenue > 0 || shopifyRevenue > 0 || amazonRevenue > 0;
 };
 
 // Helper: Format date to YYYY-MM-DD without timezone issues
@@ -5715,18 +5719,32 @@ Keep insights brief and actionable. Format as numbered list.`;
       const lowInventory = inventoryItems.filter(i => i.daysOfSupply >= 14 && i.daysOfSupply < 30);
       
       // ==================== ADS SPEND ANALYSIS ====================
+      // Handle both formats: shopify.googleSpend (with sales data) and root-level googleSpend (ads-only)
       const adsAnalysis = sortedDays.slice(-30).reduce((acc, d) => {
         const dayData = allDaysData[d];
-        const googleAds = dayData?.shopify?.googleSpend || 0;
-        const metaAds = dayData?.shopify?.metaSpend || 0;
+        if (!dayData) return acc;
+        
+        // Support both nested (shopify.googleSpend) and flat (googleSpend) formats
+        const googleAds = dayData?.shopify?.googleSpend || dayData?.googleSpend || dayData?.googleAds || 0;
+        const metaAds = dayData?.shopify?.metaSpend || dayData?.metaSpend || dayData?.metaAds || 0;
         const adsMetrics = dayData?.shopify?.adsMetrics || {};
+        
+        // For flat format, metrics are at root level
+        const googleImpressions = adsMetrics.googleImpressions || dayData?.googleImpressions || 0;
+        const metaImpressions = adsMetrics.metaImpressions || dayData?.metaImpressions || 0;
+        const googleClicks = adsMetrics.googleClicks || dayData?.googleClicks || 0;
+        const metaClicks = adsMetrics.metaClicks || dayData?.metaClicks || 0;
+        const googleConversions = adsMetrics.googleConversions || dayData?.googleConversions || 0;
+        const metaPurchases = adsMetrics.metaPurchases || dayData?.metaConversions || 0;
+        const metaPurchaseValue = adsMetrics.metaPurchaseValue || dayData?.metaPurchaseValue || 0;
+        
         return {
           totalGoogleSpend: acc.totalGoogleSpend + googleAds,
           totalMetaSpend: acc.totalMetaSpend + metaAds,
-          totalImpressions: acc.totalImpressions + (adsMetrics.googleImpressions || 0) + (adsMetrics.metaImpressions || 0),
-          totalClicks: acc.totalClicks + (adsMetrics.googleClicks || 0) + (adsMetrics.metaClicks || 0),
-          totalConversions: acc.totalConversions + (adsMetrics.googleConversions || 0) + (adsMetrics.metaPurchases || 0),
-          metaPurchaseValue: acc.metaPurchaseValue + (adsMetrics.metaPurchaseValue || 0),
+          totalImpressions: acc.totalImpressions + googleImpressions + metaImpressions,
+          totalClicks: acc.totalClicks + googleClicks + metaClicks,
+          totalConversions: acc.totalConversions + googleConversions + metaPurchases,
+          metaPurchaseValue: acc.metaPurchaseValue + metaPurchaseValue,
           daysWithAds: googleAds > 0 || metaAds > 0 ? acc.daysWithAds + 1 : acc.daysWithAds,
         };
       }, { totalGoogleSpend: 0, totalMetaSpend: 0, totalImpressions: 0, totalClicks: 0, totalConversions: 0, metaPurchaseValue: 0, daysWithAds: 0 });
@@ -12180,6 +12198,10 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                             const isToday = dateKey === formatDateKey(now);
                             const revenue = dayData?.total?.revenue || 0;
                             const profit = dayData?.total?.netProfit || 0;
+                            // Check if day has ads data (for indicator)
+                            const googleAds = dayData?.shopify?.googleSpend || dayData?.googleSpend || dayData?.googleAds || 0;
+                            const metaAds = dayData?.shopify?.metaSpend || dayData?.metaSpend || dayData?.metaAds || 0;
+                            const hasAds = googleAds > 0 || metaAds > 0;
                             
                             return (
                               <div 
@@ -12203,6 +12225,7 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                               >
                                 <div className={`text-xs font-medium ${hasSales ? 'text-cyan-300' : hasAdsOnly ? 'text-amber-400/60' : 'text-slate-500'}`}>
                                   {dayNum}
+                                  {hasSales && hasAds && <span className="ml-0.5 text-violet-400">●</span>}
                                 </div>
                                 {hasSales && (
                                   <div className={`text-[10px] font-medium truncate ${profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -12218,14 +12241,18 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                         </div>
                         
                         {/* Legend */}
-                        <div className="flex items-center justify-center gap-6 mt-4 text-xs text-slate-400">
+                        <div className="flex items-center justify-center gap-4 mt-4 text-xs text-slate-400 flex-wrap">
                           <div className="flex items-center gap-1">
                             <div className="w-3 h-3 rounded bg-cyan-500/20 border border-cyan-500/30" />
-                            <span>Sales data (click to view)</span>
+                            <span>Sales data</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-violet-400">●</span>
+                            <span>Has ads data</span>
                           </div>
                           <div className="flex items-center gap-1">
                             <div className="w-3 h-3 rounded bg-amber-500/10 border border-amber-500/20" />
-                            <span>Ads only (click to add sales)</span>
+                            <span>Ads only</span>
                           </div>
                           <div className="flex items-center gap-1">
                             <div className="w-3 h-3 rounded bg-slate-800/50 border border-slate-700/50" />
