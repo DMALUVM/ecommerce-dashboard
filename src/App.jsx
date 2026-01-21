@@ -78,9 +78,18 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
   
   // Bank account patterns - must have account number pattern like (5983), (1003), (1009)
   const isBankAccount = (name) => {
-    // Must have account number in parentheses pattern
-    const hasAccountNumber = /\(\d{4}\)/.test(name);
+    // Must have account number in parentheses pattern at end
+    const hasAccountNumber = /\(\d{4}\)\s*-\s*\d+$/.test(name);
     if (!hasAccountNumber) return false;
+    
+    // Must NOT contain quotes (sign of corrupted multi-line CSV parsing)
+    if (name.includes('"')) return false;
+    
+    // Must be reasonably short (account names are typically < 50 chars)
+    if (name.length > 60) return false;
+    
+    // Must start with a letter (not a continuation of a memo)
+    if (!/^[A-Za-z]/.test(name.trim())) return false;
     
     const lower = name.toLowerCase();
     return (
@@ -1122,6 +1131,7 @@ const handleLogout = async () => {
   const [bankingCategoryFilter, setBankingCategoryFilter] = useState('all');
   const [showBankingUpload, setShowBankingUpload] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState(null); // Transaction being edited
+  const [skuDateRange, setSkuDateRange] = useState('all'); // 'all' | '4weeks' | '8weeks' | '12weeks' | 'ytd'
   
   // Sales Tax Management
   const [salesTaxConfig, setSalesTaxConfig] = useState({
@@ -2311,10 +2321,12 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     // Load new features from cloud
     if (cloud.invoices) setInvoices(cloud.invoices);
     if (cloud.amazonForecasts) setAmazonForecasts(cloud.amazonForecasts);
+    if (cloud.forecastMeta) setForecastMeta(cloud.forecastMeta);
     if (cloud.weekNotes) setWeekNotes(cloud.weekNotes);
     if (cloud.goals) setGoals(cloud.goals);
     if (cloud.productNames) setSavedProductNames(cloud.productNames);
     if (cloud.theme) setTheme(cloud.theme);
+    if (cloud.widgetConfig) setWidgetConfig(cloud.widgetConfig);
     if (cloud.productionPipeline) setProductionPipeline(cloud.productionPipeline);
     if (cloud.threeplLedger) setThreeplLedger(cloud.threeplLedger);
     if (cloud.amazonCampaigns) setAmazonCampaigns(cloud.amazonCampaigns);
@@ -2342,10 +2354,12 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.settings) writeToLocal(SETTINGS_KEY, JSON.stringify(cloud.settings));
     if (cloud.invoices) writeToLocal(INVOICES_KEY, JSON.stringify(cloud.invoices));
     if (cloud.amazonForecasts) writeToLocal(AMAZON_FORECAST_KEY, JSON.stringify(cloud.amazonForecasts));
+    if (cloud.forecastMeta) writeToLocal('ecommerce_forecast_meta_v1', JSON.stringify(cloud.forecastMeta));
     if (cloud.weekNotes) writeToLocal(NOTES_KEY, JSON.stringify(cloud.weekNotes));
     if (cloud.goals) writeToLocal(GOALS_KEY, JSON.stringify(cloud.goals));
     if (cloud.productNames) writeToLocal(PRODUCT_NAMES_KEY, JSON.stringify(cloud.productNames));
     if (cloud.theme) writeToLocal(THEME_KEY, JSON.stringify(cloud.theme));
+    if (cloud.widgetConfig) writeToLocal('ecommerce_widget_config_v1', JSON.stringify(cloud.widgetConfig));
     if (cloud.productionPipeline) localStorage.setItem('ecommerce_production_v1', JSON.stringify(cloud.productionPipeline));
     if (cloud.threeplLedger) writeToLocal(THREEPL_LEDGER_KEY, JSON.stringify(cloud.threeplLedger));
     if (cloud.amazonCampaigns) writeToLocal('ecommerce_amazon_campaigns_v1', JSON.stringify(cloud.amazonCampaigns));
@@ -2381,7 +2395,7 @@ const createStore = useCallback(async (name) => {
   };
   const updatedStores = [...stores, newStore];
   
-  // Clear current data for new store
+  // Clear current data for new store - COMPLETE LIST
   const emptyData = {
     sales: {},
     dailySales: {},
@@ -2404,13 +2418,25 @@ const createStore = useCallback(async (name) => {
     threeplLedger: { orders: [], importedFiles: [], summaryCharges: {} },
     amazonCampaigns: { campaigns: [], history: [], lastUpdated: null },
     forecastAccuracyHistory: { records: [], lastUpdated: null, modelVersion: '1.0' },
-    forecastCorrections: {},
+    forecastCorrections: { overall: { revenue: 1, units: 1, profit: 1 }, bySku: {}, byMonth: {}, byQuarter: {}, confidence: 0, samplesUsed: 0 },
     aiForecasts: {},
     leadTimeSettings: {},
     aiForecastModule: null,
-    aiLearningHistory: [],
+    aiLearningHistory: { predictions: [], modelUpdates: [] },
     weeklyReports: {},
     aiMessages: [],
+    // Banking data for new store
+    bankingData: {
+      transactions: [],
+      accounts: {},
+      categories: {},
+      monthlySnapshots: {},
+      dateRange: null,
+      transactionCount: 0,
+      lastUpload: null,
+      categoryOverrides: {},
+      settings: {},
+    },
   };
   
   // Save to cloud immediately with the new stores list
@@ -2448,7 +2474,7 @@ const createStore = useCallback(async (name) => {
     }
   }
   
-  // Update local state
+  // Update local state - COMPLETE LIST
   setStores(updatedStores);
   setActiveStoreId(newStore.id);
   setNewStoreName('');
@@ -2463,6 +2489,21 @@ const createStore = useCallback(async (name) => {
   setSavedCogs({});
   setSavedProductNames({});
   setStoreLogo('');
+  setBankingData({
+    transactions: [],
+    accounts: {},
+    categories: {},
+    monthlySnapshots: {},
+    dateRange: null,
+    transactionCount: 0,
+    lastUpload: null,
+    categoryOverrides: {},
+    settings: {},
+  });
+  setForecastCorrections({ overall: { revenue: 1, units: 1, profit: 1 }, bySku: {}, byMonth: {}, byQuarter: {}, confidence: 0, samplesUsed: 0 });
+  setAiLearningHistory({ predictions: [], modelUpdates: [] });
+  setAiMessages([]);
+  setWeeklyReports({});
   
   setToast({ message: `Created store "${name}"`, type: 'success' });
   setShowStoreSelector(false);
@@ -5492,7 +5533,7 @@ const savePeriods = async (d) => {
         corrected: false,
         correctionConfidence: forecastCorrections.confidence,
         correctionNote: forecastCorrections.samplesUsed < 2 
-          ? 'Need more data: Upload forecast + actual weekly data to enable self-learning'
+          ? 'Waiting for data overlap: Need weekly actual sales that match forecast periods'
           : 'Low confidence: Collecting more samples to improve accuracy',
       };
     }
@@ -10473,9 +10514,107 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
           error: p.accuracy?.revenueError,
         })) || [],
       },
+      // Seasonal Patterns for AI Forecasting
+      seasonalPatterns: (() => {
+        // Group data by month across years
+        const monthlyByYear = {};
+        sortedWeeks.forEach(w => {
+          const data = allWeeksData[w];
+          const date = new Date(w);
+          const year = date.getFullYear();
+          const month = date.getMonth() + 1;
+          const key = `${year}-${String(month).padStart(2, '0')}`;
+          if (!monthlyByYear[key]) monthlyByYear[key] = { year, month, revenue: 0, profit: 0, units: 0, weeks: 0 };
+          monthlyByYear[key].revenue += data.total?.revenue || 0;
+          monthlyByYear[key].profit += data.total?.netProfit || 0;
+          monthlyByYear[key].units += data.total?.units || 0;
+          monthlyByYear[key].weeks++;
+        });
+        
+        // Calculate month-over-month and year-over-year patterns
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const seasonalIndex = {};
+        monthNames.forEach((name, i) => {
+          const monthData = Object.values(monthlyByYear).filter(m => m.month === i + 1);
+          if (monthData.length > 0) {
+            const avgRevenue = monthData.reduce((s, m) => s + m.revenue, 0) / monthData.length;
+            seasonalIndex[name] = {
+              avgRevenue,
+              avgProfit: monthData.reduce((s, m) => s + m.profit, 0) / monthData.length,
+              dataPoints: monthData.length,
+              years: monthData.map(m => m.year),
+            };
+          }
+        });
+        
+        // Calculate overall average for seasonal index
+        const allMonths = Object.values(seasonalIndex);
+        const overallAvg = allMonths.length > 0 ? allMonths.reduce((s, m) => s + m.avgRevenue, 0) / allMonths.length : 0;
+        
+        // Add seasonal index (1.0 = average, >1 = above average month)
+        Object.keys(seasonalIndex).forEach(month => {
+          seasonalIndex[month].index = overallAvg > 0 ? seasonalIndex[month].avgRevenue / overallAvg : 1;
+        });
+        
+        return {
+          byMonth: seasonalIndex,
+          overallMonthlyAvg: overallAvg,
+          strongMonths: Object.entries(seasonalIndex).filter(([_, m]) => m.index > 1.1).map(([name]) => name),
+          weakMonths: Object.entries(seasonalIndex).filter(([_, m]) => m.index < 0.9).map(([name]) => name),
+        };
+      })(),
+      // Multi-Source Data Triangulation for AI
+      dataTriangulation: (() => {
+        // Compare sales data with banking deposits
+        const salesVsBanking = {};
+        if (bankingData.monthlySnapshots) {
+          Object.entries(bankingData.monthlySnapshots).forEach(([month, banking]) => {
+            // Find matching sales data
+            const salesWeeks = sortedWeeks.filter(w => w.startsWith(month));
+            const salesRevenue = salesWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.revenue || 0), 0);
+            const salesProfit = salesWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.netProfit || 0), 0);
+            
+            if (salesRevenue > 0 || banking.income > 0) {
+              salesVsBanking[month] = {
+                salesRevenue,
+                salesProfit,
+                bankDeposits: banking.income,
+                bankExpenses: banking.expenses,
+                bankNet: banking.net,
+                // Deposits should be less than revenue (after marketplace fees)
+                depositRatio: salesRevenue > 0 ? (banking.income / salesRevenue) : 0,
+                // True profit = sales profit - additional bank expenses (like ads, 3PL not in sales data)
+                adjustedProfit: salesProfit - (banking.expenses * 0.3), // Estimate 30% of expenses are already in COGS
+              };
+            }
+          });
+        }
+        
+        return {
+          salesVsBanking,
+          hasMultipleSources: bankingData.transactions?.length > 0 && sortedWeeks.length > 0,
+          dataQualityScore: (() => {
+            let score = 0;
+            if (sortedWeeks.length >= 12) score += 25; // Good weekly history
+            if (sortedDays.length >= 30) score += 20; // Good daily history
+            if (bankingData.transactions?.length >= 100) score += 20; // Good banking data
+            if (Object.keys(savedCogs).length >= 10) score += 15; // Good COGS coverage
+            if (forecastCorrections.samplesUsed >= 4) score += 10; // AI learning active
+            if (Object.keys(amazonForecasts).length > 0) score += 10; // Has forecasts
+            return score;
+          })(),
+        };
+      })(),
       // Banking/Cash Flow Data for AI analysis
       banking: bankingData.transactions?.length > 0 ? (() => {
-        const accts = Object.entries(bankingData.accounts || {});
+        // Filter to real bank accounts only
+        const strictFilter = (name) => {
+          if (!/\(\d{4}\)\s*-\s*\d+$/.test(name)) return false;
+          if (name.includes('"') || name.length > 60) return false;
+          if (!/^[A-Za-z]/.test(name.trim())) return false;
+          return true;
+        };
+        const accts = Object.entries(bankingData.accounts || {}).filter(([name, _]) => strictFilter(name));
         const checkingAccts = accts.filter(([_, a]) => a.type !== 'credit_card');
         const creditAccts = accts.filter(([_, a]) => a.type === 'credit_card');
         const totalCash = checkingAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
@@ -10490,7 +10629,7 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
           transactionCount: bankingData.transactions.length,
           dateRange: bankingData.dateRange,
           lastUpload: bankingData.lastUpload,
-          // CFO Summary
+          // CFO Summary (note: this is CASH FLOW not profit - doesn't include COGS)
           cfoMetrics: {
             cashPosition: totalCash,
             creditCardDebt: totalDebt,
@@ -10505,10 +10644,10 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
             balance: data.balance || 0,
             transactions: data.transactions,
           })),
-          // Monthly Performance (last 12 months)
+          // Monthly Cash Flow (last 12 months) - NOTE: income is deposits, not revenue; net is cash flow, not profit
           monthlySnapshots: Object.entries(bankingData.monthlySnapshots || {}).slice(-12).map(([month, data]) => ({
             month,
-            income: data.income,
+            income: data.income,  // Bank deposits (Amazon/Shopify payouts after fees)
             expenses: data.expenses,
             net: data.net,
             transactionCount: data.transactions,
@@ -10687,6 +10826,43 @@ ${ctx.periodData.length > 0 ? (() => {
          'Avg Monthly Revenue: $' + avgRev.toFixed(0) + '\n' +
          'Peak vs Avg: ' + ((best.totalRevenue / avgRev - 1) * 100).toFixed(0) + '% above average';
 })() : 'No seasonality data'}
+
+=== SEASONAL PATTERNS (AI Learning) ===
+${ctx.seasonalPatterns ? `
+Monthly Performance Patterns (for forecasting):
+${JSON.stringify(ctx.seasonalPatterns.byMonth)}
+Overall Monthly Average: $${ctx.seasonalPatterns.overallMonthlyAvg?.toFixed(0) || 0}
+Strong Months (>10% above avg): ${ctx.seasonalPatterns.strongMonths?.join(', ') || 'None identified yet'}
+Weak Months (<10% below avg): ${ctx.seasonalPatterns.weakMonths?.join(', ') || 'None identified yet'}
+
+Use seasonal indices when forecasting:
+- Index > 1.0 = Above average month (expect higher sales)
+- Index < 1.0 = Below average month (expect lower sales)
+- Apply: Expected Revenue = Base Forecast × Seasonal Index
+` : 'Not enough historical data for seasonal pattern analysis'}
+
+=== DATA QUALITY & TRIANGULATION ===
+${ctx.dataTriangulation ? `
+Data Quality Score: ${ctx.dataTriangulation.dataQualityScore}/100
+- 25 pts: 12+ weeks sales history
+- 20 pts: 30+ days daily data
+- 20 pts: 100+ banking transactions
+- 15 pts: 10+ SKUs with COGS
+- 10 pts: AI learning active (4+ samples)
+- 10 pts: Amazon forecasts uploaded
+
+Multiple Data Sources: ${ctx.dataTriangulation.hasMultipleSources ? 'YES - Can cross-validate sales vs banking' : 'NO - Limited to single source'}
+
+${ctx.dataTriangulation.hasMultipleSources && Object.keys(ctx.dataTriangulation.salesVsBanking || {}).length > 0 ? `
+Sales vs Banking Comparison (cross-validation):
+${Object.entries(ctx.dataTriangulation.salesVsBanking).slice(-6).map(([month, data]) => 
+  `- ${month}: Sales $${data.salesRevenue?.toFixed(0) || 0} → Bank Deposits $${data.bankDeposits?.toFixed(0) || 0} (${(data.depositRatio * 100).toFixed(0)}% deposit ratio)`
+).join('\n')}
+
+Note: Deposit ratio < 100% is normal (marketplace fees taken before payout)
+Typical healthy range: 70-85% for Amazon, 95-98% for Shopify
+` : ''}
+` : 'Data triangulation not available'}
 
 === WEEK NOTES (user annotations) ===
 ${notesData.length > 0 ? JSON.stringify(notesData) : 'No notes added'}
@@ -11466,7 +11642,14 @@ ${forecastInfo.alerts.map(a => `- ${a}`).join('\n')}`;
       // Add banking/cash flow data if available
       let bankingSection = '';
       if (bankingData.transactions?.length > 0) {
-        const accts = Object.entries(bankingData.accounts || {});
+        // Filter to real bank accounts only
+        const strictFilter = (name) => {
+          if (!/\(\d{4}\)\s*-\s*\d+$/.test(name)) return false;
+          if (name.includes('"') || name.length > 60) return false;
+          if (!/^[A-Za-z]/.test(name.trim())) return false;
+          return true;
+        };
+        const accts = Object.entries(bankingData.accounts || {}).filter(([name, _]) => strictFilter(name));
         const checkingAccts = accts.filter(([_, a]) => a.type !== 'credit_card');
         const creditAccts = accts.filter(([_, a]) => a.type === 'credit_card');
         const totalCash = checkingAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
@@ -11491,7 +11674,7 @@ ${forecastInfo.alerts.map(a => `- ${a}`).join('\n')}`;
         
         bankingSection = `
 
-💰 CASH FLOW & BANKING:
+💰 CASH FLOW & BANKING (Note: Cash flow ≠ profit - doesn't include COGS):
 - Cash Available: $${totalCash.toFixed(0)}
 - Credit Card Debt: $${totalDebt.toFixed(0)}
 - Net Position: $${(totalCash - totalDebt).toFixed(0)}
@@ -13652,13 +13835,19 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     
                     const thisMonthSnap = bankingData.monthlySnapshots?.[thisMonth] || { income: 0, expenses: 0, net: 0 };
                     const lastMonthSnap = bankingData.monthlySnapshots?.[lastMonth] || { income: 0, expenses: 0, net: 0 };
-                    const twoMonthsAgoSnap = bankingData.monthlySnapshots?.[twoMonthsAgo] || { income: 0, expenses: 0, net: 0 };
                     const isStale = !bankingData.lastUpload || new Date().toDateString() !== new Date(bankingData.lastUpload).toDateString();
                     
-                    // Calculate account balances
-                    const accounts = bankingData.accounts || {};
-                    const checkingAccounts = Object.entries(accounts).filter(([_, a]) => a.type !== 'credit_card');
-                    const creditCardAccounts = Object.entries(accounts).filter(([_, a]) => a.type === 'credit_card');
+                    // Filter to only real bank accounts (strict pattern matching)
+                    const allAccounts = Object.entries(bankingData.accounts || {});
+                    const realAccounts = allAccounts.filter(([name, _]) => {
+                      if (!/\(\d{4}\)\s*-\s*\d+$/.test(name)) return false;
+                      if (name.includes('"')) return false;
+                      if (name.length > 60) return false;
+                      if (!/^[A-Za-z]/.test(name.trim())) return false;
+                      return true;
+                    });
+                    const checkingAccounts = realAccounts.filter(([_, a]) => a.type !== 'credit_card');
+                    const creditCardAccounts = realAccounts.filter(([_, a]) => a.type === 'credit_card');
                     const totalCash = checkingAccounts.reduce((sum, [_, a]) => sum + (a.balance || 0), 0);
                     const totalDebt = creditCardAccounts.reduce((sum, [_, a]) => sum + Math.abs(a.balance || 0), 0);
                     
@@ -13671,9 +13860,8 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     // Cash runway (months of cash at current burn rate)
                     const runway = avgBurn > 0 ? Math.floor(totalCash / avgBurn) : 99;
                     
-                    // Trend: compare last month net to two months ago
-                    const trend = lastMonthSnap.net - twoMonthsAgoSnap.net;
-                    const trendPct = twoMonthsAgoSnap.net !== 0 ? ((trend / Math.abs(twoMonthsAgoSnap.net)) * 100) : 0;
+                    // Trend: compare this month to last month
+                    const trend = thisMonthSnap.net - lastMonthSnap.net;
                     
                     return (
                       <div className={`bg-slate-800/50 rounded-2xl border ${isStale ? 'border-amber-500/50' : 'border-slate-700'} p-5`}>
@@ -13709,16 +13897,16 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                             </span>
                           </div>
                           <div className="flex justify-between items-center pt-2 border-t border-slate-700">
-                            <span className="text-slate-300">This Month Net</span>
+                            <span className="text-slate-300">This Month Cash Flow</span>
                             <span className={`font-bold ${thisMonthSnap.net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                               {formatCurrency(thisMonthSnap.net)}
                             </span>
                           </div>
                           <div className="flex justify-between items-center">
-                            <span className="text-slate-500 text-xs">Profit Trend</span>
+                            <span className="text-slate-500 text-xs">vs Last Month</span>
                             <span className={`text-xs flex items-center gap-1 ${trend >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                               {trend >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                              {trend >= 0 ? '+' : ''}{formatCurrency(trend)} vs prior month
+                              {trend >= 0 ? '+' : ''}{formatCurrency(trend)}
                             </span>
                           </div>
                         </div>
@@ -18403,11 +18591,36 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
 
   // ==================== SKU RANKINGS VIEW ====================
   if (view === 'skus') {
-    const sortedWeeks = Object.keys(allWeeksData).sort();
+    const allWeeks = Object.keys(allWeeksData).sort();
+    
+    // Filter weeks based on date range
+    const getFilteredWeeks = () => {
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      switch (skuDateRange) {
+        case '4weeks': return allWeeks.slice(-4);
+        case '8weeks': return allWeeks.slice(-8);
+        case '12weeks': return allWeeks.slice(-12);
+        case 'ytd': return allWeeks.filter(w => w.startsWith(String(currentYear)));
+        default: return allWeeks;
+      }
+    };
+    const sortedWeeks = getFilteredWeeks();
     const recentWeeks = sortedWeeks.slice(-4);
     const olderWeeks = sortedWeeks.slice(-8, -4);
     
-    // Aggregate SKU data across all weeks
+    // Get period label for display
+    const getPeriodLabel = () => {
+      switch (skuDateRange) {
+        case '4weeks': return 'Last 4 Weeks';
+        case '8weeks': return 'Last 8 Weeks';
+        case '12weeks': return 'Last 12 Weeks';
+        case 'ytd': return 'Year to Date';
+        default: return 'All Time';
+      }
+    };
+    
+    // Aggregate SKU data across filtered weeks
     const skuAggregates = {};
     const skuRecentData = {};
     const skuOlderData = {};
@@ -18639,9 +18852,32 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           <NavTabs />
           {dataBar}
           
-          <div className="mb-6">
-            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">🏆 SKU Performance Rankings</h1>
-            <p className="text-slate-400">Identify your best sellers, most profitable products, and trends</p>
+          <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <h1 className="text-2xl lg:text-3xl font-bold text-white mb-1">🏆 SKU Performance Rankings</h1>
+              <p className="text-slate-400 text-sm">Identify your best sellers, most profitable products, and trends — <span className="text-white font-medium">{getPeriodLabel()}</span></p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { key: '4weeks', label: '4 Weeks' },
+                { key: '8weeks', label: '8 Weeks' },
+                { key: '12weeks', label: '12 Weeks' },
+                { key: 'ytd', label: 'YTD' },
+                { key: 'all', label: 'All Time' },
+              ].map(r => (
+                <button
+                  key={r.key}
+                  onClick={() => setSkuDateRange(r.key)}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                    skuDateRange === r.key 
+                      ? 'bg-amber-600 text-white' 
+                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
           </div>
           
           {/* Summary Stats */}
@@ -18675,125 +18911,62 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             </div>
           </div>
           
-          {/* NEW: Profit Per Unit Trends - Amazon Focus */}
+          {/* Profit Per Unit Trends - Compact Design */}
           {(decliningProfitability.length > 0 || improvingProfitability.length > 0) && (
-            <div className="mb-6 bg-gradient-to-r from-slate-800/50 to-slate-900/50 rounded-2xl border border-slate-700 p-6">
-              <h2 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
-                <TrendingDown className="w-6 h-6 text-orange-400" />
-                Amazon Profit Per Unit Trends
-              </h2>
-              <p className="text-slate-400 text-sm mb-6">Track how fees and costs are impacting your per-unit profitability over time</p>
+            <div className="mb-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Declining */}
+              {decliningProfitability.length > 0 && (
+                <div className="bg-rose-900/10 border border-rose-500/20 rounded-xl p-4">
+                  <h3 className="text-sm font-semibold text-rose-400 mb-3 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4" />
+                    Declining Profit/Unit ({decliningProfitability.length})
+                  </h3>
+                  <div className="space-y-2">
+                    {decliningProfitability.slice(0, 5).map(s => (
+                      <div key={s.sku} className="flex items-center justify-between py-2 border-b border-slate-700/50 last:border-0">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white text-sm font-medium truncate">{s.sku}</p>
+                          <p className="text-slate-500 text-xs">{s.totalUnits} units</p>
+                        </div>
+                        <div className="text-right ml-3">
+                          <p className="text-rose-400 font-bold">{formatCurrency(s.ppuChange)}/unit</p>
+                          <p className="text-slate-500 text-xs">{formatCurrency(s.olderPPU)} → {formatCurrency(s.recentPPU)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {decliningProfitability.length > 5 && (
+                    <p className="text-slate-500 text-xs mt-2 text-center">+{decliningProfitability.length - 5} more</p>
+                  )}
+                </div>
+              )}
               
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                {/* Declining Profitability */}
-                {decliningProfitability.length > 0 && (
-                  <div className="bg-rose-900/10 border border-rose-500/20 rounded-xl p-5">
-                    <h3 className="text-lg font-semibold text-rose-400 mb-4 flex items-center gap-2">
-                      <AlertTriangle className="w-5 h-5" />
-                      ⚠️ Declining Profit/Unit (Watch These!)
-                    </h3>
-                    <div className="space-y-4">
-                      {decliningProfitability.map(s => (
-                        <div key={s.sku} className="bg-slate-900/50 rounded-lg p-4">
-                          <div className="flex items-center justify-between mb-3">
-                            <div>
-                              <p className="text-white font-semibold">{s.sku}</p>
-                              <p className="text-slate-500 text-xs">{s.totalUnits} units over {s.weeklyData.length} weeks</p>
-                            </div>
-                            <div className="text-right">
-                              <p className={`text-lg font-bold ${s.ppuChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                {s.ppuChange >= 0 ? '+' : ''}{formatCurrency(s.ppuChange)}/unit
-                              </p>
-                              <p className="text-slate-500 text-xs">
-                                {formatCurrency(s.olderPPU)} → {formatCurrency(s.recentPPU)}
-                              </p>
-                            </div>
-                          </div>
-                          {/* Mini sparkline chart */}
-                          <div className="relative flex items-end gap-0.5 h-12">
-                            {s.weeklyData.map((w, i) => {
-                              const maxPPU = Math.max(...s.weeklyData.map(x => Math.abs(x.profitPerUnit))) || 1;
-                              const height = Math.abs(w.profitPerUnit) / maxPPU * 100;
-                              const isPositive = w.profitPerUnit >= 0;
-                              const showLabel = i === 0 || i === s.weeklyData.length - 1;
-                              return (
-                                <div key={i} className="flex-1 flex flex-col items-center group relative" style={{ minWidth: '16px', maxWidth: '40px' }}>
-                                  <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
-                                    {w.week.slice(5)}: {formatCurrency(w.profitPerUnit)}/unit
-                                  </div>
-                                  <div 
-                                    className={`w-full rounded-t ${isPositive ? 'bg-emerald-500/60' : 'bg-rose-500/60'}`}
-                                    style={{ height: `${Math.max(height, 5)}%` }}
-                                  />
-                                  {showLabel && <span className="text-[9px] text-slate-500 mt-1 whitespace-nowrap">{w.week.slice(5)}</span>}
-                                </div>
-                              );
-                            })}
-                          </div>
-                          {/* Fee analysis */}
-                          {s.fpuChange > 0.1 && (
-                            <div className="mt-3 text-xs text-amber-400 flex items-center gap-1">
-                              <AlertCircle className="w-3 h-3" />
-                              Fees increased by {formatCurrency(s.fpuChange)}/unit
-                            </div>
-                          )}
+              {/* Improving */}
+              {improvingProfitability.length > 0 && (
+                <div className="bg-emerald-900/10 border border-emerald-500/20 rounded-xl p-4">
+                  <h3 className="text-sm font-semibold text-emerald-400 mb-3 flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4" />
+                    Improving Profit/Unit ({improvingProfitability.length})
+                  </h3>
+                  <div className="space-y-2">
+                    {improvingProfitability.slice(0, 5).map(s => (
+                      <div key={s.sku} className="flex items-center justify-between py-2 border-b border-slate-700/50 last:border-0">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white text-sm font-medium truncate">{s.sku}</p>
+                          <p className="text-slate-500 text-xs">{s.totalUnits} units</p>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                
-                {/* Improving Profitability */}
-                {improvingProfitability.length > 0 && (
-                  <div className="bg-emerald-900/10 border border-emerald-500/20 rounded-xl p-5">
-                    <h3 className="text-lg font-semibold text-emerald-400 mb-4 flex items-center gap-2">
-                      <TrendingUp className="w-5 h-5" />
-                      ✅ Improving Profit/Unit
-                    </h3>
-                    <div className="space-y-4">
-                      {improvingProfitability.map(s => (
-                        <div key={s.sku} className="bg-slate-900/50 rounded-lg p-4">
-                          <div className="flex items-center justify-between mb-3">
-                            <div>
-                              <p className="text-white font-semibold">{s.sku}</p>
-                              <p className="text-slate-500 text-xs">{s.totalUnits} units over {s.weeklyData.length} weeks</p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-lg font-bold text-emerald-400">
-                                +{formatCurrency(s.ppuChange)}/unit
-                              </p>
-                              <p className="text-slate-500 text-xs">
-                                {formatCurrency(s.olderPPU)} → {formatCurrency(s.recentPPU)}
-                              </p>
-                            </div>
-                          </div>
-                          {/* Mini sparkline chart */}
-                          <div className="relative flex items-end gap-0.5 h-12">
-                            {s.weeklyData.map((w, i) => {
-                              const maxPPU = Math.max(...s.weeklyData.map(x => Math.abs(x.profitPerUnit))) || 1;
-                              const height = Math.abs(w.profitPerUnit) / maxPPU * 100;
-                              const isPositive = w.profitPerUnit >= 0;
-                              const showLabel = i === 0 || i === s.weeklyData.length - 1;
-                              return (
-                                <div key={i} className="flex-1 flex flex-col items-center group relative" style={{ minWidth: '16px', maxWidth: '40px' }}>
-                                  <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
-                                    {w.week.slice(5)}: {formatCurrency(w.profitPerUnit)}/unit
-                                  </div>
-                                  <div 
-                                    className={`w-full rounded-t ${isPositive ? 'bg-emerald-500/60' : 'bg-rose-500/60'}`}
-                                    style={{ height: `${Math.max(height, 5)}%` }}
-                                  />
-                                  {showLabel && <span className="text-[9px] text-slate-500 mt-1 whitespace-nowrap">{w.week.slice(5)}</span>}
-                                </div>
-                              );
-                            })}
-                          </div>
+                        <div className="text-right ml-3">
+                          <p className="text-emerald-400 font-bold">+{formatCurrency(s.ppuChange)}/unit</p>
+                          <p className="text-slate-500 text-xs">{formatCurrency(s.olderPPU)} → {formatCurrency(s.recentPPU)}</p>
                         </div>
-                      ))}
-                    </div>
+                      </div>
+                    ))}
                   </div>
-                )}
-              </div>
+                  {improvingProfitability.length > 5 && (
+                    <p className="text-slate-500 text-xs mt-2 text-center">+{improvingProfitability.length - 5} more</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
           
@@ -22584,8 +22757,86 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           return;
         }
         
+        // Smart merge: deduplicate transactions based on ID
+        let mergedTransactions = parsed.transactions;
+        let newCount = parsed.transactions.length;
+        let duplicateCount = 0;
+        
+        if (bankingData.transactions?.length > 0) {
+          const existingIds = new Set(bankingData.transactions.map(t => t.id));
+          const newTxns = parsed.transactions.filter(t => !existingIds.has(t.id));
+          duplicateCount = parsed.transactions.length - newTxns.length;
+          
+          // Merge: keep existing transactions, add only new ones
+          // Sort by date to maintain chronological order
+          mergedTransactions = [...bankingData.transactions, ...newTxns]
+            .sort((a, b) => b.date.localeCompare(a.date));
+          newCount = newTxns.length;
+        }
+        
+        // Recalculate all aggregates from merged transactions
+        const accounts = {};
+        const categories = {};
+        const monthlySnapshots = {};
+        
+        mergedTransactions.forEach(txn => {
+          // Account aggregates
+          if (!accounts[txn.account]) {
+            accounts[txn.account] = { 
+              name: txn.account, 
+              type: txn.accountType, 
+              transactions: 0, 
+              totalIn: 0, 
+              totalOut: 0,
+              balance: parsed.accounts[txn.account]?.balance || bankingData.accounts?.[txn.account]?.balance || 0,
+            };
+          }
+          accounts[txn.account].transactions++;
+          if (txn.isIncome) accounts[txn.account].totalIn += txn.amount;
+          if (txn.isExpense) accounts[txn.account].totalOut += txn.amount;
+          
+          // Category aggregates
+          const cat = txn.topCategory || 'Uncategorized';
+          if (!categories[cat]) categories[cat] = { totalIn: 0, totalOut: 0, count: 0, subcategories: {} };
+          categories[cat].count++;
+          if (txn.isIncome) categories[cat].totalIn += txn.amount;
+          if (txn.isExpense) categories[cat].totalOut += txn.amount;
+          
+          // Monthly snapshots
+          const month = txn.date.substring(0, 7);
+          if (!monthlySnapshots[month]) monthlySnapshots[month] = { income: 0, expenses: 0, net: 0, transactions: 0 };
+          monthlySnapshots[month].transactions++;
+          if (txn.isIncome) {
+            monthlySnapshots[month].income += txn.amount;
+            monthlySnapshots[month].net += txn.amount;
+          }
+          if (txn.isExpense) {
+            monthlySnapshots[month].expenses += txn.amount;
+            monthlySnapshots[month].net -= txn.amount;
+          }
+        });
+        
+        // Update account balances from new upload (most current)
+        Object.entries(parsed.accounts).forEach(([name, acct]) => {
+          if (accounts[name] && acct.balance) {
+            accounts[name].balance = acct.balance;
+          }
+        });
+        
+        // Calculate date range
+        const dates = mergedTransactions.map(t => t.date).sort();
+        const dateRange = { 
+          start: dates[0], 
+          end: dates[dates.length - 1] 
+        };
+        
         const newBankingData = {
-          ...parsed,
+          transactions: mergedTransactions,
+          accounts,
+          categories,
+          monthlySnapshots,
+          dateRange,
+          transactionCount: mergedTransactions.length,
           lastUpload: new Date().toISOString(),
           categoryOverrides: bankingData.categoryOverrides || {},
           settings: bankingData.settings,
@@ -22595,10 +22846,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
         queueCloudSave();
         
-        setToast({ 
-          message: `Imported ${parsed.transactionCount} transactions from ${parsed.dateRange?.start} to ${parsed.dateRange?.end}`, 
-          type: 'success' 
-        });
+        const message = duplicateCount > 0 
+          ? `Added ${newCount} new transactions (${duplicateCount} duplicates skipped). Total: ${mergedTransactions.length}`
+          : `Imported ${newCount} transactions from ${dateRange.start} to ${dateRange.end}`;
+        setToast({ message, type: 'success' });
       } catch (err) {
         setToast({ message: 'Error parsing file: ' + err.message, type: 'error' });
       }
@@ -22727,12 +22978,25 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               
               {/* Account Balances - CFO Summary */}
               {Object.keys(bankingData.accounts || {}).length > 0 && (() => {
-                const accts = Object.entries(bankingData.accounts);
-                const checkingAccts = accts.filter(([_, a]) => a.type !== 'credit_card');
-                const creditAccts = accts.filter(([_, a]) => a.type === 'credit_card');
+                // Filter to only show real bank accounts (strict pattern matching)
+                const realAccts = Object.entries(bankingData.accounts).filter(([name, _]) => {
+                  // Must have account number ending pattern like (5983) - 1
+                  if (!/\(\d{4}\)\s*-\s*\d+$/.test(name)) return false;
+                  // Must not contain quotes (corrupted data)
+                  if (name.includes('"')) return false;
+                  // Must be reasonably short
+                  if (name.length > 60) return false;
+                  // Must start with letter
+                  if (!/^[A-Za-z]/.test(name.trim())) return false;
+                  return true;
+                });
+                const checkingAccts = realAccts.filter(([_, a]) => a.type !== 'credit_card');
+                const creditAccts = realAccts.filter(([_, a]) => a.type === 'credit_card');
                 const totalCash = checkingAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
                 const totalDebt = creditAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
                 const netPosition = totalCash - totalDebt;
+                
+                if (realAccts.length === 0) return null;
                 
                 return (
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
@@ -22754,7 +23018,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     
                     {/* Individual Accounts */}
                     <div className="space-y-2">
-                      {accts.map(([name, acct]) => {
+                      {realAccts.map(([name, acct]) => {
                         const isCard = acct.type === 'credit_card';
                         const balance = acct.balance || 0;
                         const shortName = name.split('(')[0].trim();
@@ -23018,63 +23282,86 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Trends Tab */}
               {bankingTab === 'trends' && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Monthly Net Profit */}
+                  {/* Monthly Cash Flow Chart */}
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-                    <h3 className="text-lg font-semibold text-white mb-4">Monthly Net Profit</h3>
+                    <h3 className="text-lg font-semibold text-white mb-2">Monthly Cash Flow</h3>
+                    <p className="text-xs text-slate-500 mb-4">Income deposits minus expenses (not profit)</p>
                     {monthKeys.length > 0 && (() => {
-                      const maxNet = Math.max(...monthKeys.map(m => Math.abs(monthlySnapshots[m]?.net || 0)), 1);
+                      const netValues = monthKeys.map(m => monthlySnapshots[m]?.net || 0);
+                      const maxAbs = Math.max(...netValues.map(n => Math.abs(n)), 1000); // Min $1000 for scale
+                      
                       return (
-                        <div className="flex items-end gap-1 h-40">
-                          {monthKeys.map(m => {
-                            const net = monthlySnapshots[m]?.net || 0;
-                            const height = (Math.abs(net) / maxNet) * 100;
-                            return (
-                              <div key={m} className="flex-1 flex flex-col items-center group relative">
-                                <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 shadow-lg">
-                                  {new Date(m + '-01').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}<br/>
-                                  {formatCurrency(net)}
+                        <div className="h-48">
+                          <div className="flex items-end gap-1 h-full">
+                            {monthKeys.map(m => {
+                              const net = monthlySnapshots[m]?.net || 0;
+                              const heightPct = Math.min((Math.abs(net) / maxAbs) * 100, 100);
+                              const isPositive = net >= 0;
+                              return (
+                                <div key={m} className="flex-1 flex flex-col items-center group relative h-full justify-end">
+                                  <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-900 text-white text-xs px-3 py-2 rounded-lg whitespace-nowrap z-50 shadow-xl border border-slate-600">
+                                    <div className="font-medium">{new Date(m + '-01').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</div>
+                                    <div className={`text-sm ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(net)}</div>
+                                  </div>
+                                  <div 
+                                    className={`w-full rounded-t transition-all hover:opacity-80 ${isPositive ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                                    style={{ height: `${Math.max(heightPct, 3)}%` }}
+                                  />
+                                  <span className="text-[9px] text-slate-500 mt-1 truncate w-full text-center">{new Date(m + '-01').toLocaleDateString('en-US', { month: 'short' })}</span>
                                 </div>
-                                <div 
-                                  className={`w-full rounded-t transition-all ${net >= 0 ? 'bg-emerald-500/70' : 'bg-rose-500/70'}`}
-                                  style={{ height: `${height}%`, minHeight: '4px' }}
-                                />
-                                <span className="text-[9px] text-slate-500 mt-1">{new Date(m + '-01').toLocaleDateString('en-US', { month: 'short' })}</span>
-                              </div>
-                            );
-                          })}
+                              );
+                            })}
+                          </div>
                         </div>
                       );
                     })()}
                   </div>
                   
-                  {/* EOY Projection */}
+                  {/* Cash Flow Summary */}
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-                    <h3 className="text-lg font-semibold text-white mb-4">End of Year Projection</h3>
+                    <h3 className="text-lg font-semibold text-white mb-4">Cash Flow Summary</h3>
                     {(() => {
                       const currentYear = now.getFullYear();
                       const ytdMonths = monthKeys.filter(m => m.startsWith(String(currentYear)));
-                      const ytdNet = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0);
-                      const avgMonthlyNet = ytdMonths.length > 0 ? ytdNet / ytdMonths.length : 0;
-                      const monthsRemaining = 12 - now.getMonth() - 1;
-                      const projectedEOY = ytdNet + (avgMonthlyNet * monthsRemaining);
+                      const ytdIncome = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.income || 0), 0);
+                      const ytdExpenses = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.expenses || 0), 0);
+                      const ytdNet = ytdIncome - ytdExpenses;
+                      
+                      // Get last year same period for comparison if available
+                      const lastYear = currentYear - 1;
+                      const lastYearMonths = monthKeys.filter(m => m.startsWith(String(lastYear)));
+                      const lastYearSamePeriod = lastYearMonths.slice(0, ytdMonths.length);
+                      const lastYearNet = lastYearSamePeriod.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0);
+                      const yoyChange = lastYearNet !== 0 ? ((ytdNet - lastYearNet) / Math.abs(lastYearNet)) * 100 : 0;
                       
                       return (
                         <div className="space-y-4">
-                          <div className="flex justify-between items-center p-3 bg-slate-700/30 rounded-lg">
-                            <span className="text-slate-400">YTD Net Profit</span>
-                            <span className={`font-bold ${ytdNet >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(ytdNet)}</span>
+                          <div className="flex justify-between items-center p-3 bg-emerald-900/20 border border-emerald-500/30 rounded-lg">
+                            <span className="text-emerald-400">YTD Income (Deposits)</span>
+                            <span className="font-bold text-emerald-400">{formatCurrency(ytdIncome)}</span>
                           </div>
-                          <div className="flex justify-between items-center p-3 bg-slate-700/30 rounded-lg">
-                            <span className="text-slate-400">Avg Monthly Net</span>
-                            <span className={`font-bold ${avgMonthlyNet >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(avgMonthlyNet)}</span>
+                          <div className="flex justify-between items-center p-3 bg-rose-900/20 border border-rose-500/30 rounded-lg">
+                            <span className="text-rose-400">YTD Expenses</span>
+                            <span className="font-bold text-rose-400">{formatCurrency(ytdExpenses)}</span>
                           </div>
-                          <div className="flex justify-between items-center p-3 bg-slate-700/30 rounded-lg">
-                            <span className="text-slate-400">Months Remaining</span>
-                            <span className="font-bold text-white">{monthsRemaining}</span>
+                          <div className="flex justify-between items-center p-4 bg-slate-700/50 rounded-xl">
+                            <span className="text-white font-medium">YTD Net Cash Flow</span>
+                            <span className={`text-xl font-bold ${ytdNet >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(ytdNet)}</span>
                           </div>
-                          <div className="flex justify-between items-center p-4 bg-violet-600/20 border border-violet-500/30 rounded-xl">
-                            <span className="text-violet-300 font-medium">Projected EOY Profit</span>
-                            <span className={`text-2xl font-bold ${projectedEOY >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(projectedEOY)}</span>
+                          {lastYearSamePeriod.length > 0 && lastYearNet !== 0 && (
+                            <div className="flex justify-between items-center p-3 bg-slate-700/30 rounded-lg">
+                              <span className="text-slate-400">vs Same Period Last Year</span>
+                              <span className={`font-medium flex items-center gap-1 ${yoyChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {yoyChange >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                                {yoyChange >= 0 ? '+' : ''}{yoyChange.toFixed(1)}%
+                              </span>
+                            </div>
+                          )}
+                          <div className="p-3 bg-amber-900/20 border border-amber-500/30 rounded-lg">
+                            <p className="text-amber-400 text-xs">
+                              ⚠️ <strong>Note:</strong> Cash flow ≠ profit. Income deposits include revenue minus marketplace fees, not COGS. 
+                              For true profit analysis, see your Sales data.
+                            </p>
                           </div>
                         </div>
                       );
