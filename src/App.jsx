@@ -6015,15 +6015,49 @@ Respond with ONLY this JSON:
         };
       });
       
-      // Calculate key metrics for baseline
-      const avgWeeklyRevenue = weeklyHistory.length > 0 
-        ? weeklyHistory.reduce((sum, w) => sum + w.revenue, 0) / weeklyHistory.length : 0;
-      const avgWeeklyProfit = weeklyHistory.length > 0
-        ? weeklyHistory.reduce((sum, w) => sum + w.profit, 0) / weeklyHistory.length : 0;
-      const avgWeeklyUnits = weeklyHistory.length > 0
-        ? weeklyHistory.reduce((sum, w) => sum + w.units, 0) / weeklyHistory.length : 0;
-      const avgDailyRevenue = dailyHistory.length > 0
-        ? dailyHistory.reduce((sum, d) => sum + d.revenue, 0) / dailyHistory.length : 0;
+      // Calculate key metrics for baseline - EXCLUDE ZERO REVENUE WEEKS
+      // Filter to only weeks with actual revenue > $100 (to exclude placeholder/empty weeks)
+      const activeWeeks = weeklyHistory.filter(w => w.revenue > 100);
+      const activeDays = dailyHistory.filter(d => d.revenue > 0);
+      
+      // Calculate averages from ACTIVE data only
+      const avgWeeklyRevenue = activeWeeks.length > 0 
+        ? activeWeeks.reduce((sum, w) => sum + w.revenue, 0) / activeWeeks.length : 0;
+      const avgWeeklyProfit = activeWeeks.length > 0
+        ? activeWeeks.reduce((sum, w) => sum + w.profit, 0) / activeWeeks.length : 0;
+      const avgWeeklyUnits = activeWeeks.length > 0
+        ? activeWeeks.reduce((sum, w) => sum + w.units, 0) / activeWeeks.length : 0;
+      const avgDailyRevenue = activeDays.length > 0
+        ? activeDays.reduce((sum, d) => sum + d.revenue, 0) / activeDays.length : 0;
+      const avgDailyProfit = activeDays.length > 0
+        ? activeDays.reduce((sum, d) => sum + d.profit, 0) / activeDays.length : 0;
+      const avgDailyUnits = activeDays.length > 0
+        ? activeDays.reduce((sum, d) => sum + d.units, 0) / activeDays.length : 0;
+      
+      // Calculate weekly estimate from daily data (more accurate if we have recent daily data)
+      const weeklyFromDaily = avgDailyRevenue * 7;
+      const weeklyProfitFromDaily = avgDailyProfit * 7;
+      const weeklyUnitsFromDaily = avgDailyUnits * 7;
+      
+      // If we have recent daily data (last 7 days), prefer that over weekly averages
+      const recentDays = activeDays.slice(-7);
+      const hasRecentDailyData = recentDays.length >= 5;
+      
+      // Use weighted average: 70% daily-based if recent, 30% weekly
+      let effectiveWeeklyRevenue, effectiveWeeklyProfit, effectiveWeeklyUnits;
+      if (hasRecentDailyData && weeklyFromDaily > 0) {
+        effectiveWeeklyRevenue = weeklyFromDaily * 0.7 + avgWeeklyRevenue * 0.3;
+        effectiveWeeklyProfit = weeklyProfitFromDaily * 0.7 + avgWeeklyProfit * 0.3;
+        effectiveWeeklyUnits = weeklyUnitsFromDaily * 0.7 + avgWeeklyUnits * 0.3;
+      } else if (avgWeeklyRevenue > 0) {
+        effectiveWeeklyRevenue = avgWeeklyRevenue;
+        effectiveWeeklyProfit = avgWeeklyProfit;
+        effectiveWeeklyUnits = avgWeeklyUnits;
+      } else {
+        effectiveWeeklyRevenue = weeklyFromDaily;
+        effectiveWeeklyProfit = weeklyProfitFromDaily;
+        effectiveWeeklyUnits = weeklyUnitsFromDaily;
+      }
       
       // Past predictions for learning
       const pastPredictions = aiLearningHistory.predictions
@@ -6034,20 +6068,20 @@ Respond with ONLY this JSON:
       let baselineRevenue, baselineProfit, baselineUnits;
       if (period === 'tomorrow') {
         baselineRevenue = avgDailyRevenue;
-        baselineProfit = avgWeeklyProfit / 7;
-        baselineUnits = avgWeeklyUnits / 7;
+        baselineProfit = avgDailyProfit;
+        baselineUnits = avgDailyUnits;
       } else if (period === 'week') {
-        baselineRevenue = avgWeeklyRevenue;
-        baselineProfit = avgWeeklyProfit;
-        baselineUnits = avgWeeklyUnits;
+        baselineRevenue = effectiveWeeklyRevenue;
+        baselineProfit = effectiveWeeklyProfit;
+        baselineUnits = effectiveWeeklyUnits;
       } else if (period === 'month') {
-        baselineRevenue = avgWeeklyRevenue * 4.33;
-        baselineProfit = avgWeeklyProfit * 4.33;
-        baselineUnits = avgWeeklyUnits * 4.33;
+        baselineRevenue = effectiveWeeklyRevenue * 4.33;
+        baselineProfit = effectiveWeeklyProfit * 4.33;
+        baselineUnits = effectiveWeeklyUnits * 4.33;
       } else { // quarter
-        baselineRevenue = avgWeeklyRevenue * 13;
-        baselineProfit = avgWeeklyProfit * 13;
-        baselineUnits = avgWeeklyUnits * 13;
+        baselineRevenue = effectiveWeeklyRevenue * 13;
+        baselineProfit = effectiveWeeklyProfit * 13;
+        baselineUnits = effectiveWeeklyUnits * 13;
       }
       
       const prompt = `You are an expert e-commerce sales forecaster. Analyze this data and predict sales.
@@ -6058,18 +6092,18 @@ CRITICAL: Base your prediction on the ACTUAL historical data. Do NOT make up num
 
 ## TODAY'S DATE: ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 
-## KEY BASELINES (USE THESE - they are calculated from actual data)
-- Average Weekly Revenue: $${avgWeeklyRevenue.toFixed(2)}
-- Average Weekly Profit: $${avgWeeklyProfit.toFixed(2)}
-- Average Weekly Units: ${avgWeeklyUnits.toFixed(0)}
-- Average Daily Revenue: $${avgDailyRevenue.toFixed(2)}
-- EXPECTED BASELINE FOR ${period.toUpperCase()}: $${baselineRevenue.toFixed(2)} revenue, $${baselineProfit.toFixed(2)} profit, ${baselineUnits.toFixed(0)} units
+## KEY BASELINES (calculated from ACTIVE data only - zero-revenue weeks excluded)
+- Average Daily Revenue (last 30 days): $${avgDailyRevenue.toFixed(2)}/day
+- Weekly estimate from daily data: $${weeklyFromDaily.toFixed(2)}/week
+- Average from active weeks (${activeWeeks.length} weeks with sales): $${avgWeeklyRevenue.toFixed(2)}/week
+- **EFFECTIVE WEEKLY BASELINE**: $${effectiveWeeklyRevenue.toFixed(2)} (${hasRecentDailyData ? '70% daily-based, 30% weekly' : 'weekly average'})
+- EXPECTED BASELINE FOR ${period.toUpperCase()}: $${baselineRevenue.toFixed(2)} revenue, $${baselineProfit.toFixed(2)} profit, ${Math.round(baselineUnits)} units
 
-## WEEKLY HISTORY (${weeklyHistory.length} weeks)
-${JSON.stringify(weeklyHistory, null, 2)}
+## RECENT DAILY PERFORMANCE (MOST RELIABLE - ${activeDays.length} active days)
+${JSON.stringify(dailyHistory.slice(-14), null, 2)}
 
-## DAILY HISTORY (${dailyHistory.length} days)
-${JSON.stringify(dailyHistory, null, 2)}
+## WEEKLY HISTORY (${activeWeeks.length} active weeks out of ${weeklyHistory.length} total)
+${JSON.stringify(activeWeeks.slice(-8), null, 2)}
 
 ## PAST AI PREDICTIONS VS ACTUALS (for learning)
 ${pastPredictions.length > 0 ? JSON.stringify(pastPredictions, null, 2) : 'No past predictions yet'}
@@ -6079,10 +6113,11 @@ Revenue Correction: ${forecastCorrections.overall?.revenue?.toFixed(3) || 1}x
 Confidence: ${forecastCorrections.confidence?.toFixed(1) || 0}%
 
 RULES:
-1. Your "expected" prediction should be very close to the baseline of $${baselineRevenue.toFixed(0)}
-2. "low" should be ~20% below baseline, "high" should be ~20% above
-3. Only deviate significantly if there's a clear trend in the data
-4. Look at the actual weekly/daily numbers - they show real performance
+1. PRIORITIZE recent daily data over older weekly data
+2. Your "expected" prediction should be very close to the baseline of $${baselineRevenue.toFixed(0)}
+3. "low" should be ~20% below baseline, "high" should be ~20% above
+4. Only deviate significantly if there's a clear trend in the RECENT data
+5. Ignore weeks with zero or near-zero revenue (they represent data gaps, not actual performance)
 
 Respond with ONLY this JSON:
 {
@@ -18906,6 +18941,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     // Data availability
     const sortedWeeks = Object.keys(allWeeksData).sort();
     const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
+    const activeWeeksCount = sortedWeeks.filter(w => (allWeeksData[w]?.total?.revenue || 0) > 100).length;
     const hasEnoughData = sortedWeeks.length >= 4 || sortedDays.length >= 14;
     
     // Learning stats
@@ -19010,7 +19046,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     <h3 className="text-xl font-semibold text-white">
                       {forecastPeriod === 'tomorrow' ? "Tomorrow's" : forecastPeriod === 'week' ? 'This Week' : forecastPeriod === 'month' ? 'This Month' : 'This Quarter'} Sales Forecast
                     </h3>
-                    <p className="text-slate-400 text-sm">AI prediction using {sortedWeeks.length} weeks + {sortedDays.length} days of historical data</p>
+                    <p className="text-slate-400 text-sm">AI prediction using {activeWeeksCount} active weeks + {sortedDays.length} days of sales data</p>
                   </div>
                   <button 
                     onClick={() => generateSalesForecastAI(forecastPeriod)}
