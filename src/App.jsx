@@ -1128,10 +1128,11 @@ const handleLogout = async () => {
   const [bankingFile, setBankingFile] = useState(null);
   const [bankingProcessing, setBankingProcessing] = useState(false);
   const [bankingDateRange, setBankingDateRange] = useState('month'); // 'week' | 'month' | 'quarter' | 'year' | 'all' | 'ytd'
-  const [bankingTab, setBankingTab] = useState('overview'); // 'overview' | 'income' | 'expenses' | 'accounts' | 'trends' | 'ai'
+  const [bankingTab, setBankingTab] = useState('overview'); // 'overview' | 'income' | 'expenses' | 'accounts' | 'trends' | 'ai' | 'cfo' | 'cards'
   const [bankingCategoryFilter, setBankingCategoryFilter] = useState('all');
   const [showBankingUpload, setShowBankingUpload] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState(null); // Transaction being edited
+  const [bankingDrilldown, setBankingDrilldown] = useState(null); // { category: string, type: 'expense'|'income' } for drill-down view
   const [skuDateRange, setSkuDateRange] = useState('all'); // 'all' | '4weeks' | 'ytd' | '2025' | '2024'
   
   // Sales Tax Management
@@ -23919,18 +23920,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               })()}
               
               {/* Tabs */}
-              <div className="flex gap-2 mb-6 border-b border-slate-700 pb-2">
+              <div className="flex gap-2 mb-6 border-b border-slate-700 pb-2 overflow-x-auto">
                 {[
                   { key: 'overview', label: 'Overview', icon: BarChart3 },
-                  { key: 'expenses', label: 'Expenses', icon: CreditCard },
+                  { key: 'cfo', label: 'CFO Dashboard', icon: Target },
+                  { key: 'cards', label: 'Credit Cards', icon: CreditCard },
+                  { key: 'expenses', label: 'Expenses', icon: TrendingDown },
                   { key: 'income', label: 'Income', icon: Wallet },
                   { key: 'trends', label: 'Trends', icon: TrendingUp },
                   { key: 'transactions', label: 'Transactions', icon: FileText },
                 ].map(tab => (
                   <button
                     key={tab.key}
-                    onClick={() => setBankingTab(tab.key)}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors ${
+                    onClick={() => { setBankingTab(tab.key); setBankingDrilldown(null); }}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors whitespace-nowrap ${
                       bankingTab === tab.key 
                         ? 'bg-green-600 text-white' 
                         : 'text-slate-400 hover:text-white hover:bg-slate-700'
@@ -23955,11 +23958,18 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       {topExpenseCategories.length === 0 ? (
                         <p className="text-slate-500 text-sm">No expenses in this period</p>
                       ) : topExpenseCategories.slice(0, 8).map(([cat, amount], i) => (
-                        <div key={cat} className="flex items-center gap-3">
+                        <div 
+                          key={cat} 
+                          className="flex items-center gap-3 cursor-pointer hover:bg-slate-700/30 rounded-lg p-1 -mx-1 transition-colors"
+                          onClick={() => { setBankingTab('expenses'); setBankingDrilldown({ category: cat, type: 'expense' }); }}
+                        >
                           <div className="w-6 text-slate-500 text-sm">{i + 1}</div>
                           <div className="flex-1">
                             <div className="flex justify-between text-sm mb-1">
-                              <span className="text-white truncate">{cat}</span>
+                              <span className="text-white truncate flex items-center gap-1">
+                                {cat}
+                                <ChevronRight className="w-3 h-3 text-slate-500" />
+                              </span>
                               <span className="text-rose-400 font-medium">{formatCurrency(amount)}</span>
                             </div>
                             <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
@@ -23984,11 +23994,18 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       {topIncomeCategories.length === 0 ? (
                         <p className="text-slate-500 text-sm">No income in this period</p>
                       ) : topIncomeCategories.slice(0, 8).map(([cat, amount], i) => (
-                        <div key={cat} className="flex items-center gap-3">
+                        <div 
+                          key={cat} 
+                          className="flex items-center gap-3 cursor-pointer hover:bg-slate-700/30 rounded-lg p-1 -mx-1 transition-colors"
+                          onClick={() => { setBankingTab('income'); setBankingDrilldown({ category: cat, type: 'income' }); }}
+                        >
                           <div className="w-6 text-slate-500 text-sm">{i + 1}</div>
                           <div className="flex-1">
                             <div className="flex justify-between text-sm mb-1">
-                              <span className="text-white truncate">{cat}</span>
+                              <span className="text-white truncate flex items-center gap-1">
+                                {cat}
+                                <ChevronRight className="w-3 h-3 text-slate-500" />
+                              </span>
                               <span className="text-emerald-400 font-medium">{formatCurrency(amount)}</span>
                             </div>
                             <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
@@ -24055,102 +24072,204 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Expenses Tab */}
               {bankingTab === 'expenses' && (
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold text-white">Expenses — {periodLabel}</h3>
-                    <span className="text-slate-400 text-sm">{topExpenseCategories.length} categories</span>
-                  </div>
-                  <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
-                    <table className="w-full text-sm">
-                      <thead className="sticky top-0 bg-slate-800">
-                        <tr className="border-b border-slate-700">
-                          <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
-                          <th className="text-right text-slate-400 font-medium py-2 px-2">Total</th>
-                          <th className="text-right text-slate-400 font-medium py-2 px-2">% of Expenses</th>
-                          <th className="text-right text-slate-400 font-medium py-2 px-2">Txns</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {topExpenseCategories.map(([cat, amount]) => {
-                          const pct = (amount / totalExpenses) * 100;
-                          const count = filteredTxns.filter(t => t.isExpense && t.topCategory === cat).length;
-                          return (
-                            <tr key={cat} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                              <td className="py-2 px-2 text-white">{cat}</td>
-                              <td className="py-2 px-2 text-right text-rose-400 font-medium">{formatCurrency(amount)}</td>
-                              <td className="py-2 px-2 text-right">
-                                <div className="flex items-center justify-end gap-2">
-                                  <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                                    <div className="h-full bg-rose-500" style={{ width: `${pct}%` }} />
-                                  </div>
-                                  <span className="text-slate-400 w-12 text-right">{pct.toFixed(1)}%</span>
-                                </div>
-                              </td>
-                              <td className="py-2 px-2 text-right text-slate-400">{count}</td>
+                  {/* Drill-down view */}
+                  {bankingDrilldown && bankingDrilldown.type === 'expense' ? (
+                    <>
+                      <div className="flex items-center justify-between mb-4">
+                        <button 
+                          onClick={() => setBankingDrilldown(null)}
+                          className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors"
+                        >
+                          <ChevronLeft className="w-5 h-5" />
+                          <span className="text-lg font-semibold text-white">{bankingDrilldown.category}</span>
+                        </button>
+                        <span className="text-rose-400 font-bold text-lg">
+                          {formatCurrency(expensesByCategory[bankingDrilldown.category] || 0)}
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-slate-800">
+                            <tr className="border-b border-slate-700">
+                              <th className="text-left text-slate-400 font-medium py-2 px-2">Date</th>
+                              <th className="text-left text-slate-400 font-medium py-2 px-2">Description</th>
+                              <th className="text-left text-slate-400 font-medium py-2 px-2">Account</th>
+                              <th className="text-right text-slate-400 font-medium py-2 px-2">Amount</th>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                      <tfoot>
-                        <tr className="border-t-2 border-slate-600">
-                          <td className="py-2 px-2 font-bold text-white">Total</td>
-                          <td className="py-2 px-2 text-right font-bold text-rose-400">{formatCurrency(totalExpenses)}</td>
-                          <td className="py-2 px-2 text-right text-slate-400">100%</td>
-                          <td className="py-2 px-2 text-right text-slate-400">{filteredTxns.filter(t => t.isExpense).length}</td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
+                          </thead>
+                          <tbody>
+                            {filteredTxns
+                              .filter(t => t.isExpense && t.topCategory === bankingDrilldown.category)
+                              .map((txn, i) => (
+                                <tr key={txn.id || i} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                  <td className="py-2 px-2 text-slate-400 whitespace-nowrap">{txn.date}</td>
+                                  <td className="py-2 px-2 text-white">{txn.name}</td>
+                                  <td className="py-2 px-2 text-slate-400 text-xs">{txn.account?.split('(')[0]?.trim() || '-'}</td>
+                                  <td className="py-2 px-2 text-right text-rose-400 font-medium">{formatCurrency(txn.amount)}</td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-white">Expenses — {periodLabel}</h3>
+                        <span className="text-slate-400 text-sm">{topExpenseCategories.length} categories • Click to drill down</span>
+                      </div>
+                      <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-slate-800">
+                            <tr className="border-b border-slate-700">
+                              <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
+                              <th className="text-right text-slate-400 font-medium py-2 px-2">Total</th>
+                              <th className="text-right text-slate-400 font-medium py-2 px-2">% of Expenses</th>
+                              <th className="text-right text-slate-400 font-medium py-2 px-2">Txns</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {topExpenseCategories.map(([cat, amount]) => {
+                              const pct = (amount / totalExpenses) * 100;
+                              const count = filteredTxns.filter(t => t.isExpense && t.topCategory === cat).length;
+                              return (
+                                <tr 
+                                  key={cat} 
+                                  className="border-b border-slate-700/50 hover:bg-slate-700/30 cursor-pointer"
+                                  onClick={() => setBankingDrilldown({ category: cat, type: 'expense' })}
+                                >
+                                  <td className="py-2 px-2 text-white flex items-center gap-2">
+                                    {cat}
+                                    <ChevronRight className="w-4 h-4 text-slate-500" />
+                                  </td>
+                                  <td className="py-2 px-2 text-right text-rose-400 font-medium">{formatCurrency(amount)}</td>
+                                  <td className="py-2 px-2 text-right">
+                                    <div className="flex items-center justify-end gap-2">
+                                      <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                        <div className="h-full bg-rose-500" style={{ width: `${pct}%` }} />
+                                      </div>
+                                      <span className="text-slate-400 w-12 text-right">{pct.toFixed(1)}%</span>
+                                    </div>
+                                  </td>
+                                  <td className="py-2 px-2 text-right text-slate-400">{count}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 border-slate-600">
+                              <td className="py-2 px-2 font-bold text-white">Total</td>
+                              <td className="py-2 px-2 text-right font-bold text-rose-400">{formatCurrency(totalExpenses)}</td>
+                              <td className="py-2 px-2 text-right text-slate-400">100%</td>
+                              <td className="py-2 px-2 text-right text-slate-400">{filteredTxns.filter(t => t.isExpense).length}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               
               {/* Income Tab */}
               {bankingTab === 'income' && (
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold text-white">Income — {periodLabel}</h3>
-                    <span className="text-slate-400 text-sm">{topIncomeCategories.length} sources</span>
-                  </div>
-                  <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
-                    <table className="w-full text-sm">
-                      <thead className="sticky top-0 bg-slate-800">
-                        <tr className="border-b border-slate-700">
-                          <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
-                          <th className="text-right text-slate-400 font-medium py-2 px-2">Total</th>
-                          <th className="text-right text-slate-400 font-medium py-2 px-2">% of Income</th>
-                          <th className="text-right text-slate-400 font-medium py-2 px-2">Txns</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {topIncomeCategories.map(([cat, amount]) => {
-                          const pct = (amount / totalIncome) * 100;
-                          const count = filteredTxns.filter(t => t.isIncome && t.topCategory === cat).length;
-                          return (
-                            <tr key={cat} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                              <td className="py-2 px-2 text-white">{cat}</td>
-                              <td className="py-2 px-2 text-right text-emerald-400 font-medium">{formatCurrency(amount)}</td>
-                              <td className="py-2 px-2 text-right">
-                                <div className="flex items-center justify-end gap-2">
-                                  <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                                    <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
-                                  </div>
-                                  <span className="text-slate-400 w-12 text-right">{pct.toFixed(1)}%</span>
-                                </div>
-                              </td>
-                              <td className="py-2 px-2 text-right text-slate-400">{count}</td>
+                  {/* Drill-down view */}
+                  {bankingDrilldown && bankingDrilldown.type === 'income' ? (
+                    <>
+                      <div className="flex items-center justify-between mb-4">
+                        <button 
+                          onClick={() => setBankingDrilldown(null)}
+                          className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors"
+                        >
+                          <ChevronLeft className="w-5 h-5" />
+                          <span className="text-lg font-semibold text-white">{bankingDrilldown.category}</span>
+                        </button>
+                        <span className="text-emerald-400 font-bold text-lg">
+                          {formatCurrency(incomeByCategory[bankingDrilldown.category] || 0)}
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-slate-800">
+                            <tr className="border-b border-slate-700">
+                              <th className="text-left text-slate-400 font-medium py-2 px-2">Date</th>
+                              <th className="text-left text-slate-400 font-medium py-2 px-2">Description</th>
+                              <th className="text-left text-slate-400 font-medium py-2 px-2">Account</th>
+                              <th className="text-right text-slate-400 font-medium py-2 px-2">Amount</th>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                      <tfoot>
-                        <tr className="border-t-2 border-slate-600">
-                          <td className="py-2 px-2 font-bold text-white">Total</td>
-                          <td className="py-2 px-2 text-right font-bold text-emerald-400">{formatCurrency(totalIncome)}</td>
-                          <td className="py-2 px-2 text-right text-slate-400">100%</td>
-                          <td className="py-2 px-2 text-right text-slate-400">{filteredTxns.filter(t => t.isIncome).length}</td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
+                          </thead>
+                          <tbody>
+                            {filteredTxns
+                              .filter(t => t.isIncome && t.topCategory === bankingDrilldown.category)
+                              .map((txn, i) => (
+                                <tr key={txn.id || i} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                  <td className="py-2 px-2 text-slate-400 whitespace-nowrap">{txn.date}</td>
+                                  <td className="py-2 px-2 text-white">{txn.name}</td>
+                                  <td className="py-2 px-2 text-slate-400 text-xs">{txn.account?.split('(')[0]?.trim() || '-'}</td>
+                                  <td className="py-2 px-2 text-right text-emerald-400 font-medium">{formatCurrency(txn.amount)}</td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-white">Income — {periodLabel}</h3>
+                        <span className="text-slate-400 text-sm">{topIncomeCategories.length} sources • Click to drill down</span>
+                      </div>
+                      <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-slate-800">
+                            <tr className="border-b border-slate-700">
+                              <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
+                              <th className="text-right text-slate-400 font-medium py-2 px-2">Total</th>
+                              <th className="text-right text-slate-400 font-medium py-2 px-2">% of Income</th>
+                              <th className="text-right text-slate-400 font-medium py-2 px-2">Txns</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {topIncomeCategories.map(([cat, amount]) => {
+                              const pct = (amount / totalIncome) * 100;
+                              const count = filteredTxns.filter(t => t.isIncome && t.topCategory === cat).length;
+                              return (
+                                <tr 
+                                  key={cat} 
+                                  className="border-b border-slate-700/50 hover:bg-slate-700/30 cursor-pointer"
+                                  onClick={() => setBankingDrilldown({ category: cat, type: 'income' })}
+                                >
+                                  <td className="py-2 px-2 text-white flex items-center gap-2">
+                                    {cat}
+                                    <ChevronRight className="w-4 h-4 text-slate-500" />
+                                  </td>
+                                  <td className="py-2 px-2 text-right text-emerald-400 font-medium">{formatCurrency(amount)}</td>
+                                  <td className="py-2 px-2 text-right">
+                                    <div className="flex items-center justify-end gap-2">
+                                      <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                        <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
+                                      </div>
+                                      <span className="text-slate-400 w-12 text-right">{pct.toFixed(1)}%</span>
+                                    </div>
+                                  </td>
+                                  <td className="py-2 px-2 text-right text-slate-400">{count}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 border-slate-600">
+                              <td className="py-2 px-2 font-bold text-white">Total</td>
+                              <td className="py-2 px-2 text-right font-bold text-emerald-400">{formatCurrency(totalIncome)}</td>
+                              <td className="py-2 px-2 text-right text-slate-400">100%</td>
+                              <td className="py-2 px-2 text-right text-slate-400">{filteredTxns.filter(t => t.isIncome).length}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               
@@ -24399,6 +24518,443 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   </div>
                 </div>
               )}
+              
+              {/* CFO Dashboard Tab */}
+              {bankingTab === 'cfo' && (() => {
+                // Calculate CFO metrics
+                const currentMonth = now.toISOString().slice(0, 7);
+                const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
+                const twoMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().slice(0, 7);
+                
+                const currentMonthData = monthlySnapshots[currentMonth] || { income: 0, expenses: 0, net: 0 };
+                const lastMonthData = monthlySnapshots[lastMonth] || { income: 0, expenses: 0, net: 0 };
+                const twoMonthsAgoData = monthlySnapshots[twoMonthsAgo] || { income: 0, expenses: 0, net: 0 };
+                
+                // Operating metrics
+                const grossMargin = currentMonthData.income > 0 
+                  ? ((currentMonthData.income - (expensesByCategory['Cost of goods sold'] || 0)) / currentMonthData.income * 100) 
+                  : 0;
+                const operatingMargin = currentMonthData.income > 0 
+                  ? (currentMonthData.net / currentMonthData.income * 100) 
+                  : 0;
+                  
+                // Burn rate (avg monthly expenses over last 3 months)
+                const last3Months = monthKeys.slice(-3);
+                const avgMonthlyExpenses = last3Months.length > 0 
+                  ? last3Months.reduce((s, m) => s + (monthlySnapshots[m]?.expenses || 0), 0) / last3Months.length 
+                  : 0;
+                
+                // Runway calculation
+                const realAccts = Object.entries(bankingData.accounts || {}).filter(([name, _]) => 
+                  /\(\d{4}\)\s*-\s*\d+$/.test(name) && !name.includes('"') && name.length <= 60
+                );
+                const totalCash = realAccts.filter(([_, a]) => a.type !== 'credit_card').reduce((s, [_, a]) => s + (a.balance || 0), 0);
+                const runwayMonths = avgMonthlyExpenses > 0 ? totalCash / avgMonthlyExpenses : Infinity;
+                
+                // MoM growth
+                const revenueMoM = lastMonthData.income > 0 
+                  ? ((currentMonthData.income - lastMonthData.income) / lastMonthData.income * 100) 
+                  : 0;
+                const expenseMoM = lastMonthData.expenses > 0 
+                  ? ((currentMonthData.expenses - lastMonthData.expenses) / lastMonthData.expenses * 100) 
+                  : 0;
+                
+                // Expense efficiency (operating expenses / revenue)
+                const opexRatio = currentMonthData.income > 0 
+                  ? ((currentMonthData.expenses - (expensesByCategory['Cost of goods sold'] || 0)) / currentMonthData.income * 100) 
+                  : 0;
+                
+                // YTD calculations
+                const currentYear = now.getFullYear();
+                const ytdMonths = monthKeys.filter(m => m.startsWith(String(currentYear)));
+                const ytdIncome = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.income || 0), 0);
+                const ytdExpenses = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.expenses || 0), 0);
+                const ytdNet = ytdIncome - ytdExpenses;
+                
+                // AI Profit Forecast - project year-end based on current trends
+                const monthsRemaining = 12 - (now.getMonth() + 1);
+                const avgMonthlyNet = ytdMonths.length > 0 ? ytdNet / ytdMonths.length : 0;
+                const projectedYearEndProfit = ytdNet + (avgMonthlyNet * monthsRemaining);
+                
+                // Trend-adjusted forecast (weighted more recent months higher)
+                const recentMonths = ytdMonths.slice(-3);
+                const recentAvgNet = recentMonths.length > 0 
+                  ? recentMonths.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0) / recentMonths.length 
+                  : avgMonthlyNet;
+                const trendAdjustedForecast = ytdNet + (recentAvgNet * monthsRemaining);
+                
+                return (
+                  <div className="space-y-6">
+                    {/* Key Performance Indicators */}
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                      <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                        <Target className="w-5 h-5 text-violet-400" />
+                        Key Performance Indicators — {new Date(currentMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                      </h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-slate-700/50 rounded-lg p-4">
+                          <p className="text-slate-400 text-xs mb-1">Operating Margin</p>
+                          <p className={`text-2xl font-bold ${operatingMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {operatingMargin.toFixed(1)}%
+                          </p>
+                          <p className="text-slate-500 text-xs">Net / Revenue</p>
+                        </div>
+                        <div className="bg-slate-700/50 rounded-lg p-4">
+                          <p className="text-slate-400 text-xs mb-1">OpEx Ratio</p>
+                          <p className={`text-2xl font-bold ${opexRatio <= 50 ? 'text-emerald-400' : opexRatio <= 70 ? 'text-amber-400' : 'text-rose-400'}`}>
+                            {opexRatio.toFixed(1)}%
+                          </p>
+                          <p className="text-slate-500 text-xs">Operating Exp / Revenue</p>
+                        </div>
+                        <div className="bg-slate-700/50 rounded-lg p-4">
+                          <p className="text-slate-400 text-xs mb-1">Revenue MoM</p>
+                          <p className={`text-2xl font-bold flex items-center gap-1 ${revenueMoM >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {revenueMoM >= 0 ? '+' : ''}{revenueMoM.toFixed(1)}%
+                            {revenueMoM >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                          </p>
+                          <p className="text-slate-500 text-xs">vs Last Month</p>
+                        </div>
+                        <div className="bg-slate-700/50 rounded-lg p-4">
+                          <p className="text-slate-400 text-xs mb-1">Cash Runway</p>
+                          <p className={`text-2xl font-bold ${runwayMonths >= 6 ? 'text-emerald-400' : runwayMonths >= 3 ? 'text-amber-400' : 'text-rose-400'}`}>
+                            {runwayMonths === Infinity ? '∞' : `${runwayMonths.toFixed(1)}mo`}
+                          </p>
+                          <p className="text-slate-500 text-xs">At current burn rate</p>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* AI Profit Forecast */}
+                    <div className="bg-gradient-to-r from-violet-900/30 to-indigo-900/30 rounded-xl border border-violet-500/30 p-5">
+                      <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                        <Brain className="w-5 h-5 text-violet-400" />
+                        AI Year-End Profit Forecast — {currentYear}
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                        <div className="bg-slate-800/50 rounded-lg p-4">
+                          <p className="text-slate-400 text-xs mb-1">YTD Actual</p>
+                          <p className={`text-2xl font-bold ${ytdNet >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {formatCurrency(ytdNet)}
+                          </p>
+                          <p className="text-slate-500 text-xs">{ytdMonths.length} months completed</p>
+                        </div>
+                        <div className="bg-slate-800/50 rounded-lg p-4">
+                          <p className="text-slate-400 text-xs mb-1">Linear Projection</p>
+                          <p className={`text-2xl font-bold ${projectedYearEndProfit >= 0 ? 'text-cyan-400' : 'text-rose-400'}`}>
+                            {formatCurrency(projectedYearEndProfit)}
+                          </p>
+                          <p className="text-slate-500 text-xs">Based on avg monthly</p>
+                        </div>
+                        <div className="bg-slate-800/50 rounded-lg p-4 border border-violet-500/30">
+                          <p className="text-violet-400 text-xs mb-1">🤖 AI Trend Forecast</p>
+                          <p className={`text-2xl font-bold ${trendAdjustedForecast >= 0 ? 'text-violet-400' : 'text-rose-400'}`}>
+                            {formatCurrency(trendAdjustedForecast)}
+                          </p>
+                          <p className="text-slate-500 text-xs">Weighted recent trends</p>
+                        </div>
+                      </div>
+                      <div className="bg-slate-800/30 rounded-lg p-3">
+                        <p className="text-slate-400 text-sm">
+                          <span className="text-violet-400 font-medium">📊 Forecast Methodology:</span> AI analyzes your last 3 months' performance trends and weights them higher than older data. 
+                          With {monthsRemaining} months remaining, your recent average monthly net of {formatCurrency(recentAvgNet)} projects to {formatCurrency(trendAdjustedForecast)} by year-end.
+                          {trendAdjustedForecast > projectedYearEndProfit 
+                            ? " 📈 Recent performance is trending above your year average!" 
+                            : trendAdjustedForecast < projectedYearEndProfit 
+                              ? " 📉 Recent performance is below your year average — may need attention."
+                              : ""}
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {/* Cash Flow Analysis */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                        <h3 className="text-lg font-semibold text-white mb-4">Burn Rate Analysis</h3>
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-center p-3 bg-slate-700/30 rounded-lg">
+                            <span className="text-slate-400">Avg Monthly Expenses</span>
+                            <span className="font-bold text-rose-400">{formatCurrency(avgMonthlyExpenses)}</span>
+                          </div>
+                          <div className="flex justify-between items-center p-3 bg-slate-700/30 rounded-lg">
+                            <span className="text-slate-400">Expense Growth MoM</span>
+                            <span className={`font-bold flex items-center gap-1 ${expenseMoM <= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {expenseMoM >= 0 ? '+' : ''}{expenseMoM.toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center p-3 bg-slate-700/30 rounded-lg">
+                            <span className="text-slate-400">Cash Position</span>
+                            <span className="font-bold text-emerald-400">{formatCurrency(totalCash)}</span>
+                          </div>
+                          <div className="flex justify-between items-center p-3 bg-slate-700/30 rounded-lg">
+                            <span className="text-slate-400">Runway</span>
+                            <span className={`font-bold ${runwayMonths >= 6 ? 'text-emerald-400' : runwayMonths >= 3 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {runwayMonths === Infinity ? 'Profitable' : `${runwayMonths.toFixed(1)} months`}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                        <h3 className="text-lg font-semibold text-white mb-4">Expense Breakdown (This Month)</h3>
+                        <div className="space-y-2">
+                          {topExpenseCategories.slice(0, 6).map(([cat, amount]) => {
+                            const pct = totalExpenses > 0 ? (amount / totalExpenses * 100) : 0;
+                            return (
+                              <div key={cat} className="flex items-center gap-2">
+                                <div className="flex-1">
+                                  <div className="flex justify-between text-sm mb-1">
+                                    <span className="text-slate-300 truncate">{cat}</span>
+                                    <span className="text-slate-400">{formatCurrency(amount)}</span>
+                                  </div>
+                                  <div className="w-full h-1 bg-slate-700 rounded-full overflow-hidden">
+                                    <div className="h-full bg-rose-500/60 rounded-full" style={{ width: `${pct}%` }} />
+                                  </div>
+                                </div>
+                                <span className="text-slate-500 text-xs w-12 text-right">{pct.toFixed(0)}%</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+              
+              {/* Credit Cards Tab */}
+              {bankingTab === 'cards' && (() => {
+                // Get credit card accounts
+                const realAccts = Object.entries(bankingData.accounts || {}).filter(([name, _]) => 
+                  /\(\d{4}\)\s*-\s*\d+$/.test(name) && !name.includes('"') && name.length <= 60
+                );
+                const creditAccts = realAccts.filter(([_, a]) => a.type === 'credit_card');
+                
+                // Get credit card transactions grouped by card
+                const cardTransactions = {};
+                creditAccts.forEach(([name, _]) => {
+                  cardTransactions[name] = sortedTxns.filter(t => t.account === name && t.isExpense);
+                });
+                
+                // Determine card type and calculate optimal payment dates
+                const getCardAnalysis = (cardName, txns) => {
+                  const isAmexPlatinum = cardName.toLowerCase().includes('platinum');
+                  const isAmexPrime = cardName.toLowerCase().includes('prime') || cardName.toLowerCase().includes('amazon');
+                  const isAmex = cardName.toLowerCase().includes('amex') || cardName.toLowerCase().includes('american express') || isAmexPlatinum || isAmexPrime;
+                  
+                  // Group transactions by statement period (approximate)
+                  // Amex Business cards: Statement closes monthly, payment due 25 days after statement close
+                  // For Amex Platinum: "Please Pay By" is suggested, actual due date is ~2 weeks later
+                  
+                  const now = new Date();
+                  const pendingCharges = txns.filter(t => {
+                    const txnDate = new Date(t.date);
+                    const daysSinceTxn = (now - txnDate) / (1000 * 60 * 60 * 24);
+                    return daysSinceTxn < 60; // Last 60 days of charges
+                  });
+                  
+                  // Calculate payment windows for each charge
+                  const chargeAnalysis = pendingCharges.map(t => {
+                    const txnDate = new Date(t.date);
+                    
+                    // Estimate statement close (typically end of month or fixed date)
+                    // For simplicity, assume statement closes on the last day of the month
+                    const statementCloseDate = new Date(txnDate.getFullYear(), txnDate.getMonth() + 1, 0);
+                    
+                    // Payment due date: 25 days after statement close for Amex
+                    const paymentDueDate = new Date(statementCloseDate);
+                    paymentDueDate.setDate(paymentDueDate.getDate() + 25);
+                    
+                    // Optimal pay date: 5 days before due date to avoid interest
+                    const optimalPayDate = new Date(paymentDueDate);
+                    optimalPayDate.setDate(optimalPayDate.getDate() - 5);
+                    
+                    // For Amex Platinum: actual due date is ~14 days after "Please Pay By" date
+                    // So the real due date is statement close + 25 days + 14 days ≈ 39 days
+                    const amexPlatinumRealDueDate = isAmexPlatinum 
+                      ? new Date(statementCloseDate.getTime() + (39 * 24 * 60 * 60 * 1000))
+                      : paymentDueDate;
+                    const amexPlatinumOptimalPayDate = new Date(amexPlatinumRealDueDate);
+                    amexPlatinumOptimalPayDate.setDate(amexPlatinumOptimalPayDate.getDate() - 5);
+                    
+                    // For Amazon Business Prime: 90-day terms if selected
+                    const amazonPrimeMaxDate = isAmexPrime 
+                      ? new Date(txnDate.getTime() + (90 * 24 * 60 * 60 * 1000))
+                      : null;
+                    const amazonPrimeOptimalPayDate = amazonPrimeMaxDate 
+                      ? new Date(amazonPrimeMaxDate.getTime() - (5 * 24 * 60 * 60 * 1000))
+                      : null;
+                    
+                    return {
+                      ...t,
+                      statementCloseDate,
+                      standardDueDate: paymentDueDate,
+                      optimalPayDate: isAmexPlatinum ? amexPlatinumOptimalPayDate : optimalPayDate,
+                      realDueDate: isAmexPlatinum ? amexPlatinumRealDueDate : paymentDueDate,
+                      amazonPrimeMaxDate,
+                      amazonPrimeOptimalPayDate,
+                      daysUntilDue: Math.ceil((isAmexPlatinum ? amexPlatinumRealDueDate : paymentDueDate - now) / (1000 * 60 * 60 * 24)),
+                      isUrgent: (isAmexPlatinum ? amexPlatinumRealDueDate : paymentDueDate) <= new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000)),
+                    };
+                  });
+                  
+                  // Find the soonest payment needed
+                  const urgentCharges = chargeAnalysis.filter(c => c.isUrgent);
+                  const nextPaymentDue = chargeAnalysis.length > 0 
+                    ? chargeAnalysis.reduce((min, c) => c.realDueDate < min.realDueDate ? c : min)
+                    : null;
+                  
+                  // Total balance
+                  const balance = bankingData.accounts?.[cardName]?.balance || 0;
+                  
+                  return {
+                    cardName,
+                    isAmex,
+                    isAmexPlatinum,
+                    isAmexPrime,
+                    balance,
+                    charges: chargeAnalysis,
+                    urgentCharges,
+                    nextPaymentDue,
+                    totalPending: pendingCharges.reduce((s, t) => s + t.amount, 0),
+                  };
+                };
+                
+                const cardAnalyses = creditAccts.map(([name, _]) => getCardAnalysis(name, cardTransactions[name] || []));
+                
+                // Find next urgent payment across all cards
+                const allUrgentCharges = cardAnalyses.flatMap(c => c.urgentCharges);
+                const nextGlobalPayment = cardAnalyses.filter(c => c.nextPaymentDue).sort((a, b) => 
+                  a.nextPaymentDue.realDueDate - b.nextPaymentDue.realDueDate
+                )[0];
+                
+                return (
+                  <div className="space-y-6">
+                    {/* Payment Alert */}
+                    {allUrgentCharges.length > 0 && (
+                      <div className="bg-amber-900/30 border border-amber-500/50 rounded-xl p-4">
+                        <h3 className="text-lg font-semibold text-amber-400 mb-2 flex items-center gap-2">
+                          <AlertTriangle className="w-5 h-5" />
+                          Payment Due Soon
+                        </h3>
+                        <p className="text-amber-200">
+                          You have {allUrgentCharges.length} charges with payments due within 7 days.
+                          Pay by the optimal dates below to avoid interest while maximizing your cash flow.
+                        </p>
+                      </div>
+                    )}
+                    
+                    {/* Amex Card Rules Reference */}
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                      <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                        <HelpCircle className="w-5 h-5 text-cyan-400" />
+                        Amex Business Card Payment Rules
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="bg-slate-700/30 rounded-lg p-4 border-l-4 border-violet-500">
+                          <h4 className="font-semibold text-violet-400 mb-2">💳 Business Platinum</h4>
+                          <ul className="text-sm text-slate-300 space-y-1">
+                            <li>• "Please Pay By" date is NOT the due date</li>
+                            <li>• Actual due date is ~14 days AFTER "Please Pay By"</li>
+                            <li>• Pay in full by actual due date to avoid interest</li>
+                            <li>• Pay Over Time feature accrues interest from day 1</li>
+                            <li>• <span className="text-emerald-400">Optimal: Pay 5 days before actual due date</span></li>
+                          </ul>
+                        </div>
+                        <div className="bg-slate-700/30 rounded-lg p-4 border-l-4 border-amber-500">
+                          <h4 className="font-semibold text-amber-400 mb-2">📦 Business Prime (Amazon)</h4>
+                          <ul className="text-sm text-slate-300 space-y-1">
+                            <li>• Standard: 25-day grace period after statement</li>
+                            <li>• Optional: 90-day payment terms (no 5% back)</li>
+                            <li>• Choose 5% back OR 90-day terms per purchase</li>
+                            <li>• No interest if paid in full by due date</li>
+                            <li>• <span className="text-emerald-400">Optimal: Pay 5 days before due date</span></li>
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Card-by-Card Analysis */}
+                    {cardAnalyses.map(card => (
+                      <div key={card.cardName} className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                            <CreditCard className={`w-5 h-5 ${card.isAmexPlatinum ? 'text-violet-400' : card.isAmexPrime ? 'text-amber-400' : 'text-cyan-400'}`} />
+                            {card.cardName.split('(')[0].trim()}
+                            {card.isAmexPlatinum && <span className="text-xs bg-violet-500/30 text-violet-300 px-2 py-0.5 rounded">Platinum</span>}
+                            {card.isAmexPrime && <span className="text-xs bg-amber-500/30 text-amber-300 px-2 py-0.5 rounded">Prime</span>}
+                          </h3>
+                          <span className="text-rose-400 font-bold text-lg">{formatCurrency(card.balance)}</span>
+                        </div>
+                        
+                        {card.nextPaymentDue && (
+                          <div className={`mb-4 p-3 rounded-lg ${card.nextPaymentDue.isUrgent ? 'bg-amber-900/30 border border-amber-500/30' : 'bg-emerald-900/20 border border-emerald-500/30'}`}>
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className={`font-medium ${card.nextPaymentDue.isUrgent ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                  {card.nextPaymentDue.isUrgent ? '⚠️ Payment Due Soon' : '✓ Next Payment Window'}
+                                </p>
+                                <p className="text-sm text-slate-300">
+                                  Optimal Pay Date: <span className="font-bold text-white">{card.nextPaymentDue.optimalPayDate.toLocaleDateString()}</span>
+                                  <span className="text-slate-500"> ({card.nextPaymentDue.daysUntilDue} days)</span>
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-slate-400 text-xs">Due Date</p>
+                                <p className="font-medium text-white">{card.nextPaymentDue.realDueDate.toLocaleDateString()}</p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Recent Charges with Payment Schedule */}
+                        {card.charges.length > 0 && (
+                          <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                            <table className="w-full text-sm">
+                              <thead className="sticky top-0 bg-slate-800">
+                                <tr className="border-b border-slate-700">
+                                  <th className="text-left text-slate-400 font-medium py-2 px-2">Date</th>
+                                  <th className="text-left text-slate-400 font-medium py-2 px-2">Description</th>
+                                  <th className="text-right text-slate-400 font-medium py-2 px-2">Amount</th>
+                                  <th className="text-right text-slate-400 font-medium py-2 px-2">Pay By</th>
+                                  <th className="text-right text-slate-400 font-medium py-2 px-2">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {card.charges.slice(0, 10).map((charge, i) => (
+                                  <tr key={charge.id || i} className="border-b border-slate-700/50">
+                                    <td className="py-2 px-2 text-slate-400">{charge.date}</td>
+                                    <td className="py-2 px-2 text-white truncate max-w-[200px]">{charge.name}</td>
+                                    <td className="py-2 px-2 text-right text-rose-400">{formatCurrency(charge.amount)}</td>
+                                    <td className="py-2 px-2 text-right text-cyan-400">{charge.optimalPayDate.toLocaleDateString()}</td>
+                                    <td className="py-2 px-2 text-right">
+                                      {charge.isUrgent 
+                                        ? <span className="text-amber-400 text-xs">⚠️ Soon</span>
+                                        : <span className="text-emerald-400 text-xs">✓ OK</span>
+                                      }
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        
+                        {card.charges.length === 0 && (
+                          <p className="text-slate-500 text-sm">No recent charges found for this card</p>
+                        )}
+                      </div>
+                    ))}
+                    
+                    {creditAccts.length === 0 && (
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-8 text-center">
+                        <CreditCard className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                        <p className="text-slate-400">No credit card accounts found in your banking data.</p>
+                        <p className="text-slate-500 text-sm mt-1">Upload a QBO file that includes your credit card transactions.</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              }()}
             </>
           )}
         </div>
