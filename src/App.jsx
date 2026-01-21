@@ -19665,92 +19665,64 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const currentYearData = currentYear ? getYearData(currentYear) : null;
     const previousYearData = previousYear ? getYearData(previousYear) : null;
     
-    // Month-over-month YoY comparison (uses weekly data + monthly period data)
-    // Use the same aggregation approach that works in Trends
+    // Month-over-month YoY comparison - use SAME approach as Trends page
     const getMonthlyByYear = (year) => {
       const months = {};
+      const monthNamesList = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
       
-      // First, aggregate from weekly data - use full month key then extract month
+      // First, check allPeriodsData for monthly periods (same as Trends page)
+      Object.keys(allPeriodsData).forEach(p => {
+        const data = allPeriodsData[p];
+        
+        // Try to extract year and month from period key
+        let periodYear = null;
+        let periodMonth = null;
+        
+        // Check for month name patterns like "January 2026", "january-2026", "Jan 2026"
+        monthNamesList.forEach((name, idx) => {
+          if (p.toLowerCase().includes(name) || p.toLowerCase().includes(name.substring(0, 3))) {
+            const yearMatch = p.match(/\d{4}/);
+            if (yearMatch) {
+              periodYear = yearMatch[0];
+              periodMonth = String(idx + 1).padStart(2, '0');
+            }
+          }
+        });
+        
+        // Check for YYYY-MM format like "2026-01"
+        const yymm = p.match(/^(\d{4})-(\d{2})$/);
+        if (yymm) {
+          periodYear = yymm[1];
+          periodMonth = yymm[2];
+        }
+        
+        // If this period matches the requested year, add it
+        if (periodYear === year && periodMonth) {
+          months[periodMonth] = {
+            revenue: data.total?.revenue || data.revenue || 0,
+            profit: data.total?.netProfit || data.profit || 0,
+            units: data.total?.units || data.units || 0,
+            source: 'period'
+          };
+        }
+      });
+      
+      // Then aggregate from weekly data for months not already found
       sortedWeeks.filter(w => w.startsWith(year)).forEach(w => {
         const week = allWeeksData[w];
         if (!week) return;
         
         const month = w.substring(5, 7); // "01" for January
+        
+        // Only add from weekly if we don't have period data for this month
         if (!months[month]) {
           months[month] = { revenue: 0, profit: 0, units: 0, source: 'weekly' };
         }
-        // Make sure we're getting the revenue correctly
-        const weekRevenue = week.total?.revenue || week.revenue || 0;
-        const weekProfit = week.total?.netProfit || week.profit || 0;
-        const weekUnits = week.total?.units || week.units || 0;
         
-        months[month].revenue += weekRevenue;
-        months[month].profit += weekProfit;
-        months[month].units += weekUnits;
-      });
-      
-      // Then check for monthly period data (flexible patterns for various formats)
-      // Matches: "January 2025", "Jan 2025", "2025-01", "January2025", "Jan2025", "Jan-2025", "Jan '25"
-      const monthPatterns = [
-        { regex: /^january[\s\-]*['']?(\d{2,4})$/i, month: '01' },
-        { regex: /^february[\s\-]*['']?(\d{2,4})$/i, month: '02' },
-        { regex: /^march[\s\-]*['']?(\d{2,4})$/i, month: '03' },
-        { regex: /^april[\s\-]*['']?(\d{2,4})$/i, month: '04' },
-        { regex: /^may[\s\-]*['']?(\d{2,4})$/i, month: '05' },
-        { regex: /^june[\s\-]*['']?(\d{2,4})$/i, month: '06' },
-        { regex: /^july[\s\-]*['']?(\d{2,4})$/i, month: '07' },
-        { regex: /^august[\s\-]*['']?(\d{2,4})$/i, month: '08' },
-        { regex: /^september[\s\-]*['']?(\d{2,4})$/i, month: '09' },
-        { regex: /^october[\s\-]*['']?(\d{2,4})$/i, month: '10' },
-        { regex: /^november[\s\-]*['']?(\d{2,4})$/i, month: '11' },
-        { regex: /^december[\s\-]*['']?(\d{2,4})$/i, month: '12' },
-        { regex: /^jan[\s\-]*['']?(\d{2,4})$/i, month: '01' },
-        { regex: /^feb[\s\-]*['']?(\d{2,4})$/i, month: '02' },
-        { regex: /^mar[\s\-]*['']?(\d{2,4})$/i, month: '03' },
-        { regex: /^apr[\s\-]*['']?(\d{2,4})$/i, month: '04' },
-        { regex: /^jun[\s\-]*['']?(\d{2,4})$/i, month: '06' },
-        { regex: /^jul[\s\-]*['']?(\d{2,4})$/i, month: '07' },
-        { regex: /^aug[\s\-]*['']?(\d{2,4})$/i, month: '08' },
-        { regex: /^sep[\s\-]*['']?(\d{2,4})$/i, month: '09' },
-        { regex: /^oct[\s\-]*['']?(\d{2,4})$/i, month: '10' },
-        { regex: /^nov[\s\-]*['']?(\d{2,4})$/i, month: '11' },
-        { regex: /^dec[\s\-]*['']?(\d{2,4})$/i, month: '12' },
-        { regex: /^(\d{4})-(\d{2})$/, yearGroup: 1, monthGroup: 2 }, // 2025-01 format
-      ];
-      
-      // Helper to normalize year (handle 2-digit years)
-      const normalizeYear = (year) => {
-        if (year.length === 2) {
-          return year >= '50' ? '19' + year : '20' + year;
-        }
-        return year;
-      };
-      
-      Object.keys(allPeriodsData).forEach(periodKey => {
-        for (const pattern of monthPatterns) {
-          const match = periodKey.match(pattern.regex);
-          if (match) {
-            const periodYear = pattern.yearGroup ? match[pattern.yearGroup] : match[1];
-            const normalizedPeriodYear = normalizeYear(periodYear);
-            const periodMonth = pattern.monthGroup ? match[pattern.monthGroup] : pattern.month;
-            
-            if (normalizedPeriodYear === year) {
-              const p = allPeriodsData[periodKey];
-              // Period data overrides or adds to weekly data
-              if (!months[periodMonth] || months[periodMonth].source === 'weekly') {
-                const periodRevenue = p.total?.revenue || p.revenue || 0;
-                const periodProfit = p.total?.netProfit || p.profit || 0;
-                const periodUnits = p.total?.units || p.units || 0;
-                months[periodMonth] = {
-                  revenue: periodRevenue,
-                  profit: periodProfit,
-                  units: periodUnits,
-                  source: 'period'
-                };
-              }
-            }
-            break;
-          }
+        if (months[month].source === 'weekly') {
+          months[month].revenue += week.total?.revenue || 0;
+          months[month].profit += week.total?.netProfit || 0;
+          months[month].units += week.total?.units || 0;
         }
       });
       
@@ -19803,6 +19775,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 {Object.keys(previousMonths).length > 0 && `${previousYear}: ${Object.keys(previousMonths).map(m => monthNames[parseInt(m)-1]).join(', ')}`}
               </p>
             )}
+            {/* Debug info */}
+            <p className="text-slate-600 text-xs mt-1">
+              Debug: {sortedWeeks.length} weeks, {Object.keys(allPeriodsData).length} periods | 
+              Current months found: {JSON.stringify(Object.keys(currentMonths))} |
+              Max revenue: {formatCurrency(maxMonthlyRev)}
+            </p>
           </div>
           
           {!currentYearData && (
