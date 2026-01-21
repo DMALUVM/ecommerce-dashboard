@@ -136,6 +136,24 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
       continue;
     }
     
+    // SKIP non-cash items (depreciation, amortization, etc.)
+    const categoryLower = category.toLowerCase();
+    const memoLower = memo.toLowerCase();
+    if (
+      categoryLower.includes('depreciation') ||
+      categoryLower.includes('amortization') ||
+      categoryLower.includes('accumulated') ||
+      categoryLower.includes('unrealized') ||
+      categoryLower.includes('allowance for') ||
+      categoryLower.includes('bad debt') ||
+      categoryLower.includes('write-off') ||
+      categoryLower.includes('accrued') ||
+      memoLower.includes('depreciation') ||
+      memoLower.includes('amortization')
+    ) {
+      continue;
+    }
+    
     // Determine if income or expense based on account type and transaction
     let isIncome = false;
     let isExpense = false;
@@ -163,10 +181,9 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
           isExpense = true;
         }
       } else if (txnType === 'Journal Entry') {
-        // Journal entries - check category
-        if (category.includes('Payroll') || category.includes('Wages')) {
-          isExpense = true;
-        }
+        // Skip most journal entries - they're usually non-cash adjustments
+        // Only include if clearly payroll related AND has a real cash impact
+        continue;
       } else if (txnType === 'Payroll Check') {
         isExpense = true;
       }
@@ -2472,11 +2489,6 @@ const switchStore = useCallback(async (storeId) => {
 const deleteStore = useCallback(async (storeId) => {
   console.log('deleteStore called with:', storeId, 'stores:', stores.length);
   
-  if (stores.length <= 1) {
-    setToast({ message: 'Cannot delete the only store', type: 'error' });
-    return;
-  }
-  
   const store = stores.find(s => s.id === storeId);
   if (!store) {
     setToast({ message: 'Store not found', type: 'error' });
@@ -2487,20 +2499,49 @@ const deleteStore = useCallback(async (storeId) => {
   const confirmed = window.confirm(`Delete store "${store.name}"? All data will be permanently lost.`);
   if (!confirmed) return;
   
-  const updatedStores = stores.filter(s => s.id !== storeId);
+  // If this is the last store, create a new empty one
+  let updatedStores = stores.filter(s => s.id !== storeId);
+  let newActiveId;
   
-  // Determine new active store
-  let newActiveId = activeStoreId;
-  if (storeId === activeStoreId && updatedStores.length > 0) {
-    newActiveId = updatedStores[0].id;
+  if (updatedStores.length === 0) {
+    // Create a fresh default store
+    const newStore = {
+      id: `store_${Date.now()}`,
+      name: 'My Store',
+      createdAt: new Date().toISOString(),
+    };
+    updatedStores = [newStore];
+    newActiveId = newStore.id;
+  } else {
+    newActiveId = storeId === activeStoreId ? updatedStores[0].id : activeStoreId;
   }
   
   // Update local state first
   setStores(updatedStores);
+  setActiveStoreId(newActiveId);
   
-  // If deleting active store, switch to another
-  if (storeId === activeStoreId && updatedStores.length > 0) {
-    setActiveStoreId(newActiveId);
+  // Clear all data for fresh start if last store was deleted
+  if (stores.length === 1) {
+    // Reset all state to defaults
+    setAllWeeksData([]);
+    setAllDaysData({});
+    setInvHistory([]);
+    setAllPeriodsData([]);
+    setBankingData({
+      transactions: [],
+      lastUpload: null,
+      accounts: {},
+      categories: {},
+      monthlySnapshots: {},
+      categoryOverrides: {},
+      settings: { reminderEnabled: true, reminderTime: '09:00' }
+    });
+    // Clear localStorage
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('ecommerce_')) {
+        localStorage.removeItem(key);
+      }
+    });
   }
   
   // Save updated stores list to cloud
@@ -2593,20 +2634,18 @@ const StoreSelectorModal = () => {
                     {store.id === activeStoreId && (
                       <span className="px-2 py-0.5 bg-violet-500 rounded text-xs text-white">Active</span>
                     )}
-                    {stores.length > 1 && (
-                      <button 
-                        onClick={(e) => { 
-                          e.preventDefault();
-                          e.stopPropagation(); 
-                          console.log('Delete button clicked for store:', store.id);
-                          deleteStore(store.id); 
-                        }}
-                        className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/20 rounded transition-colors"
-                        title={`Delete ${store.name}`}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
+                    <button 
+                      onClick={(e) => { 
+                        e.preventDefault();
+                        e.stopPropagation(); 
+                        console.log('Delete button clicked for store:', store.id);
+                        deleteStore(store.id); 
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/20 rounded transition-colors"
+                      title={`Delete ${store.name}`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
               ))}
@@ -13528,40 +13567,85 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     const lastMonth = now.getMonth() === 0 
                       ? `${now.getFullYear() - 1}-12` 
                       : `${now.getFullYear()}-${String(now.getMonth()).padStart(2, '0')}`;
+                    const twoMonthsAgo = now.getMonth() <= 1
+                      ? `${now.getFullYear() - 1}-${String(12 + now.getMonth() - 1).padStart(2, '0')}`
+                      : `${now.getFullYear()}-${String(now.getMonth() - 1).padStart(2, '0')}`;
+                    
                     const thisMonthSnap = bankingData.monthlySnapshots?.[thisMonth] || { income: 0, expenses: 0, net: 0 };
                     const lastMonthSnap = bankingData.monthlySnapshots?.[lastMonth] || { income: 0, expenses: 0, net: 0 };
+                    const twoMonthsAgoSnap = bankingData.monthlySnapshots?.[twoMonthsAgo] || { income: 0, expenses: 0, net: 0 };
                     const isStale = !bankingData.lastUpload || new Date().toDateString() !== new Date(bankingData.lastUpload).toDateString();
+                    
+                    // Calculate account balances
+                    const accounts = bankingData.accounts || {};
+                    const checkingAccounts = Object.entries(accounts).filter(([_, a]) => a.type !== 'credit_card');
+                    const creditCardAccounts = Object.entries(accounts).filter(([_, a]) => a.type === 'credit_card');
+                    const totalCash = checkingAccounts.reduce((sum, [_, a]) => sum + (a.balance || 0), 0);
+                    const totalDebt = creditCardAccounts.reduce((sum, [_, a]) => sum + Math.abs(a.balance || 0), 0);
+                    
+                    // Calculate burn rate (average monthly expenses over last 3 months)
+                    const recentMonths = Object.keys(bankingData.monthlySnapshots || {}).sort().slice(-3);
+                    const avgBurn = recentMonths.length > 0 
+                      ? recentMonths.reduce((s, m) => s + (bankingData.monthlySnapshots[m]?.expenses || 0), 0) / recentMonths.length
+                      : 0;
+                    
+                    // Cash runway (months of cash at current burn rate)
+                    const runway = avgBurn > 0 ? Math.floor(totalCash / avgBurn) : 99;
+                    
+                    // Trend: compare last month net to two months ago
+                    const trend = lastMonthSnap.net - twoMonthsAgoSnap.net;
+                    const trendPct = twoMonthsAgoSnap.net !== 0 ? ((trend / Math.abs(twoMonthsAgoSnap.net)) * 100) : 0;
                     
                     return (
                       <div className={`bg-slate-800/50 rounded-2xl border ${isStale ? 'border-amber-500/50' : 'border-slate-700'} p-5`}>
                         <div className="flex items-center justify-between mb-3">
                           <h3 className="text-sm font-semibold text-slate-300 uppercase flex items-center gap-2">
-                            <Landmark className="w-4 h-4 text-green-400" />Cash Flow
+                            <Landmark className="w-4 h-4 text-green-400" />CFO Dashboard
                           </h3>
                           {isStale && <span className="text-xs text-amber-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />Update needed</span>}
                         </div>
-                        <div className="space-y-2 text-sm">
-                          <div className="flex justify-between">
-                            <span className="text-slate-400">This month income</span>
-                            <span className="text-emerald-400 font-medium">{formatCurrency(thisMonthSnap.income)}</span>
+                        
+                        {/* Cash Position & Debt */}
+                        <div className="grid grid-cols-2 gap-3 mb-3">
+                          <div className="bg-emerald-900/20 rounded-lg p-3 border border-emerald-500/20">
+                            <p className="text-xs text-emerald-400 mb-1">💵 Cash Position</p>
+                            <p className="text-lg font-bold text-white">{formatCurrency(totalCash)}</p>
                           </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-400">This month expenses</span>
-                            <span className="text-rose-400 font-medium">{formatCurrency(thisMonthSnap.expenses)}</span>
+                          <div className="bg-rose-900/20 rounded-lg p-3 border border-rose-500/20">
+                            <p className="text-xs text-rose-400 mb-1">💳 Credit Card Debt</p>
+                            <p className="text-lg font-bold text-white">{formatCurrency(totalDebt)}</p>
                           </div>
-                          <div className="flex justify-between pt-2 border-t border-slate-700">
-                            <span className="text-slate-300 font-medium">Net Cash Flow</span>
-                            <span className={`font-bold ${thisMonthSnap.net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(thisMonthSnap.net)}</span>
-                          </div>
-                          {lastMonthSnap.net !== 0 && (
-                            <div className="flex justify-between text-xs">
-                              <span className="text-slate-500">vs Last Month</span>
-                              <span className={lastMonthSnap.net > 0 ? 'text-slate-400' : 'text-rose-400'}>{formatCurrency(lastMonthSnap.net)}</span>
-                            </div>
-                          )}
                         </div>
+                        
+                        {/* Key Metrics */}
+                        <div className="space-y-2 text-sm">
+                          <div className="flex justify-between items-center">
+                            <span className="text-slate-400">Monthly Burn Rate</span>
+                            <span className="text-rose-400 font-medium">{formatCurrency(avgBurn)}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-slate-400">Cash Runway</span>
+                            <span className={`font-bold ${runway > 6 ? 'text-emerald-400' : runway > 3 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {runway > 12 ? '12+ months' : `${runway} months`}
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center pt-2 border-t border-slate-700">
+                            <span className="text-slate-300">This Month Net</span>
+                            <span className={`font-bold ${thisMonthSnap.net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {formatCurrency(thisMonthSnap.net)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-slate-500 text-xs">Profit Trend</span>
+                            <span className={`text-xs flex items-center gap-1 ${trend >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {trend >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                              {trend >= 0 ? '+' : ''}{formatCurrency(trend)} vs prior month
+                            </span>
+                          </div>
+                        </div>
+                        
                         <button onClick={() => setView('banking')} className="w-full mt-3 p-2 bg-green-600/20 hover:bg-green-600/30 border border-green-500/30 rounded-lg text-green-300 text-sm flex items-center justify-center gap-2">
-                          <BarChart3 className="w-4 h-4" />View Banking Details
+                          <BarChart3 className="w-4 h-4" />View Full Banking
                         </button>
                       </div>
                     );
@@ -22380,9 +22464,22 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       }
     });
     
-    // Sort categories by amount
-    const topExpenseCategories = Object.entries(expensesByCategory).sort((a, b) => b[1] - a[1]).slice(0, 10);
-    const topIncomeCategories = Object.entries(incomeByCategory).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    // Sort categories by amount - ALL categories for detailed tabs
+    const topExpenseCategories = Object.entries(expensesByCategory).sort((a, b) => b[1] - a[1]);
+    const topIncomeCategories = Object.entries(incomeByCategory).sort((a, b) => b[1] - a[1]);
+    
+    // Get period label for headers
+    const getPeriodLabel = () => {
+      switch (bankingDateRange) {
+        case 'week': return 'Last 7 Days';
+        case 'month': return 'This Month';
+        case 'quarter': return 'This Quarter';
+        case 'ytd': return 'Year to Date';
+        case 'year': return 'Last 12 Months';
+        default: return 'All Time';
+      }
+    };
+    const periodLabel = getPeriodLabel();
     
     // Check if data is stale
     const isDataStale = !bankingData.lastUpload || 
@@ -22618,10 +22715,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                     <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
                       <CreditCard className="w-5 h-5 text-rose-400" />
-                      Top Expense Categories
+                      Top Expenses — {periodLabel}
                     </h3>
                     <div className="space-y-3">
-                      {topExpenseCategories.slice(0, 8).map(([cat, amount], i) => (
+                      {topExpenseCategories.length === 0 ? (
+                        <p className="text-slate-500 text-sm">No expenses in this period</p>
+                      ) : topExpenseCategories.slice(0, 8).map(([cat, amount], i) => (
                         <div key={cat} className="flex items-center gap-3">
                           <div className="w-6 text-slate-500 text-sm">{i + 1}</div>
                           <div className="flex-1">
@@ -22645,10 +22744,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                     <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
                       <Wallet className="w-5 h-5 text-emerald-400" />
-                      Top Income Sources
+                      Top Income — {periodLabel}
                     </h3>
                     <div className="space-y-3">
-                      {topIncomeCategories.slice(0, 8).map(([cat, amount], i) => (
+                      {topIncomeCategories.length === 0 ? (
+                        <p className="text-slate-500 text-sm">No income in this period</p>
+                      ) : topIncomeCategories.slice(0, 8).map(([cat, amount], i) => (
                         <div key={cat} className="flex items-center gap-3">
                           <div className="w-6 text-slate-500 text-sm">{i + 1}</div>
                           <div className="flex-1">
@@ -22720,10 +22821,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Expenses Tab */}
               {bankingTab === 'expenses' && (
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-                  <h3 className="text-lg font-semibold text-white mb-4">All Expense Categories</h3>
-                  <div className="overflow-x-auto">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-white">Expenses — {periodLabel}</h3>
+                    <span className="text-slate-400 text-sm">{topExpenseCategories.length} categories</span>
+                  </div>
+                  <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
                     <table className="w-full text-sm">
-                      <thead>
+                      <thead className="sticky top-0 bg-slate-800">
                         <tr className="border-b border-slate-700">
                           <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
                           <th className="text-right text-slate-400 font-medium py-2 px-2">Total</th>
@@ -22768,10 +22872,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Income Tab */}
               {bankingTab === 'income' && (
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-                  <h3 className="text-lg font-semibold text-white mb-4">All Income Sources</h3>
-                  <div className="overflow-x-auto">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-white">Income — {periodLabel}</h3>
+                    <span className="text-slate-400 text-sm">{topIncomeCategories.length} sources</span>
+                  </div>
+                  <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
                     <table className="w-full text-sm">
-                      <thead>
+                      <thead className="sticky top-0 bg-slate-800">
                         <tr className="border-b border-slate-700">
                           <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
                           <th className="text-right text-slate-400 font-medium py-2 px-2">Total</th>
@@ -22885,24 +22992,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {bankingTab === 'transactions' && (
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold text-white">Recent Transactions</h3>
+                    <h3 className="text-lg font-semibold text-white">Transactions — {periodLabel}</h3>
                     <div className="flex items-center gap-3">
                       <span className="text-slate-400 text-sm">{filteredTxns.length} transactions</span>
                       {Object.keys(bankingData.categoryOverrides || {}).length > 0 && (
                         <span className="text-xs bg-violet-500/20 text-violet-300 px-2 py-1 rounded">
-                          {Object.keys(bankingData.categoryOverrides).length} custom categories
+                          {Object.keys(bankingData.categoryOverrides).length} recategorized
                         </span>
                       )}
                     </div>
                   </div>
-                  <p className="text-xs text-slate-500 mb-4">💡 Click on a category to change it. Changes will be applied on next upload.</p>
+                  <p className="text-xs text-slate-500 mb-4">💡 Use the dropdown to select a category, or type directly in the input field for custom categories.</p>
                   <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 bg-slate-800 z-10">
                         <tr className="border-b border-slate-700">
                           <th className="text-left text-slate-400 font-medium py-2 px-2">Date</th>
                           <th className="text-left text-slate-400 font-medium py-2 px-2">Vendor</th>
-                          <th className="text-left text-slate-400 font-medium py-2 px-2">Memo</th>
                           <th className="text-left text-slate-400 font-medium py-2 px-2">Category</th>
                           <th className="text-left text-slate-400 font-medium py-2 px-2">Account</th>
                           <th className="text-right text-slate-400 font-medium py-2 px-2">Amount</th>
@@ -22914,39 +23020,28 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           return (
                             <tr key={txn.id || i} className="border-b border-slate-700/50 hover:bg-slate-700/30 group">
                               <td className="py-2 px-2 text-slate-400 whitespace-nowrap">{txn.dateDisplay}</td>
-                              <td className="py-2 px-2 text-white truncate max-w-[150px]" title={txn.vendor}>{txn.vendor}</td>
-                              <td className="py-2 px-2 text-slate-500 truncate max-w-[200px] text-xs" title={txn.memo}>{txn.memo?.slice(0, 40) || '-'}</td>
                               <td className="py-2 px-2">
-                                <div className="flex items-center gap-1">
-                                  <select
-                                    value={txn.category}
-                                    onChange={(e) => handleCategoryChange(txn.id, e.target.value)}
-                                    className={`bg-transparent border-0 ${hasOverride ? 'text-violet-300' : 'text-slate-300'} text-sm cursor-pointer hover:bg-slate-700 rounded px-1 py-0.5 max-w-[180px] truncate`}
-                                    title={txn.category}
-                                  >
-                                    <option value={txn.originalCategory || txn.category}>{txn.originalCategory || txn.category}</option>
-                                    {/* Common expense categories */}
-                                    <optgroup label="Common Expenses">
-                                      <option value="Advertising & marketing">Advertising & marketing</option>
-                                      <option value="Cost of goods sold">Cost of goods sold</option>
-                                      <option value="Office expenses">Office expenses</option>
-                                      <option value="Payroll expenses">Payroll expenses</option>
-                                      <option value="Professional services">Professional services</option>
-                                      <option value="Shipping & delivery">Shipping & delivery</option>
-                                      <option value="Software & subscriptions">Software & subscriptions</option>
-                                      <option value="Utilities">Utilities</option>
-                                      <option value="3PL Services">3PL Services</option>
-                                      <option value="General business expenses">General business expenses</option>
-                                    </optgroup>
-                                    {/* Common income categories */}
-                                    <optgroup label="Income">
-                                      <option value="Channel Sales:Amazon Sales">Amazon Sales</option>
-                                      <option value="Channel Sales:Shopify Sales">Shopify Sales</option>
-                                      <option value="Sales">Sales</option>
-                                      <option value="Partner investments">Partner investments</option>
-                                      <option value="Interest earned">Interest earned</option>
-                                    </optgroup>
-                                  </select>
+                                <div className="text-white truncate max-w-[150px]" title={txn.vendor}>{txn.vendor}</div>
+                                <div className="text-slate-500 text-xs truncate max-w-[150px]" title={txn.memo}>{txn.memo?.slice(0, 30) || ''}</div>
+                              </td>
+                              <td className="py-2 px-2">
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="text"
+                                    defaultValue={txn.category}
+                                    onBlur={(e) => {
+                                      if (e.target.value !== txn.category) {
+                                        handleCategoryChange(txn.id, e.target.value);
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.target.blur();
+                                      }
+                                    }}
+                                    className={`bg-slate-900/50 border ${hasOverride ? 'border-violet-500/50 text-violet-300' : 'border-slate-600 text-slate-300'} rounded px-2 py-1 text-sm w-44 focus:outline-none focus:ring-1 focus:ring-violet-500`}
+                                    title="Type to edit category"
+                                  />
                                   {hasOverride && (
                                     <button 
                                       onClick={() => {
@@ -22957,14 +23052,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                         queueCloudSave();
                                       }}
                                       className="text-slate-500 hover:text-rose-400 p-0.5"
-                                      title="Reset to original category"
+                                      title="Reset to original"
                                     >
                                       <X className="w-3 h-3" />
                                     </button>
                                   )}
                                 </div>
                               </td>
-                              <td className="py-2 px-2 text-slate-500 text-xs truncate max-w-[120px]" title={txn.account}>
+                              <td className="py-2 px-2 text-slate-500 text-xs truncate max-w-[100px]" title={txn.account}>
                                 {txn.accountType === 'credit_card' ? '💳' : '🏦'} {txn.account?.split(' ')[0]}
                               </td>
                               <td className={`py-2 px-2 text-right font-medium whitespace-nowrap ${txn.isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -23162,20 +23257,18 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             Switch
                           </button>
                         )}
-                        {stores.length > 1 && (
-                          <button 
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              console.log('Delete button clicked in modal for store:', store.id);
-                              deleteStore(store.id);
-                            }}
-                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
-                            title="Delete store"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
+                        <button 
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            console.log('Delete button clicked in modal for store:', store.id);
+                            deleteStore(store.id);
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
+                          title={stores.length === 1 ? "Delete and start fresh" : "Delete store"}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
                   ))}
