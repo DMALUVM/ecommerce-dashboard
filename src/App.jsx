@@ -12331,9 +12331,243 @@ ${topExpenses.map(e => `- ${e.name}: $${e.total.toFixed(0)}`).join('\n')}`;
 
       const hasBanking = bankingData.transactions?.length > 0;
       
+      // Use the SAME comprehensive context as the AI chat
+      const ctx = prepareDataContext();
+      
+      // Build alerts summary for AI
+      const alertsSummary = [];
+      if (ctx.inventory?.lowStockItems?.length > 0) {
+        alertsSummary.push(`LOW STOCK ALERT: ${ctx.inventory.lowStockItems.length} products need reorder`);
+      }
+      
+      // Get Multi-Signal AI Forecast (same as dashboard widget)
+      const multiSignalForecast = aiForecasts?.salesForecast ? {
+        nextWeek: aiForecasts.salesForecast.next4Weeks?.[0] || null,
+        next4Weeks: aiForecasts.salesForecast.next4Weeks || [],
+        signals: aiForecasts.calculatedSignals || {},
+        confidence: aiForecasts.salesForecast.next4Weeks?.[0]?.confidence || 'N/A',
+      } : null;
+      
+      // Get inventory with velocity and FBA needs analysis
+      const inventoryAnalysis = (() => {
+        const latestInvKey = Object.keys(invHistory).sort().pop();
+        const latestInv = latestInvKey ? invHistory[latestInvKey] : null;
+        if (!latestInv?.items) return null;
+        
+        // Calculate weekly velocity for each SKU
+        const skuVelocity = {};
+        const recentWeeks = Object.keys(allWeeksData).sort().slice(-4);
+        recentWeeks.forEach(w => {
+          const amazon = allWeeksData[w]?.amazon?.skuData || [];
+          const shopify = allWeeksData[w]?.shopify?.skuData || [];
+          [...amazon, ...shopify].forEach(s => {
+            const sku = s.sku || s.msku;
+            if (!skuVelocity[sku]) skuVelocity[sku] = [];
+            skuVelocity[sku].push(s.unitsSold || s.units || 0);
+          });
+        });
+        
+        return latestInv.items.map(item => {
+          const velocity = skuVelocity[item.sku];
+          const avgWeekly = velocity ? velocity.reduce((s, u) => s + u, 0) / velocity.length : 0;
+          const daysOfSupply = avgWeekly > 0 ? Math.round((item.totalUnits || 0) / (avgWeekly / 7)) : 999;
+          const fbaStock = item.fulfillableQuantity || item.fbaUnits || 0;
+          const threeplStock = item.threeplUnits || item.warehouseUnits || (item.totalUnits - fbaStock) || 0;
+          
+          return {
+            sku: item.sku,
+            name: item.productName || item.name || item.sku,
+            totalUnits: item.totalUnits || 0,
+            fbaStock,
+            threeplStock,
+            avgWeeklyVelocity: avgWeekly,
+            daysOfSupply,
+            needsRestock: daysOfSupply < 30,
+            needsManufacturing: daysOfSupply < 60,
+            suggestedFBATransfer: threeplStock > 0 && daysOfSupply < 45 ? Math.min(threeplStock, Math.round(avgWeekly * 4)) : 0,
+            suggestedManufacturingOrder: daysOfSupply < 60 ? Math.round(avgWeekly * 12) : 0,
+          };
+        }).filter(i => i.totalUnits > 0 || i.avgWeeklyVelocity > 0);
+      })();
+      
+      // 3PL Summary
+      const threeplSummary = (() => {
+        const ledgerOrders = Object.values(threeplLedger.orders || {});
+        if (ledgerOrders.length === 0) return null;
+        let totalCost = 0;
+        let totalUnits = 0;
+        ledgerOrders.forEach(o => {
+          const c = o.charges || {};
+          totalCost += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0);
+          totalUnits += (c.firstPickQty || 0) + (c.additionalPickQty || 0);
+        });
+        return {
+          totalOrders: ledgerOrders.length,
+          totalCost,
+          avgCostPerOrder: totalCost / ledgerOrders.length,
+        };
+      })();
+      
+      // Production Pipeline
+      const pipelineSummary = productionPipeline.length > 0 ? productionPipeline.map(p => ({
+        sku: p.sku,
+        product: p.productName,
+        quantity: p.quantity,
+        expectedDate: p.expectedDate,
+        status: p.status,
+      })) : null;
+      
+      // Build comprehensive report prompt
       const reportPrompt = `Generate a ${typeLabels[type]} INTELLIGENCE REPORT for "${storeName || 'Store'}".
 
-${enhancedData}
+=== ${typeLabels[type]} REPORT FOR ${periodLabel.toUpperCase()} ===
+
+PERFORMANCE METRICS:
+- Revenue: $${reportData.total.revenue.toFixed(0)}${comparisonData ? ` (${changes.revenue >= 0 ? '+' : ''}${changes.revenue.toFixed(1)}% ${comparisonLabel})` : ''}
+- Profit: $${reportData.total.netProfit.toFixed(0)}${comparisonData ? ` (${changes.profit >= 0 ? '+' : ''}${changes.profit.toFixed(1)}% ${comparisonLabel})` : ''}
+- Units Sold: ${reportData.total.units}${comparisonData ? ` (${changes.units >= 0 ? '+' : ''}${changes.units.toFixed(1)}%)` : ''}
+- Profit Margin: ${reportData.total.netMargin.toFixed(1)}%${comparisonData ? ` (${changes.margin >= 0 ? '+' : ''}${changes.margin.toFixed(1)} pts)` : ''}
+- Total Ad Spend: $${reportData.total.adSpend.toFixed(0)}
+
+CHANNEL BREAKDOWN:
+Amazon:
+- Revenue: $${reportData.amazon.revenue.toFixed(0)} (${reportData.total.amazonShare.toFixed(0)}% of total)
+- Profit: $${reportData.amazon.netProfit.toFixed(0)}
+- Ad Spend: $${reportData.amazon.adSpend.toFixed(0)}
+- ROAS: ${reportData.amazon.roas.toFixed(1)}x
+
+Shopify:
+- Revenue: $${reportData.shopify.revenue.toFixed(0)} (${reportData.total.shopifyShare.toFixed(0)}% of total)
+- Profit: $${reportData.shopify.netProfit.toFixed(0)}
+- Ad Spend: $${reportData.shopify.adSpend.toFixed(0)} (Meta + Google)
+- ROAS: ${reportData.shopify.roas.toFixed(1)}x
+- 3PL Costs: $${reportData.shopify.threeplCosts.toFixed(0)}
+
+=== 🧠 MULTI-SIGNAL AI FORECAST (Use this for predictions) ===
+${multiSignalForecast ? `
+This is the AI forecast from the dashboard - the most accurate prediction:
+- Next Week Revenue: $${multiSignalForecast.nextWeek?.predictedRevenue?.toFixed(0) || 0}
+- Next Week Profit: $${multiSignalForecast.nextWeek?.predictedProfit?.toFixed(0) || 0}
+- Confidence: ${multiSignalForecast.confidence}
+- Momentum: ${multiSignalForecast.signals?.momentum?.toFixed(1) || 0}%
+
+4-Week Outlook:
+${JSON.stringify(multiSignalForecast.next4Weeks.map(w => ({ week: w.weekEnding, revenue: w.predictedRevenue, profit: w.predictedProfit })))}
+` : 'Multi-Signal forecast not available - user should generate it on dashboard'}
+
+=== 📦 INVENTORY STATUS & ACTION ITEMS ===
+${inventoryAnalysis ? `
+INVENTORY ANALYSIS (${inventoryAnalysis.length} SKUs tracked):
+
+CRITICAL - NEEDS IMMEDIATE ATTENTION:
+${inventoryAnalysis.filter(i => i.needsRestock).map(i => 
+  `- ${i.sku} (${i.name}): ${i.daysOfSupply} days supply, ${i.fbaStock} at FBA, ${i.threeplStock} at 3PL
+    → TRANSFER ${i.suggestedFBATransfer} units from 3PL to FBA
+    → ${i.needsManufacturing ? `ORDER ${i.suggestedManufacturingOrder} units from manufacturer` : ''}`
+).join('\n') || 'No critical inventory issues'}
+
+WATCH LIST (30-60 days supply):
+${inventoryAnalysis.filter(i => !i.needsRestock && i.needsManufacturing).map(i => 
+  `- ${i.sku}: ${i.daysOfSupply} days supply, consider ordering ${i.suggestedManufacturingOrder} units`
+).join('\n') || 'None'}
+
+HEALTHY STOCK (60+ days):
+${inventoryAnalysis.filter(i => !i.needsManufacturing).map(i => 
+  `- ${i.sku}: ${i.daysOfSupply} days supply (${i.totalUnits} units)`
+).slice(0, 5).join('\n') || 'None'}
+` : 'No inventory data - upload Amazon Inventory Report'}
+
+=== 🚚 3PL FULFILLMENT ===
+${threeplSummary ? `
+- Total Orders: ${threeplSummary.totalOrders}
+- Total 3PL Cost: $${threeplSummary.totalCost.toFixed(0)}
+- Avg Cost Per Order: $${threeplSummary.avgCostPerOrder.toFixed(2)}
+` : 'No 3PL data uploaded'}
+
+=== 🏭 PRODUCTION PIPELINE ===
+${pipelineSummary ? `
+Incoming inventory from manufacturing:
+${pipelineSummary.map(p => `- ${p.sku} (${p.product}): ${p.quantity} units, arriving ${p.expectedDate}, status: ${p.status}`).join('\n')}
+` : 'No production orders tracked - add in Production tab'}
+
+=== 📊 AMAZON FORECASTS ===
+${forecastInfo.upcoming.length > 0 ? `
+Upcoming Amazon projections:
+${forecastInfo.upcoming.map(f => `- ${f.week}: $${f.sales.toFixed(0)} projected sales`).join('\n')}
+` : 'No Amazon forecasts uploaded'}
+
+${forecastInfo.alerts.length > 0 ? `
+FORECAST ALERTS:
+${forecastInfo.alerts.map(a => `⚠️ ${a}`).join('\n')}
+` : ''}
+
+${bankingSection}
+
+=== ACTIVE ALERTS ===
+${alertsSummary.length > 0 ? alertsSummary.join('\n') : 'No critical alerts'}
+
+=== 📈 AMAZON PPC CAMPAIGNS ===
+${amazonCampaigns.campaigns?.length > 0 ? `
+Campaign Data (${amazonCampaigns.campaigns.length} campaigns):
+- Total Spend: $${(amazonCampaigns.summary?.totalSpend || 0).toFixed(0)}
+- Total Sales: $${(amazonCampaigns.summary?.totalSales || 0).toFixed(0)}
+- Overall ROAS: ${(amazonCampaigns.summary?.roas || 0).toFixed(2)}x
+- ACOS: ${(amazonCampaigns.summary?.acos || 0).toFixed(1)}%
+
+Top Performing Campaigns (by ROAS):
+${amazonCampaigns.campaigns?.filter(c => c.spend > 50 && c.state === 'ENABLED').sort((a,b) => b.roas - a.roas).slice(0,5).map(c => 
+  `- ${c.name?.substring(0,40) || 'Unknown'}: ${c.roas?.toFixed(2) || 0}x ROAS, $${c.spend?.toFixed(0) || 0} spend, $${c.sales?.toFixed(0) || 0} sales`
+).join('\n') || 'No qualifying campaigns'}
+
+Underperforming Campaigns (need attention):
+${amazonCampaigns.campaigns?.filter(c => c.spend > 50 && c.roas < 2 && c.state === 'ENABLED').sort((a,b) => a.roas - b.roas).slice(0,5).map(c => 
+  `- ${c.name?.substring(0,40) || 'Unknown'}: ${c.roas?.toFixed(2) || 0}x ROAS, ${c.acos?.toFixed(0) || 0}% ACOS - consider pausing`
+).join('\n') || 'All campaigns performing adequately'}
+` : 'No Amazon PPC campaign data uploaded'}
+
+=== 📊 FORECAST ACCURACY LEARNING ===
+${(() => {
+  const records = forecastAccuracyHistory.records || [];
+  const withActuals = records.filter(r => r.actualRevenue !== undefined);
+  if (withActuals.length === 0) return 'No forecast accuracy data yet - will learn as weeks complete';
+  
+  const avgError = withActuals.reduce((s, r) => {
+    const error = r.forecastRevenue > 0 ? Math.abs(r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100 : 0;
+    return s + error;
+  }, 0) / withActuals.length;
+  
+  const avgBias = withActuals.reduce((s, r) => {
+    const bias = r.forecastRevenue > 0 ? (r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100 : 0;
+    return s + bias;
+  }, 0) / withActuals.length;
+  
+  return `Forecast Learning (${withActuals.length} samples):
+- Average Accuracy: ${(100 - avgError).toFixed(1)}%
+- Bias: ${avgBias > 0 ? '+' : ''}${avgBias.toFixed(1)}% (${avgBias > 0 ? 'forecasts tend to be low' : 'forecasts tend to be high'})
+
+Recent Predictions vs Actuals:
+${withActuals.slice(-5).map(r => 
+  `- Week ${r.weekEnding}: Forecast $${r.forecastRevenue?.toFixed(0) || 0} → Actual $${r.actualRevenue?.toFixed(0) || 0} (${r.forecastRevenue > 0 ? ((r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100).toFixed(1) : 0}%)`
+).join('\n')}`;
+})()}
+
+=== 📅 DAY-OF-WEEK PATTERNS ===
+${ctx.dayOfWeekPatterns && Object.keys(ctx.dayOfWeekPatterns).length > 0 ? `
+Best performing days based on historical data:
+${Object.entries(ctx.dayOfWeekPatterns).sort((a, b) => b[1].avgRevenue - a[1].avgRevenue).map(([day, data]) => 
+  `- ${day}: Avg $${data.avgRevenue?.toFixed(0) || 0} revenue, $${data.avgProfit?.toFixed(0) || 0} profit`
+).join('\n')}
+
+Use this for: optimal ad spend timing, inventory planning, promotion scheduling
+` : 'Not enough daily data for day-of-week analysis yet'}
+
+=== 🔄 SEASONAL PATTERNS ===
+${ctx.seasonalPatterns ? `
+Monthly Performance Patterns:
+- Strong Months (>10% above avg): ${ctx.seasonalPatterns.strongMonths?.join(', ') || 'None identified'}
+- Weak Months (<10% below avg): ${ctx.seasonalPatterns.weakMonths?.join(', ') || 'None identified'}
+- Overall Monthly Avg: $${ctx.seasonalPatterns.overallMonthlyAvg?.toFixed(0) || 0}
+` : 'Not enough historical data for seasonal patterns'}
 
 Create a comprehensive markdown report with these sections:
 
@@ -12341,7 +12575,7 @@ Create a comprehensive markdown report with these sections:
 **${periodLabel}**
 
 ## Executive Summary
-(3-4 sentences: overall performance, biggest win, main concern, outlook)
+(3-4 sentences: overall performance, biggest win, main concern, and the AI forecast outlook)
 
 ## 💰 Key Metrics
 | Metric | Value | ${comparisonData ? 'Change | ' : ''}Status |
@@ -12356,17 +12590,28 @@ Create a comprehensive markdown report with these sections:
 ## 📈 Channel Performance
 (Detailed Amazon vs Shopify analysis with ROAS insights)
 
-${inventoryAlerts.length > 0 ? `## 📦 Inventory Alerts
-(Comment on low stock items and recommended actions)
+## 🎯 Amazon PPC Analysis
+(If PPC data available: analyze top/bottom campaigns, ACOS trends, optimization opportunities)
 
-` : ''}${forecastInfo.upcoming.length > 0 ? `## 🔮 Forecast & Outlook
-(Analysis of upcoming Amazon forecasts and what to expect)
+## 📦 Inventory & Supply Chain
+(CRITICAL: Analyze the inventory data above. Be specific about:
+- Which SKUs need 3PL→FBA transfers and how many units
+- Which SKUs need manufacturing orders and suggested quantities
+- Production pipeline timing and if it covers upcoming needs
+- Any stockout risks based on velocity vs current inventory)
 
-` : ''}${hasBanking ? `## 💵 Cash Flow & Financial Health
-(Analysis of cash position, burn rate, runway, and expense trends. Note any concerns about cash flow or unusual expenses.)
+## 🔮 AI Forecast & Outlook
+(Use the Multi-Signal AI Forecast data. Include next week prediction with confidence level and 4-week outlook. Reference forecast accuracy learning if available.)
 
-` : ''}## 🎯 Recommendations
-(5 specific, prioritized action items with expected impact)
+${hasBanking ? `## 💵 Cash Flow & Financial Health
+(Analysis of cash position, burn rate, runway, and expense trends)
+` : ''}
+## 🎯 Recommendations
+(5-7 specific, prioritized action items with expected impact. MUST include:
+- Specific inventory actions like "Transfer X units of SKU-123 from 3PL to FBA"
+- PPC optimization suggestions if campaign data available
+- Cash flow actions if banking data shows concerns
+- Timing recommendations based on day-of-week patterns)
 
 Use the ACTUAL numbers provided. Be specific and actionable. Include period-over-period changes where available.`;
 
@@ -12374,7 +12619,19 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          system: 'You are an expert e-commerce analyst. Generate detailed, data-driven reports using ONLY the numbers provided. Be specific with SKUs, percentages, and dollar amounts. Make recommendations actionable.',
+          system: `You are an expert e-commerce analyst generating intelligence reports for "${storeName || 'Store'}". 
+
+CRITICAL INSTRUCTIONS:
+1. Use the MULTI-SIGNAL AI FORECAST for all predictions - it's the most accurate forecast
+2. Be SPECIFIC about inventory actions - include exact SKUs, quantities, and what to do
+3. Cross-reference inventory velocity with current stock to identify risks
+4. Include actionable recommendations with expected impact
+5. Use actual numbers, not generalities
+
+For inventory recommendations:
+- If FBA stock is low but 3PL has inventory → Recommend specific transfer quantity
+- If total inventory is low → Recommend manufacturing order with quantity
+- Consider velocity trends and lead times`,
           messages: [{ role: 'user', content: reportPrompt }]
         }),
       });
@@ -19665,67 +19922,71 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const currentYearData = currentYear ? getYearData(currentYear) : null;
     const previousYearData = previousYear ? getYearData(previousYear) : null;
     
-    // Month-over-month YoY comparison - use SAME approach as Trends page
-    const getMonthlyByYear = (year) => {
-      const months = {};
-      const monthNamesList = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+    // Month-over-month YoY comparison - use EXACT same logic as Trends getMonthlyTrends
+    // First build ALL monthly data same as Trends, then filter by year
+    const buildAllMonthlyData = () => {
+      const monthData = {};
       
-      // First, check allPeriodsData for monthly periods (same as Trends page)
-      Object.keys(allPeriodsData).forEach(p => {
+      // Identify monthly periods same as Trends
+      const monthlyPeriods = Object.keys(allPeriodsData).filter(p => {
+        return /^(january|february|march|april|may|june|july|august|september|october|november|december)-?\d{4}$/i.test(p) ||
+               /^\d{4}-\d{2}$/.test(p) ||
+               /^[a-z]+-\d{4}$/i.test(p);
+      });
+      
+      // First, add period data for months (EXACT copy from Trends)
+      monthlyPeriods.forEach(p => {
         const data = allPeriodsData[p];
-        
-        // Try to extract year and month from period key
-        let periodYear = null;
-        let periodMonth = null;
-        
-        // Check for month name patterns like "January 2026", "january-2026", "Jan 2026"
+        let monthKey = p;
+        const monthNamesList = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
         monthNamesList.forEach((name, idx) => {
-          if (p.toLowerCase().includes(name) || p.toLowerCase().includes(name.substring(0, 3))) {
+          if (p.toLowerCase().includes(name)) {
             const yearMatch = p.match(/\d{4}/);
-            if (yearMatch) {
-              periodYear = yearMatch[0];
-              periodMonth = String(idx + 1).padStart(2, '0');
-            }
+            if (yearMatch) monthKey = `${yearMatch[0]}-${String(idx + 1).padStart(2, '0')}`;
           }
         });
         
-        // Check for YYYY-MM format like "2026-01"
-        const yymm = p.match(/^(\d{4})-(\d{2})$/);
-        if (yymm) {
-          periodYear = yymm[1];
-          periodMonth = yymm[2];
-        }
-        
-        // If this period matches the requested year, add it
-        if (periodYear === year && periodMonth) {
-          months[periodMonth] = {
-            revenue: data.total?.revenue || data.revenue || 0,
-            profit: data.total?.netProfit || data.profit || 0,
-            units: data.total?.units || data.units || 0,
-            source: 'period'
+        monthData[monthKey] = {
+          key: p,
+          source: 'period',
+          revenue: data.total?.revenue || 0,
+          profit: data.total?.netProfit || 0,
+          units: data.total?.units || 0,
+        };
+      });
+      
+      // Then aggregate weekly data for months not in periods (EXACT copy from Trends)
+      sortedWeeks.forEach(w => {
+        const monthKey = w.substring(0, 7); // "2025-01" format
+        if (!monthData[monthKey]) {
+          monthData[monthKey] = {
+            key: monthKey,
+            source: 'weekly',
+            revenue: 0, profit: 0, units: 0,
           };
         }
-      });
-      
-      // Then aggregate from weekly data for months not already found
-      sortedWeeks.filter(w => w.startsWith(year)).forEach(w => {
-        const week = allWeeksData[w];
-        if (!week) return;
-        
-        const month = w.substring(5, 7); // "01" for January
-        
-        // Only add from weekly if we don't have period data for this month
-        if (!months[month]) {
-          months[month] = { revenue: 0, profit: 0, units: 0, source: 'weekly' };
-        }
-        
-        if (months[month].source === 'weekly') {
-          months[month].revenue += week.total?.revenue || 0;
-          months[month].profit += week.total?.netProfit || 0;
-          months[month].units += week.total?.units || 0;
+        if (monthData[monthKey].source === 'weekly') {
+          const week = allWeeksData[w];
+          monthData[monthKey].revenue += week.total?.revenue || 0;
+          monthData[monthKey].profit += week.total?.netProfit || 0;
+          monthData[monthKey].units += week.total?.units || 0;
         }
       });
       
+      return monthData;
+    };
+    
+    const allMonthlyData = buildAllMonthlyData();
+    
+    // Now filter by year and convert to month-only keys ("01", "02", etc.)
+    const getMonthlyByYear = (year) => {
+      const months = {};
+      Object.entries(allMonthlyData).forEach(([key, data]) => {
+        if (key.startsWith(year)) {
+          const month = key.substring(5, 7); // Extract "01" from "2025-01"
+          months[month] = data;
+        }
+      });
       return months;
     };
     
@@ -19775,12 +20036,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 {Object.keys(previousMonths).length > 0 && `${previousYear}: ${Object.keys(previousMonths).map(m => monthNames[parseInt(m)-1]).join(', ')}`}
               </p>
             )}
-            {/* Debug info */}
-            <p className="text-slate-600 text-xs mt-1">
-              Debug: {sortedWeeks.length} weeks, {Object.keys(allPeriodsData).length} periods | 
-              Current months found: {JSON.stringify(Object.keys(currentMonths))} |
-              Max revenue: {formatCurrency(maxMonthlyRev)}
-            </p>
           </div>
           
           {!currentYearData && (
@@ -19870,28 +20125,36 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           {hasMonthlyData && (
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
               <h3 className="text-lg font-semibold text-white mb-4">Monthly Revenue: {currentYear}{previousYear ? ` vs ${previousYear}` : ''}</h3>
-              <div className="flex items-end gap-2 h-64">
+              <div className="flex items-end gap-2" style={{ height: '250px' }}>
                 {allMonths.map((m, i) => {
                   const currRev = currentMonths[m]?.revenue || 0;
                   const prevRev = previousMonths[m]?.revenue || 0;
-                  const currHeight = maxMonthlyRev > 0 ? (currRev / maxMonthlyRev) * 100 : 0;
-                  const prevHeight = maxMonthlyRev > 0 ? (prevRev / maxMonthlyRev) * 100 : 0;
+                  // Calculate pixel heights (max 200px)
+                  const maxBarHeight = 200;
+                  const currHeight = maxMonthlyRev > 0 ? Math.round((currRev / maxMonthlyRev) * maxBarHeight) : 0;
+                  const prevHeight = maxMonthlyRev > 0 ? Math.round((prevRev / maxMonthlyRev) * maxBarHeight) : 0;
                   return (
-                    <div key={m} className="flex-1 flex flex-col items-center">
-                      <div className="relative flex gap-0.5 items-end h-48 w-full">
+                    <div key={m} className="flex-1 flex flex-col items-center justify-end">
+                      <div className="flex gap-0.5 items-end w-full justify-center" style={{ height: `${maxBarHeight}px` }}>
                         {previousYear && (
-                          <div className="flex-1 flex flex-col justify-end group relative">
+                          <div className="flex-1 flex items-end justify-center group relative">
                             <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                               {previousYear}: {formatCurrency(prevRev)}
                             </div>
-                            <div className="w-full bg-slate-600 rounded-t transition-all hover:bg-slate-500" style={{ height: `${Math.max(prevHeight, prevRev > 0 ? 2 : 0)}%` }} />
+                            <div 
+                              className="w-full max-w-[30px] bg-slate-600 rounded-t transition-all hover:bg-slate-500" 
+                              style={{ height: `${Math.max(prevHeight, prevRev > 0 ? 4 : 0)}px` }} 
+                            />
                           </div>
                         )}
-                        <div className={`${previousYear ? 'flex-1' : 'w-full'} flex flex-col justify-end group relative`}>
+                        <div className={`${previousYear ? 'flex-1' : 'w-full'} flex items-end justify-center group relative`}>
                           <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                             {currentYear}: {formatCurrency(currRev)}
                           </div>
-                          <div className="w-full bg-violet-500 rounded-t transition-all hover:bg-violet-400" style={{ height: `${Math.max(currHeight, currRev > 0 ? 2 : 0)}%` }} />
+                          <div 
+                            className="w-full max-w-[30px] bg-violet-500 rounded-t transition-all hover:bg-violet-400" 
+                            style={{ height: `${Math.max(currHeight, currRev > 0 ? 4 : 0)}px` }} 
+                          />
                         </div>
                       </div>
                       <span className="text-xs text-slate-400 mt-2">{monthNames[i]}</span>
