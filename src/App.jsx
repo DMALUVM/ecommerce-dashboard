@@ -931,6 +931,7 @@ export default function Dashboard() {
   const [trendsChannel, setTrendsChannel] = useState('combined'); // 'amazon' | 'shopify' | 'combined' for trends filtering
   const [dailyFiles, setDailyFiles] = useState({ amazon: null, shopify: null }); // Daily upload files
   const [dailyAdSpend, setDailyAdSpend] = useState({ meta: '', google: '' }); // Daily ad spend inputs
+  const [calendarMonth, setCalendarMonth] = useState(null); // null = auto (latest data), or { year, month }
   
   // Amazon Campaign Data
   const [amazonCampaigns, setAmazonCampaigns] = useState(() => {
@@ -3587,18 +3588,56 @@ const savePeriods = async (d) => {
           discounts: shopDisc, netProfit: shopProfit, netMargin: shopRev > 0 ? (shopProfit/shopRev)*100 : 0,
           aov: shopUnits > 0 ? shopRev/shopUnits : 0, roas: shopAds > 0 ? shopRev/shopAds : 0, skuData: shopifySkus
         } : null,
-        total: {
-          revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds,
-          netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0,
-          roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0,
-          amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0,
-          shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0
-        }
       };
       
-      // Save to state - merge with existing data (preserves Google Ads data if present)
+      // CRITICAL: Merge with existing data - preserve channels that weren't uploaded
       const existingDayData = allDaysData[selectedDay] || {};
-      const mergedDayData = { ...existingDayData, ...dayData };
+      
+      // Only update channels that were actually uploaded, preserve others
+      const mergedDayData = {
+        ...existingDayData,
+        date: selectedDay,
+        createdAt: new Date().toISOString(),
+        // Preserve existing Amazon data if no new Amazon file uploaded
+        amazon: dailyFiles.amazon ? dayData.amazon : existingDayData.amazon,
+        // Preserve existing Shopify data if no new Shopify file uploaded
+        shopify: dailyFiles.shopify ? dayData.shopify : existingDayData.shopify,
+        // Preserve any existing ads data (Meta/Google from bulk upload)
+        metaSpend: existingDayData.metaSpend,
+        metaImpressions: existingDayData.metaImpressions,
+        metaClicks: existingDayData.metaClicks,
+        metaPurchases: existingDayData.metaPurchases,
+        googleSpend: existingDayData.googleSpend,
+        googleImpressions: existingDayData.googleImpressions,
+        googleClicks: existingDayData.googleClicks,
+        googleConversions: existingDayData.googleConversions,
+      };
+      
+      // Recalculate totals based on merged data
+      const finalAmazon = mergedDayData.amazon || {};
+      const finalShopify = mergedDayData.shopify || {};
+      const finalAmzRev = finalAmazon.revenue || 0;
+      const finalShopRev = finalShopify.revenue || 0;
+      const finalTotalRev = finalAmzRev + finalShopRev;
+      const finalAmzProfit = finalAmazon.netProfit || 0;
+      const finalShopProfit = finalShopify.netProfit || 0;
+      const finalTotalProfit = finalAmzProfit + finalShopProfit;
+      const finalAmzAds = finalAmazon.adSpend || 0;
+      const finalShopAds = finalShopify.adSpend || 0;
+      const finalTotalAds = finalAmzAds + finalShopAds;
+      
+      mergedDayData.total = {
+        revenue: finalTotalRev,
+        units: (finalAmazon.units || 0) + (finalShopify.units || 0),
+        cogs: (finalAmazon.cogs || 0) + (finalShopify.cogs || 0),
+        adSpend: finalTotalAds,
+        netProfit: finalTotalProfit,
+        netMargin: finalTotalRev > 0 ? (finalTotalProfit/finalTotalRev)*100 : 0,
+        roas: finalTotalAds > 0 ? finalTotalRev/finalTotalAds : 0,
+        amazonShare: finalTotalRev > 0 ? (finalAmzRev/finalTotalRev)*100 : 0,
+        shopifyShare: finalTotalRev > 0 ? (finalShopRev/finalTotalRev)*100 : 0
+      };
+      
       const updatedDays = { ...allDaysData, [selectedDay]: mergedDayData };
       setAllDaysData(updatedDays);
       lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays));
@@ -10318,8 +10357,18 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       const amz = data.amazon || {};
       const shop = data.shopify || {};
       const total = data.total || {};
+      
+      // Adjust date if it's Monday (start of week) to show Sunday (end of week)
+      const weekDate = new Date(week + 'T00:00:00');
+      const dayOfWeek = weekDate.getDay();
+      const weekEndDate = dayOfWeek === 1 
+        ? new Date(weekDate.getTime() - 24 * 60 * 60 * 1000) 
+        : weekDate;
+      const weekEndStr = weekEndDate.toISOString().split('T')[0];
+      
       return {
-        weekEnding: week,
+        weekEnding: weekEndStr,
+        weekKey: week, // Original key
         totalRevenue: total.revenue || 0,
         totalProfit: total.netProfit || 0,
         totalUnits: total.units || 0,
@@ -10519,6 +10568,90 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       p.avgProfit = p.count > 0 ? p.totalProfit / p.count : 0;
     });
     
+    // PRE-COMPUTED: Filter to only weeks with actual revenue
+    const weeksWithRevenue = sortedWeeks.filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0);
+    
+    // Helper function to compute category breakdown for a set of weeks
+    const computeCategoryBreakdown = (weekKeys) => {
+      const categories = {};
+      
+      weekKeys.forEach(weekKey => {
+        const weekData = allWeeksData[weekKey];
+        if (!weekData) return;
+        
+        // Process all SKUs and group by category
+        const processSkus = (skuData, channel) => {
+          (skuData || []).forEach(s => {
+            const sku = s.sku || s.msku;
+            const productName = (savedProductNames[sku] || s.name || s.title || sku).toLowerCase();
+            const units = s.unitsSold || s.units || 0;
+            const revenue = s.netSales || s.revenue || 0;
+            const profit = channel === 'Amazon' ? (s.netProceeds || revenue) : (revenue - (s.cogs || 0));
+            
+            // Determine category from product name ONLY (not SKU prefix)
+            // Order matters - check specific patterns before general ones
+            let category = 'Other';
+            if (productName.includes('lip balm')) category = 'Lip Balm';
+            else if (productName.includes('sensitive') && productName.includes('deodorant')) category = 'Sensitive Skin Deodorant';
+            else if (productName.includes('extra strength') && productName.includes('deodorant')) category = 'Extra Strength Deodorant';
+            else if (productName.includes('deodorant')) category = 'Deodorant';
+            else if (productName.includes('athlete') && productName.includes('soap')) category = "Athlete's Shield Soap";
+            else if (productName.includes('soap')) category = 'Tallow Soap Bars';
+            else if (productName.includes('sun balm')) category = 'Sun Balm';
+            else if (productName.includes('tallow balm') || (productName.includes('moisturizer') && productName.includes('tallow'))) category = 'Tallow Balm';
+            // "balm" alone without other keywords - check what it is
+            else if (productName.includes('balm')) {
+              // Distinguish between lip balm, tallow balm, sun balm
+              if (productName.includes('lip')) category = 'Lip Balm';
+              else if (productName.includes('sun')) category = 'Sun Balm';
+              else if (productName.includes('hydration') || productName.includes('moisturizer')) category = 'Tallow Balm';
+              else category = 'Other Balm';
+            }
+            
+            if (!categories[category]) {
+              categories[category] = { units: 0, revenue: 0, profit: 0, skus: [] };
+            }
+            categories[category].units += units;
+            categories[category].revenue += revenue;
+            categories[category].profit += profit;
+            
+            // Only add SKU details for single-week queries (keep data compact)
+            if (weekKeys.length === 1) {
+              categories[category].skus.push({ sku, name: savedProductNames[sku] || s.name || sku, channel, units, revenue, profit });
+            }
+          });
+        };
+        
+        processSkus(weekData.amazon?.skuData, 'Amazon');
+        processSkus(weekData.shopify?.skuData, 'Shopify');
+      });
+      
+      // Calculate margins and sort SKUs
+      Object.values(categories).forEach(cat => {
+        cat.margin = cat.revenue > 0 ? (cat.profit / cat.revenue * 100).toFixed(1) : 0;
+        if (cat.skus) cat.skus.sort((a, b) => b.revenue - a.revenue);
+      });
+      
+      return categories;
+    };
+    
+    // Get total metrics for a set of weeks
+    const getWeeksTotals = (weekKeys) => {
+      return weekKeys.reduce((acc, w) => {
+        const data = allWeeksData[w];
+        if (data) {
+          acc.revenue += data.total?.revenue || 0;
+          acc.profit += data.total?.netProfit || 0;
+          acc.units += data.total?.units || 0;
+        }
+        return acc;
+      }, { revenue: 0, profit: 0, units: 0 });
+    };
+    
+    // LAST WEEK (most recent week with actual data)
+    const lastWeekKey = weeksWithRevenue[weeksWithRevenue.length - 1];
+    const lastWeekData = lastWeekKey ? allWeeksData[lastWeekKey] : null;
+    
     return {
       storeName: storeName || 'E-Commerce Store',
       dataRange: { 
@@ -10537,6 +10670,127 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       periodData: periodsSummary,
       yoyInsights,
       monthlyTrend2025,
+      // PER-WEEK SKU BREAKDOWN - for answering "last week" questions accurately
+      skuByWeek: (() => {
+        const recentWeeks = sortedWeeks.slice(-4);
+        return recentWeeks.map(week => {
+          const data = allWeeksData[week];
+          const skuList = [];
+          
+          // Week dates: Amazon reports week as ending Sunday, key is typically the Sunday
+          // If key is Monday (start of week), adjust to show Sunday (end of prior week)
+          const weekDate = new Date(week + 'T00:00:00');
+          const dayOfWeek = weekDate.getDay(); // 0=Sun, 1=Mon, etc.
+          // If it's Monday (1), subtract 1 day to get Sunday
+          // If it's already Sunday (0), keep it
+          const weekEndDate = dayOfWeek === 1 
+            ? new Date(weekDate.getTime() - 24 * 60 * 60 * 1000) 
+            : weekDate;
+          const weekEndStr = weekEndDate.toISOString().split('T')[0];
+          
+          // Amazon SKUs
+          (data.amazon?.skuData || []).forEach(s => {
+            const sku = s.sku || s.msku;
+            const productName = savedProductNames[sku] || s.name || s.title || sku;
+            const units = s.unitsSold || s.units || 0;
+            const revenue = s.netSales || s.revenue || 0;
+            const profit = s.netProceeds || revenue;
+            skuList.push({
+              sku,
+              productName,
+              channel: 'Amazon',
+              units,
+              revenue,
+              profit,
+              profitPerUnit: units > 0 ? profit / units : 0,
+            });
+          });
+          
+          // Shopify SKUs
+          (data.shopify?.skuData || []).forEach(s => {
+            const sku = s.sku;
+            const productName = savedProductNames[sku] || s.name || s.title || sku;
+            const units = s.unitsSold || s.units || 0;
+            const revenue = s.netSales || s.revenue || 0;
+            const profit = revenue - (s.cogs || 0);
+            skuList.push({
+              sku,
+              productName,
+              channel: 'Shopify',
+              units,
+              revenue,
+              profit,
+              profitPerUnit: units > 0 ? profit / units : 0,
+            });
+          });
+          
+          return {
+            weekEnding: weekEndStr,
+            weekKey: week, // Original key for reference
+            weekLabel: `Week ending ${weekEndDate.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })}`,
+            totalRevenue: data.total?.revenue || 0,
+            totalProfit: data.total?.netProfit || 0,
+            totalUnits: data.total?.units || 0,
+            skus: skuList.sort((a, b) => b.revenue - a.revenue),
+          };
+        });
+      })(),
+      // LAST WEEK (most recent week with actual revenue)
+      lastWeekByCategory: lastWeekKey ? {
+        weekEnding: lastWeekKey,
+        weekLabel: `Week of ${new Date(new Date(lastWeekKey + 'T00:00:00').getTime() - 6*24*60*60*1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(lastWeekKey + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+        totalRevenue: lastWeekData?.total?.revenue || 0,
+        totalProfit: lastWeekData?.total?.netProfit || 0,
+        totalUnits: lastWeekData?.total?.units || 0,
+        byCategory: computeCategoryBreakdown([lastWeekKey]),
+      } : null,
+      
+      // LAST 2 WEEKS
+      last2WeeksByCategory: (() => {
+        const weeks = weeksWithRevenue.slice(-2);
+        if (weeks.length === 0) return null;
+        const totals = getWeeksTotals(weeks);
+        const startDate = new Date(new Date(weeks[0] + 'T00:00:00').getTime() - 6*24*60*60*1000);
+        const endDate = new Date(weeks[weeks.length - 1] + 'T00:00:00');
+        return {
+          weeks: weeks,
+          dateRange: `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+          totalRevenue: totals.revenue,
+          totalProfit: totals.profit,
+          totalUnits: totals.units,
+          byCategory: computeCategoryBreakdown(weeks),
+        };
+      })(),
+      
+      // LAST 4 WEEKS (approx 1 month)
+      last4WeeksByCategory: (() => {
+        const weeks = weeksWithRevenue.slice(-4);
+        if (weeks.length === 0) return null;
+        const totals = getWeeksTotals(weeks);
+        const startDate = new Date(new Date(weeks[0] + 'T00:00:00').getTime() - 6*24*60*60*1000);
+        const endDate = new Date(weeks[weeks.length - 1] + 'T00:00:00');
+        return {
+          weeks: weeks,
+          dateRange: `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+          totalRevenue: totals.revenue,
+          totalProfit: totals.profit,
+          totalUnits: totals.units,
+          byCategory: computeCategoryBreakdown(weeks),
+        };
+      })(),
+      
+      // ALL TIME by category
+      allTimeByCategory: (() => {
+        const totals = getWeeksTotals(weeksWithRevenue);
+        return {
+          weeks: weeksWithRevenue.length,
+          totalRevenue: totals.revenue,
+          totalProfit: totals.profit,
+          totalUnits: totals.units,
+          byCategory: computeCategoryBreakdown(weeksWithRevenue),
+        };
+      })(),
+      
       skuAnalysis: skuAnalysis.slice(0, 30),
       skusByProfitPerUnit: [...skuAnalysis].sort((a, b) => b.profitPerUnit - a.profitPerUnit).slice(0, 10),
       decliningSkus: skuAnalysis.filter(s => s.trend === 'declining').slice(0, 10),
@@ -10806,6 +11060,24 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       
       const systemPrompt = `You are an expert e-commerce analyst and business advisor for "${ctx.storeName}". You have access to ALL uploaded sales data and can answer questions about any aspect of the business.
 
+⚠️ CRITICAL - HOW TO ANSWER TIMEFRAME QUESTIONS:
+Use the PRE-COMPUTED timeframe data structures - they are already calculated correctly!
+
+| User asks about... | Use this data |
+|-------------------|---------------|
+| "last week" | lastWeekByCategory |
+| "last 2 weeks" / "past 2 weeks" | last2WeeksByCategory |
+| "last month" / "last 4 weeks" | last4WeeksByCategory |
+| "all time" / "total" | allTimeByCategory |
+
+For category questions (e.g., "how much lip balm?"):
+→ Look up: [timeframe]ByCategory.byCategory["Lip Balm"]
+→ The data includes: units, revenue, profit, margin
+
+❌ NEVER sum from skuByWeek array (contains multiple weeks)
+❌ NEVER use skuAnalysis (those are ALL-TIME totals)
+✅ ALWAYS use the pre-computed byCategory data
+
 IMPORTANT PROFIT CALCULATION NOTES:
 - Amazon "Net Proceeds" IS the profit - it already has COGS, fees, and ad spend deducted
 - Shopify profit = Net Sales - COGS (discounts already deducted from Net Sales)
@@ -10873,6 +11145,52 @@ ${JSON.stringify(ctx.productCatalog)}
 === SKUs BY CATEGORY ===
 ${JSON.stringify(ctx.skusByCategory)}
 When user asks about a product type (e.g., "lip balm", "deodorant", "soap"), find the matching category and aggregate data for those SKUs.
+
+=== PRE-COMPUTED TIMEFRAME DATA (USE THESE FOR TIMEFRAME QUESTIONS) ===
+
+**LAST WEEK (${ctx.lastWeekByCategory?.weekLabel || 'No data'}):**
+${ctx.lastWeekByCategory ? `
+Week: ${ctx.lastWeekByCategory.weekEnding}
+Total Revenue: $${ctx.lastWeekByCategory.totalRevenue.toFixed(2)}
+Total Profit: $${ctx.lastWeekByCategory.totalProfit.toFixed(2)}
+Total Units: ${ctx.lastWeekByCategory.totalUnits}
+BY CATEGORY: ${JSON.stringify(ctx.lastWeekByCategory.byCategory)}
+` : 'No data'}
+
+**LAST 2 WEEKS (${ctx.last2WeeksByCategory?.dateRange || 'No data'}):**
+${ctx.last2WeeksByCategory ? `
+Weeks included: ${ctx.last2WeeksByCategory.weeks?.join(', ')}
+Total Revenue: $${ctx.last2WeeksByCategory.totalRevenue.toFixed(2)}
+Total Profit: $${ctx.last2WeeksByCategory.totalProfit.toFixed(2)}
+Total Units: ${ctx.last2WeeksByCategory.totalUnits}
+BY CATEGORY: ${JSON.stringify(ctx.last2WeeksByCategory.byCategory)}
+` : 'No data'}
+
+**LAST 4 WEEKS / LAST MONTH (${ctx.last4WeeksByCategory?.dateRange || 'No data'}):**
+${ctx.last4WeeksByCategory ? `
+Weeks included: ${ctx.last4WeeksByCategory.weeks?.join(', ')}
+Total Revenue: $${ctx.last4WeeksByCategory.totalRevenue.toFixed(2)}
+Total Profit: $${ctx.last4WeeksByCategory.totalProfit.toFixed(2)}
+Total Units: ${ctx.last4WeeksByCategory.totalUnits}
+BY CATEGORY: ${JSON.stringify(ctx.last4WeeksByCategory.byCategory)}
+` : 'No data'}
+
+**ALL TIME (${ctx.allTimeByCategory?.weeks || 0} weeks):**
+${ctx.allTimeByCategory ? `
+Total Revenue: $${ctx.allTimeByCategory.totalRevenue.toFixed(2)}
+Total Profit: $${ctx.allTimeByCategory.totalProfit.toFixed(2)}
+Total Units: ${ctx.allTimeByCategory.totalUnits}
+BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
+` : 'No data'}
+
+⚠️ CRITICAL INSTRUCTIONS FOR TIMEFRAME QUESTIONS:
+1. "last week" → Use lastWeekByCategory
+2. "last 2 weeks" / "past 2 weeks" → Use last2WeeksByCategory  
+3. "last month" / "last 4 weeks" / "past month" → Use last4WeeksByCategory
+4. "all time" / "total" / "overall" → Use allTimeByCategory
+5. ALWAYS use the pre-computed byCategory data - it's already calculated correctly
+6. DO NOT try to sum from skuByWeek or skuAnalysis - those can cause errors
+7. If user asks about a specific category (e.g., "lip balm"), look up that category key
 
 === WEEKLY DATA (most recent 12 weeks) ===
 ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
@@ -12431,6 +12749,27 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
       alerts.push({ type: 'warning', text: a.message, link: 'forecast' });
     });
     
+    // QBO/Banking data stale alert
+    if (bankingData.transactions?.length > 0) {
+      const lastUpload = bankingData.lastUpload ? new Date(bankingData.lastUpload) : null;
+      const today = new Date();
+      const isStale = !lastUpload || 
+        (today.getTime() - lastUpload.getTime()) > 24 * 60 * 60 * 1000; // More than 24 hours old
+      
+      if (isStale) {
+        const daysSince = lastUpload 
+          ? Math.floor((today.getTime() - lastUpload.getTime()) / (24 * 60 * 60 * 1000))
+          : null;
+        alerts.push({ 
+          type: 'warning', 
+          text: daysSince 
+            ? `QBO data is ${daysSince} day${daysSince !== 1 ? 's' : ''} old - upload latest transactions`
+            : 'QBO data needs to be uploaded',
+          link: 'banking' 
+        });
+      }
+    }
+    
     // Calculate total upcoming bills for display
     const totalUpcomingBills = upcomingBills.reduce((s, i) => s + i.amount, 0);
     
@@ -13351,12 +13690,27 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                   </div>
                   
                   {(() => {
-                    // Get current month and year
+                    // Get current month and year - use calendarMonth state if set, otherwise auto-detect
                     const now = new Date();
                     const daysWithSales = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
+                    const allDaysWithAny = Object.keys(allDaysData).sort();
                     const latestDate = daysWithSales.length > 0 ? new Date(daysWithSales[daysWithSales.length - 1] + 'T12:00:00') : now;
-                    const viewMonth = latestDate.getMonth();
-                    const viewYear = latestDate.getFullYear();
+                    
+                    // Use calendarMonth state if set, otherwise use latest data month
+                    const viewMonth = calendarMonth ? calendarMonth.month : latestDate.getMonth();
+                    const viewYear = calendarMonth ? calendarMonth.year : latestDate.getFullYear();
+                    
+                    // Get available months for navigation (months with any data)
+                    const availableMonths = new Set();
+                    allDaysWithAny.forEach(d => {
+                      const date = new Date(d + 'T12:00:00');
+                      availableMonths.add(`${date.getFullYear()}-${date.getMonth()}`);
+                    });
+                    const sortedMonths = Array.from(availableMonths).sort();
+                    const currentMonthKey = `${viewYear}-${viewMonth}`;
+                    const currentMonthIdx = sortedMonths.indexOf(currentMonthKey);
+                    const hasPrevMonth = currentMonthIdx > 0;
+                    const hasNextMonth = currentMonthIdx < sortedMonths.length - 1;
                     
                     // Get first day of month and number of days
                     const firstDay = new Date(viewYear, viewMonth, 1);
@@ -13372,19 +13726,76 @@ Use the ACTUAL numbers provided. Be specific and actionable. Include period-over
                     const monthRevenue = monthDays.reduce((sum, d) => sum + (allDaysData[d]?.total?.revenue || 0), 0);
                     const monthProfit = monthDays.reduce((sum, d) => sum + (allDaysData[d]?.total?.netProfit || 0), 0);
                     
+                    // Count days missing ads data
+                    const daysWithMeta = monthDays.filter(d => {
+                      const data = allDaysData[d];
+                      return (data?.shopify?.metaSpend || data?.metaSpend || data?.metaAds || 0) > 0;
+                    }).length;
+                    const daysWithGoogle = monthDays.filter(d => {
+                      const data = allDaysData[d];
+                      return (data?.shopify?.googleSpend || data?.googleSpend || data?.googleAds || 0) > 0;
+                    }).length;
+                    const daysMissingMeta = monthDays.length - daysWithMeta;
+                    const daysMissingGoogle = monthDays.length - daysWithGoogle;
+                    
+                    // Navigate to prev/next month
+                    const goPrevMonth = () => {
+                      if (hasPrevMonth) {
+                        const [year, month] = sortedMonths[currentMonthIdx - 1].split('-').map(Number);
+                        setCalendarMonth({ year, month });
+                      }
+                    };
+                    const goNextMonth = () => {
+                      if (hasNextMonth) {
+                        const [year, month] = sortedMonths[currentMonthIdx + 1].split('-').map(Number);
+                        setCalendarMonth({ year, month });
+                      }
+                    };
+                    const goToLatest = () => setCalendarMonth(null);
+                    
                     return (
                       <>
-                        {/* Month Header */}
+                        {/* Month Header with Navigation */}
                         <div className="flex items-center justify-between mb-4">
-                          <h4 className="text-white font-medium">
-                            {new Date(viewYear, viewMonth).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-                          </h4>
+                          <div className="flex items-center gap-2">
+                            <button 
+                              onClick={goPrevMonth}
+                              disabled={!hasPrevMonth}
+                              className={`w-7 h-7 flex items-center justify-center rounded-lg ${hasPrevMonth ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-slate-800/50 text-slate-600 cursor-not-allowed'}`}
+                            >
+                              ←
+                            </button>
+                            <h4 className="text-white font-medium min-w-[140px] text-center">
+                              {new Date(viewYear, viewMonth).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                            </h4>
+                            <button 
+                              onClick={goNextMonth}
+                              disabled={!hasNextMonth}
+                              className={`w-7 h-7 flex items-center justify-center rounded-lg ${hasNextMonth ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-slate-800/50 text-slate-600 cursor-not-allowed'}`}
+                            >
+                              →
+                            </button>
+                            {calendarMonth && (
+                              <button onClick={goToLatest} className="ml-2 px-2 py-1 text-xs bg-cyan-500/20 text-cyan-400 rounded hover:bg-cyan-500/30">
+                                Latest
+                              </button>
+                            )}
+                          </div>
                           <div className="flex items-center gap-4 text-sm">
                             <span className="text-slate-400">{monthDays.length} days</span>
                             <span className="text-emerald-400">{formatCurrency(monthRevenue)}</span>
                             <span className={monthProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{formatCurrency(monthProfit)} profit</span>
                           </div>
                         </div>
+                        
+                        {/* Missing Ads Data Alert */}
+                        {monthDays.length > 0 && (daysMissingMeta > 0 || daysMissingGoogle > 0) && (
+                          <div className="mb-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs text-amber-400 flex items-center gap-2">
+                            <span>⚠️ Missing ads data:</span>
+                            {daysMissingMeta > 0 && <span className="px-2 py-0.5 bg-blue-500/20 rounded">Meta: {daysMissingMeta} days</span>}
+                            {daysMissingGoogle > 0 && <span className="px-2 py-0.5 bg-red-500/20 rounded">Google: {daysMissingGoogle} days</span>}
+                          </div>
+                        )}
                         
                         {/* Calendar Grid */}
                         <div className="grid grid-cols-7 gap-1 mb-2">
@@ -17909,10 +18320,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             )}
           </div>
           
-          {/* Monthly YoY Chart - only shows with weekly data */}
-          {previousYear && hasMonthlyData && (
+          {/* Monthly YoY Chart - shows even with just current year data */}
+          {hasMonthlyData && (
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Monthly Revenue: {currentYear} vs {previousYear}</h3>
+              <h3 className="text-lg font-semibold text-white mb-4">Monthly Revenue: {currentYear}{previousYear ? ` vs ${previousYear}` : ''}</h3>
               <div className="flex items-end gap-2 h-64">
                 {allMonths.map((m, i) => {
                   const currRev = currentMonths[m]?.revenue || 0;
@@ -17922,17 +18333,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   return (
                     <div key={m} className="flex-1 flex flex-col items-center">
                       <div className="relative flex gap-0.5 items-end h-48 w-full">
-                        <div className="flex-1 flex flex-col justify-end group relative">
-                          <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
-                            {previousYear}: {formatCurrency(prevRev)}
+                        {previousYear && (
+                          <div className="flex-1 flex flex-col justify-end group relative">
+                            <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
+                              {previousYear}: {formatCurrency(prevRev)}
+                            </div>
+                            <div className="w-full bg-slate-600 rounded-t transition-all hover:bg-slate-500" style={{ height: `${Math.max(prevHeight, prevRev > 0 ? 2 : 0)}%` }} />
                           </div>
-                          <div className="w-full bg-slate-600 rounded-t transition-all hover:bg-slate-500" style={{ height: `${Math.max(prevHeight, 1)}%` }} />
-                        </div>
-                        <div className="flex-1 flex flex-col justify-end group relative">
+                        )}
+                        <div className={`${previousYear ? 'flex-1' : 'w-full'} flex flex-col justify-end group relative`}>
                           <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                             {currentYear}: {formatCurrency(currRev)}
                           </div>
-                          <div className="w-full bg-violet-500 rounded-t transition-all hover:bg-violet-400" style={{ height: `${Math.max(currHeight, 1)}%` }} />
+                          <div className="w-full bg-violet-500 rounded-t transition-all hover:bg-violet-400" style={{ height: `${Math.max(currHeight, currRev > 0 ? 2 : 0)}%` }} />
                         </div>
                       </div>
                       <span className="text-xs text-slate-400 mt-2">{monthNames[i]}</span>
@@ -17941,7 +18354,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 })}
               </div>
               <div className="flex gap-4 mt-3 text-sm justify-center">
-                <span className="flex items-center gap-2"><span className="w-3 h-3 bg-slate-600 rounded" />{previousYear}</span>
+                {previousYear && <span className="flex items-center gap-2"><span className="w-3 h-3 bg-slate-600 rounded" />{previousYear}</span>}
                 <span className="flex items-center gap-2"><span className="w-3 h-3 bg-violet-500 rounded" />{currentYear}</span>
               </div>
             </div>
@@ -19886,9 +20299,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
 
   // ==================== PROFITABILITY VIEW ====================
   if (view === 'profitability') {
-    // Use a separate state for profitability period, defaulting to weekly
-    // If trendsTab is 'daily', treat as 'weekly' for profitability
-    const profitPeriod = trendsTab === 'daily' ? 'weekly' : trendsTab; // 'weekly' | 'monthly' | 'yearly'
+    // Period tabs: weekly, monthly, quarterly, ytd
+    const profitPeriod = trendsTab === 'daily' ? 'weekly' : trendsTab; // 'weekly' | 'monthly' | 'quarterly' | 'yearly'
     
     const sortedWeeks = Object.keys(allWeeksData).filter(w => {
       const data = allWeeksData[w];
@@ -19898,38 +20310,37 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     // Categorize periods - flexible matching for various formats
     const monthlyPeriods = sortedPeriods.filter(p => {
-      // Full month names: "January 2025", "January2025", etc.
       if (/^(january|february|march|april|may|june|july|august|september|october|november|december)[\s\-]*['']?\d{2,4}$/i.test(p)) return true;
-      // Short month names: "Jan 2025", "Jan2025", "Jan '25", etc.
       if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[\s\-]*['']?\d{2,4}$/i.test(p)) return true;
-      // ISO format: "2025-01"
       if (/^\d{4}-\d{2}$/.test(p)) return true;
       return false;
+    }).sort((a, b) => {
+      // Sort by extracted year and month
+      const getYearMonth = (p) => {
+        const yearMatch = p.match(/(20\d{2})/);
+        const year = yearMatch ? yearMatch[1] : '2025';
+        const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+        const monthMatch = p.toLowerCase().match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/);
+        const month = monthMatch ? String(monthNames.indexOf(monthMatch[1]) + 1).padStart(2, '0') : '01';
+        return `${year}-${month}`;
+      };
+      return getYearMonth(a).localeCompare(getYearMonth(b));
     });
-    const quarterlyPeriods = sortedPeriods.filter(p => /q[1-4]/i.test(p));
-    const yearlyPeriods = sortedPeriods.filter(p => /^\d{4}$/.test(p));
+    const quarterlyPeriods = sortedPeriods.filter(p => /q[1-4]/i.test(p)).sort();
+    const yearlyPeriods = sortedPeriods.filter(p => /^\d{4}$/.test(p)).sort();
     
-    // Get data based on selected period type
-    let recentWeeks = [];
-    let olderWeeks = [];
-    let periodLabel = '';
-    
-    if (profitPeriod === 'monthly' && monthlyPeriods.length > 0) {
-      // Use monthly period data
-      recentWeeks = monthlyPeriods.slice(-4);
-      olderWeeks = monthlyPeriods.slice(-8, -4);
-      periodLabel = `Last ${recentWeeks.length} months`;
-    } else if (profitPeriod === 'yearly' && (yearlyPeriods.length > 0 || quarterlyPeriods.length > 0)) {
-      recentWeeks = yearlyPeriods.length > 0 ? yearlyPeriods : quarterlyPeriods.slice(-4);
-      periodLabel = yearlyPeriods.length > 0 ? `${recentWeeks.length} year(s)` : `${recentWeeks.length} quarters`;
-    } else {
-      // Default to weekly
-      recentWeeks = sortedWeeks.slice(-4);
-      olderWeeks = sortedWeeks.slice(-8, -4);
-      periodLabel = recentWeeks.length > 0 
-        ? `Last ${recentWeeks.length} weeks: ${new Date(recentWeeks[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(recentWeeks[recentWeeks.length-1] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
-        : 'No data';
-    }
+    // Get 3PL costs for a date range
+    const get3PLCostsForPeriod = (startDate, endDate) => {
+      if (!threeplLedger?.orders) return 0;
+      let total = 0;
+      Object.entries(threeplLedger.orders).forEach(([orderId, order]) => {
+        const orderDate = order.shipmentDate || order.orderDate;
+        if (orderDate && orderDate >= startDate && orderDate <= endDate) {
+          total += (order.shipping || 0) + (order.pickFees || 0) + (order.packagingFees || 0) + (order.storageFees || 0) + (order.otherFees || 0);
+        }
+      });
+      return total;
+    };
     
     // Helper to get data from either weekly or period source
     const getData = (key) => {
@@ -19938,44 +20349,136 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       return null;
     };
     
-    // Aggregate data for recent period
+    // Get single period data based on selected tab
+    let currentPeriodKey = '';
+    let currentPeriodLabel = '';
+    let priorPeriodKey = '';
+    let priorPeriodLabel = '';
+    let trendPeriods = []; // For margin trend chart
+    let trendPeriodType = 'week';
+    
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth(); // 0-indexed
+    const currentQuarter = Math.floor(currentMonth / 3) + 1;
+    
+    if (profitPeriod === 'monthly' && monthlyPeriods.length > 0) {
+      // Prior month (most recent uploaded month)
+      currentPeriodKey = monthlyPeriods[monthlyPeriods.length - 1];
+      currentPeriodLabel = currentPeriodKey;
+      priorPeriodKey = monthlyPeriods.length > 1 ? monthlyPeriods[monthlyPeriods.length - 2] : '';
+      priorPeriodLabel = priorPeriodKey;
+      trendPeriods = monthlyPeriods.slice(-8);
+      trendPeriodType = 'month';
+    } else if (profitPeriod === 'quarterly' && quarterlyPeriods.length > 0) {
+      // Prior quarter
+      currentPeriodKey = quarterlyPeriods[quarterlyPeriods.length - 1];
+      currentPeriodLabel = currentPeriodKey;
+      priorPeriodKey = quarterlyPeriods.length > 1 ? quarterlyPeriods[quarterlyPeriods.length - 2] : '';
+      priorPeriodLabel = priorPeriodKey;
+      trendPeriods = quarterlyPeriods.slice(-4);
+      trendPeriodType = 'quarter';
+    } else if (profitPeriod === 'yearly') {
+      // YTD - aggregate all weeks from current year
+      const ytdWeeks = sortedWeeks.filter(w => w.startsWith(String(currentYear)));
+      currentPeriodKey = 'ytd';
+      currentPeriodLabel = `${currentYear} Year-to-Date`;
+      // Prior year same period for comparison
+      const priorYtdWeeks = sortedWeeks.filter(w => w.startsWith(String(currentYear - 1)));
+      priorPeriodKey = 'prior_ytd';
+      priorPeriodLabel = `${currentYear - 1} Same Period`;
+      trendPeriods = monthlyPeriods.length > 0 ? monthlyPeriods.slice(-12) : sortedWeeks.slice(-12);
+      trendPeriodType = monthlyPeriods.length > 0 ? 'month' : 'week';
+    } else {
+      // Weekly - prior week (most recent complete week)
+      currentPeriodKey = sortedWeeks[sortedWeeks.length - 1] || '';
+      currentPeriodLabel = currentPeriodKey ? `Week of ${new Date(currentPeriodKey + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : 'No data';
+      priorPeriodKey = sortedWeeks.length > 1 ? sortedWeeks[sortedWeeks.length - 2] : '';
+      priorPeriodLabel = priorPeriodKey ? `Week of ${new Date(priorPeriodKey + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : '';
+      trendPeriods = sortedWeeks.slice(-8);
+      trendPeriodType = 'week';
+    }
+    
+    // Get totals for current period
     const totals = { revenue: 0, cogs: 0, amazonFees: 0, threeplCosts: 0, adSpend: 0, profit: 0, units: 0, returns: 0 };
+    
+    if (profitPeriod === 'yearly') {
+      // YTD aggregation
+      const ytdWeeks = sortedWeeks.filter(w => w.startsWith(String(currentYear)));
+      ytdWeeks.forEach(w => {
+        const data = allWeeksData[w];
+        if (!data) return;
+        totals.revenue += data.total?.revenue || 0;
+        totals.cogs += data.total?.cogs || 0;
+        totals.amazonFees += data.amazon?.fees || 0;
+        totals.threeplCosts += data.shopify?.threeplCosts || 0;
+        totals.adSpend += data.total?.adSpend || 0;
+        totals.profit += data.total?.netProfit || 0;
+        totals.units += data.total?.units || 0;
+        totals.returns += data.amazon?.returns || 0;
+      });
+      // Add 3PL costs for YTD
+      const ytdStart = `${currentYear}-01-01`;
+      const ytdEnd = new Date().toISOString().split('T')[0];
+      totals.threeplCosts += get3PLCostsForPeriod(ytdStart, ytdEnd);
+    } else {
+      // Single period
+      const data = getData(currentPeriodKey);
+      if (data) {
+        totals.revenue = data.total?.revenue || 0;
+        totals.cogs = data.total?.cogs || 0;
+        totals.amazonFees = data.amazon?.fees || 0;
+        totals.threeplCosts = data.shopify?.threeplCosts || 0;
+        totals.adSpend = data.total?.adSpend || 0;
+        totals.profit = data.total?.netProfit || 0;
+        totals.units = data.total?.units || 0;
+        totals.returns = data.amazon?.returns || 0;
+        
+        // Add 3PL costs for weekly periods
+        if (profitPeriod === 'weekly' && currentPeriodKey) {
+          const weekEnd = new Date(currentPeriodKey);
+          const weekStart = new Date(weekEnd);
+          weekStart.setDate(weekStart.getDate() - 6);
+          totals.threeplCosts += get3PLCostsForPeriod(
+            weekStart.toISOString().split('T')[0],
+            weekEnd.toISOString().split('T')[0]
+          );
+        }
+      }
+    }
+    
+    // Get prior period totals for comparison
+    const priorTotals = { revenue: 0, cogs: 0, amazonFees: 0, threeplCosts: 0, adSpend: 0, profit: 0, units: 0, returns: 0 };
+    if (profitPeriod === 'yearly') {
+      // Prior YTD
+      const currentDayOfYear = Math.floor((new Date() - new Date(currentYear, 0, 0)) / (1000 * 60 * 60 * 24));
+      const priorYtdEnd = new Date(currentYear - 1, 0, currentDayOfYear);
+      const priorYtdWeeks = sortedWeeks.filter(w => {
+        const wDate = new Date(w);
+        return wDate.getFullYear() === currentYear - 1 && wDate <= priorYtdEnd;
+      });
+      priorYtdWeeks.forEach(w => {
+        const data = allWeeksData[w];
+        if (!data) return;
+        priorTotals.revenue += data.total?.revenue || 0;
+        priorTotals.cogs += data.total?.cogs || 0;
+        priorTotals.amazonFees += data.amazon?.fees || 0;
+        priorTotals.threeplCosts += data.shopify?.threeplCosts || 0;
+        priorTotals.adSpend += data.total?.adSpend || 0;
+        priorTotals.profit += data.total?.netProfit || 0;
+      });
+    } else if (priorPeriodKey) {
+      const priorData = getData(priorPeriodKey);
+      if (priorData) {
+        priorTotals.revenue = priorData.total?.revenue || 0;
+        priorTotals.cogs = priorData.total?.cogs || 0;
+        priorTotals.amazonFees = priorData.amazon?.fees || 0;
+        priorTotals.threeplCosts = priorData.shopify?.threeplCosts || 0;
+        priorTotals.adSpend = priorData.total?.adSpend || 0;
+        priorTotals.profit = priorData.total?.netProfit || 0;
+      }
+    }
+    
     const weeklyBreakdown = [];
-    
-    recentWeeks.forEach(w => {
-      const data = getData(w);
-      if (!data) return;
-      const rev = data.total?.revenue || 0;
-      const cogs = data.total?.cogs || 0;
-      const amzFees = data.amazon?.fees || 0;
-      const threepl = data.shopify?.threeplCosts || 0;
-      const ads = data.total?.adSpend || 0;
-      const profit = data.total?.netProfit || 0;
-      const units = data.total?.units || 0;
-      const returns = data.amazon?.returns || 0;
-      
-      totals.revenue += rev;
-      totals.cogs += cogs;
-      totals.amazonFees += amzFees;
-      totals.threeplCosts += threepl;
-      totals.adSpend += ads;
-      totals.profit += profit;
-      totals.units += units;
-      totals.returns += returns;
-      
-      weeklyBreakdown.push({ week: w, revenue: rev, cogs, amazonFees: amzFees, threeplCosts: threepl, adSpend: ads, profit, units, returns, margin: rev > 0 ? (profit/rev)*100 : 0 });
-    });
-    
-    // Calculate prior period for comparison
-    const priorTotals = { revenue: 0, profit: 0, cogs: 0, adSpend: 0 };
-    olderWeeks.forEach(w => {
-      const data = getData(w);
-      if (!data) return;
-      priorTotals.revenue += data.total?.revenue || 0;
-      priorTotals.profit += data.total?.netProfit || 0;
-      priorTotals.cogs += data.total?.cogs || 0;
-      priorTotals.adSpend += data.total?.adSpend || 0;
-    });
     
     // Calculate percentages
     const pcts = {
@@ -20008,24 +20511,55 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       { name: 'Ad Spend', value: totals.adSpend, pct: pcts.adSpend },
     ].sort((a, b) => b.value - a.value);
     
-    // SKU-level profitability
+    // Build margin trends data from trendPeriods
+    const marginTrends = trendPeriods.map(p => {
+      const data = getData(p);
+      if (!data) return null;
+      const rev = data.total?.revenue || 1;
+      const profit = data.total?.netProfit || 0;
+      return {
+        period: p,
+        label: trendPeriodType === 'week' 
+          ? new Date(p + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          : p.replace(/\s*\d{4}$/, '').slice(0, 3),
+        revenue: data.total?.revenue || 0,
+        profit: profit,
+        margin: (profit / rev) * 100,
+        cogsPct: ((data.total?.cogs || 0) / rev) * 100,
+        adsPct: ((data.total?.adSpend || 0) / rev) * 100,
+        feesPct: (((data.amazon?.fees || 0) + (data.shopify?.threeplCosts || 0)) / rev) * 100,
+      };
+    }).filter(Boolean);
+    
+    // SKU-level profitability for current period
     const skuProfitability = [];
-    recentWeeks.forEach(w => {
-      const data = getData(w); // Use getData helper instead of direct access
-      if (!data) return;
-      [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])].forEach(s => {
-        const existing = skuProfitability.find(x => x.sku === s.sku);
+    const currentData = getData(currentPeriodKey);
+    if (currentData) {
+      [...(currentData.amazon?.skuData || []), ...(currentData.shopify?.skuData || [])].forEach(s => {
         const profit = s.netProceeds !== undefined ? s.netProceeds : (s.netSales || 0) - (s.cogs || 0);
         const revenue = s.netSales || 0;
-        if (existing) {
-          existing.revenue += revenue;
-          existing.profit += profit;
-          existing.units += s.unitsSold || 0;
-        } else {
-          skuProfitability.push({ sku: s.sku, name: s.name || '', revenue, profit, units: s.unitsSold || 0 });
-        }
+        skuProfitability.push({ sku: s.sku, name: s.name || '', revenue, profit, units: s.unitsSold || 0 });
       });
-    });
+    } else if (profitPeriod === 'yearly') {
+      // For YTD, aggregate all SKUs from current year
+      const ytdWeeks = sortedWeeks.filter(w => w.startsWith(String(currentYear)));
+      ytdWeeks.forEach(w => {
+        const data = allWeeksData[w];
+        if (!data) return;
+        [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])].forEach(s => {
+          const existing = skuProfitability.find(x => x.sku === s.sku);
+          const profit = s.netProceeds !== undefined ? s.netProceeds : (s.netSales || 0) - (s.cogs || 0);
+          const revenue = s.netSales || 0;
+          if (existing) {
+            existing.revenue += revenue;
+            existing.profit += profit;
+            existing.units += s.unitsSold || 0;
+          } else {
+            skuProfitability.push({ sku: s.sku, name: s.name || '', revenue, profit, units: s.unitsSold || 0 });
+          }
+        });
+      });
+    }
     
     // Calculate margin and sort
     const skuWithMargins = skuProfitability.map(s => ({
@@ -20050,7 +20584,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     const maxVal = Math.max(totals.revenue, Math.abs(totals.profit));
     
-    // Cost trends over time
+    // Cost trends over time (kept for backward compatibility)
     const costTrends = sortedWeeks.slice(-12).map(w => {
       const week = allWeeksData[w];
       const rev = week.total?.revenue || 1;
@@ -20072,28 +20606,40 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">💰 Profitability Deep Dive</h1>
-            <p className="text-slate-400">Understand where your money goes ({periodLabel})</p>
+            <p className="text-slate-400">
+              {profitPeriod === 'yearly' 
+                ? currentPeriodLabel 
+                : `${currentPeriodLabel}${priorPeriodLabel ? ` vs ${priorPeriodLabel}` : ''}`}
+            </p>
           </div>
           
           {/* Time Period Tabs */}
-          <div className="flex gap-2 mb-6">
+          <div className="flex flex-wrap gap-2 mb-6">
             <button 
               onClick={() => setTrendsTab('weekly')}
               className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'weekly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
             >
-              📅 Weekly ({sortedWeeks.length})
+              📅 Prior Week
             </button>
             <button 
               onClick={() => setTrendsTab('monthly')}
               className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'monthly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              disabled={monthlyPeriods.length === 0}
             >
-              📊 Monthly ({monthlyPeriods.length})
+              📊 Prior Month {monthlyPeriods.length === 0 && '(No data)'}
+            </button>
+            <button 
+              onClick={() => setTrendsTab('quarterly')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'quarterly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              disabled={quarterlyPeriods.length === 0}
+            >
+              📈 Prior Quarter {quarterlyPeriods.length === 0 && '(No data)'}
             </button>
             <button 
               onClick={() => setTrendsTab('yearly')}
               className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'yearly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
             >
-              📆 Yearly ({yearlyPeriods.length || quarterlyPeriods.length})
+              📆 YTD
             </button>
           </div>
           
@@ -20110,10 +20656,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 <p className={`font-semibold ${profitPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(profitPerUnit)}</p>
               </div>
               <div>
-                <p className="text-slate-400">Margin Trend vs Prior 4 Weeks</p>
+                <p className="text-slate-400">Margin vs Prior Period</p>
                 <p className={`font-semibold flex items-center gap-1 ${pcts.profit >= priorPcts.profit ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {pcts.profit >= priorPcts.profit ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                  {pcts.profit >= priorPcts.profit ? '+' : ''}{(pcts.profit - priorPcts.profit).toFixed(1)}%
+                  {priorPcts.profit > 0 ? (
+                    <>
+                      {pcts.profit >= priorPcts.profit ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                      {pcts.profit >= priorPcts.profit ? '+' : ''}{(pcts.profit - priorPcts.profit).toFixed(1)}%
+                    </>
+                  ) : (
+                    <span className="text-slate-500">No prior data</span>
+                  )}
                 </p>
               </div>
             </div>
@@ -20123,7 +20675,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-white">Profit Waterfall</h3>
-              <span className="text-sm text-slate-400">{periodLabel}</span>
+              <span className="text-sm text-slate-400">{currentPeriodLabel}</span>
             </div>
             {/* Horizontal Bar Waterfall */}
             <div className="space-y-2">
@@ -20210,6 +20762,56 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               <p className={`text-sm ${pcts.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{pcts.profit.toFixed(1)}% margin</p>
             </div>
           </div>
+          
+          {/* Margin Trend Chart */}
+          {marginTrends.length > 1 && (
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">Margin Trend</h3>
+                <span className="text-sm text-slate-400">Last {marginTrends.length} {trendPeriodType}s</span>
+              </div>
+              <div className="h-48 flex items-end gap-2">
+                {marginTrends.map((t, i) => {
+                  const maxMargin = Math.max(...marginTrends.map(m => Math.abs(m.margin)), 50);
+                  const height = Math.abs(t.margin) / maxMargin * 100;
+                  const isPositive = t.margin >= 0;
+                  const isLast = i === marginTrends.length - 1;
+                  return (
+                    <div key={t.period} className="flex-1 flex flex-col items-center group relative">
+                      <div className="absolute -top-16 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded whitespace-nowrap z-50 shadow-lg pointer-events-none">
+                        <p className="font-medium">{t.period}</p>
+                        <p className="text-slate-300">Revenue: {formatCurrency(t.revenue)}</p>
+                        <p className={isPositive ? 'text-emerald-400' : 'text-rose-400'}>Margin: {t.margin.toFixed(1)}%</p>
+                        <p className="text-rose-300">COGS: {t.cogsPct.toFixed(1)}%</p>
+                        <p className="text-orange-300">Fees: {t.feesPct.toFixed(1)}%</p>
+                        <p className="text-purple-300">Ads: {t.adsPct.toFixed(1)}%</p>
+                      </div>
+                      <div className="w-full h-full flex items-end">
+                        <div 
+                          className={`w-full rounded-t transition-all hover:opacity-80 ${isPositive ? (isLast ? 'bg-emerald-500' : 'bg-emerald-500/60') : (isLast ? 'bg-rose-500' : 'bg-rose-500/60')}`}
+                          style={{ height: `${Math.max(height, 4)}%` }}
+                        />
+                      </div>
+                      <div className="mt-2 text-center">
+                        <span className="text-[10px] text-slate-500">{t.label}</span>
+                        <p className={`text-xs font-medium ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>{t.margin.toFixed(0)}%</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-4 pt-4 border-t border-slate-700 flex justify-between text-sm text-slate-400">
+                <span>Avg Margin: <span className={marginTrends.reduce((s, t) => s + t.margin, 0) / marginTrends.length >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{(marginTrends.reduce((s, t) => s + t.margin, 0) / marginTrends.length).toFixed(1)}%</span></span>
+                <span>Trend: {marginTrends.length >= 2 ? (
+                  marginTrends[marginTrends.length - 1].margin > marginTrends[0].margin 
+                    ? <span className="text-emerald-400">↑ Improving</span>
+                    : marginTrends[marginTrends.length - 1].margin < marginTrends[0].margin
+                    ? <span className="text-rose-400">↓ Declining</span>
+                    : <span className="text-slate-400">→ Stable</span>
+                ) : '-'}</span>
+              </div>
+            </div>
+          )}
           
           {/* SKU Profitability Insights */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
