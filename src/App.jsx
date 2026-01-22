@@ -8028,6 +8028,9 @@ Analyze the data and respond with ONLY this JSON:
       <div className="w-px bg-slate-600 mx-1" />
       
       {/* Data Views */}
+      {appSettings.modulesEnabled?.dailyTracking !== false && (
+        <button onClick={() => { const d = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse(); if (d.length) { setSelectedDay(d[0]); setView('daily'); }}} disabled={!Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'daily' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Sun className="w-4 h-4 inline mr-1" />Days</button>
+      )}
       {appSettings.modulesEnabled?.weeklyTracking !== false && (
         <button onClick={() => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}} disabled={!Object.keys(allWeeksData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />Weeks</button>
       )}
@@ -16495,6 +16498,158 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             </div>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz /><ChannelCard title="Shopify" color="blue" data={data.shopify} /></div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==================== DAILY VIEW ====================
+  if (view === 'daily' && selectedDay && allDaysData[selectedDay]) {
+    const dayData = allDaysData[selectedDay];
+    const daysWithSales = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse();
+    const idx = daysWithSales.indexOf(selectedDay);
+    
+    const amazon = dayData.amazon || {};
+    const shopify = dayData.shopify || {};
+    const total = dayData.total || {};
+    
+    // Build proper data structures for ChannelCard component
+    const amazonData = {
+      revenue: amazon.revenue || 0,
+      units: amazon.units || 0,
+      netProfit: amazon.netProfit || amazon.netProceeds || 0,
+      margin: amazon.margin || (amazon.revenue > 0 ? ((amazon.netProfit || amazon.netProceeds || 0) / amazon.revenue) * 100 : 0),
+      cogs: amazon.cogs || 0,
+      fees: amazon.fees || amazon.fbaFees || 0,
+      adSpend: amazon.adSpend || 0,
+      roas: amazon.roas || (amazon.adSpend > 0 ? amazon.revenue / amazon.adSpend : 0),
+      aov: amazon.units > 0 ? amazon.revenue / amazon.units : 0,
+      returns: amazon.returns || 0,
+      returnRate: amazon.returnRate || 0,
+      skuData: amazon.skuData || [],
+    };
+    
+    const shopifyData = {
+      revenue: shopify.revenue || 0,
+      units: shopify.units || 0,
+      netProfit: shopify.netProfit || 0,
+      netMargin: shopify.netMargin || (shopify.revenue > 0 ? (shopify.netProfit / shopify.revenue) * 100 : 0),
+      cogs: shopify.cogs || 0,
+      threeplCosts: shopify.threeplCosts || 0,
+      adSpend: (shopify.metaSpend || 0) + (shopify.googleSpend || 0),
+      metaSpend: shopify.metaSpend || 0,
+      googleSpend: shopify.googleSpend || 0,
+      roas: shopify.roas || 0,
+      aov: shopify.units > 0 ? shopify.revenue / shopify.units : 0,
+      discounts: shopify.discounts || 0,
+      skuData: shopify.skuData || [],
+    };
+    
+    const deleteDay = (dayKey) => {
+      if (!confirm(`Delete ${new Date(dayKey + 'T12:00:00').toLocaleDateString()}? This cannot be undone.`)) return;
+      const updated = { ...allDaysData };
+      delete updated[dayKey];
+      setAllDaysData(updated);
+      lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated));
+      queueCloudSave({ ...combinedData, dailySales: updated });
+      const remaining = Object.keys(updated).filter(k => hasDailySalesData(updated[k])).sort().reverse();
+      if (remaining.length) setSelectedDay(remaining[0]);
+      else { setView('dashboard'); setSelectedDay(null); }
+      setToast({ message: 'Day deleted', type: 'success' });
+    };
+    
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><GoalsModal /><StoreSelectorModal />
+          
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+            <div className="flex items-center gap-4">
+              {storeLogo && (
+                <img src={storeLogo} alt="Store logo" className="w-12 h-12 object-contain rounded-xl bg-white p-1.5" />
+              )}
+              <div>
+                <h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'Daily Performance'}</h1>
+                <p className="text-slate-400">{new Date(selectedDay + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => deleteDay(selectedDay)} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-lg text-sm"><Trash2 className="w-4 h-4" /></button>
+            </div>
+          </div>
+          
+          <NavTabs />
+          
+          {/* Day Selector */}
+          <div className="flex items-center gap-4 mb-6">
+            <button onClick={() => idx < daysWithSales.length - 1 && setSelectedDay(daysWithSales[idx + 1])} disabled={idx >= daysWithSales.length - 1} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
+            <select value={selectedDay} onChange={(e) => setSelectedDay(e.target.value)} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">
+              {daysWithSales.map(d => <option key={d} value={d}>{new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</option>)}
+            </select>
+            <button onClick={() => idx > 0 && setSelectedDay(daysWithSales[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
+          </div>
+          
+          {/* Top Metrics */}
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+            <MetricCard label="Total Revenue" value={formatCurrency(total.revenue || 0)} icon={DollarSign} color="emerald" />
+            <MetricCard label="Total Units" value={formatNumber(total.units || 0)} icon={Package} color="blue" />
+            <MetricCard label="Net Profit" value={formatCurrency(total.netProfit || 0)} sub={`${formatPercent(total.netMargin || 0)} margin`} icon={TrendingUp} color={(total.netProfit || 0) >= 0 ? 'emerald' : 'rose'} />
+            <MetricCard label="Ad Spend" value={formatCurrency(total.adSpend || 0)} sub={`${(total.roas || 0).toFixed(2)}x TACOS`} icon={BarChart3} color="violet" />
+            <MetricCard label="COGS" value={formatCurrency(total.cogs || 0)} icon={ShoppingCart} color="amber" />
+          </div>
+          
+          {/* Channel Split Bar */}
+          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5 mb-8">
+            <h3 className="text-sm font-semibold text-slate-400 uppercase mb-4">Revenue by Channel</h3>
+            <div className="h-4 bg-slate-700 rounded-full overflow-hidden flex mb-3">
+              <div className="bg-orange-500 h-full" style={{ width: `${total.amazonShare || 0}%` }} />
+              <div className="bg-blue-500 h-full" style={{ width: `${total.shopifyShare || 0}%` }} />
+            </div>
+            <div className="flex justify-between text-sm">
+              <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-orange-500" /><span className="text-slate-300">Amazon</span><span className="text-white font-semibold">{formatPercent(total.amazonShare || 0)}</span></div>
+              <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-blue-500" /><span className="text-slate-300">Shopify</span><span className="text-white font-semibold">{formatPercent(total.shopifyShare || 0)}</span></div>
+            </div>
+          </div>
+          
+          {/* Channel Cards */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <ChannelCard title="Amazon" color="orange" data={amazonData} isAmz showSkuTable />
+            <ChannelCard title="Shopify" color="blue" data={shopifyData} showSkuTable />
+          </div>
+          
+          {/* Google/Meta Ads Details */}
+          {((shopify.googleSpend > 0 || shopify.adsMetrics?.googleImpressions > 0) || (shopify.metaSpend > 0 || shopify.adsMetrics?.metaImpressions > 0)) && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+              {/* Google Ads */}
+              {(shopify.googleSpend > 0 || shopify.adsMetrics?.googleImpressions > 0) && (
+                <div className="bg-red-900/20 border border-red-500/30 rounded-2xl p-5">
+                  <h3 className="text-lg font-semibold text-red-400 mb-4">Google Ads</h3>
+                  <div className="grid grid-cols-3 gap-4 text-center">
+                    <div><p className="text-slate-400 text-xs mb-1">Spend</p><p className="text-white text-lg font-semibold">{formatCurrency(shopify.googleSpend || 0)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Clicks</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.googleClicks || 0)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Impressions</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.googleImpressions || 0)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Conversions</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.googleConversions || 0)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">CPC</p><p className="text-white text-lg font-semibold">{formatCurrency(shopify.adsMetrics?.googleCPC || 0)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">CPA</p><p className="text-white text-lg font-semibold">{formatCurrency(shopify.adsMetrics?.googleCostPerConv || 0)}</p></div>
+                  </div>
+                </div>
+              )}
+              
+              {/* Meta Ads */}
+              {(shopify.metaSpend > 0 || shopify.adsMetrics?.metaImpressions > 0) && (
+                <div className="bg-indigo-900/20 border border-indigo-500/30 rounded-2xl p-5">
+                  <h3 className="text-lg font-semibold text-indigo-400 mb-4">Meta Ads</h3>
+                  <div className="grid grid-cols-3 gap-4 text-center">
+                    <div><p className="text-slate-400 text-xs mb-1">Spend</p><p className="text-white text-lg font-semibold">{formatCurrency(shopify.metaSpend || 0)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Clicks</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.metaClicks || 0)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Impressions</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.metaImpressions || 0)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Purchases</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.metaPurchases || 0)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">CTR</p><p className="text-white text-lg font-semibold">{(shopify.adsMetrics?.metaCTR || 0).toFixed(2)}%</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">CPC</p><p className="text-white text-lg font-semibold">{formatCurrency(shopify.adsMetrics?.metaCPC || 0)}</p></div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     );
