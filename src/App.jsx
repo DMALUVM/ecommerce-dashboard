@@ -99,7 +99,7 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
       if (match) {
         const accountName = match[1].trim();
         // Parse the total amount (usually in column 8 or 9)
-        let totalStr = (cols[8] || cols[7] || '').replace(/[$,"\s]/g, '');
+        let totalStr = (cols[9] || cols[8] || cols[7] || '').replace(/[$,"\s]/g, '');
         const total = parseFloat(totalStr) || 0;
         accountTotals[accountName] = total;
       }
