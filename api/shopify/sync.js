@@ -638,14 +638,32 @@ export default async function handler(req, res) {
         weeklyData[weekEnding].shopify.shopPayOrders += 1;
         weeklyData[weekEnding].shopify.shopPayTaxExcluded += orderTax;
         totalShopPayTaxExcluded += orderTax;
+        
+        // Also track Shop Pay by state for visibility
+        if (stateCode) {
+          if (!taxByState[stateCode]) {
+            taxByState[stateCode] = {
+              stateCode,
+              taxCollected: 0,
+              taxableSales: 0,
+              orderCount: 0,
+              excludedShopPayTax: 0,
+              shopPaySales: 0,
+              shopPayOrders: 0,
+            };
+          }
+          taxByState[stateCode].excludedShopPayTax += orderTax;
+          taxByState[stateCode].shopPaySales = (taxByState[stateCode].shopPaySales || 0) + (orderRevenue - orderDiscount);
+          taxByState[stateCode].shopPayOrders = (taxByState[stateCode].shopPayOrders || 0) + 1;
+        }
       } else {
         // Include tax in totals for non-Shop Pay orders
         dailyData[orderDate].shopify.taxTotal += orderTax;
         weeklyData[weekEnding].shopify.taxTotal += orderTax;
         totalTaxCollected += orderTax;
         
-        // Track by state for filing purposes
-        if (stateCode && orderTax > 0) {
+        // Track by state for filing purposes - track ALL sales, not just taxed
+        if (stateCode) {
           // Initialize state tracking
           if (!taxByState[stateCode]) {
             taxByState[stateCode] = {
