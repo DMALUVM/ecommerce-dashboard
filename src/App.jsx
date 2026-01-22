@@ -6511,15 +6511,21 @@ Keep insights brief and actionable. Format as numbered list.`;
       // ==================== PERIOD DATA ANALYSIS (2025 Monthly, 2024 Quarterly) ====================
       const periodsSummary = Object.entries(allPeriodsData).map(([label, data]) => ({
         period: label,
-        type: label.match(/^\d{4}$/) ? 'yearly' : label.match(/^q\d/i) ? 'quarterly' : 'monthly',
+        type: (() => {
+          const l = label.toLowerCase();
+          if (l.match(/^\d{4}$/)) return 'yearly';
+          if (l.match(/^q\d/i)) return 'quarterly';
+          if (l.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i)) return 'monthly';
+          return 'monthly';
+        })(),
         totalRevenue: data.total?.revenue || 0,
         totalProfit: data.total?.netProfit || 0,
         totalUnits: data.total?.units || 0,
         margin: data.total?.revenue > 0 ? ((data.total?.netProfit || 0) / data.total.revenue * 100) : 0,
       })).sort((a, b) => a.period.localeCompare(b.period));
       
-      const months2025 = periodsSummary.filter(p => p.period.includes('2025') && p.type === 'monthly');
-      const quarters2024 = periodsSummary.filter(p => p.period.includes('2024') && p.type === 'quarterly');
+      const months2025 = periodsSummary.filter(p => (p.period.includes('2025') || p.period.includes('-2025')) && p.type === 'monthly');
+      const quarters2024 = periodsSummary.filter(p => (p.period.includes('2024') || p.period.includes('-2024')) && p.type === 'quarterly');
       
       // Calculate seasonal index for current month (if we have historical data)
       const currentMonth = today.toLocaleDateString('en-US', { month: 'long' });
@@ -10541,10 +10547,62 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       const ledger3PL = get3PLForPeriod(threeplLedger, label);
       const threeplFromLedger = ledger3PL?.metrics?.totalCost || 0;
       
+      // Compute category breakdown for this period (like we do for weeks)
+      const categoryBreakdown = {};
+      const processSkusForPeriod = (skuData, channel) => {
+        (skuData || []).forEach(s => {
+          const sku = s.sku || s.msku || '';
+          const productName = (savedProductNames[sku] || s.name || s.title || sku).toLowerCase();
+          const units = s.unitsSold || s.units || 0;
+          const revenue = s.netSales || s.revenue || 0;
+          const profit = channel === 'Amazon' ? (s.netProceeds || revenue) : (revenue - (s.cogs || 0));
+          
+          // Determine category (same logic as computeCategoryBreakdown)
+          let category = 'Other';
+          if (productName.includes('lip balm') || productName.includes('lip-balm')) category = 'Lip Balm';
+          else if (productName.includes('sensitive') && productName.includes('deodorant')) category = 'Sensitive Skin Deodorant';
+          else if (productName.includes('extra strength') && productName.includes('deodorant')) category = 'Extra Strength Deodorant';
+          else if (productName.includes('deodorant') || productName.includes('deo')) category = 'Deodorant';
+          else if (productName.includes('athlete') && productName.includes('soap')) category = "Athlete's Shield Soap";
+          else if (productName.includes('soap') || productName.includes('bar soap')) category = 'Tallow Soap Bars';
+          else if (productName.includes('sun balm') || productName.includes('spf')) category = 'Sun Balm';
+          else if (productName.includes('tallow balm') || productName.includes('moisturizer')) category = 'Tallow Balm';
+          
+          // Fallback: check for lip balm pack patterns
+          if (category === 'Other') {
+            const combined = (sku + ' ' + productName).toLowerCase();
+            if (combined.match(/\d-?pack/i) && (
+              combined.includes('orange') || combined.includes('peppermint') || 
+              combined.includes('vanilla') || combined.includes('lavender') ||
+              combined.includes('unscented') || combined.includes('assorted') ||
+              combined.includes('mint') || combined.includes('honey')
+            )) {
+              category = 'Lip Balm';
+            }
+          }
+          
+          if (!categoryBreakdown[category]) {
+            categoryBreakdown[category] = { units: 0, revenue: 0, profit: 0 };
+          }
+          categoryBreakdown[category].units += units;
+          categoryBreakdown[category].revenue += revenue;
+          categoryBreakdown[category].profit += profit;
+        });
+      };
+      
+      processSkusForPeriod(amz.skuData, 'Amazon');
+      processSkusForPeriod(shop.skuData, 'Shopify');
+      
       return {
         period: label,
         label: data.label || label,
-        type: label.match(/^\d{4}$/) ? 'yearly' : label.match(/^q\d/i) ? 'quarterly' : 'monthly',
+        type: (() => {
+          const l = label.toLowerCase();
+          if (l.match(/^\d{4}$/)) return 'yearly';
+          if (l.match(/^q\d/i)) return 'quarterly';
+          if (l.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i)) return 'monthly';
+          return 'monthly';
+        })(),
         totalRevenue: data.total?.revenue || 0,
         totalProfit: data.total?.netProfit || 0,
         totalUnits: data.total?.units || 0,
@@ -10559,6 +10617,7 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
         shopifyUnits: shop.units || 0,
         threeplCosts: threeplFromLedger || shop.threeplCosts || 0,
         skuCount: ((amz.skuData || []).length + (shop.skuData || []).length),
+        byCategory: categoryBreakdown, // NEW: Category breakdown for this period
       };
     }).sort((a, b) => a.period.localeCompare(b.period));
     
@@ -11482,6 +11541,12 @@ BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
 - "Compare 2024 vs 2025" → Use YoY INSIGHTS + PERIOD DATA
 - The period data contains monthly 2025 totals and quarterly 2024 totals
 
+🏷️ FOR CATEGORY + PERIOD QUESTIONS (e.g., "how much lip balm in January 2025?"):
+- Look at the period's byCategory field: periodData.find(p => p.period === "January 2025").byCategory["Lip Balm"]
+- Each period now has byCategory breakdown with: units, revenue, profit per category
+- See "LIP BALM BY MONTH (2025)" section for pre-computed lip balm monthly data
+- If byCategory is empty for a period, the SKU data wasn't included when that period was uploaded
+
 === WEEKLY DATA (most recent 12 weeks) ===
 ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
 
@@ -11489,22 +11554,33 @@ ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
 ${ctx.periodData.length > 0 ? `CRITICAL: This is historical data uploaded as monthly/quarterly periods!
 Total periods tracked: ${ctx.periodData.length}
 
-📅 2025 MONTHLY DATA:
-${ctx.periodData.filter(p => p.period.includes('2025') && p.type === 'monthly').map(p => 
-  `- ${p.period}: $${p.totalRevenue.toFixed(0)} revenue, $${p.totalProfit.toFixed(0)} profit, ${p.totalUnits} units, ${p.margin.toFixed(1)}% margin`
+📅 2025 MONTHLY DATA WITH CATEGORY BREAKDOWNS:
+${ctx.periodData.filter(p => (p.period.includes('2025') || p.period.includes('-2025')) && p.type === 'monthly').map(p => 
+  `${p.period}: $${p.totalRevenue.toFixed(0)} total | ${p.byCategory && Object.keys(p.byCategory).length > 0 
+    ? Object.entries(p.byCategory).map(([cat, data]) => `${cat}: $${data.revenue.toFixed(0)} rev, ${data.units} units`).join('; ')
+    : 'No category breakdown'}`
 ).join('\n') || 'No 2025 monthly periods uploaded'}
 
-📅 2024 QUARTERLY DATA:
-${ctx.periodData.filter(p => p.period.includes('2024') && p.type === 'quarterly').map(p => 
-  `- ${p.period}: $${p.totalRevenue.toFixed(0)} revenue, $${p.totalProfit.toFixed(0)} profit, ${p.totalUnits} units`
+📅 2024 QUARTERLY DATA WITH CATEGORY BREAKDOWNS:
+${ctx.periodData.filter(p => (p.period.includes('2024') || p.period.includes('-2024')) && p.type === 'quarterly').map(p => 
+  `${p.period}: $${p.totalRevenue.toFixed(0)} total | ${p.byCategory && Object.keys(p.byCategory).length > 0 
+    ? Object.entries(p.byCategory).map(([cat, data]) => `${cat}: $${data.revenue.toFixed(0)} rev, ${data.units} units`).join('; ')
+    : 'No category breakdown'}`
 ).join('\n') || 'No 2024 quarterly periods uploaded'}
 
-📅 2024 MONTHLY DATA:
-${ctx.periodData.filter(p => p.period.includes('2024') && p.type === 'monthly').map(p => 
-  `- ${p.period}: $${p.totalRevenue.toFixed(0)} revenue, $${p.totalProfit.toFixed(0)} profit`
+📅 2024 MONTHLY DATA WITH CATEGORY BREAKDOWNS:
+${ctx.periodData.filter(p => (p.period.includes('2024') || p.period.includes('-2024')) && p.type === 'monthly').map(p => 
+  `${p.period}: $${p.totalRevenue.toFixed(0)} total | ${p.byCategory && Object.keys(p.byCategory).length > 0 
+    ? Object.entries(p.byCategory).map(([cat, data]) => `${cat}: $${data.revenue.toFixed(0)} rev, ${data.units} units`).join('; ')
+    : 'No category breakdown'}`
 ).join('\n') || 'No 2024 monthly periods uploaded'}
 
-ALL PERIODS RAW DATA:
+🔍 LIP BALM BY MONTH (2025):
+${ctx.periodData.filter(p => (p.period.includes('2025') || p.period.includes('-2025')) && p.type === 'monthly' && p.byCategory?.['Lip Balm']).map(p => 
+  `- ${p.period}: $${p.byCategory['Lip Balm'].revenue.toFixed(0)} revenue, ${p.byCategory['Lip Balm'].units} units, $${p.byCategory['Lip Balm'].profit.toFixed(0)} profit`
+).join('\n') || 'No lip balm data in 2025 periods (SKU data may not have been included in period uploads)'}
+
+ALL PERIODS RAW DATA (with byCategory):
 ${JSON.stringify(ctx.periodData)}` : 'No historical period data uploaded yet (quarterly/monthly/yearly)'}
 
 === YEAR-OVER-YEAR INSIGHTS ===
