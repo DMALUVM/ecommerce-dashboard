@@ -1035,6 +1035,7 @@ export default function Dashboard() {
   const [dashboardRange, setDashboardRange] = useState('month'); // 'yesterday' | 'week' | 'month' | 'quarter' | 'year'
   const [trendsTab, setTrendsTab] = useState('daily'); // 'daily' | 'weekly' | 'monthly' | 'yearly' for trends view
   const [trendsChannel, setTrendsChannel] = useState('combined'); // 'amazon' | 'shopify' | 'combined' for trends filtering
+  const [trendsDateRange, setTrendsDateRange] = useState({ start: null, end: null, preset: 'all' }); // Date range filter for trends
   const [dailyFiles, setDailyFiles] = useState({ amazon: null, shopify: null }); // Daily upload files
   const [dailyAdSpend, setDailyAdSpend] = useState({ meta: '', google: '' }); // Daily ad spend inputs
   const [calendarMonth, setCalendarMonth] = useState(null); // null = auto (latest data), or { year, month }
@@ -20153,8 +20154,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
 
   // ==================== TRENDS VIEW ====================
   if (view === 'trends') {
-    // Get all available data
-    const sortedWeeks = Object.keys(allWeeksData).sort();
+    // Apply date range filter
+    const filterByDateRange = (dateKey) => {
+      if (trendsDateRange.preset === 'all' || (!trendsDateRange.start && !trendsDateRange.end)) {
+        return true;
+      }
+      const date = dateKey.substring(0, 10); // Handle both YYYY-MM-DD and YYYY-MM-DD with extra chars
+      if (trendsDateRange.start && date < trendsDateRange.start) return false;
+      if (trendsDateRange.end && date > trendsDateRange.end) return false;
+      return true;
+    };
+    
+    // Get all available data with date filtering
+    const sortedWeeks = Object.keys(allWeeksData).filter(filterByDateRange).sort();
     const sortedPeriods = Object.keys(allPeriodsData).sort();
     
     // Categorize periods by type
@@ -20327,7 +20339,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     // Get weekly data - filter out weeks with no meaningful revenue
     // Also include forecast data for comparison
-    const weeklyData = sortedWeeks.slice(-12).map(w => {
+    // Respect date range filter
+    const weeksToShow = trendsDateRange.preset === 'all' ? 12 : 
+                        trendsDateRange.preset === 'last30' ? 5 :
+                        trendsDateRange.preset === 'last90' ? 13 :
+                        sortedWeeks.length;
+    
+    const weeklyData = sortedWeeks.slice(-weeksToShow).map(w => {
       const week = allWeeksData[w];
       
       // Find forecast for this week from various sources
@@ -20472,9 +20490,18 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     // Combine actual + projected
     const weeklyDataWithProjections = [...weeklyData, ...projectedWeeks];
     
-    // Get daily data (last 30 days with real sales data, not just ads)
-    const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
-    const dailyData = sortedDays.slice(-30).map(d => {
+    // Get daily data filtered by date range
+    const sortedDays = Object.keys(allDaysData)
+      .filter(d => hasDailySalesData(allDaysData[d]) && filterByDateRange(d))
+      .sort();
+    
+    // Determine how many days to show based on range
+    const daysToShow = trendsDateRange.preset === 'all' ? 30 : 
+                       trendsDateRange.preset === 'last30' ? 30 :
+                       trendsDateRange.preset === 'last90' ? 90 :
+                       sortedDays.length;
+    
+    const dailyData = sortedDays.slice(-daysToShow).map(d => {
       const day = allDaysData[d];
       return {
         key: d,
@@ -20732,8 +20759,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           </div>
           
           {/* Channel Filter */}
-          <div className="flex gap-2 mb-6">
-            <span className="text-slate-400 text-sm self-center mr-2">Channel:</span>
+          <div className="flex flex-wrap gap-2 mb-4 items-center">
+            <span className="text-slate-400 text-sm mr-2">Channel:</span>
             <button 
               onClick={() => setTrendsChannel('combined')}
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsChannel === 'combined' ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
@@ -20752,6 +20779,76 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             >
               🛍️ Shopify
             </button>
+          </div>
+          
+          {/* Date Range Filter */}
+          <div className="flex flex-wrap gap-2 mb-6 items-center bg-slate-800/50 rounded-lg p-3 border border-slate-700">
+            <span className="text-slate-400 text-sm mr-2">📅 Date Range:</span>
+            <button 
+              onClick={() => setTrendsDateRange({ start: null, end: null, preset: 'all' })}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsDateRange.preset === 'all' ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+            >
+              All Time
+            </button>
+            <button 
+              onClick={() => {
+                const now = new Date();
+                const start = `${now.getFullYear()}-01-01`;
+                const end = `${now.getFullYear()}-12-31`;
+                setTrendsDateRange({ start, end, preset: 'ytd' });
+              }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsDateRange.preset === 'ytd' ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+            >
+              {new Date().getFullYear()}
+            </button>
+            <button 
+              onClick={() => {
+                const lastYear = new Date().getFullYear() - 1;
+                setTrendsDateRange({ start: `${lastYear}-01-01`, end: `${lastYear}-12-31`, preset: 'lastyear' });
+              }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsDateRange.preset === 'lastyear' ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+            >
+              {new Date().getFullYear() - 1}
+            </button>
+            <button 
+              onClick={() => {
+                const now = new Date();
+                const end = now.toISOString().split('T')[0];
+                const start = new Date(now.setDate(now.getDate() - 30)).toISOString().split('T')[0];
+                setTrendsDateRange({ start, end, preset: 'last30' });
+              }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsDateRange.preset === 'last30' ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+            >
+              Last 30 Days
+            </button>
+            <button 
+              onClick={() => {
+                const now = new Date();
+                const end = now.toISOString().split('T')[0];
+                const start = new Date(now.setDate(now.getDate() - 90)).toISOString().split('T')[0];
+                setTrendsDateRange({ start, end, preset: 'last90' });
+              }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsDateRange.preset === 'last90' ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+            >
+              Last 90 Days
+            </button>
+            
+            {/* Custom Date Range */}
+            <div className="flex items-center gap-2 ml-2 border-l border-slate-600 pl-3">
+              <input 
+                type="date" 
+                value={trendsDateRange.start || ''} 
+                onChange={(e) => setTrendsDateRange(prev => ({ ...prev, start: e.target.value, preset: 'custom' }))}
+                className="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-white"
+              />
+              <span className="text-slate-500">to</span>
+              <input 
+                type="date" 
+                value={trendsDateRange.end || ''} 
+                onChange={(e) => setTrendsDateRange(prev => ({ ...prev, end: e.target.value, preset: 'custom' }))}
+                className="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-white"
+              />
+            </div>
           </div>
           
           {!dataAvailable ? (
