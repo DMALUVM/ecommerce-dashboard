@@ -1272,7 +1272,7 @@ const handleLogout = async () => {
   
   // Sales Tax Management
   const [salesTaxConfig, setSalesTaxConfig] = useState({
-    nexusStates: {}, // { stateCode: { hasNexus: true, frequency: 'monthly', registrationId: '', customFilings: [], notes: '' } }
+    nexusStates: {}, // { stateCode: { hasNexus: true, frequency: 'monthly', registrationId: '', portalUrl: '', customFilings: [], notes: '' } }
     filingHistory: {}, // { stateCode: { 'YYYY-MM' or 'YYYY-QN': { filed: true, paidDate: '', amount: 0, confirmationNum: '', reportData: {} } } }
     hiddenStates: [], // states user wants to hide from view
   });
@@ -1309,6 +1309,7 @@ const handleLogout = async () => {
   const [taxFilingNotes, setTaxFilingNotes] = useState('');
   const [viewingStateHistory, setViewingStateHistory] = useState(null); // state code to view history for
   const [taxViewTab, setTaxViewTab] = useState('states'); // 'states' | 'history' | 'nexus-info'
+  const [filingDetailState, setFilingDetailState] = useState(null); // { stateCode, data } for filing format modal
   
   // AI Chatbot state
   const [showAIChat, setShowAIChat] = useState(false);
@@ -2089,6 +2090,276 @@ const US_STATES_TAX_INFO = {
   WI: { name: 'Wisconsin', hasStateTax: true, stateRate: 0.05, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
   WY: { name: 'Wyoming', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
   DC: { name: 'District of Columbia', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
+};
+
+// State-specific filing formats - defines exact fields needed for each state's return
+// Based on actual state filing requirements as of 2025
+const STATE_FILING_FORMATS = {
+  WV: {
+    name: 'West Virginia',
+    formName: 'WV/CST-200CU (Combined Sales & Use Tax Return)',
+    website: 'https://mytaxes.wvtax.gov/',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Total gross receipts/sales' },
+      { name: 'Line 2 - Deductions', key: 'deductions', description: 'Non-taxable sales, exemptions' },
+      { name: 'Line 3 - Net Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - Tax Rate', key: 'taxRate', description: '6.0%' },
+      { name: 'Line 5 - Tax Due', key: 'taxDue', description: 'Line 3 × 0.06' },
+      { name: 'Line 6 - Tax Collected', key: 'taxCollected', description: 'Actual tax collected from customers' },
+    ],
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      deductions: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxRate: '6.0%',
+      taxDue: (data.totalSales || data.sales || 0) * 0.06,
+      taxCollected: data.taxOwed || data.tax || 0,
+    }),
+  },
+  PA: {
+    name: 'Pennsylvania',
+    formName: 'PA-100 Sales, Use and Hotel Occupancy Tax Return',
+    website: 'https://www.revenue.pa.gov/OnlineServices/myPATH/',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Total sales price of taxable goods' },
+      { name: 'Line 2 - Sales Not Subject to Tax', key: 'exemptSales', description: 'Exempt sales (resale, manufacturing, etc.)' },
+      { name: 'Line 3 - Net Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - State Tax (6%)', key: 'stateTax', description: 'Line 3 × 0.06' },
+      { name: 'Line 5 - Local Tax (if applicable)', key: 'localTax', description: 'Philadelphia 2%, Allegheny 1%' },
+      { name: 'Line 6 - Total Tax Due', key: 'totalTax', description: 'Line 4 + Line 5' },
+    ],
+    note: 'Philadelphia adds 2% local tax, Allegheny County (Pittsburgh) adds 1%. Most remote sellers only owe state 6%.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.06,
+      localTax: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  MD: {
+    name: 'Maryland',
+    formName: 'Form 202 - Sales and Use Tax Return',
+    website: 'https://interactive.marylandtaxes.gov/',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Total sales of tangible personal property' },
+      { name: 'Line 2 - Exempt Sales', key: 'exemptSales', description: 'Sales for resale, exempt organizations' },
+      { name: 'Line 3 - Net Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - Tax Collected (6%)', key: 'taxCollected', description: 'Tax collected from customers' },
+    ],
+    note: 'Maryland has a single 6% rate statewide. No local taxes for remote sellers.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxCollected: data.taxOwed || data.tax || 0,
+    }),
+  },
+  VA: {
+    name: 'Virginia',
+    formName: 'Form ST-9 - Retail Sales and Use Tax Return',
+    website: 'https://www.tax.virginia.gov/',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Total gross sales' },
+      { name: 'Line 2 - Deductions', key: 'deductions', description: 'Exempt sales, sales for resale' },
+      { name: 'Line 3 - Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4a - State Tax (4.3%)', key: 'stateTax', description: 'Line 3 × 0.043' },
+      { name: 'Line 4b - Local Tax (1%)', key: 'localTax', description: 'Line 3 × 0.01' },
+      { name: 'Line 5 - Total Tax (5.3%)', key: 'totalTax', description: 'Line 4a + Line 4b' },
+    ],
+    note: 'Virginia has combined 5.3% rate (4.3% state + 1% local). Some areas have additional regional taxes.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      deductions: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.043,
+      localTax: (data.totalSales || data.sales || 0) * 0.01,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  TX: {
+    name: 'Texas',
+    formName: 'Form 01-117 - Texas Sales and Use Tax Return',
+    website: 'https://comptroller.texas.gov/taxes/sales/',
+    fields: [
+      { name: 'Item 1 - Total Sales', key: 'totalSales', description: 'Total receipts from all sales' },
+      { name: 'Item 2 - Taxable Sales', key: 'taxableSales', description: 'Sales subject to sales tax' },
+      { name: 'Item 3 - Taxable Purchases', key: 'taxablePurchases', description: 'Use tax on purchases (usually $0)' },
+      { name: 'Item 4 - Total Tax Due', key: 'totalTax', description: 'State (6.25%) + Local taxes' },
+    ],
+    note: 'Texas has 6.25% state rate. Local taxes vary by location (up to 2% additional). Report location of delivery for local tax.',
+    calculate: (data) => ({
+      totalSales: data.totalSales || data.sales || 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxablePurchases: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  FL: {
+    name: 'Florida',
+    formName: 'Form DR-15 - Sales and Use Tax Return',
+    website: 'https://floridarevenue.com/taxes/taxesfees/Pages/sales_tax.aspx',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Total gross sales' },
+      { name: 'Line 2 - Exempt Sales', key: 'exemptSales', description: 'Tax-exempt sales' },
+      { name: 'Line 3 - Taxable Amount', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - State Tax (6%)', key: 'stateTax', description: 'Line 3 × 0.06' },
+      { name: 'Line 5 - County Surtax', key: 'surtax', description: 'Discretionary sales surtax (varies by county)' },
+      { name: 'Line 6 - Total Tax Due', key: 'totalTax', description: 'Line 4 + Line 5' },
+    ],
+    note: 'Florida has 6% state rate plus county surtax (0-2.5%). Use customer shipping address to determine county.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.06,
+      surtax: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  CA: {
+    name: 'California',
+    formName: 'CDTFA-401 - State, Local, and District Sales and Use Tax Return',
+    website: 'https://onlineservices.cdtfa.ca.gov/',
+    fields: [
+      { name: 'Line 1 - Total Gross Sales', key: 'grossSales', description: 'Total of all sales' },
+      { name: 'Line 2 - Purchases Subject to Use Tax', key: 'useTaxPurchases', description: 'Usually $0 for sellers' },
+      { name: 'Line 3 - Total', key: 'totalSubject', description: 'Line 1 + Line 2' },
+      { name: 'Line 4 - Deductions', key: 'deductions', description: 'Nontaxable sales, exempt sales' },
+      { name: 'Line 5 - Total Taxable', key: 'taxableSales', description: 'Line 3 minus Line 4' },
+      { name: 'Line 6 - Tax Due', key: 'taxDue', description: 'Based on district tax rates' },
+    ],
+    note: 'CA requires district-level reporting. Base rate is 7.25% but varies by district (7.25%-10.75%). Use CDTFA online system.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      useTaxPurchases: 0,
+      totalSubject: data.totalSales || data.sales || 0,
+      deductions: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxDue: data.taxOwed || data.tax || 0,
+    }),
+  },
+  NY: {
+    name: 'New York',
+    formName: 'Form ST-100 - New York State and Local Sales and Use Tax Return',
+    website: 'https://www.tax.ny.gov/bus/st/stidx.htm',
+    fields: [
+      { name: 'Part 1 - Gross Sales', key: 'grossSales', description: 'Gross sales and services' },
+      { name: 'Part 1 - Non-Taxable Sales', key: 'nonTaxable', description: 'Exempt sales, clothing under $110' },
+      { name: 'Part 1 - Taxable Sales', key: 'taxableSales', description: 'Gross minus non-taxable' },
+      { name: 'Part 2 - State Tax (4%)', key: 'stateTax', description: 'Taxable × 0.04' },
+      { name: 'Part 2 - Local Tax', key: 'localTax', description: 'Varies by jurisdiction (0-4.875%)' },
+      { name: 'Total Tax Due', key: 'totalTax', description: 'State + Local' },
+    ],
+    note: 'NY exempts clothing/footwear under $110. NYC has 4.5% local tax. Use Schedule H for jurisdiction breakdown.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      nonTaxable: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.04,
+      localTax: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  OH: {
+    name: 'Ohio',
+    formName: 'UST 1 - Universal Sales Tax Return',
+    website: 'https://tax.ohio.gov/sales_and_use.aspx',
+    fields: [
+      { name: 'Line 1 - Gross Receipts', key: 'grossSales', description: 'Total gross receipts' },
+      { name: 'Line 2 - Exempt Sales', key: 'exemptSales', description: 'Non-taxable transactions' },
+      { name: 'Line 3 - Net Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - Tax Collected', key: 'taxCollected', description: 'Total tax collected' },
+    ],
+    note: 'Ohio has 5.75% state rate plus county taxes (0.75%-2.25%). Use county of delivery.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxCollected: data.taxOwed || data.tax || 0,
+    }),
+  },
+  NC: {
+    name: 'North Carolina',
+    formName: 'Form E-500 - Sales and Use Tax Return',
+    website: 'https://www.ncdor.gov/taxes-forms/sales-and-use-tax',
+    fields: [
+      { name: 'Line 1 - Gross Receipts', key: 'grossSales', description: 'Total gross receipts' },
+      { name: 'Line 2 - Exempt Receipts', key: 'exemptSales', description: 'Tax-exempt sales' },
+      { name: 'Line 3 - Net Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - State Tax (4.75%)', key: 'stateTax', description: 'Line 3 × 0.0475' },
+      { name: 'Line 5 - Local Tax (2-2.75%)', key: 'localTax', description: 'County tax rate varies' },
+      { name: 'Line 6 - Total Tax', key: 'totalTax', description: 'Line 4 + Line 5' },
+    ],
+    note: 'NC has 4.75% state + 2-2.75% county. Combined rates range 6.75%-7.5%. Use destination county.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.0475,
+      localTax: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  GA: {
+    name: 'Georgia',
+    formName: 'Form ST-3 - Sales and Use Tax Return',
+    website: 'https://gtc.dor.ga.gov/',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Gross sales, use, and withdrawals' },
+      { name: 'Line 2 - Deductions', key: 'deductions', description: 'Exempt and non-taxable sales' },
+      { name: 'Line 3 - Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - State Tax (4%)', key: 'stateTax', description: 'Line 3 × 0.04' },
+      { name: 'Line 5 - Local Tax', key: 'localTax', description: 'LOST/SPLOST varies by jurisdiction' },
+      { name: 'Line 6 - Total Tax', key: 'totalTax', description: 'Line 4 + Line 5' },
+    ],
+    note: 'GA has 4% state rate + 3-4% local option taxes. Combined rates 7-9%. File through Georgia Tax Center.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      deductions: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.04,
+      localTax: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  NJ: {
+    name: 'New Jersey',
+    formName: 'Form ST-50 - Sales and Use Tax Return',
+    website: 'https://www.state.nj.us/treasury/taxation/su.shtml',
+    fields: [
+      { name: 'Line 1 - Gross Receipts', key: 'grossSales', description: 'Total gross receipts' },
+      { name: 'Line 2 - Non-Taxable Sales', key: 'exemptSales', description: 'Exempt sales' },
+      { name: 'Line 3 - Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - Tax Due (6.625%)', key: 'taxDue', description: 'Line 3 × 0.06625' },
+    ],
+    note: 'NJ has single statewide 6.625% rate. No local taxes. Urban Enterprise Zones may have reduced rates.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxDue: data.taxOwed || data.tax || 0,
+    }),
+  },
+  // Generic format for states without specific config
+  DEFAULT: {
+    name: 'Standard',
+    formName: 'State Sales Tax Return',
+    website: null,
+    fields: [
+      { name: 'Gross Sales', key: 'grossSales', description: 'Total sales shipped to state' },
+      { name: 'Exempt Sales', key: 'exemptSales', description: 'Non-taxable sales' },
+      { name: 'Net Taxable Sales', key: 'taxableSales', description: 'Gross minus exempt' },
+      { name: 'Tax Collected', key: 'taxCollected', description: 'Tax you collected on orders' },
+    ],
+    calculate: (data, stateInfo) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxCollected: data.taxOwed || data.tax || 0,
+    }),
+  },
 };
 
 // Filing frequency due date calculator
@@ -26337,6 +26608,28 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </div>
               
               <div>
+                <label className="block text-sm text-slate-400 mb-2">Tax Portal URL</label>
+                <div className="flex gap-2">
+                  <input 
+                    type="url" 
+                    defaultValue={config.portalUrl || STATE_FILING_FORMATS[taxConfigState]?.website || ''} 
+                    onBlur={(e) => updateStateConfig(taxConfigState, 'portalUrl', e.target.value)} 
+                    placeholder="https://state-tax-portal.gov..." 
+                    className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" 
+                  />
+                  {(config.portalUrl || STATE_FILING_FORMATS[taxConfigState]?.website) && (
+                    <button
+                      onClick={() => window.open(config.portalUrl || STATE_FILING_FORMATS[taxConfigState]?.website, '_blank')}
+                      className="px-4 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl text-white font-medium"
+                    >
+                      🔗 Open
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 mt-1">Add your custom login URL or use the default state portal</p>
+              </div>
+              
+              <div>
                 <label className="block text-sm text-slate-400 mb-2">Notes</label>
                 <textarea value={taxFormNotes} onChange={(e) => setTaxFormNotes(e.target.value)} onBlur={(e) => updateStateConfig(taxConfigState, 'notes', e.target.value)} placeholder="Any notes about this state's requirements..." rows={2} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
               </div>
@@ -26878,6 +27171,218 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       </div>
                     )}
                     
+                    {/* NEXUS States Quick Actions - Your Filing Obligations */}
+                    {(() => {
+                      const nexusStatesWithData = taxData.byState.filter(s => nexusStates[s.stateCode]?.hasNexus);
+                      const totalNexusTaxOwed = nexusStatesWithData.reduce((s, st) => s + (st.taxOwed || st.tax || 0), 0);
+                      const periodKey = taxPeriodType === 'month' ? taxPeriodValue : `${taxPeriodValue.split('-')[0]}-Q${taxPeriodValue.split('-')[1]}`;
+                      const unfiledStates = nexusStatesWithData.filter(s => !salesTaxConfig.filingHistory?.[s.stateCode]?.[periodKey]?.filed);
+                      const filedStates = nexusStatesWithData.filter(s => salesTaxConfig.filingHistory?.[s.stateCode]?.[periodKey]?.filed);
+                      
+                      // Helper: Check if filing is due for this period based on frequency
+                      const isFilingDueForPeriod = (stateCode) => {
+                        const config = nexusStates[stateCode] || {};
+                        const frequency = config.frequency || 'monthly';
+                        const [year, period] = taxPeriodValue.split('-');
+                        const periodMonth = parseInt(period);
+                        
+                        if (taxPeriodType === 'month') {
+                          if (frequency === 'monthly') return true;
+                          if (frequency === 'quarterly') {
+                            // Q1: Mar, Q2: Jun, Q3: Sep, Q4: Dec
+                            return [3, 6, 9, 12].includes(periodMonth);
+                          }
+                          if (frequency === 'semi-annual') {
+                            // H1: Jun, H2: Dec
+                            return [6, 12].includes(periodMonth);
+                          }
+                          if (frequency === 'annual') {
+                            return periodMonth === 12;
+                          }
+                        }
+                        return true; // Default to due
+                      };
+                      
+                      // Filter to only states with filings due this period
+                      const statesDueThisPeriod = unfiledStates.filter(s => isFilingDueForPeriod(s.stateCode));
+                      const statesNotDueYet = unfiledStates.filter(s => !isFilingDueForPeriod(s.stateCode));
+                      
+                      // Helper to download a single state's filing
+                      const downloadStateFiling = (state) => {
+                        const { start, end } = getDateRange();
+                        const periodLabel = taxPeriodType === 'month' 
+                          ? new Date(start).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }).replace(' ', '-')
+                          : taxPeriodValue;
+                        const stateInfo = US_STATES_TAX_INFO[state.stateCode];
+                        const filingFormat = STATE_FILING_FORMATS[state.stateCode] || STATE_FILING_FORMATS.DEFAULT;
+                        const calculated = filingFormat.calculate(state, stateInfo);
+                        
+                        let csv = `${stateInfo?.name || state.stateCode} Sales Tax Return\n`;
+                        csv += `Period: ${periodLabel}\n`;
+                        csv += `Form: ${filingFormat.formName}\n`;
+                        csv += `Generated: ${new Date().toLocaleDateString()}\n`;
+                        csv += `\nVERIFY: Compare with Shopify Admin > Analytics > Reports > Taxes\n\n`;
+                        csv += `Field,Value,Notes\n`;
+                        
+                        filingFormat.fields.forEach(field => {
+                          const val = calculated[field.key];
+                          const formattedVal = typeof val === 'number' ? val.toFixed(2) : (val || '');
+                          csv += `"${field.name}",${formattedVal},"${field.description || ''}"\n`;
+                        });
+                        
+                        csv += `\nState Tax Rate,${((stateInfo?.stateRate || 0) * 100).toFixed(2)}%\n`;
+                        csv += `Orders,${state.totalOrders || state.orders || 0}\n`;
+                        
+                        if (filingFormat.note) csv += `\nNote:,"${filingFormat.note}"\n`;
+                        
+                        const portalUrl = nexusStates[state.stateCode]?.portalUrl || STATE_FILING_FORMATS[state.stateCode]?.website;
+                        if (portalUrl) csv += `\nFile Online:,${portalUrl}\n`;
+                        
+                        const blob = new Blob([csv], { type: 'text/csv' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `${state.stateCode}-SalesTax-${periodLabel}.csv`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      };
+                      
+                      // Get portal URL for a state (custom > default)
+                      const getPortalUrl = (stateCode) => {
+                        return nexusStates[stateCode]?.portalUrl || STATE_FILING_FORMATS[stateCode]?.website || null;
+                      };
+                      
+                      if (nexusStatesWithData.length === 0) return null;
+                      
+                      return (
+                        <div className="bg-gradient-to-r from-rose-900/30 to-violet-900/30 border border-rose-500/30 rounded-xl p-4 mb-6">
+                          <div className="flex justify-between items-start mb-4">
+                            <div>
+                              <h4 className="text-lg font-bold text-white flex items-center gap-2">
+                                🏛️ Your Filing Obligations
+                              </h4>
+                              <p className="text-slate-400 text-sm">
+                                {statesDueThisPeriod.length > 0 
+                                  ? `${statesDueThisPeriod.length} state${statesDueThisPeriod.length > 1 ? 's' : ''} due for ${taxPeriodValue}`
+                                  : unfiledStates.length > 0 
+                                    ? 'No filings due this period'
+                                    : 'All filings complete! ✓'}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-xs text-slate-400">Total You Owe</p>
+                              <p className="text-2xl font-bold text-rose-400">{formatCurrency(totalNexusTaxOwed)}</p>
+                            </div>
+                          </div>
+                          
+                          {/* States DUE This Period */}
+                          {statesDueThisPeriod.length > 0 && (
+                            <>
+                              <p className="text-xs text-rose-400 mb-2 font-semibold">⚠️ DUE THIS PERIOD:</p>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                                {statesDueThisPeriod.map(state => {
+                                  const stateInfo = US_STATES_TAX_INFO[state.stateCode];
+                                  const config = nexusStates[state.stateCode] || {};
+                                  const portalUrl = getPortalUrl(state.stateCode);
+                                  return (
+                                    <div key={state.stateCode} className="bg-slate-800/80 rounded-lg p-3 border border-rose-500/50">
+                                      <div className="flex justify-between items-center mb-1">
+                                        <div>
+                                          <span className="font-bold text-white">{state.stateName}</span>
+                                          <span className="text-xs text-slate-500 ml-2">({config.frequency || 'monthly'})</span>
+                                        </div>
+                                        <span className="text-rose-400 font-bold">{formatCurrency(state.taxOwed || state.tax || 0)}</span>
+                                      </div>
+                                      <div className="flex gap-2 mt-2">
+                                        <button
+                                          onClick={() => downloadStateFiling(state)}
+                                          className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-2 py-1.5 rounded font-medium"
+                                          title="Download filing data"
+                                        >
+                                          ⬇️ Export
+                                        </button>
+                                        <button
+                                          onClick={() => setFilingDetailState({ stateCode: state.stateCode, data: state })}
+                                          className="text-xs bg-violet-600 hover:bg-violet-500 text-white px-2 py-1.5 rounded font-medium"
+                                        >
+                                          📋 Details
+                                        </button>
+                                        {portalUrl && (
+                                          <button
+                                            onClick={() => window.open(portalUrl, '_blank')}
+                                            className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-2 py-1.5 rounded font-medium"
+                                            title={`Open ${state.stateCode} tax portal`}
+                                          >
+                                            🔗 File Online
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </>
+                          )}
+                          
+                          {/* States NOT Due Yet (accumulating) */}
+                          {statesNotDueYet.length > 0 && (
+                            <div className="mb-4">
+                              <p className="text-xs text-amber-400 mb-2">📅 Accumulating (not due yet):</p>
+                              <div className="flex flex-wrap gap-2">
+                                {statesNotDueYet.map(state => {
+                                  const config = nexusStates[state.stateCode] || {};
+                                  return (
+                                    <div key={state.stateCode} className="text-xs bg-amber-900/30 text-amber-300 px-2 py-1 rounded border border-amber-500/30 flex items-center gap-2">
+                                      <span>{state.stateCode}: {formatCurrency(state.taxOwed || state.tax || 0)}</span>
+                                      <span className="text-amber-500">({config.frequency || 'monthly'})</span>
+                                      <button
+                                        onClick={() => downloadStateFiling(state)}
+                                        className="hover:text-amber-200"
+                                        title="Download anyway"
+                                      >
+                                        ⬇️
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Filed States */}
+                          {filedStates.length > 0 && (
+                            <div className="mb-4">
+                              <p className="text-xs text-emerald-400 mb-2">✓ Filed this period:</p>
+                              <div className="flex flex-wrap gap-2">
+                                {filedStates.map(state => (
+                                  <span key={state.stateCode} className="text-xs bg-emerald-900/50 text-emerald-300 px-2 py-1 rounded border border-emerald-500/30">
+                                    {state.stateCode} • {formatCurrency(salesTaxConfig.filingHistory?.[state.stateCode]?.[periodKey]?.amount || state.taxOwed || 0)}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Download All DUE States Button */}
+                          {statesDueThisPeriod.length > 0 && (
+                            <button
+                              onClick={async () => {
+                                for (const state of statesDueThisPeriod) {
+                                  downloadStateFiling(state);
+                                  await new Promise(resolve => setTimeout(resolve, 300));
+                                }
+                                setToast({ message: `Downloaded ${statesDueThisPeriod.length} state filings`, type: 'success' });
+                              }}
+                              className="w-full px-4 py-3 bg-gradient-to-r from-violet-600 to-rose-600 hover:from-violet-500 hover:to-rose-500 rounded-lg text-white font-bold flex items-center justify-center gap-2"
+                            >
+                              <Download className="w-5 h-5" />
+                              Download All Due Filings ({statesDueThisPeriod.length} files)
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    
                     {taxData.byState.length > 0 && (
                       <>
                         <div className="flex justify-between items-center mb-2">
@@ -26942,6 +27447,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               </th>
                               <th className="text-right text-slate-400 py-2 px-2">Orders</th>
                               <th className="text-center text-slate-400 py-2 px-2">Status</th>
+                              <th className="text-center text-slate-400 py-2 px-2">Action</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -26978,6 +27484,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                       <span className="text-xs text-slate-600">No tax</span>
                                     )}
                                   </td>
+                                  <td className="py-2 px-2 text-center">
+                                    {hasNexus && (
+                                      <button
+                                        onClick={() => setFilingDetailState({ stateCode: state.stateCode, data: state })}
+                                        className="text-xs bg-violet-600 hover:bg-violet-500 text-white px-2 py-1 rounded font-medium"
+                                      >
+                                        📋 File
+                                      </button>
+                                    )}
+                                  </td>
                                 </tr>
                               );
                             })}
@@ -26991,6 +27507,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               <td className="py-3 px-2 text-right text-emerald-400">{formatCurrency(taxData.shopPayExcluded)}</td>
                               <td className="py-3 px-2 text-right text-slate-400">{taxData.byState.reduce((s, st) => s + (st.totalOrders || st.orders || 0), 0)}</td>
                               <td></td>
+                              <td></td>
                             </tr>
                           </tfoot>
                         </table>
@@ -26999,9 +27516,197 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           <p className="text-slate-400 text-xs">
                             💡 <strong className="text-rose-300">YOU OWE</strong> = Tax you must file/pay yourself. 
                             <strong className="text-emerald-300 ml-2">Shop Pay ✓</strong> = Shopify already collected and remits this tax for you.
-                            Total Sales includes all orders for nexus threshold tracking.
+                            Click <strong className="text-violet-300">📋 File</strong> on NEXUS states to see state-specific filing format.
                           </p>
                         </div>
+                        
+                        {/* State Filing Detail Modal */}
+                        {filingDetailState && (() => {
+                          const stateCode = filingDetailState.stateCode;
+                          const stateData = filingDetailState.data;
+                          const stateInfo = US_STATES_TAX_INFO[stateCode];
+                          const filingFormat = STATE_FILING_FORMATS[stateCode] || STATE_FILING_FORMATS.DEFAULT;
+                          const calculated = filingFormat.calculate(stateData, stateInfo);
+                          const periodKey = taxPeriodType === 'month' ? taxPeriodValue : `${taxPeriodValue.split('-')[0]}-Q${taxPeriodValue.split('-')[1]}`;
+                          const alreadyFiled = salesTaxConfig.filingHistory?.[stateCode]?.[periodKey]?.filed;
+                          
+                          return (
+                            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                              <div className="bg-slate-800 rounded-xl border border-slate-600 p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+                                <div className="flex items-center justify-between mb-4">
+                                  <div>
+                                    <h3 className="text-xl font-bold text-white">{stateInfo?.name || stateCode} Sales Tax Filing</h3>
+                                    <p className="text-sm text-slate-400">{filingFormat.formName}</p>
+                                  </div>
+                                  <button onClick={() => setFilingDetailState(null)} className="p-2 hover:bg-slate-700 rounded-lg">
+                                    <X className="w-5 h-5 text-slate-400" />
+                                  </button>
+                                </div>
+                                
+                                {/* Already Filed Banner */}
+                                {alreadyFiled && (
+                                  <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-lg p-3 mb-4 flex items-center gap-2">
+                                    <CheckCircle className="w-5 h-5 text-emerald-400" />
+                                    <div>
+                                      <p className="text-emerald-400 font-medium">Filed & Paid</p>
+                                      <p className="text-emerald-300/70 text-xs">
+                                        {salesTaxConfig.filingHistory[stateCode][periodKey].filedDate 
+                                          ? `Filed on ${new Date(salesTaxConfig.filingHistory[stateCode][periodKey].filedDate).toLocaleDateString()}`
+                                          : 'Marked as complete'}
+                                        {salesTaxConfig.filingHistory[stateCode][periodKey].amount > 0 && 
+                                          ` • ${formatCurrency(salesTaxConfig.filingHistory[stateCode][periodKey].amount)} paid`}
+                                      </p>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* Portal URL - Custom or Default */}
+                                {(() => {
+                                  const portalUrl = nexusStates[stateCode]?.portalUrl || filingFormat.website;
+                                  if (!portalUrl) return null;
+                                  return (
+                                    <button 
+                                      onClick={() => window.open(portalUrl, '_blank')}
+                                      className="w-full flex items-center justify-center gap-2 text-sm bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg mb-4 font-medium"
+                                    >
+                                      <ArrowUpRight className="w-4 h-4" />
+                                      Open {stateInfo?.name} Tax Portal
+                                    </button>
+                                  );
+                                })()}
+                                
+                                {/* Filing fields */}
+                                <div className="bg-slate-900 rounded-lg p-4 mb-4">
+                                  <h4 className="text-sm font-semibold text-slate-300 mb-3">📝 Fields for Your Return</h4>
+                                  <div className="space-y-3">
+                                    {filingFormat.fields.map(field => (
+                                      <div key={field.key} className="flex justify-between items-center border-b border-slate-700 pb-2">
+                                        <div>
+                                          <p className="text-white font-medium">{field.name}</p>
+                                          <p className="text-xs text-slate-500">{field.description}</p>
+                                        </div>
+                                        <p className="text-lg font-bold text-emerald-400">
+                                          {typeof calculated[field.key] === 'number' 
+                                            ? formatCurrency(calculated[field.key])
+                                            : calculated[field.key] || '—'}
+                                        </p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                                
+                                {filingFormat.note && (
+                                  <div className="bg-amber-900/20 border border-amber-500/30 rounded-lg p-3 mb-4">
+                                    <p className="text-amber-300 text-sm">⚠️ {filingFormat.note}</p>
+                                  </div>
+                                )}
+                                
+                                {/* Verify with Shopify */}
+                                <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-3 mb-4">
+                                  <p className="text-blue-300 text-sm">
+                                    💡 <strong>Verify:</strong> Cross-check these numbers with Shopify Admin → Analytics → Reports → Taxes. 
+                                    Look for "{stateInfo?.name} Sales Tax" report for this period.
+                                  </p>
+                                </div>
+                                
+                                {/* State-specific info */}
+                                <div className="bg-slate-700/50 rounded-lg p-3 mb-4 text-sm">
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <div><span className="text-slate-400">State Rate:</span> <span className="text-white">{((stateInfo?.stateRate || 0) * 100).toFixed(2)}%</span></div>
+                                    <div><span className="text-slate-400">SST Member:</span> <span className="text-white">{stateInfo?.sst ? 'Yes' : 'No'}</span></div>
+                                    <div><span className="text-slate-400">Marketplace:</span> <span className="text-white">{stateInfo?.marketplaceFacilitator ? 'Yes' : 'No'}</span></div>
+                                    <div><span className="text-slate-400">Period:</span> <span className="text-white">{taxPeriodValue}</span></div>
+                                  </div>
+                                </div>
+                                
+                                {/* Mark as Paid Section */}
+                                {!alreadyFiled && (stateData.taxOwed > 0 || stateData.tax > 0) && (
+                                  <div className="bg-slate-900 rounded-lg p-4 mb-4">
+                                    <h4 className="text-sm font-semibold text-slate-300 mb-3">✅ Mark as Filed & Paid</h4>
+                                    <div className="space-y-3">
+                                      <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Amount Paid</label>
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          id={`filing-amount-${stateCode}`}
+                                          defaultValue={(stateData.taxOwed || stateData.tax || 0).toFixed(2)}
+                                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Confirmation # (optional)</label>
+                                        <input
+                                          type="text"
+                                          id={`filing-confirm-${stateCode}`}
+                                          placeholder="e.g., 12345678"
+                                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                                        />
+                                      </div>
+                                      <button
+                                        onClick={() => {
+                                          const amount = parseFloat(document.getElementById(`filing-amount-${stateCode}`).value) || 0;
+                                          const confirmNum = document.getElementById(`filing-confirm-${stateCode}`).value || '';
+                                          markFilingComplete(stateCode, periodKey, {
+                                            amount,
+                                            confirmationNum: confirmNum,
+                                            reportData: {
+                                              grossSales: stateData.totalSales || stateData.sales,
+                                              taxCollected: stateData.taxOwed || stateData.tax,
+                                              orders: stateData.totalOrders || stateData.orders,
+                                              period: taxPeriodValue,
+                                            }
+                                          });
+                                          setToast({ message: `${stateInfo?.name} tax marked as filed for ${taxPeriodValue}`, type: 'success' });
+                                          setFilingDetailState(null);
+                                        }}
+                                        className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white font-medium"
+                                      >
+                                        ✓ Mark as Filed & Paid
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* Export button */}
+                                <div className="flex gap-3">
+                                  <button
+                                    onClick={() => {
+                                      // Generate state-specific CSV
+                                      let csv = `${stateInfo?.name} Sales Tax Filing - ${taxPeriodValue}\n`;
+                                      csv += `Form: ${filingFormat.formName}\n\n`;
+                                      csv += `Field,Value\n`;
+                                      filingFormat.fields.forEach(field => {
+                                        const val = calculated[field.key];
+                                        csv += `"${field.name}",${typeof val === 'number' ? val.toFixed(2) : val || ''}\n`;
+                                      });
+                                      csv += `\nState Rate,${((stateInfo?.stateRate || 0) * 100).toFixed(2)}%\n`;
+                                      csv += `Period,${taxPeriodValue}\n`;
+                                      
+                                      const blob = new Blob([csv], { type: 'text/csv' });
+                                      const url = URL.createObjectURL(blob);
+                                      const a = document.createElement('a');
+                                      a.href = url;
+                                      a.download = `${stateCode}-sales-tax-${taxPeriodValue}.csv`;
+                                      a.click();
+                                      URL.revokeObjectURL(url);
+                                    }}
+                                    className="flex-1 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium flex items-center justify-center gap-2"
+                                  >
+                                    <Download className="w-4 h-4" />
+                                    Export {stateCode} Data
+                                  </button>
+                                  <button
+                                    onClick={() => setFilingDetailState(null)}
+                                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300"
+                                  >
+                                    Close
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </>
                     )}
                   </>
