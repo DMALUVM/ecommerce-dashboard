@@ -8578,6 +8578,29 @@ Analyze the data and respond with ONLY this JSON:
     const hasAmazon = dayData.amazon && (amazon.revenue > 0 || amazon.units > 0);
     const hasShopify = dayData.shopify && (shopify.revenue > 0 || shopify.units > 0);
     
+    // Calculate channel share percentages
+    const totalRevenue = (amazon.revenue || 0) + (shopify.revenue || 0);
+    const amazonShare = totalRevenue > 0 ? ((amazon.revenue || 0) / totalRevenue) * 100 : 0;
+    const shopifyShare = totalRevenue > 0 ? ((shopify.revenue || 0) / totalRevenue) * 100 : 0;
+    
+    // Calculate Shopify COGS from skuData if not stored
+    let shopifyCogs = shopify.cogs || 0;
+    if (shopifyCogs === 0 && shopify.skuData) {
+      shopifyCogs = (shopify.skuData || []).reduce((sum, sku) => {
+        const skuKey = sku.sku || sku.title || '';
+        const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+        return sum + (unitCost * (sku.unitsSold || sku.units || 0));
+      }, 0);
+    }
+    
+    // Calculate totals for display
+    const amazonCogs = amazon.cogs || 0;
+    const amazonFees = amazon.fees || 0;
+    const amazonAdSpend = amazon.adSpend || 0;
+    const shopifyAdSpend = (shopify.metaSpend || 0) + (shopify.googleSpend || 0) + (shopify.adSpend || 0);
+    const shopifyFees = shopify.fees || shopify.transactionFees || 0;
+    const shopifyShipping = shopify.shipping || 0;
+    
     // Save ad spend edits
     const saveAdSpendEdit = () => {
       const metaSpend = parseFloat(dayAdSpendEdit.meta) || 0;
@@ -8706,19 +8729,33 @@ Analyze the data and respond with ONLY this JSON:
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4 mb-4 sm:mb-6">
             <div className="bg-slate-900/50 rounded-lg sm:rounded-xl p-3 sm:p-4">
               <p className="text-slate-400 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Revenue</p>
-              <p className="text-base sm:text-xl font-bold text-white">{formatCurrency(total.revenue || 0)}</p>
+              <p className="text-base sm:text-xl font-bold text-white">{formatCurrency(totalRevenue)}</p>
             </div>
             <div className="bg-slate-900/50 rounded-lg sm:rounded-xl p-3 sm:p-4">
               <p className="text-slate-400 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Profit</p>
-              <p className={`text-base sm:text-xl font-bold ${(total.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(total.netProfit || 0)}</p>
+              {(() => {
+                // Calculate total profit properly
+                const totalCogs = amazonCogs + shopifyCogs;
+                const totalFees = amazonFees + shopifyFees;
+                const totalAds = amazonAdSpend + shopifyAdSpend;
+                const calcTotalProfit = total.netProfit || (totalRevenue - totalCogs - totalFees - shopifyShipping - totalAds);
+                return <p className={`text-base sm:text-xl font-bold ${calcTotalProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(calcTotalProfit)}</p>;
+              })()}
             </div>
             <div className="bg-slate-900/50 rounded-lg sm:rounded-xl p-3 sm:p-4">
               <p className="text-slate-400 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Units</p>
-              <p className="text-base sm:text-xl font-bold text-white">{formatNumber(total.units || 0)}</p>
+              <p className="text-base sm:text-xl font-bold text-white">{formatNumber((amazon.units || 0) + (shopify.units || 0))}</p>
             </div>
             <div className="bg-slate-900/50 rounded-lg sm:rounded-xl p-3 sm:p-4">
               <p className="text-slate-400 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Margin</p>
-              <p className={`text-base sm:text-xl font-bold ${(total.netMargin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(total.netMargin || 0)}</p>
+              {(() => {
+                const totalCogs = amazonCogs + shopifyCogs;
+                const totalFees = amazonFees + shopifyFees;
+                const totalAds = amazonAdSpend + shopifyAdSpend;
+                const calcTotalProfit = total.netProfit || (totalRevenue - totalCogs - totalFees - shopifyShipping - totalAds);
+                const calcMargin = totalRevenue > 0 ? (calcTotalProfit / totalRevenue) * 100 : 0;
+                return <p className={`text-base sm:text-xl font-bold ${calcMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(calcMargin)}</p>;
+              })()}
             </div>
           </div>
           
@@ -8728,16 +8765,21 @@ Analyze the data and respond with ONLY this JSON:
             <div className={`rounded-lg sm:rounded-xl border p-3 sm:p-4 ${hasAmazon ? 'bg-orange-900/20 border-orange-500/30' : 'bg-slate-900/30 border-slate-700'}`}>
               <h3 className="text-base sm:text-lg font-semibold text-orange-400 mb-2 sm:mb-3 flex items-center gap-2 flex-wrap">
                 <Store className="w-4 h-4 sm:w-5 sm:h-5" /> Amazon
-                {hasAmazon && <span className="text-[10px] sm:text-xs bg-orange-500/20 px-2 py-0.5 rounded">{formatPercent(total.amazonShare || 0)}</span>}
+                {hasAmazon && <span className="text-[10px] sm:text-xs bg-orange-500/20 px-2 py-0.5 rounded">{formatPercent(amazonShare)}</span>}
               </h3>
               {hasAmazon ? (
                 <div className="space-y-1.5 sm:space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-slate-400">Revenue</span><span className="text-white font-medium">{formatCurrency(amazon.revenue || 0)}</span></div>
                   <div className="flex justify-between"><span className="text-slate-400">Units</span><span className="text-white font-medium">{formatNumber(amazon.units || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400">Ad Spend</span><span className="text-amber-400 font-medium">{formatCurrency(amazon.adSpend || 0)}</span></div>
+                  <div className="border-t border-orange-500/20 pt-1.5 mt-1.5">
+                    <div className="flex justify-between text-slate-500"><span>COGS</span><span className="text-rose-400/70">-{formatCurrency(amazonCogs)}</span></div>
+                    <div className="flex justify-between text-slate-500"><span>Amazon Fees</span><span className="text-rose-400/70">-{formatCurrency(amazonFees)}</span></div>
+                    <div className="flex justify-between text-slate-500"><span>Ad Spend</span><span className="text-amber-400">-{formatCurrency(amazonAdSpend)}</span></div>
+                  </div>
                   <div className="border-t border-orange-500/30 pt-2 mt-2">
                     <div className="flex justify-between"><span className="text-slate-300 font-medium">Net Profit</span><span className={`font-bold ${(amazon.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(amazon.netProfit || 0)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400">ROAS</span><span className="text-cyan-400 font-medium">{(amazon.roas || 0).toFixed(2)}x</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">Margin</span><span className={`font-medium ${(amazon.netMargin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(amazon.netMargin || (amazon.revenue > 0 ? (amazon.netProfit / amazon.revenue) * 100 : 0))}</span></div>
+                    {amazonAdSpend > 0 && <div className="flex justify-between"><span className="text-slate-400">ROAS</span><span className="text-cyan-400 font-medium">{(amazon.revenue / amazonAdSpend).toFixed(2)}x</span></div>}
                   </div>
                 </div>
               ) : (
@@ -8749,17 +8791,35 @@ Analyze the data and respond with ONLY this JSON:
             <div className={`rounded-lg sm:rounded-xl border p-3 sm:p-4 ${hasShopify ? 'bg-green-900/20 border-green-500/30' : 'bg-slate-900/30 border-slate-700'}`}>
               <h3 className="text-base sm:text-lg font-semibold text-green-400 mb-2 sm:mb-3 flex items-center gap-2 flex-wrap">
                 <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5" /> Shopify
-                {hasShopify && <span className="text-[10px] sm:text-xs bg-green-500/20 px-2 py-0.5 rounded">{formatPercent(total.shopifyShare || 0)}</span>}
+                {hasShopify && <span className="text-[10px] sm:text-xs bg-green-500/20 px-2 py-0.5 rounded">{formatPercent(shopifyShare)}</span>}
               </h3>
               {hasShopify ? (
                 <div className="space-y-1.5 sm:space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-slate-400">Revenue</span><span className="text-white font-medium">{formatCurrency(shopify.revenue || 0)}</span></div>
                   <div className="flex justify-between"><span className="text-slate-400">Units</span><span className="text-white font-medium">{formatNumber(shopify.units || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400">Meta Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.metaSpend || dayData.metaSpend || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400">Google Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.googleSpend || dayData.googleSpend || 0)}</span></div>
+                  <div className="border-t border-green-500/20 pt-1.5 mt-1.5">
+                    {shopifyCogs > 0 && <div className="flex justify-between text-slate-500"><span>COGS</span><span className="text-rose-400/70">-{formatCurrency(shopifyCogs)}</span></div>}
+                    {shopifyFees > 0 && <div className="flex justify-between text-slate-500"><span>Transaction Fees</span><span className="text-rose-400/70">-{formatCurrency(shopifyFees)}</span></div>}
+                    {shopifyShipping > 0 && <div className="flex justify-between text-slate-500"><span>Shipping</span><span className="text-rose-400/70">-{formatCurrency(shopifyShipping)}</span></div>}
+                    {(shopify.metaSpend || 0) > 0 && <div className="flex justify-between text-slate-500"><span>Meta Ads</span><span className="text-amber-400">-{formatCurrency(shopify.metaSpend || 0)}</span></div>}
+                    {(shopify.googleSpend || 0) > 0 && <div className="flex justify-between text-slate-500"><span>Google Ads</span><span className="text-amber-400">-{formatCurrency(shopify.googleSpend || 0)}</span></div>}
+                    {shopifyAdSpend === 0 && shopifyCogs === 0 && shopifyFees === 0 && shopifyShipping === 0 && (
+                      <div className="text-slate-500 text-xs italic">No costs tracked yet</div>
+                    )}
+                  </div>
                   <div className="border-t border-green-500/30 pt-2 mt-2">
-                    <div className="flex justify-between"><span className="text-slate-300 font-medium">Net Profit</span><span className={`font-bold ${(shopify.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(shopify.netProfit || 0)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400">ROAS</span><span className="text-cyan-400 font-medium">{(shopify.roas || 0).toFixed(2)}x</span></div>
+                    {(() => {
+                      // Calculate net profit if not stored
+                      const calcProfit = shopify.netProfit || (shopify.revenue - shopifyCogs - shopifyFees - shopifyShipping - shopifyAdSpend);
+                      const calcMargin = shopify.revenue > 0 ? (calcProfit / shopify.revenue) * 100 : 0;
+                      return (
+                        <>
+                          <div className="flex justify-between"><span className="text-slate-300 font-medium">Net Profit</span><span className={`font-bold ${calcProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(calcProfit)}</span></div>
+                          <div className="flex justify-between"><span className="text-slate-400">Margin</span><span className={`font-medium ${calcMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(calcMargin)}</span></div>
+                          {shopifyAdSpend > 0 && <div className="flex justify-between"><span className="text-slate-400">ROAS</span><span className="text-cyan-400 font-medium">{(shopify.revenue / shopifyAdSpend).toFixed(2)}x</span></div>}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               ) : (
