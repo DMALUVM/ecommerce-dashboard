@@ -1036,6 +1036,7 @@ export default function Dashboard() {
   const [trendsTab, setTrendsTab] = useState('daily'); // 'daily' | 'weekly' | 'monthly' | 'yearly' for trends view
   const [trendsChannel, setTrendsChannel] = useState('combined'); // 'amazon' | 'shopify' | 'combined' for trends filtering
   const [trendsDateRange, setTrendsDateRange] = useState({ start: null, end: null, preset: 'all' }); // Date range filter for trends
+  const [profitPeriodIndex, setProfitPeriodIndex] = useState(-1); // -1 = most recent, 0+ = index from end of available periods
   const [dailyFiles, setDailyFiles] = useState({ amazon: null, shopify: null }); // Daily upload files
   const [dailyAdSpend, setDailyAdSpend] = useState({ meta: '', google: '' }); // Daily ad spend inputs
   const [calendarMonth, setCalendarMonth] = useState(null); // null = auto (latest data), or { year, month }
@@ -20755,8 +20756,66 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     // For stats cards, only use actual data (not projected)
     const actualData = currentData.filter(d => !d.isProjected);
-    const latestPeriod = actualData[actualData.length - 1];
-    const prevPeriod = actualData[actualData.length - 2];
+    
+    // When filtering by channel, find the latest period that has data for that channel
+    const getLatestWithChannelData = () => {
+      if (trendsChannel === 'combined') {
+        return actualData[actualData.length - 1];
+      }
+      // Find the latest period with actual data for the selected channel
+      for (let i = actualData.length - 1; i >= 0; i--) {
+        const period = actualData[i];
+        if (trendsChannel === 'amazon' && (period.amazonRev > 0 || period.amazonUnits > 0)) {
+          return period;
+        }
+        if (trendsChannel === 'shopify' && (period.shopifyRev > 0 || period.shopifyUnits > 0)) {
+          return period;
+        }
+      }
+      return actualData[actualData.length - 1]; // Fallback
+    };
+    
+    const getPreviousWithChannelData = (latestIdx) => {
+      if (trendsChannel === 'combined') {
+        return actualData[actualData.length - 2];
+      }
+      const latestIndex = actualData.findIndex(d => d === latestIdx);
+      for (let i = latestIndex - 1; i >= 0; i--) {
+        const period = actualData[i];
+        if (trendsChannel === 'amazon' && (period.amazonRev > 0 || period.amazonUnits > 0)) {
+          return period;
+        }
+        if (trendsChannel === 'shopify' && (period.shopifyRev > 0 || period.shopifyUnits > 0)) {
+          return period;
+        }
+      }
+      return null;
+    };
+    
+    const latestPeriod = getLatestWithChannelData();
+    const prevPeriod = getPreviousWithChannelData(latestPeriod);
+    
+    // Apply channel filter to data - defined here so rangeTotals can use it
+    const getFilteredValue = (d, field) => {
+      if (trendsChannel === 'amazon') {
+        if (field === 'revenue') return d.amazonRev || 0;
+        if (field === 'profit') return d.amazonProfit || 0;
+        if (field === 'units') return d.amazonUnits || 0;
+      } else if (trendsChannel === 'shopify') {
+        if (field === 'revenue') return d.shopifyRev || 0;
+        if (field === 'profit') return d.shopifyProfit || 0;
+        if (field === 'units') return d.shopifyUnits || 0;
+      }
+      return d[field] || 0;
+    };
+    
+    // Also calculate totals for the entire selected range (for the selected channel)
+    const rangeTotals = actualData.reduce((acc, d) => {
+      acc.revenue += getFilteredValue(d, 'revenue');
+      acc.profit += getFilteredValue(d, 'profit');
+      acc.units += getFilteredValue(d, 'units');
+      return acc;
+    }, { revenue: 0, profit: 0, units: 0 });
     
     const calcChange = (current, previous) => {
       if (!previous || previous === 0) return null;
@@ -20821,20 +20880,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const periodLabel = trendsTab === 'daily' ? 'Daily' : trendsTab === 'weekly' ? 'Weekly' : trendsTab === 'monthly' ? 'Monthly' : 'Yearly';
     const periodLabelShort = trendsTab === 'daily' ? 'Day' : trendsTab === 'weekly' ? 'Week' : trendsTab === 'monthly' ? 'Month' : 'Year';
     const dataAvailable = currentData.length > 0;
-    
-    // Apply channel filter to data
-    const getFilteredValue = (d, field) => {
-      if (trendsChannel === 'amazon') {
-        if (field === 'revenue') return d.amazonRev || 0;
-        if (field === 'profit') return d.amazonProfit || 0;
-        if (field === 'units') return d.amazonUnits || 0;
-      } else if (trendsChannel === 'shopify') {
-        if (field === 'revenue') return d.shopifyRev || 0;
-        if (field === 'profit') return d.shopifyProfit || 0;
-        if (field === 'units') return d.shopifyUnits || 0;
-      }
-      return d[field] || 0;
-    };
 
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
@@ -20992,12 +21037,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {/* Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-                  <p className="text-slate-400 text-sm mb-1">Revenue (Latest {periodLabelShort})</p>
+                  <p className="text-slate-400 text-sm mb-1">
+                    Revenue (Latest {periodLabelShort})
+                    {latestPeriod?.label && <span className="text-slate-500 text-xs ml-1">• {latestPeriod.label}</span>}
+                  </p>
                   <p className="text-2xl font-bold text-white">{formatCurrency(getFilteredValue(latestPeriod || {}, 'revenue'))}</p>
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-slate-500 text-xs">vs previous</span>
                     <ChangeIndicator current={getFilteredValue(latestPeriod || {}, 'revenue')} previous={getFilteredValue(prevPeriod || {}, 'revenue')} />
                   </div>
+                  {rangeTotals.revenue > 0 && actualData.length > 1 && (
+                    <div className="mt-2 pt-2 border-t border-slate-700">
+                      <span className="text-slate-500 text-xs">Range total ({actualData.length} {periodLabelShort.toLowerCase()}s): </span>
+                      <span className="text-slate-300 text-xs font-medium">{formatCurrency(rangeTotals.revenue)}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                   <p className="text-slate-400 text-sm mb-1">Net Profit</p>
@@ -21006,6 +21060,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     <span className="text-slate-500 text-xs">vs previous</span>
                     <ChangeIndicator current={getFilteredValue(latestPeriod || {}, 'profit')} previous={getFilteredValue(prevPeriod || {}, 'profit')} />
                   </div>
+                  {rangeTotals.profit !== 0 && actualData.length > 1 && (
+                    <div className="mt-2 pt-2 border-t border-slate-700">
+                      <span className="text-slate-500 text-xs">Range total: </span>
+                      <span className={`text-xs font-medium ${rangeTotals.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(rangeTotals.profit)}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                   <p className="text-slate-400 text-sm mb-1">Units Sold</p>
@@ -21014,6 +21074,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     <span className="text-slate-500 text-xs">vs previous</span>
                     <ChangeIndicator current={getFilteredValue(latestPeriod || {}, 'units')} previous={getFilteredValue(prevPeriod || {}, 'units')} />
                   </div>
+                  {rangeTotals.units > 0 && actualData.length > 1 && (
+                    <div className="mt-2 pt-2 border-t border-slate-700">
+                      <span className="text-slate-500 text-xs">Range total: </span>
+                      <span className="text-slate-300 text-xs font-medium">{formatNumber(rangeTotals.units)}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
                   <p className="text-slate-400 text-sm mb-1">Profit Margin</p>
@@ -21025,6 +21091,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     const prevProfit = getFilteredValue(prevPeriod || {}, 'profit');
                     const prevMargin = prevRev > 0 ? (prevProfit / prevRev) * 100 : 0;
                     const marginChange = latestMargin - prevMargin;
+                    const rangeMargin = rangeTotals.revenue > 0 ? (rangeTotals.profit / rangeTotals.revenue) * 100 : 0;
                     return (
                       <>
                         <p className={`text-2xl font-bold ${latestMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(latestMargin)}</p>
@@ -21034,6 +21101,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             {marginChange >= 0 ? '+' : ''}{marginChange.toFixed(1)}pt
                           </span>}
                         </div>
+                        {actualData.length > 1 && (
+                          <div className="mt-2 pt-2 border-t border-slate-700">
+                            <span className="text-slate-500 text-xs">Range avg: </span>
+                            <span className={`text-xs font-medium ${rangeMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(rangeMargin)}</span>
+                          </div>
+                        )}
                       </>
                     );
                   })()}
@@ -24149,18 +24222,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const currentQuarter = Math.floor(currentMonth / 3) + 1;
     
     if (profitPeriod === 'monthly' && monthlyPeriods.length > 0) {
-      // Prior month (most recent uploaded month)
-      currentPeriodKey = monthlyPeriods[monthlyPeriods.length - 1];
+      // Selected month (default to most recent if -1)
+      const idx = profitPeriodIndex === -1 ? monthlyPeriods.length - 1 : Math.min(profitPeriodIndex, monthlyPeriods.length - 1);
+      currentPeriodKey = monthlyPeriods[idx];
       currentPeriodLabel = currentPeriodKey;
-      priorPeriodKey = monthlyPeriods.length > 1 ? monthlyPeriods[monthlyPeriods.length - 2] : '';
+      priorPeriodKey = idx > 0 ? monthlyPeriods[idx - 1] : '';
       priorPeriodLabel = priorPeriodKey;
       trendPeriods = monthlyPeriods.slice(-8);
       trendPeriodType = 'month';
     } else if (profitPeriod === 'quarterly' && quarterlyPeriods.length > 0) {
-      // Prior quarter
-      currentPeriodKey = quarterlyPeriods[quarterlyPeriods.length - 1];
+      // Selected quarter
+      const idx = profitPeriodIndex === -1 ? quarterlyPeriods.length - 1 : Math.min(profitPeriodIndex, quarterlyPeriods.length - 1);
+      currentPeriodKey = quarterlyPeriods[idx];
       currentPeriodLabel = currentPeriodKey;
-      priorPeriodKey = quarterlyPeriods.length > 1 ? quarterlyPeriods[quarterlyPeriods.length - 2] : '';
+      priorPeriodKey = idx > 0 ? quarterlyPeriods[idx - 1] : '';
       priorPeriodLabel = priorPeriodKey;
       trendPeriods = quarterlyPeriods.slice(-4);
       trendPeriodType = 'quarter';
@@ -24176,10 +24251,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       trendPeriods = monthlyPeriods.length > 0 ? monthlyPeriods.slice(-12) : sortedWeeks.slice(-12);
       trendPeriodType = monthlyPeriods.length > 0 ? 'month' : 'week';
     } else {
-      // Weekly - prior week (most recent complete week)
-      currentPeriodKey = sortedWeeks[sortedWeeks.length - 1] || '';
+      // Weekly - selected week (default to most recent if -1)
+      const idx = profitPeriodIndex === -1 ? sortedWeeks.length - 1 : Math.min(profitPeriodIndex, sortedWeeks.length - 1);
+      currentPeriodKey = sortedWeeks[idx] || '';
       currentPeriodLabel = currentPeriodKey ? `Week of ${new Date(currentPeriodKey + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : 'No data';
-      priorPeriodKey = sortedWeeks.length > 1 ? sortedWeeks[sortedWeeks.length - 2] : '';
+      priorPeriodKey = idx > 0 ? sortedWeeks[idx - 1] : '';
       priorPeriodLabel = priorPeriodKey ? `Week of ${new Date(priorPeriodKey + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : '';
       trendPeriods = sortedWeeks.slice(-8);
       trendPeriodType = 'week';
@@ -24401,34 +24477,104 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           </div>
           
           {/* Time Period Tabs */}
-          <div className="flex flex-wrap gap-2 mb-6">
+          <div className="flex flex-wrap gap-2 mb-4">
             <button 
-              onClick={() => setTrendsTab('weekly')}
+              onClick={() => { setTrendsTab('weekly'); setProfitPeriodIndex(-1); }}
               className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'weekly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
             >
-              📅 Prior Week
+              📅 Weekly
             </button>
             <button 
-              onClick={() => setTrendsTab('monthly')}
+              onClick={() => { setTrendsTab('monthly'); setProfitPeriodIndex(-1); }}
               className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'monthly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
               disabled={monthlyPeriods.length === 0}
             >
-              📊 Prior Month {monthlyPeriods.length === 0 && '(No data)'}
+              📊 Monthly {monthlyPeriods.length === 0 && '(No data)'}
             </button>
             <button 
-              onClick={() => setTrendsTab('quarterly')}
+              onClick={() => { setTrendsTab('quarterly'); setProfitPeriodIndex(-1); }}
               className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'quarterly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
               disabled={quarterlyPeriods.length === 0}
             >
-              📈 Prior Quarter {quarterlyPeriods.length === 0 && '(No data)'}
+              📈 Quarterly {quarterlyPeriods.length === 0 && '(No data)'}
             </button>
             <button 
-              onClick={() => setTrendsTab('yearly')}
+              onClick={() => { setTrendsTab('yearly'); setProfitPeriodIndex(-1); }}
               className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'yearly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
             >
               📆 YTD
             </button>
           </div>
+          
+          {/* Period Selector */}
+          {profitPeriod !== 'yearly' && (
+            <div className="flex flex-wrap gap-2 mb-6 items-center bg-slate-800/50 rounded-lg p-3 border border-slate-700">
+              <span className="text-slate-400 text-sm mr-2">📅 Select Period:</span>
+              <select
+                value={(() => {
+                  const periods = profitPeriod === 'weekly' ? sortedWeeks : profitPeriod === 'monthly' ? monthlyPeriods : quarterlyPeriods;
+                  return profitPeriodIndex === -1 ? periods.length - 1 : profitPeriodIndex;
+                })()}
+                onChange={(e) => {
+                  const periods = profitPeriod === 'weekly' ? sortedWeeks : profitPeriod === 'monthly' ? monthlyPeriods : quarterlyPeriods;
+                  const idx = parseInt(e.target.value);
+                  setProfitPeriodIndex(idx === periods.length - 1 ? -1 : idx);
+                }}
+                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm min-w-[200px]"
+              >
+                {profitPeriod === 'weekly' && [...sortedWeeks].reverse().map((w, reverseIdx) => {
+                  const idx = sortedWeeks.length - 1 - reverseIdx;
+                  return (
+                    <option key={w} value={idx}>
+                      Week of {new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </option>
+                  );
+                })}
+                {profitPeriod === 'monthly' && [...monthlyPeriods].reverse().map((p, reverseIdx) => {
+                  const idx = monthlyPeriods.length - 1 - reverseIdx;
+                  return <option key={p} value={idx}>{p}</option>;
+                })}
+                {profitPeriod === 'quarterly' && [...quarterlyPeriods].reverse().map((p, reverseIdx) => {
+                  const idx = quarterlyPeriods.length - 1 - reverseIdx;
+                  return <option key={p} value={idx}>{p}</option>;
+                })}
+              </select>
+              
+              {/* Quick navigation buttons */}
+              <div className="flex gap-1 ml-2">
+                <button
+                  onClick={() => {
+                    const periods = profitPeriod === 'weekly' ? sortedWeeks : profitPeriod === 'monthly' ? monthlyPeriods : quarterlyPeriods;
+                    const currentIdx = profitPeriodIndex === -1 ? periods.length - 1 : profitPeriodIndex;
+                    if (currentIdx > 0) setProfitPeriodIndex(currentIdx - 1);
+                  }}
+                  className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-sm"
+                  title="Previous period"
+                >
+                  ← Prev
+                </button>
+                <button
+                  onClick={() => {
+                    const periods = profitPeriod === 'weekly' ? sortedWeeks : profitPeriod === 'monthly' ? monthlyPeriods : quarterlyPeriods;
+                    const currentIdx = profitPeriodIndex === -1 ? periods.length - 1 : profitPeriodIndex;
+                    if (currentIdx < periods.length - 1) setProfitPeriodIndex(currentIdx + 1);
+                    else setProfitPeriodIndex(-1); // Go to latest
+                  }}
+                  className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-sm"
+                  title="Next period"
+                >
+                  Next →
+                </button>
+                <button
+                  onClick={() => setProfitPeriodIndex(-1)}
+                  className={`px-2 py-1 rounded text-sm ${profitPeriodIndex === -1 ? 'bg-emerald-600 text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}`}
+                  title="Go to latest"
+                >
+                  Latest
+                </button>
+              </div>
+            </div>
+          )}
           
           {/* Key Insights Alert */}
           <div className="bg-gradient-to-r from-indigo-900/40 to-violet-900/40 border border-indigo-500/30 rounded-xl p-4 mb-6">
@@ -27428,9 +27574,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       // Helper to download a single state's filing
                       const downloadStateFiling = (state) => {
                         const { start, end } = getDateRange();
-                        const periodLabel = taxPeriodType === 'month' 
-                          ? new Date(start).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }).replace(' ', '-')
-                          : taxPeriodValue;
+                        // Use taxPeriodValue directly to avoid timezone issues
+                        let periodLabel;
+                        if (taxPeriodType === 'month') {
+                          const [year, month] = taxPeriodValue.split('-');
+                          const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                          periodLabel = `${monthNames[parseInt(month) - 1]}-${year}`;
+                        } else {
+                          periodLabel = taxPeriodValue;
+                        }
                         const stateInfo = US_STATES_TAX_INFO[state.stateCode];
                         const filingFormat = STATE_FILING_FORMATS[state.stateCode] || STATE_FILING_FORMATS.DEFAULT;
                         const calculated = filingFormat.calculate(state, stateInfo);
@@ -27609,13 +27761,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             onClick={() => {
                               // Export tax data as CSV for filing
                               const { start, end } = getDateRange();
-                              const periodLabel = taxPeriodType === 'month' 
-                                ? new Date(start).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-                                : taxPeriodType === 'quarter'
-                                ? `Q${taxPeriodValue.split('-')[1]} ${taxPeriodValue.split('-')[0]}`
-                                : taxPeriodType === 'semiannual'
-                                ? `${taxPeriodValue.split('-')[1] === '1' ? 'H1' : 'H2'} ${taxPeriodValue.split('-')[0]}`
-                                : taxPeriodValue.split('-')[0];
+                              // Use taxPeriodValue directly to avoid timezone issues
+                              let periodLabel;
+                              if (taxPeriodType === 'month') {
+                                const [year, month] = taxPeriodValue.split('-');
+                                const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+                                periodLabel = `${monthNames[parseInt(month) - 1]} ${year}`;
+                              } else if (taxPeriodType === 'quarter') {
+                                periodLabel = `Q${taxPeriodValue.split('-')[1]} ${taxPeriodValue.split('-')[0]}`;
+                              } else if (taxPeriodType === 'semiannual') {
+                                periodLabel = `${taxPeriodValue.split('-')[1] === '1' ? 'H1' : 'H2'} ${taxPeriodValue.split('-')[0]}`;
+                              } else {
+                                periodLabel = taxPeriodValue.split('-')[0];
+                              }
                               
                               // Create CSV with all fields states typically need
                               let csv = 'State,State Code,Total Sales,Total Tax,Tax You Owe,Shop Pay Tax (Shopify Remits),Total Orders,Has Nexus,Period,Start Date,End Date\n';
