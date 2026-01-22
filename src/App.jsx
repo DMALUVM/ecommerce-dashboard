@@ -865,6 +865,72 @@ const get3PLForWeek = (ledger, weekKey) => {
   return { breakdown, metrics };
 };
 
+// Get 3PL data for a specific day by filtering ledger orders by shipDate
+const get3PLForDay = (ledger, dayKey) => {
+  if (!ledger || !ledger.orders) return null;
+  
+  // Find orders that shipped on this specific day
+  const dayOrders = Object.values(ledger.orders).filter(o => o.shipDate === dayKey);
+  
+  if (dayOrders.length === 0) return null;
+  
+  const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+  const metrics = {
+    totalCost: 0,
+    orderCount: dayOrders.length,
+    totalUnits: 0,
+    avgShippingCost: 0,
+    avgPickCost: 0,
+    avgPackagingCost: 0,
+    avgCostPerOrder: 0,
+    avgUnitsPerOrder: 0,
+    shippingCount: 0,
+    firstPickCount: 0,
+    additionalPickCount: 0,
+    carrierBreakdown: {},
+    stateBreakdown: {},
+  };
+  
+  let totalShipping = 0;
+  
+  dayOrders.forEach(order => {
+    const c = order.charges || {};
+    breakdown.pickFees += (c.firstPick || 0) + (c.additionalPick || 0);
+    breakdown.boxCharges += c.box || 0;
+    breakdown.other += (c.reBoxing || 0) + (c.fbaForwarding || 0);
+    
+    metrics.firstPickCount += c.firstPickQty || 0;
+    metrics.additionalPickCount += c.additionalPickQty || 0;
+    
+    // Track by carrier
+    if (order.carrier) {
+      if (!metrics.carrierBreakdown[order.carrier]) metrics.carrierBreakdown[order.carrier] = { orders: 0, cost: 0 };
+      metrics.carrierBreakdown[order.carrier].orders++;
+    }
+    
+    // Track by state
+    if (order.state) {
+      if (!metrics.stateBreakdown[order.state]) metrics.stateBreakdown[order.state] = 0;
+      metrics.stateBreakdown[order.state]++;
+    }
+  });
+  
+  // Note: Summary charges (like storage) are weekly, not daily - so we don't include them in daily view
+  // Only order-level charges are included for daily breakdown
+  
+  metrics.totalUnits = metrics.firstPickCount + metrics.additionalPickCount;
+  metrics.totalCost = breakdown.pickFees + breakdown.boxCharges + breakdown.other;
+  
+  if (metrics.orderCount > 0) {
+    metrics.avgPickCost = breakdown.pickFees / metrics.orderCount;
+    metrics.avgPackagingCost = breakdown.boxCharges / metrics.orderCount;
+    metrics.avgCostPerOrder = metrics.totalCost / metrics.orderCount;
+    metrics.avgUnitsPerOrder = metrics.totalUnits / metrics.orderCount;
+  }
+  
+  return { breakdown, metrics };
+};
+
 // Get 3PL data for a period (month/quarter/year) by aggregating from ledger
 const get3PLForPeriod = (ledger, periodKey) => {
   if (!ledger || !ledger.orders) return null;
@@ -16513,6 +16579,26 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     const shopify = dayData.shopify || {};
     const total = dayData.total || {};
     
+    // Get ads metrics from either shopify object or top-level dayData (bulk uploads store at top level)
+    const googleSpend = shopify.googleSpend || dayData.googleSpend || 0;
+    const metaSpend = shopify.metaSpend || dayData.metaSpend || 0;
+    const googleImpressions = shopify.adsMetrics?.googleImpressions || dayData.googleImpressions || 0;
+    const googleClicks = shopify.adsMetrics?.googleClicks || dayData.googleClicks || 0;
+    const googleConversions = shopify.adsMetrics?.googleConversions || dayData.googleConversions || 0;
+    const googleCPC = dayData.googleCpc || (googleClicks > 0 ? googleSpend / googleClicks : 0);
+    const googleCPA = dayData.googleCpa || dayData.googleCostPerConv || (googleConversions > 0 ? googleSpend / googleConversions : 0);
+    const metaImpressions = shopify.adsMetrics?.metaImpressions || dayData.metaImpressions || 0;
+    const metaClicks = shopify.adsMetrics?.metaClicks || dayData.metaClicks || 0;
+    const metaPurchases = shopify.adsMetrics?.metaPurchases || dayData.metaPurchases || dayData.metaConversions || 0;
+    const metaCTR = dayData.metaCtr || (metaImpressions > 0 ? (metaClicks / metaImpressions) * 100 : 0);
+    const metaCPC = dayData.metaCpc || (metaClicks > 0 ? metaSpend / metaClicks : 0);
+    
+    // Get 3PL costs from ledger first, then fallback to dayData/shopify
+    const ledger3PL = get3PLForDay(threeplLedger, selectedDay);
+    const threeplCosts = ledger3PL?.metrics?.totalCost || shopify.threeplCosts || dayData.threeplCosts || 0;
+    const threeplBreakdown = ledger3PL?.breakdown || shopify.threeplBreakdown || dayData.threeplBreakdown || {};
+    const threeplMetrics = ledger3PL?.metrics || shopify.threeplMetrics || dayData.threeplMetrics || {};
+    
     // Build proper data structures for ChannelCard component
     const amazonData = {
       revenue: amazon.revenue || 0,
@@ -16535,11 +16621,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       netProfit: shopify.netProfit || 0,
       netMargin: shopify.netMargin || (shopify.revenue > 0 ? (shopify.netProfit / shopify.revenue) * 100 : 0),
       cogs: shopify.cogs || 0,
-      threeplCosts: shopify.threeplCosts || 0,
-      adSpend: (shopify.metaSpend || 0) + (shopify.googleSpend || 0),
-      metaSpend: shopify.metaSpend || 0,
-      googleSpend: shopify.googleSpend || 0,
-      roas: shopify.roas || 0,
+      threeplCosts: threeplCosts,
+      threeplBreakdown: threeplBreakdown,
+      threeplMetrics: threeplMetrics,
+      adSpend: metaSpend + googleSpend,
+      metaSpend: metaSpend,
+      googleSpend: googleSpend,
+      roas: (metaSpend + googleSpend) > 0 ? (shopify.revenue || 0) / (metaSpend + googleSpend) : 0,
       aov: shopify.units > 0 ? shopify.revenue / shopify.units : 0,
       discounts: shopify.discounts || 0,
       skuData: shopify.skuData || [],
@@ -16617,34 +16705,34 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           </div>
           
           {/* Google/Meta Ads Details */}
-          {((shopify.googleSpend > 0 || shopify.adsMetrics?.googleImpressions > 0) || (shopify.metaSpend > 0 || shopify.adsMetrics?.metaImpressions > 0)) && (
+          {(googleSpend > 0 || googleImpressions > 0 || metaSpend > 0 || metaImpressions > 0) && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
               {/* Google Ads */}
-              {(shopify.googleSpend > 0 || shopify.adsMetrics?.googleImpressions > 0) && (
+              {(googleSpend > 0 || googleImpressions > 0) && (
                 <div className="bg-red-900/20 border border-red-500/30 rounded-2xl p-5">
                   <h3 className="text-lg font-semibold text-red-400 mb-4">Google Ads</h3>
                   <div className="grid grid-cols-3 gap-4 text-center">
-                    <div><p className="text-slate-400 text-xs mb-1">Spend</p><p className="text-white text-lg font-semibold">{formatCurrency(shopify.googleSpend || 0)}</p></div>
-                    <div><p className="text-slate-400 text-xs mb-1">Clicks</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.googleClicks || 0)}</p></div>
-                    <div><p className="text-slate-400 text-xs mb-1">Impressions</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.googleImpressions || 0)}</p></div>
-                    <div><p className="text-slate-400 text-xs mb-1">Conversions</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.googleConversions || 0)}</p></div>
-                    <div><p className="text-slate-400 text-xs mb-1">CPC</p><p className="text-white text-lg font-semibold">{formatCurrency(shopify.adsMetrics?.googleCPC || 0)}</p></div>
-                    <div><p className="text-slate-400 text-xs mb-1">CPA</p><p className="text-white text-lg font-semibold">{formatCurrency(shopify.adsMetrics?.googleCostPerConv || 0)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Spend</p><p className="text-white text-lg font-semibold">{formatCurrency(googleSpend)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Clicks</p><p className="text-white text-lg font-semibold">{formatNumber(googleClicks)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Impressions</p><p className="text-white text-lg font-semibold">{formatNumber(googleImpressions)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Conversions</p><p className="text-white text-lg font-semibold">{formatNumber(googleConversions)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">CPC</p><p className="text-white text-lg font-semibold">{formatCurrency(googleCPC)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">CPA</p><p className="text-white text-lg font-semibold">{formatCurrency(googleCPA)}</p></div>
                   </div>
                 </div>
               )}
               
               {/* Meta Ads */}
-              {(shopify.metaSpend > 0 || shopify.adsMetrics?.metaImpressions > 0) && (
+              {(metaSpend > 0 || metaImpressions > 0) && (
                 <div className="bg-indigo-900/20 border border-indigo-500/30 rounded-2xl p-5">
                   <h3 className="text-lg font-semibold text-indigo-400 mb-4">Meta Ads</h3>
                   <div className="grid grid-cols-3 gap-4 text-center">
-                    <div><p className="text-slate-400 text-xs mb-1">Spend</p><p className="text-white text-lg font-semibold">{formatCurrency(shopify.metaSpend || 0)}</p></div>
-                    <div><p className="text-slate-400 text-xs mb-1">Clicks</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.metaClicks || 0)}</p></div>
-                    <div><p className="text-slate-400 text-xs mb-1">Impressions</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.metaImpressions || 0)}</p></div>
-                    <div><p className="text-slate-400 text-xs mb-1">Purchases</p><p className="text-white text-lg font-semibold">{formatNumber(shopify.adsMetrics?.metaPurchases || 0)}</p></div>
-                    <div><p className="text-slate-400 text-xs mb-1">CTR</p><p className="text-white text-lg font-semibold">{(shopify.adsMetrics?.metaCTR || 0).toFixed(2)}%</p></div>
-                    <div><p className="text-slate-400 text-xs mb-1">CPC</p><p className="text-white text-lg font-semibold">{formatCurrency(shopify.adsMetrics?.metaCPC || 0)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Spend</p><p className="text-white text-lg font-semibold">{formatCurrency(metaSpend)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Clicks</p><p className="text-white text-lg font-semibold">{formatNumber(metaClicks)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Impressions</p><p className="text-white text-lg font-semibold">{formatNumber(metaImpressions)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">Purchases</p><p className="text-white text-lg font-semibold">{formatNumber(metaPurchases)}</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">CTR</p><p className="text-white text-lg font-semibold">{metaCTR.toFixed(2)}%</p></div>
+                    <div><p className="text-slate-400 text-xs mb-1">CPC</p><p className="text-white text-lg font-semibold">{formatCurrency(metaCPC)}</p></div>
                   </div>
                 </div>
               )}
