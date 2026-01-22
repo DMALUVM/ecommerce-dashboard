@@ -532,6 +532,10 @@ export default async function handler(req, res) {
     let totalTaxCollected = 0;
     let totalShopPayTaxExcluded = 0;
     let shopPayOrderCount = 0;
+    
+    // Track all payment gateways seen (for debugging Shop Pay detection)
+    const allPaymentGateways = new Set();
+    const shopPayGatewaysFound = new Set();
 
     // Helper to get week ending (Sunday)
     const getWeekEnding = (dateStr) => {
@@ -549,26 +553,59 @@ export default async function handler(req, res) {
       const gateways = order.payment_gateway_names || [];
       const sourceName = (order.source_name || '').toLowerCase();
       const tags = (order.tags || '').toLowerCase();
+      const checkoutToken = (order.checkout_token || '').toLowerCase();
+      
+      // Track all gateways seen
+      gateways.forEach(g => allPaymentGateways.add(g));
       
       // Check payment gateways
+      let matchedGateway = null;
       const hasShopPayGateway = gateways.some(g => {
         const lower = g.toLowerCase().replace(/[\s_-]/g, '');
-        return lower === 'shoppay' || 
+        const original = g.toLowerCase();
+        
+        // Match variations of Shop Pay
+        const isMatch = lower === 'shoppay' || 
                lower.includes('shoppay') ||
                lower === 'shopifyinstallments' ||
-               lower.includes('shopifyinstallments');
+               lower.includes('shopifyinstallments') ||
+               original === 'shop pay' ||
+               original === 'shop_pay' ||
+               original.includes('shop pay');
+        if (isMatch) matchedGateway = g;
+        return isMatch;
       });
       
       // Also check source_name and tags for Shop Pay indicators
       const hasShopPaySource = sourceName.includes('shop_pay') || 
                                sourceName.includes('shoppay') ||
+                               sourceName === 'shop pay' ||
                                tags.includes('shop_pay') ||
-                               tags.includes('shoppay');
+                               tags.includes('shoppay') ||
+                               tags.includes('shop pay');
       
       // Check if payment was processed through Shop Pay Installments
-      const hasInstallments = order.payment_terms?.payment_terms_type === 'INSTALLMENTS';
+      const hasInstallments = order.payment_terms?.payment_terms_type === 'INSTALLMENTS' ||
+                              order.payment_terms?.payment_terms_name?.toLowerCase().includes('shop pay');
       
-      return hasShopPayGateway || hasShopPaySource || hasInstallments;
+      // Check for Shop Pay in payment details
+      const paymentDetails = order.payment_details || {};
+      const hasShopPayDetails = paymentDetails.credit_card_company?.toLowerCase() === 'shop pay';
+      
+      // Check for "accelerated_checkout" in source
+      const hasAcceleratedCheckout = sourceName.includes('accelerated');
+      
+      const isShopPay = hasShopPayGateway || hasShopPaySource || hasInstallments || hasShopPayDetails || hasAcceleratedCheckout;
+      
+      // Track which gateways matched
+      if (isShopPay && matchedGateway) {
+        shopPayGatewaysFound.add(matchedGateway);
+      }
+      if (isShopPay && !matchedGateway) {
+        shopPayGatewaysFound.add('detected via: ' + (hasShopPaySource ? 'source/tags' : hasInstallments ? 'installments' : hasShopPayDetails ? 'payment_details' : 'accelerated'));
+      }
+      
+      return isShopPay;
     };
     
     // Helper to get state code from order
@@ -828,6 +865,11 @@ export default async function handler(req, res) {
       .sort((a, b) => b.taxCollected - a.taxCollected);
 
     // Return response
+    // Log payment gateway info for debugging
+    console.log('Payment Gateways Found:', Array.from(allPaymentGateways));
+    console.log('Shop Pay Gateways Matched:', Array.from(shopPayGatewaysFound));
+    console.log(`Shop Pay Orders: ${shopPayOrderCount} out of ${orders.length} total orders`);
+    
     return res.status(200).json({
       success: true,
       orderCount: orders.length,
@@ -844,6 +886,9 @@ export default async function handler(req, res) {
         shopPayOrderCount,
         byState: taxByStateSummary,
         byJurisdiction: taxByJurisdiction,
+        // Payment gateway debugging info
+        paymentGateways: Array.from(allPaymentGateways),
+        shopPayGatewaysMatched: Array.from(shopPayGatewaysFound),
       },
       taxByJurisdiction, // Keep for backward compatibility
       dateRange: { start: startDate, end: endDate },
