@@ -10568,15 +10568,24 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
           else if (productName.includes('sun balm') || productName.includes('spf')) category = 'Sun Balm';
           else if (productName.includes('tallow balm') || productName.includes('moisturizer')) category = 'Tallow Balm';
           
-          // Fallback: check for lip balm pack patterns
+          // Fallback: check for lip balm pack patterns (handles "Sweet Orange 3-Pack", "Assorted Pack", etc.)
           if (category === 'Other') {
             const combined = (sku + ' ' + productName).toLowerCase();
-            if (combined.match(/\d-?pack/i) && (
-              combined.includes('orange') || combined.includes('peppermint') || 
-              combined.includes('vanilla') || combined.includes('lavender') ||
-              combined.includes('unscented') || combined.includes('assorted') ||
-              combined.includes('mint') || combined.includes('honey')
-            )) {
+            // Check for pack patterns with lip balm flavors/variants
+            const isLipBalmPack = (
+              (combined.includes('pack') || combined.includes('pk')) && (
+                combined.includes('orange') || combined.includes('peppermint') || 
+                combined.includes('vanilla') || combined.includes('lavender') ||
+                combined.includes('unscented') || combined.includes('assorted') ||
+                combined.includes('mint') || combined.includes('honey') ||
+                combined.includes('sweet') || combined.includes('citrus') ||
+                combined.includes('cherry') || combined.includes('berry')
+              )
+            );
+            // Also check for lip balm SKU patterns (like LB-, BALM-, etc.)
+            const hasLipBalmSku = /^(lb|balm|lip)/i.test(sku) || sku.toLowerCase().includes('lip');
+            
+            if (isLipBalmPack || hasLipBalmSku) {
               category = 'Lip Balm';
             }
           }
@@ -10592,6 +10601,25 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       
       processSkusForPeriod(amz.skuData, 'Amazon');
       processSkusForPeriod(shop.skuData, 'Shopify');
+      
+      // Also build SKU-level breakdown for detailed queries
+      const skuBreakdown = {};
+      const buildSkuBreakdown = (skuData) => {
+        (skuData || []).forEach(s => {
+          const sku = s.sku || s.msku || '';
+          if (!sku) return;
+          const name = savedProductNames[sku] || s.name || s.title || sku;
+          const revenue = s.netSales || s.revenue || 0;
+          const units = s.unitsSold || s.units || 0;
+          if (!skuBreakdown[sku]) {
+            skuBreakdown[sku] = { name, revenue: 0, units: 0 };
+          }
+          skuBreakdown[sku].revenue += revenue;
+          skuBreakdown[sku].units += units;
+        });
+      };
+      buildSkuBreakdown(amz.skuData);
+      buildSkuBreakdown(shop.skuData);
       
       return {
         period: label,
@@ -10617,7 +10645,8 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
         shopifyUnits: shop.units || 0,
         threeplCosts: threeplFromLedger || shop.threeplCosts || 0,
         skuCount: ((amz.skuData || []).length + (shop.skuData || []).length),
-        byCategory: categoryBreakdown, // NEW: Category breakdown for this period
+        byCategory: categoryBreakdown, // Category breakdown for this period
+        skuBreakdown: skuBreakdown, // SKU-level breakdown for detailed queries
       };
     }).sort((a, b) => a.period.localeCompare(b.period));
     
@@ -10745,6 +10774,77 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       skusByCategory[p.category].push(p.sku);
     });
     
+    // COMPREHENSIVE SKU-LEVEL AGGREGATION (combines all periods + weeks)
+    const skuMasterData = {};
+    
+    // Add period data (2025 monthly, 2024 quarterly)
+    periodsSummary.filter(p => p.totalRevenue > 0).forEach(period => {
+      Object.entries(period.skuBreakdown || {}).forEach(([sku, data]) => {
+        if (!skuMasterData[sku]) {
+          const catalogEntry = productCatalog.find(p => p.sku === sku);
+          skuMasterData[sku] = {
+            sku,
+            name: catalogEntry?.name || data.name || sku,
+            category: catalogEntry?.category || 'Other',
+            totalRevenue: 0,
+            totalUnits: 0,
+            byPeriod: {},
+            byWeek: {},
+          };
+        }
+        skuMasterData[sku].totalRevenue += data.revenue || 0;
+        skuMasterData[sku].totalUnits += data.units || 0;
+        skuMasterData[sku].byPeriod[period.period] = { revenue: data.revenue, units: data.units };
+      });
+    });
+    
+    // Add weekly data (recent weeks)
+    sortedWeeks.slice(-12).forEach(week => {
+      const weekData = allWeeksData[week];
+      if (!weekData) return;
+      
+      const processWeekSkus = (skuData, channel) => {
+        (skuData || []).forEach(s => {
+          const sku = s.sku || s.msku || '';
+          if (!sku) return;
+          const revenue = s.netSales || s.revenue || 0;
+          const units = s.unitsSold || s.units || 0;
+          
+          if (!skuMasterData[sku]) {
+            const catalogEntry = productCatalog.find(p => p.sku === sku);
+            skuMasterData[sku] = {
+              sku,
+              name: catalogEntry?.name || savedProductNames[sku] || s.name || sku,
+              category: catalogEntry?.category || 'Other',
+              totalRevenue: 0,
+              totalUnits: 0,
+              byPeriod: {},
+              byWeek: {},
+            };
+          }
+          
+          if (!skuMasterData[sku].byWeek[week]) {
+            skuMasterData[sku].byWeek[week] = { revenue: 0, units: 0 };
+          }
+          skuMasterData[sku].byWeek[week].revenue += revenue;
+          skuMasterData[sku].byWeek[week].units += units;
+          // Only add to totals if not already counted in periods
+          if (Object.keys(skuMasterData[sku].byPeriod).length === 0) {
+            skuMasterData[sku].totalRevenue += revenue;
+            skuMasterData[sku].totalUnits += units;
+          }
+        });
+      };
+      
+      processWeekSkus(weekData.amazon?.skuData, 'Amazon');
+      processWeekSkus(weekData.shopify?.skuData, 'Shopify');
+    });
+    
+    // Convert to sorted array
+    const skuMasterList = Object.values(skuMasterData)
+      .filter(s => s.totalRevenue > 0 || Object.keys(s.byWeek).length > 0)
+      .sort((a, b) => b.totalRevenue - a.totalRevenue);
+    
     // Calculate all time totals properly:
     // 2026: Use weekly data (actual weeks)
     // 2025: Use monthly period data (no weekly breakdown available)
@@ -10841,13 +10941,21 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
             // If still "Other", try SKU-based pattern matching (common lip balm packs)
             if (category === 'Other') {
               const combined = (sku + ' ' + productName).toLowerCase();
-              // Check for common lip balm indicators: 3-pack, pack, flavors like orange/peppermint/vanilla
-              if (combined.match(/\d-?pack/i) && (
-                combined.includes('orange') || combined.includes('peppermint') || 
-                combined.includes('vanilla') || combined.includes('lavender') ||
-                combined.includes('unscented') || combined.includes('assorted') ||
-                combined.includes('mint') || combined.includes('honey')
-              )) {
+              // Check for pack patterns with lip balm flavors/variants
+              const isLipBalmPack = (
+                (combined.includes('pack') || combined.includes('pk')) && (
+                  combined.includes('orange') || combined.includes('peppermint') || 
+                  combined.includes('vanilla') || combined.includes('lavender') ||
+                  combined.includes('unscented') || combined.includes('assorted') ||
+                  combined.includes('mint') || combined.includes('honey') ||
+                  combined.includes('sweet') || combined.includes('citrus') ||
+                  combined.includes('cherry') || combined.includes('berry')
+                )
+              );
+              // Also check for lip balm SKU patterns (like LB-, BALM-, etc.)
+              const hasLipBalmSku = /^(lb|balm|lip)/i.test(sku) || sku.toLowerCase().includes('lip');
+              
+              if (isLipBalmPack || hasLipBalmSku) {
                 category = 'Lip Balm';
               }
             }
@@ -11054,6 +11162,7 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       improvingSkus: skuAnalysis.filter(s => s.trend === 'improving').slice(0, 10),
       productCatalog,
       skusByCategory,
+      skuMasterData: skuMasterList, // COMPREHENSIVE: all SKU data across periods + weeks
       inventory: inventorySummary,
       salesTax: taxSummary,
       goals,
@@ -11488,12 +11597,64 @@ ${ctx.goals.weeklyRevenue > 0 && ctx.weeklyData.length > 0 ? `- Last Week vs Goa
 === ALERTS ===
 ${alertsSummary.length > 0 ? alertsSummary.join('\n') : 'No active alerts'}
 
-=== PRODUCT CATALOG (SKU to Product Name mapping) ===
+=== PRODUCT CATALOG (SKU ↔ Product Name mapping) ===
+Use this to translate between product names and SKUs:
 ${JSON.stringify(ctx.productCatalog)}
 
-=== SKUs BY CATEGORY ===
-${JSON.stringify(ctx.skusByCategory)}
-When user asks about a product type (e.g., "lip balm", "deodorant", "soap"), find the matching category and aggregate data for those SKUs.
+=== QUICK LOOKUP: Product Names → SKUs ===
+${ctx.productCatalog?.slice(0, 15).map(p => `"${p.name.substring(0, 40)}..." → ${p.sku} [${p.category}]`).join('\n') || 'No catalog'}
+
+=== SKUs BY CATEGORY (for category queries) ===
+${Object.entries(ctx.skusByCategory || {}).map(([cat, skus]) => `${cat}: ${skus.join(', ')}`).join('\n') || 'No categories'}
+
+=== 📦 SKU MASTER DATA (PRIMARY DATA SOURCE - USE THIS) ===
+IMPORTANT: This is the authoritative SKU-level data. Use SKUs as the primary identifier for all analysis.
+
+**TOP 20 SKUs BY REVENUE (all-time across periods + weeks):**
+${ctx.skuMasterData?.slice(0, 20).map(s => 
+  `${s.sku}: "${s.name}" [${s.category}] - $${s.totalRevenue.toFixed(0)} rev, ${s.totalUnits} units`
+).join('\n') || 'No SKU data'}
+
+**SKU BREAKDOWN BY 2025 MONTH:**
+${(() => {
+  const byMonth = {};
+  ctx.skuMasterData?.forEach(s => {
+    Object.entries(s.byPeriod || {}).forEach(([period, data]) => {
+      if (!byMonth[period]) byMonth[period] = [];
+      if (data.revenue > 0) byMonth[period].push({ sku: s.sku, name: s.name, category: s.category, revenue: data.revenue, units: data.units });
+    });
+  });
+  return Object.entries(byMonth)
+    .filter(([p]) => p.includes('2025') || p.includes('-2025'))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(0, 6)
+    .map(([period, skus]) => {
+      const top3 = skus.sort((a, b) => b.revenue - a.revenue).slice(0, 3);
+      return `${period}: ${top3.map(s => `${s.sku}=$${s.revenue.toFixed(0)}`).join(', ')}`;
+    }).join('\n') || 'No period data';
+})()}
+
+**CATEGORY TOTALS FROM SKU DATA:**
+${(() => {
+  const cats = {};
+  ctx.skuMasterData?.forEach(s => {
+    if (!cats[s.category]) cats[s.category] = { revenue: 0, units: 0, skuCount: 0 };
+    cats[s.category].revenue += s.totalRevenue;
+    cats[s.category].units += s.totalUnits;
+    cats[s.category].skuCount++;
+  });
+  return Object.entries(cats)
+    .sort(([,a], [,b]) => b.revenue - a.revenue)
+    .map(([cat, d]) => `${cat}: $${d.revenue.toFixed(0)} revenue, ${d.units} units (${d.skuCount} SKUs)`)
+    .join('\n') || 'No category data';
+})()}
+
+🔑 SKU-CENTRIC ANALYSIS RULES:
+- ALWAYS use SKU codes (e.g., DDPE0004Shop) as primary identifiers
+- Look up product names from productCatalog when needed for display
+- For category questions, find SKUs in that category and sum their data
+- For period questions, use skuMasterData[x].byPeriod[period]
+- For week questions, use skuMasterData[x].byWeek[week]
 
 === 🎯🎯🎯 PRE-COMPUTED TIMEFRAME DATA - USE THIS FOR TIMEFRAME QUESTIONS 🎯🎯🎯 ===
 
@@ -11541,47 +11702,41 @@ BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
 - "Compare 2024 vs 2025" → Use YoY INSIGHTS + PERIOD DATA
 - The period data contains monthly 2025 totals and quarterly 2024 totals
 
-🏷️ FOR CATEGORY + PERIOD QUESTIONS (e.g., "how much lip balm in January 2025?"):
-- Look at the period's byCategory field: periodData.find(p => p.period === "January 2025").byCategory["Lip Balm"]
-- Each period now has byCategory breakdown with: units, revenue, profit per category
-- See "LIP BALM BY MONTH (2025)" section for pre-computed lip balm monthly data
-- If byCategory is empty for a period, the SKU data wasn't included when that period was uploaded
+🏷️ FOR CATEGORY QUESTIONS (e.g., "how much lip balm sold?"):
+- User says category name → Find SKUs: skusByCategory["Lip Balm"] = ["DDPE0001Shop", "DDPE0002Shop", ...]
+- Sum data from skuMasterData for each of those SKUs
+- Show breakdown by SKU in response: "DDPE0001Shop (Unscented): $X, DDPE0002Shop (Peppermint): $Y..."
+
+📦 FOR SPECIFIC PRODUCT QUESTIONS (e.g., "how did assorted pack do?" or "DDPE0004Shop sales"):
+- If SKU given → Look up directly in skuMasterData
+- If product name given → Search productCatalog for match → Get SKU → Look up in skuMasterData
+- Show: "DDPE0004Shop (Grass-Fed Tallow Lip Balm 3-Pack – Assorted): $285,000 total, 21,000 units"
+
+🗓️ FOR PERIOD QUESTIONS (e.g., "lip balm in January 2025"):
+- Resolve product/category to SKUs first
+- Then look up each SKU's byPeriod["january-2025"] data
+- Sum and display with SKU breakdown
+
+🔑 REMEMBER: Internally always use SKUs - they're unique identifiers. Product names are for user-friendly display.
 
 === WEEKLY DATA (most recent 12 weeks) ===
 ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
 
 === PERIOD DATA (Quarterly/Monthly/Yearly Historical) ===
-${ctx.periodData.length > 0 ? `CRITICAL: This is historical data uploaded as monthly/quarterly periods!
-Total periods tracked: ${ctx.periodData.length}
+${ctx.periodData.length > 0 ? `Total periods tracked: ${ctx.periodData.filter(p => p.totalRevenue > 0).length} (with data)
 
-📅 2025 MONTHLY DATA WITH CATEGORY BREAKDOWNS:
-${ctx.periodData.filter(p => (p.period.includes('2025') || p.period.includes('-2025')) && p.type === 'monthly').map(p => 
-  `${p.period}: $${p.totalRevenue.toFixed(0)} total | ${p.byCategory && Object.keys(p.byCategory).length > 0 
-    ? Object.entries(p.byCategory).map(([cat, data]) => `${cat}: $${data.revenue.toFixed(0)} rev, ${data.units} units`).join('; ')
-    : 'No category breakdown'}`
-).join('\n') || 'No 2025 monthly periods uploaded'}
+📅 2025 MONTHLY TOTALS:
+${ctx.periodData.filter(p => (p.period.includes('2025') || p.period.includes('-2025')) && p.type === 'monthly' && p.totalRevenue > 0).map(p => 
+  `${p.period}: $${p.totalRevenue.toFixed(0)} rev, ${p.totalUnits} units, ${p.margin.toFixed(1)}% margin`
+).join('\n') || 'No 2025 monthly periods'}
 
-📅 2024 QUARTERLY DATA WITH CATEGORY BREAKDOWNS:
-${ctx.periodData.filter(p => (p.period.includes('2024') || p.period.includes('-2024')) && p.type === 'quarterly').map(p => 
-  `${p.period}: $${p.totalRevenue.toFixed(0)} total | ${p.byCategory && Object.keys(p.byCategory).length > 0 
-    ? Object.entries(p.byCategory).map(([cat, data]) => `${cat}: $${data.revenue.toFixed(0)} rev, ${data.units} units`).join('; ')
-    : 'No category breakdown'}`
-).join('\n') || 'No 2024 quarterly periods uploaded'}
+📅 2024 QUARTERLY TOTALS:
+${ctx.periodData.filter(p => (p.period.includes('2024') || p.period.includes('-2024')) && p.type === 'quarterly' && p.totalRevenue > 0).map(p => 
+  `${p.period}: $${p.totalRevenue.toFixed(0)} rev, ${p.totalUnits} units`
+).join('\n') || 'No 2024 quarterly periods'}
 
-📅 2024 MONTHLY DATA WITH CATEGORY BREAKDOWNS:
-${ctx.periodData.filter(p => (p.period.includes('2024') || p.period.includes('-2024')) && p.type === 'monthly').map(p => 
-  `${p.period}: $${p.totalRevenue.toFixed(0)} total | ${p.byCategory && Object.keys(p.byCategory).length > 0 
-    ? Object.entries(p.byCategory).map(([cat, data]) => `${cat}: $${data.revenue.toFixed(0)} rev, ${data.units} units`).join('; ')
-    : 'No category breakdown'}`
-).join('\n') || 'No 2024 monthly periods uploaded'}
-
-🔍 LIP BALM BY MONTH (2025):
-${ctx.periodData.filter(p => (p.period.includes('2025') || p.period.includes('-2025')) && p.type === 'monthly' && p.byCategory?.['Lip Balm']).map(p => 
-  `- ${p.period}: $${p.byCategory['Lip Balm'].revenue.toFixed(0)} revenue, ${p.byCategory['Lip Balm'].units} units, $${p.byCategory['Lip Balm'].profit.toFixed(0)} profit`
-).join('\n') || 'No lip balm data in 2025 periods (SKU data may not have been included in period uploads)'}
-
-ALL PERIODS RAW DATA (with byCategory):
-${JSON.stringify(ctx.periodData)}` : 'No historical period data uploaded yet (quarterly/monthly/yearly)'}
+NOTE: For SKU-level breakdown by period, use the SKU MASTER DATA section above.
+` : 'No historical period data uploaded yet'}
 
 === YEAR-OVER-YEAR INSIGHTS ===
 ${ctx.yoyInsights?.length > 0 ? JSON.stringify(ctx.yoyInsights) : 'No comparable year-over-year data available yet'}
@@ -12019,6 +12174,20 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
 === 🧠 AI LEARNING INSTRUCTIONS ===
 You have access to the MULTI-SIGNAL AI FORECAST which is the most accurate forecast available. Use it as your PRIMARY source for predictions.
 
+**PRODUCT IDENTIFICATION (CRITICAL):**
+- Users may ask using EITHER product name ("lip balm", "assorted 3-pack") OR SKU ("DDPE0004Shop")
+- ALWAYS resolve to SKU internally for data lookup
+- When user says "lip balm" → find SKUs in skusByCategory["Lip Balm"] → aggregate skuMasterData for those SKUs
+- When user says "DDPE0004Shop" → look up directly in skuMasterData
+- When user says "assorted pack" → search productCatalog for matching name → get SKU → look up in skuMasterData
+- In responses, show BOTH: "DDPE0004Shop (Assorted 3-Pack Lip Balm): $X revenue"
+
+**FOR SKU-LEVEL ANALYSIS:**
+1. Use skuMasterData as the authoritative source for all SKU data
+2. Each SKU has: totalRevenue, totalUnits, byPeriod (monthly), byWeek (recent weeks)
+3. For category totals, sum data from all SKUs in that category
+4. For period-specific questions, use skuMasterData[sku].byPeriod["january-2025"]
+
 **FOR PREDICTIONS:**
 1. Always use the Multi-Signal AI Forecast data (if available) for weekly predictions
 2. Check the FORECAST ACCURACY LEARNING section to understand how past predictions performed
@@ -12034,6 +12203,7 @@ You have access to the MULTI-SIGNAL AI FORECAST which is the most accurate forec
 1. Your predictions should align with the Multi-Signal AI Forecast shown on the dashboard
 2. If asked "what will next week's revenue be?", use the Multi-Signal next week prediction
 3. Be transparent about confidence levels and data quality
+4. Always show SKU codes alongside product names in responses for clarity
 
 The goal is for you to learn from the forecast vs actual comparisons over time and become increasingly accurate.`;
 
@@ -28174,19 +28344,64 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               {Object.keys(allPeriodsData).length > 0 && (
                 <div className="mb-4">
                   <p className="text-slate-300 text-sm mb-2">Period Data ({Object.keys(allPeriodsData).length} periods)</p>
+                  
+                  {/* Empty periods warning and bulk delete */}
+                  {(() => {
+                    const emptyPeriods = Object.keys(allPeriodsData).filter(k => {
+                      const p = allPeriodsData[k];
+                      return (p.total?.revenue || 0) === 0 || ((p.amazon?.skuData?.length || 0) + (p.shopify?.skuData?.length || 0)) === 0;
+                    });
+                    if (emptyPeriods.length > 0) {
+                      return (
+                        <div className="bg-amber-900/20 border border-amber-500/30 rounded-lg p-3 mb-3">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-amber-400 text-sm font-medium">⚠️ {emptyPeriods.length} Empty Period{emptyPeriods.length > 1 ? 's' : ''} Found</p>
+                              <p className="text-slate-400 text-xs">{emptyPeriods.slice(0, 5).join(', ')}{emptyPeriods.length > 5 ? '...' : ''}</p>
+                            </div>
+                            <button
+                              onClick={() => {
+                                if (confirm(`Delete ${emptyPeriods.length} empty period(s)?\n\n${emptyPeriods.join(', ')}\n\nThis cannot be undone.`)) {
+                                  const updated = { ...allPeriodsData };
+                                  emptyPeriods.forEach(k => delete updated[k]);
+                                  setAllPeriodsData(updated);
+                                  savePeriods(updated);
+                                  setToast({ message: `Deleted ${emptyPeriods.length} empty periods`, type: 'success' });
+                                }
+                              }}
+                              className="px-3 py-1.5 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-amber-300 text-xs font-medium"
+                            >
+                              Delete All Empty
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+                  
                   <div className="flex flex-wrap gap-2">
-                    {Object.keys(allPeriodsData).sort().map(periodKey => (
-                      <div key={periodKey} className="flex items-center gap-1 bg-slate-700/50 rounded-lg px-2 py-1">
-                        <span className="text-slate-300 text-xs">{allPeriodsData[periodKey].label || periodKey}</span>
+                    {Object.keys(allPeriodsData).sort().map(periodKey => {
+                      const p = allPeriodsData[periodKey];
+                      const isEmpty = (p.total?.revenue || 0) === 0;
+                      const skuCount = (p.amazon?.skuData?.length || 0) + (p.shopify?.skuData?.length || 0);
+                      return (
+                      <div key={periodKey} className={`flex items-center gap-1 rounded-lg px-2 py-1 ${isEmpty ? 'bg-rose-900/30 border border-rose-500/30' : 'bg-slate-700/50'}`}>
+                        <span className={`text-xs ${isEmpty ? 'text-rose-400' : 'text-slate-300'}`}>
+                          {p.label || periodKey}
+                          {isEmpty && ' ⚠️'}
+                          {!isEmpty && skuCount > 0 && <span className="text-slate-500 ml-1">({skuCount})</span>}
+                        </span>
                         <button
                           onClick={() => {
-                            if (confirm(`Delete period "${allPeriodsData[periodKey].label || periodKey}"? This cannot be undone.`)) {
+                            if (confirm(`Delete period "${p.label || periodKey}"? This cannot be undone.`)) {
                               setAllPeriodsData(prev => {
                                 const updated = { ...prev };
                                 delete updated[periodKey];
+                                savePeriods(updated);
                                 return updated;
                               });
-                              toast('Period deleted', 'success');
+                              setToast({ message: 'Period deleted', type: 'success' });
                             }
                           }}
                           className="text-rose-400 hover:text-rose-300 p-0.5"
@@ -28194,7 +28409,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           <X className="w-3 h-3" />
                         </button>
                       </div>
-                    ))}
+                    );})}
                   </div>
                 </div>
               )}
