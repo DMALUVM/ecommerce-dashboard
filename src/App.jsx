@@ -6508,6 +6508,35 @@ Keep insights brief and actionable. Format as numbered list.`;
       const dailyBasedWeekly = avg7Day * 7; // Most recent daily × 7
       const trendAdjustedWeekly = dailyBasedWeekly * (1 + weeklyTrend / 100 * 0.5); // Damped trend
       
+      // ==================== PERIOD DATA ANALYSIS (2025 Monthly, 2024 Quarterly) ====================
+      const periodsSummary = Object.entries(allPeriodsData).map(([label, data]) => ({
+        period: label,
+        type: label.match(/^\d{4}$/) ? 'yearly' : label.match(/^q\d/i) ? 'quarterly' : 'monthly',
+        totalRevenue: data.total?.revenue || 0,
+        totalProfit: data.total?.netProfit || 0,
+        totalUnits: data.total?.units || 0,
+        margin: data.total?.revenue > 0 ? ((data.total?.netProfit || 0) / data.total.revenue * 100) : 0,
+      })).sort((a, b) => a.period.localeCompare(b.period));
+      
+      const months2025 = periodsSummary.filter(p => p.period.includes('2025') && p.type === 'monthly');
+      const quarters2024 = periodsSummary.filter(p => p.period.includes('2024') && p.type === 'quarterly');
+      
+      // Calculate seasonal index for current month (if we have historical data)
+      const currentMonth = today.toLocaleDateString('en-US', { month: 'long' });
+      const monthlyData = periodsSummary.filter(p => p.type === 'monthly' && p.totalRevenue > 0);
+      let seasonalIndex = 1.0;
+      if (monthlyData.length >= 3) {
+        const avgMonthlyRevenue = monthlyData.reduce((s, m) => s + m.totalRevenue, 0) / monthlyData.length;
+        const currentMonthData = monthlyData.find(m => m.period.toLowerCase().includes(currentMonth.toLowerCase()));
+        if (currentMonthData && avgMonthlyRevenue > 0) {
+          seasonalIndex = currentMonthData.totalRevenue / avgMonthlyRevenue;
+        }
+      }
+      
+      // Get YoY baseline if available (same month last year)
+      const lastYearSameMonth = `${currentMonth} ${today.getFullYear() - 1}`;
+      const yoyBaseline = periodsSummary.find(p => p.period === lastYearSameMonth);
+      
       let weightedPrediction;
       if (adjustedAmazonForecast && futureAmazonForecasts.length > 0) {
         // Blend: 60% daily-based, 20% trend-adjusted, 20% Amazon (bias-corrected)
@@ -6616,6 +6645,16 @@ ${JSON.stringify(completeWeeks.slice(-8), null, 2)}
 
 ### AMAZON FORECASTS (Next 4 weeks)
 ${JSON.stringify(futureAmazonForecasts, null, 2)}
+
+### HISTORICAL PERIOD DATA (2025 Monthly, 2024 Quarterly)
+${months2025.length > 0 ? `2025 Monthly Performance:
+${months2025.map(m => `- ${m.period}: $${m.totalRevenue.toFixed(0)} revenue, $${m.totalProfit.toFixed(0)} profit, ${m.margin.toFixed(1)}% margin`).join('\n')}` : 'No 2025 monthly data uploaded'}
+
+${quarters2024.length > 0 ? `2024 Quarterly Performance:
+${quarters2024.map(q => `- ${q.period}: $${q.totalRevenue.toFixed(0)} revenue, $${q.totalProfit.toFixed(0)} profit`).join('\n')}` : 'No 2024 quarterly data'}
+
+${yoyBaseline ? `YoY Baseline (${lastYearSameMonth}): $${yoyBaseline.totalRevenue.toFixed(0)} revenue, $${yoyBaseline.totalProfit.toFixed(0)} profit` : ''}
+Seasonal Index for ${currentMonth}: ${seasonalIndex.toFixed(2)} (1.0 = average, >1 = above average month)
 
 ### INVENTORY ALERTS
 Critical (< 14 days): ${criticalInventory.length} items
@@ -6757,6 +6796,14 @@ Respond with ONLY this JSON:
             weightedPrediction,
             profitPrediction,
             avgProfitMargin: avgProfitMargin * 100,
+            seasonalIndex,
+          },
+          periodData: {
+            months2025: months2025.length,
+            quarters2024: quarters2024.length,
+            totalPeriods: periodsSummary.length,
+            yoyBaseline: yoyBaseline ? { period: yoyBaseline.period, revenue: yoyBaseline.totalRevenue, profit: yoyBaseline.totalProfit } : null,
+            currentMonthSeasonalIndex: seasonalIndex,
           },
           adsAnalysis: {
             totalGoogleSpend: adsAnalysis.totalGoogleSpend,
@@ -6777,6 +6824,8 @@ Respond with ONLY this JSON:
             amazonForecastWeeks: futureAmazonForecasts.length,
             amazonAccuracySamples: amazonAccuracy.samples,
             adsDataDays: adsAnalysis.daysWithAds,
+            periodMonths2025: months2025.length,
+            periodQuarters2024: quarters2024.length,
           },
         });
       } else {
@@ -8174,45 +8223,45 @@ Analyze the data and respond with ONLY this JSON:
     };
     
     return (
-      <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 p-4 overflow-y-auto" onClick={() => { setViewingDayDetails(null); setEditingDayAdSpend(false); }}>
-        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-4xl w-full my-4 max-h-[calc(100vh-2rem)] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 p-2 sm:p-4 overflow-y-auto" onClick={() => { setViewingDayDetails(null); setEditingDayAdSpend(false); }}>
+        <div className="bg-slate-800 rounded-xl sm:rounded-2xl border border-slate-700 p-4 sm:p-6 max-w-4xl w-full my-2 sm:my-4 max-h-[calc(100vh-1rem)] sm:max-h-[calc(100vh-2rem)] overflow-y-auto" onClick={e => e.stopPropagation()}>
           {/* Header */}
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h2 className="text-xl font-bold text-white">
-                {new Date(viewingDayDetails + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+          <div className="flex items-start justify-between mb-4 sm:mb-6 gap-2">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base sm:text-xl font-bold text-white leading-tight">
+                {new Date(viewingDayDetails + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
               </h2>
-              <p className="text-slate-400 text-sm">Daily Performance Details</p>
+              <p className="text-slate-400 text-xs sm:text-sm">Daily Performance Details</p>
             </div>
-            <button onClick={() => { setViewingDayDetails(null); setEditingDayAdSpend(false); }} className="text-slate-400 hover:text-white p-2 hover:bg-slate-700 rounded-lg"><X className="w-5 h-5" /></button>
+            <button onClick={() => { setViewingDayDetails(null); setEditingDayAdSpend(false); }} className="text-slate-400 hover:text-white p-2 hover:bg-slate-700 rounded-lg flex-shrink-0"><X className="w-5 h-5" /></button>
           </div>
           
           {/* Edit Ad Spend Section */}
           {editingDayAdSpend && (
-            <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6">
-              <h3 className="text-amber-300 font-semibold mb-3 flex items-center gap-2">
+            <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-3 sm:p-4 mb-4 sm:mb-6">
+              <h3 className="text-amber-300 font-semibold mb-3 flex items-center gap-2 text-sm sm:text-base">
                 <DollarSign className="w-4 h-4" /> Edit Ad Spend
               </h3>
-              <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 mb-3 sm:mb-4">
                 <div>
-                  <label className="block text-sm text-slate-300 mb-1">Meta Ad Spend ($)</label>
+                  <label className="block text-xs sm:text-sm text-slate-300 mb-1">Meta ($)</label>
                   <input 
                     type="number" 
                     step="0.01"
                     id="day-ad-spend-meta"
                     defaultValue={dayAdSpendEdit.meta}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
                     placeholder="0.00"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-slate-300 mb-1">Google Ad Spend ($)</label>
+                  <label className="block text-xs sm:text-sm text-slate-300 mb-1">Google ($)</label>
                   <input 
                     type="number" 
                     step="0.01"
                     id="day-ad-spend-google"
                     defaultValue={dayAdSpendEdit.google}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
                     placeholder="0.00"
                   />
                 </div>
@@ -8225,61 +8274,56 @@ Analyze the data and respond with ONLY this JSON:
                     setDayAdSpendEdit({ meta, google });
                     setTimeout(saveAdSpendEdit, 10);
                   }}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm font-medium"
+                  className="px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm font-medium"
                 >
-                  Save Changes
+                  Save
                 </button>
                 <button 
                   onClick={() => setEditingDayAdSpend(false)}
-                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm"
+                  className="px-3 sm:px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm"
                 >
                   Cancel
                 </button>
               </div>
-              <p className="text-amber-400/70 text-xs mt-2">Note: This updates Shopify ad spend and recalculates profit/margin</p>
             </div>
           )}
           
           {/* Summary Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-slate-900/50 rounded-xl p-4">
-              <p className="text-slate-400 text-xs mb-1">Total Revenue</p>
-              <p className="text-xl font-bold text-white">{formatCurrency(total.revenue || 0)}</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4 mb-4 sm:mb-6">
+            <div className="bg-slate-900/50 rounded-lg sm:rounded-xl p-3 sm:p-4">
+              <p className="text-slate-400 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Revenue</p>
+              <p className="text-base sm:text-xl font-bold text-white">{formatCurrency(total.revenue || 0)}</p>
             </div>
-            <div className="bg-slate-900/50 rounded-xl p-4">
-              <p className="text-slate-400 text-xs mb-1">Net Profit</p>
-              <p className={`text-xl font-bold ${(total.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(total.netProfit || 0)}</p>
+            <div className="bg-slate-900/50 rounded-lg sm:rounded-xl p-3 sm:p-4">
+              <p className="text-slate-400 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Profit</p>
+              <p className={`text-base sm:text-xl font-bold ${(total.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(total.netProfit || 0)}</p>
             </div>
-            <div className="bg-slate-900/50 rounded-xl p-4">
-              <p className="text-slate-400 text-xs mb-1">Units Sold</p>
-              <p className="text-xl font-bold text-white">{formatNumber(total.units || 0)}</p>
+            <div className="bg-slate-900/50 rounded-lg sm:rounded-xl p-3 sm:p-4">
+              <p className="text-slate-400 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Units</p>
+              <p className="text-base sm:text-xl font-bold text-white">{formatNumber(total.units || 0)}</p>
             </div>
-            <div className="bg-slate-900/50 rounded-xl p-4">
-              <p className="text-slate-400 text-xs mb-1">Profit Margin</p>
-              <p className={`text-xl font-bold ${(total.netMargin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(total.netMargin || 0)}</p>
+            <div className="bg-slate-900/50 rounded-lg sm:rounded-xl p-3 sm:p-4">
+              <p className="text-slate-400 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Margin</p>
+              <p className={`text-base sm:text-xl font-bold ${(total.netMargin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(total.netMargin || 0)}</p>
             </div>
           </div>
           
           {/* Channel Breakdown */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+          <div className="grid grid-cols-1 gap-4 sm:gap-6 mb-4 sm:mb-6">
             {/* Amazon */}
-            <div className={`rounded-xl border p-4 ${hasAmazon ? 'bg-orange-900/20 border-orange-500/30' : 'bg-slate-900/30 border-slate-700'}`}>
-              <h3 className="text-lg font-semibold text-orange-400 mb-3 flex items-center gap-2">
-                <Store className="w-5 h-5" /> Amazon
-                {hasAmazon && <span className="text-xs bg-orange-500/20 px-2 py-0.5 rounded">{formatPercent(total.amazonShare || 0)} of total</span>}
+            <div className={`rounded-lg sm:rounded-xl border p-3 sm:p-4 ${hasAmazon ? 'bg-orange-900/20 border-orange-500/30' : 'bg-slate-900/30 border-slate-700'}`}>
+              <h3 className="text-base sm:text-lg font-semibold text-orange-400 mb-2 sm:mb-3 flex items-center gap-2 flex-wrap">
+                <Store className="w-4 h-4 sm:w-5 sm:h-5" /> Amazon
+                {hasAmazon && <span className="text-[10px] sm:text-xs bg-orange-500/20 px-2 py-0.5 rounded">{formatPercent(total.amazonShare || 0)}</span>}
               </h3>
               {hasAmazon ? (
-                <div className="space-y-2">
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Revenue</span><span className="text-white font-medium">{formatCurrency(amazon.revenue || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Units Sold</span><span className="text-white font-medium">{formatNumber(amazon.units || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Returns</span><span className="text-rose-400 font-medium">{formatNumber(amazon.returns || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">COGS</span><span className="text-white font-medium">{formatCurrency(amazon.cogs || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">FBA Fees</span><span className="text-white font-medium">{formatCurrency(amazon.fees || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Ad Spend</span><span className="text-amber-400 font-medium">{formatCurrency(amazon.adSpend || 0)}</span></div>
+                <div className="space-y-1.5 sm:space-y-2 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-400">Revenue</span><span className="text-white font-medium">{formatCurrency(amazon.revenue || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Units</span><span className="text-white font-medium">{formatNumber(amazon.units || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Ad Spend</span><span className="text-amber-400 font-medium">{formatCurrency(amazon.adSpend || 0)}</span></div>
                   <div className="border-t border-orange-500/30 pt-2 mt-2">
-                    <div className="flex justify-between"><span className="text-slate-300 text-sm font-medium">Net Profit</span><span className={`font-bold ${(amazon.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(amazon.netProfit || 0)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400 text-sm">Margin</span><span className={`font-medium ${(amazon.margin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(amazon.margin || 0)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400 text-sm">ROAS</span><span className="text-cyan-400 font-medium">{(amazon.roas || 0).toFixed(2)}x</span></div>
+                    <div className="flex justify-between"><span className="text-slate-300 font-medium">Net Profit</span><span className={`font-bold ${(amazon.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(amazon.netProfit || 0)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">ROAS</span><span className="text-cyan-400 font-medium">{(amazon.roas || 0).toFixed(2)}x</span></div>
                   </div>
                 </div>
               ) : (
@@ -8288,23 +8332,20 @@ Analyze the data and respond with ONLY this JSON:
             </div>
             
             {/* Shopify */}
-            <div className={`rounded-xl border p-4 ${hasShopify ? 'bg-green-900/20 border-green-500/30' : 'bg-slate-900/30 border-slate-700'}`}>
-              <h3 className="text-lg font-semibold text-green-400 mb-3 flex items-center gap-2">
-                <ShoppingBag className="w-5 h-5" /> Shopify
-                {hasShopify && <span className="text-xs bg-green-500/20 px-2 py-0.5 rounded">{formatPercent(total.shopifyShare || 0)} of total</span>}
+            <div className={`rounded-lg sm:rounded-xl border p-3 sm:p-4 ${hasShopify ? 'bg-green-900/20 border-green-500/30' : 'bg-slate-900/30 border-slate-700'}`}>
+              <h3 className="text-base sm:text-lg font-semibold text-green-400 mb-2 sm:mb-3 flex items-center gap-2 flex-wrap">
+                <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5" /> Shopify
+                {hasShopify && <span className="text-[10px] sm:text-xs bg-green-500/20 px-2 py-0.5 rounded">{formatPercent(total.shopifyShare || 0)}</span>}
               </h3>
               {hasShopify ? (
-                <div className="space-y-2">
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Revenue</span><span className="text-white font-medium">{formatCurrency(shopify.revenue || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Units Sold</span><span className="text-white font-medium">{formatNumber(shopify.units || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">COGS</span><span className="text-white font-medium">{formatCurrency(shopify.cogs || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Discounts</span><span className="text-rose-400 font-medium">{formatCurrency(shopify.discounts || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Meta Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.metaSpend || dayData.metaSpend || dayData.metaAds || 0)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400 text-sm">Google Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.googleSpend || dayData.googleSpend || dayData.googleAds || 0)}</span></div>
+                <div className="space-y-1.5 sm:space-y-2 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-400">Revenue</span><span className="text-white font-medium">{formatCurrency(shopify.revenue || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Units</span><span className="text-white font-medium">{formatNumber(shopify.units || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Meta Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.metaSpend || dayData.metaSpend || 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Google Ads</span><span className="text-amber-400 font-medium">{formatCurrency(shopify.googleSpend || dayData.googleSpend || 0)}</span></div>
                   <div className="border-t border-green-500/30 pt-2 mt-2">
-                    <div className="flex justify-between"><span className="text-slate-300 text-sm font-medium">Net Profit</span><span className={`font-bold ${(shopify.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(shopify.netProfit || 0)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400 text-sm">Margin</span><span className={`font-medium ${(shopify.netMargin || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(shopify.netMargin || 0)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400 text-sm">ROAS</span><span className="text-cyan-400 font-medium">{(shopify.roas || 0).toFixed(2)}x</span></div>
+                    <div className="flex justify-between"><span className="text-slate-300 font-medium">Net Profit</span><span className={`font-bold ${(shopify.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(shopify.netProfit || 0)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">ROAS</span><span className="text-cyan-400 font-medium">{(shopify.roas || 0).toFixed(2)}x</span></div>
                   </div>
                 </div>
               ) : (
@@ -8313,55 +8354,49 @@ Analyze the data and respond with ONLY this JSON:
             </div>
           </div>
           
-          {/* Google Ads data if present (without full sales data) */}
+          {/* Google Ads data if present */}
           {(dayData.googleAds || dayData.googleSpend || dayData.googleImpressions || shopify.googleSpend || shopify.adsMetrics?.googleImpressions) && (
-            <div className="bg-red-900/20 border border-red-500/30 rounded-xl p-4 mb-6">
-              <h3 className="text-lg font-semibold text-red-400 mb-3">Google Ads Metrics</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div><p className="text-slate-400 text-xs">Spend</p><p className="text-white font-medium">{formatCurrency(shopify.googleSpend || dayData.googleSpend || dayData.googleAds || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">Clicks</p><p className="text-white font-medium">{formatNumber(shopify.adsMetrics?.googleClicks || dayData.googleClicks || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">Impressions</p><p className="text-white font-medium">{formatNumber(shopify.adsMetrics?.googleImpressions || dayData.googleImpressions || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">Conversions</p><p className="text-white font-medium">{formatNumber(shopify.adsMetrics?.googleConversions || dayData.googleConversions || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">CPC</p><p className="text-white font-medium">{formatCurrency(shopify.adsMetrics?.googleCPC || dayData.googleCpc || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">Cost/Conv</p><p className="text-white font-medium">{formatCurrency(shopify.adsMetrics?.googleCostPerConv || dayData.googleCpa || 0)}</p></div>
+            <div className="bg-red-900/20 border border-red-500/30 rounded-lg sm:rounded-xl p-3 sm:p-4 mb-4 sm:mb-6">
+              <h3 className="text-base sm:text-lg font-semibold text-red-400 mb-2 sm:mb-3">Google Ads</h3>
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 sm:gap-4 text-center">
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Spend</p><p className="text-white text-sm font-medium">{formatCurrency(shopify.googleSpend || dayData.googleSpend || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Clicks</p><p className="text-white text-sm font-medium">{formatNumber(shopify.adsMetrics?.googleClicks || dayData.googleClicks || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Impr</p><p className="text-white text-sm font-medium">{formatNumber(shopify.adsMetrics?.googleImpressions || dayData.googleImpressions || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Conv</p><p className="text-white text-sm font-medium">{formatNumber(shopify.adsMetrics?.googleConversions || dayData.googleConversions || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">CPC</p><p className="text-white text-sm font-medium">{formatCurrency(shopify.adsMetrics?.googleCPC || dayData.googleCpc || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">CPA</p><p className="text-white text-sm font-medium">{formatCurrency(shopify.adsMetrics?.googleCostPerConv || dayData.googleCpa || 0)}</p></div>
               </div>
             </div>
           )}
           
           {/* Meta Ads data if present */}
           {(dayData.metaAds || dayData.metaSpend || dayData.metaImpressions || (shopify.adsMetrics?.metaImpressions)) && (
-            <div className="bg-indigo-900/20 border border-indigo-500/30 rounded-xl p-4 mb-6">
-              <h3 className="text-lg font-semibold text-indigo-400 mb-3">Meta Ads Metrics</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div><p className="text-slate-400 text-xs">Spend</p><p className="text-white font-medium">{formatCurrency(dayData.metaSpend || dayData.metaAds || shopify.metaSpend || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">Clicks</p><p className="text-white font-medium">{formatNumber(dayData.metaClicks || shopify.adsMetrics?.metaClicks || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">Impressions</p><p className="text-white font-medium">{formatNumber(dayData.metaImpressions || shopify.adsMetrics?.metaImpressions || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">Purchases</p><p className="text-white font-medium">{formatNumber(dayData.metaConversions || shopify.adsMetrics?.metaPurchases || 0)}</p></div>
-                <div><p className="text-slate-400 text-xs">CTR</p><p className="text-white font-medium">{(dayData.metaCtr || shopify.adsMetrics?.metaCTR || 0).toFixed(2)}%</p></div>
-                <div><p className="text-slate-400 text-xs">CPC</p><p className="text-white font-medium">{formatCurrency(dayData.metaCpc || shopify.adsMetrics?.metaCPC || 0)}</p></div>
-                {(shopify.adsMetrics?.metaPurchaseValue > 0 || dayData.metaPurchaseValue > 0) && (
-                  <div><p className="text-slate-400 text-xs">Purchase Value</p><p className="text-emerald-400 font-medium">{formatCurrency(dayData.metaPurchaseValue || shopify.adsMetrics?.metaPurchaseValue || 0)}</p></div>
-                )}
-                {(shopify.adsMetrics?.metaROAS > 0 || dayData.metaROAS > 0) && (
-                  <div><p className="text-slate-400 text-xs">ROAS</p><p className="text-cyan-400 font-medium">{(dayData.metaROAS || shopify.adsMetrics?.metaROAS || 0).toFixed(2)}x</p></div>
-                )}
+            <div className="bg-indigo-900/20 border border-indigo-500/30 rounded-lg sm:rounded-xl p-3 sm:p-4 mb-4 sm:mb-6">
+              <h3 className="text-base sm:text-lg font-semibold text-indigo-400 mb-2 sm:mb-3">Meta Ads</h3>
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 sm:gap-4 text-center">
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Spend</p><p className="text-white text-sm font-medium">{formatCurrency(dayData.metaSpend || shopify.metaSpend || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Clicks</p><p className="text-white text-sm font-medium">{formatNumber(dayData.metaClicks || shopify.adsMetrics?.metaClicks || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Impr</p><p className="text-white text-sm font-medium">{formatNumber(dayData.metaImpressions || shopify.adsMetrics?.metaImpressions || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Purch</p><p className="text-white text-sm font-medium">{formatNumber(dayData.metaConversions || shopify.adsMetrics?.metaPurchases || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">CTR</p><p className="text-white text-sm font-medium">{(dayData.metaCtr || shopify.adsMetrics?.metaCTR || 0).toFixed(1)}%</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">CPC</p><p className="text-white text-sm font-medium">{formatCurrency(dayData.metaCpc || shopify.adsMetrics?.metaCPC || 0)}</p></div>
               </div>
             </div>
           )}
           
           {/* SKU Breakdown */}
           {((amazon.skuData && amazon.skuData.length > 0) || (shopify.skuData && shopify.skuData.length > 0)) && (
-            <div className="bg-slate-900/50 rounded-xl p-4">
-              <h3 className="text-lg font-semibold text-white mb-3">Top Products</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-slate-900/50 rounded-lg sm:rounded-xl p-3 sm:p-4">
+              <h3 className="text-base sm:text-lg font-semibold text-white mb-2 sm:mb-3">Top Products</h3>
+              <div className="grid grid-cols-1 gap-3 sm:gap-4">
                 {amazon.skuData && amazon.skuData.length > 0 && (
                   <div>
-                    <p className="text-orange-400 text-sm font-medium mb-2">Amazon</p>
-                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                    <p className="text-orange-400 text-xs sm:text-sm font-medium mb-1.5 sm:mb-2">Amazon</p>
+                    <div className="space-y-1 max-h-32 sm:max-h-40 overflow-y-auto">
                       {amazon.skuData.slice(0, 5).map((sku, i) => (
-                        <div key={i} className="flex justify-between text-sm">
+                        <div key={i} className="flex justify-between text-xs sm:text-sm">
                           <span className="text-slate-300 truncate flex-1 mr-2">{savedProductNames[sku.sku] || sku.name || sku.sku}</span>
-                          <span className="text-white">{formatCurrency(sku.netSales || 0)}</span>
+                          <span className="text-white flex-shrink-0">{formatCurrency(sku.netSales || 0)}</span>
                         </div>
                       ))}
                     </div>
@@ -8369,12 +8404,12 @@ Analyze the data and respond with ONLY this JSON:
                 )}
                 {shopify.skuData && shopify.skuData.length > 0 && (
                   <div>
-                    <p className="text-green-400 text-sm font-medium mb-2">Shopify</p>
-                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                    <p className="text-green-400 text-xs sm:text-sm font-medium mb-1.5 sm:mb-2">Shopify</p>
+                    <div className="space-y-1 max-h-32 sm:max-h-40 overflow-y-auto">
                       {shopify.skuData.slice(0, 5).map((sku, i) => (
-                        <div key={i} className="flex justify-between text-sm">
+                        <div key={i} className="flex justify-between text-xs sm:text-sm">
                           <span className="text-slate-300 truncate flex-1 mr-2">{savedProductNames[sku.sku] || sku.name || sku.sku}</span>
-                          <span className="text-white">{formatCurrency(sku.netSales || 0)}</span>
+                          <span className="text-white flex-shrink-0">{formatCurrency(sku.netSales || 0)}</span>
                         </div>
                       ))}
                     </div>
@@ -8385,21 +8420,21 @@ Analyze the data and respond with ONLY this JSON:
           )}
           
           {/* Footer */}
-          <div className="flex justify-between items-center mt-6 pt-4 border-t border-slate-700">
-            <p className="text-slate-500 text-xs">
-              {dayData.createdAt && `Uploaded: ${new Date(dayData.createdAt).toLocaleString()}`}
-              {dayData.lastEdited && ` • Edited: ${new Date(dayData.lastEdited).toLocaleString()}`}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mt-4 sm:mt-6 pt-3 sm:pt-4 border-t border-slate-700">
+            <p className="text-slate-500 text-[10px] sm:text-xs order-2 sm:order-1">
+              {dayData.createdAt && `${new Date(dayData.createdAt).toLocaleDateString()}`}
+              {dayData.lastEdited && ` • Edited`}
             </p>
-            <div className="flex gap-2">
+            <div className="flex gap-2 w-full sm:w-auto order-1 sm:order-2">
               {!editingDayAdSpend && hasDailySalesData(dayData) && (
                 <button 
                   onClick={startEditingAdSpend}
-                  className="px-4 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-amber-300 text-sm flex items-center gap-2"
+                  className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-amber-300 text-xs sm:text-sm flex items-center justify-center gap-1.5 sm:gap-2"
                 >
-                  <DollarSign className="w-4 h-4" /> Edit Ad Spend
+                  <DollarSign className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> <span className="hidden sm:inline">Edit </span>Ad Spend
                 </button>
               )}
-              <button onClick={() => { setViewingDayDetails(null); setEditingDayAdSpend(false); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white">Close</button>
+              <button onClick={() => { setViewingDayDetails(null); setEditingDayAdSpend(false); }} className="flex-1 sm:flex-none px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm">Close</button>
             </div>
           </div>
         </div>
@@ -11441,11 +11476,36 @@ BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
 ⚠️ REMINDER: For "how much X sold last week" → use lastWeekByCategory.byCategory["X"]
 ⚠️ DO NOT use skuAnalysis below - that is ALL-TIME data!
 
+🗓️ FOR HISTORICAL QUESTIONS (2025 monthly, 2024 quarterly):
+- "How did we do in January 2025?" → Use PERIOD DATA section above
+- "What was Q3 2024 revenue?" → Use PERIOD DATA section above
+- "Compare 2024 vs 2025" → Use YoY INSIGHTS + PERIOD DATA
+- The period data contains monthly 2025 totals and quarterly 2024 totals
+
 === WEEKLY DATA (most recent 12 weeks) ===
 ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
 
 === PERIOD DATA (Quarterly/Monthly/Yearly Historical) ===
-${ctx.periodData.length > 0 ? 'Historical periods tracked: ' + ctx.periodData.length + '\n' + JSON.stringify(ctx.periodData) : 'No historical period data uploaded yet (quarterly/monthly/yearly)'}
+${ctx.periodData.length > 0 ? `CRITICAL: This is historical data uploaded as monthly/quarterly periods!
+Total periods tracked: ${ctx.periodData.length}
+
+📅 2025 MONTHLY DATA:
+${ctx.periodData.filter(p => p.period.includes('2025') && p.type === 'monthly').map(p => 
+  `- ${p.period}: $${p.totalRevenue.toFixed(0)} revenue, $${p.totalProfit.toFixed(0)} profit, ${p.totalUnits} units, ${p.margin.toFixed(1)}% margin`
+).join('\n') || 'No 2025 monthly periods uploaded'}
+
+📅 2024 QUARTERLY DATA:
+${ctx.periodData.filter(p => p.period.includes('2024') && p.type === 'quarterly').map(p => 
+  `- ${p.period}: $${p.totalRevenue.toFixed(0)} revenue, $${p.totalProfit.toFixed(0)} profit, ${p.totalUnits} units`
+).join('\n') || 'No 2024 quarterly periods uploaded'}
+
+📅 2024 MONTHLY DATA:
+${ctx.periodData.filter(p => p.period.includes('2024') && p.type === 'monthly').map(p => 
+  `- ${p.period}: $${p.totalRevenue.toFixed(0)} revenue, $${p.totalProfit.toFixed(0)} profit`
+).join('\n') || 'No 2024 monthly periods uploaded'}
+
+ALL PERIODS RAW DATA:
+${JSON.stringify(ctx.periodData)}` : 'No historical period data uploaded yet (quarterly/monthly/yearly)'}
 
 === YEAR-OVER-YEAR INSIGHTS ===
 ${ctx.yoyInsights?.length > 0 ? JSON.stringify(ctx.yoyInsights) : 'No comparable year-over-year data available yet'}
