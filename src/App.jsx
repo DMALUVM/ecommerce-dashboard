@@ -866,6 +866,7 @@ const get3PLForWeek = (ledger, weekKey) => {
 };
 
 // Get 3PL data for a specific day by filtering ledger orders by shipDate
+// NOTE: Storage is excluded as it's a weekly/monthly aggregate, not per-shipment
 const get3PLForDay = (ledger, dayKey) => {
   if (!ledger || !ledger.orders) return null;
   
@@ -915,11 +916,11 @@ const get3PLForDay = (ledger, dayKey) => {
     }
   });
   
-  // Note: Summary charges (like storage) are weekly, not daily - so we don't include them in daily view
-  // Only order-level charges are included for daily breakdown
+  // Storage is NOT included in daily - it's a weekly/monthly aggregate charge
+  // Only order-level charges (pick fees, box charges, etc.) are included
   
   metrics.totalUnits = metrics.firstPickCount + metrics.additionalPickCount;
-  metrics.totalCost = breakdown.pickFees + breakdown.boxCharges + breakdown.other;
+  metrics.totalCost = breakdown.pickFees + breakdown.boxCharges + breakdown.other; // No storage
   
   if (metrics.orderCount > 0) {
     metrics.avgPickCost = breakdown.pickFees / metrics.orderCount;
@@ -16602,26 +16603,30 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     const weekData = allWeeksData[weekKey];
     
     // Use day data if available, otherwise prorate week data
+    // NOTE: Storage is excluded from daily 3PL as it's a weekly/monthly aggregate charge
     let threeplCosts = 0;
     let threeplBreakdown = {};
     let threeplMetrics = {};
     
     if (ledger3PLDay && ledger3PLDay.metrics.totalCost > 0) {
-      // Exact day match from ledger
-      threeplCosts = ledger3PLDay.metrics.totalCost;
-      threeplBreakdown = ledger3PLDay.breakdown;
-      threeplMetrics = ledger3PLDay.metrics;
+      // Exact day match from ledger - exclude storage
+      const storageExcluded = ledger3PLDay.breakdown.storage || 0;
+      threeplCosts = ledger3PLDay.metrics.totalCost - storageExcluded;
+      threeplBreakdown = { ...ledger3PLDay.breakdown, storage: 0 };
+      threeplMetrics = { ...ledger3PLDay.metrics, totalCost: threeplCosts };
     } else if (ledger3PLWeek && ledger3PLWeek.metrics.totalCost > 0) {
-      // Prorate from week ledger data
+      // Prorate from week ledger data - exclude storage
       const weekShopifyUnits = weekData?.shopify?.units || 0;
       const dayShopifyUnits = shopify.units || 0;
       const ratio = weekShopifyUnits > 0 && dayShopifyUnits > 0 
         ? dayShopifyUnits / weekShopifyUnits 
         : 1/7;
       
-      threeplCosts = ledger3PLWeek.metrics.totalCost * ratio;
+      // Calculate costs excluding storage
+      const weekCostExStorage = ledger3PLWeek.metrics.totalCost - (ledger3PLWeek.breakdown.storage || 0);
+      threeplCosts = weekCostExStorage * ratio;
       threeplBreakdown = {
-        storage: (ledger3PLWeek.breakdown.storage || 0) * ratio,
+        storage: 0, // Excluded from daily
         shipping: (ledger3PLWeek.breakdown.shipping || 0) * ratio,
         pickFees: (ledger3PLWeek.breakdown.pickFees || 0) * ratio,
         boxCharges: (ledger3PLWeek.breakdown.boxCharges || 0) * ratio,
@@ -16636,7 +16641,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         isProrated: true,
       };
     } else if (weekData?.shopify?.threeplCosts > 0) {
-      // Use weekly processed data's 3PL costs (prorate by units)
+      // Use weekly processed data's 3PL costs (prorate by units) - exclude storage
       const weekShopifyUnits = weekData.shopify.units || 0;
       const dayShopifyUnits = shopify.units || 0;
       const ratio = weekShopifyUnits > 0 && dayShopifyUnits > 0 
@@ -16644,9 +16649,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         : 1/7;
       
       const weekThreepl = weekData.shopify;
-      threeplCosts = weekThreepl.threeplCosts * ratio;
+      const weekStorage = weekThreepl.threeplBreakdown?.storage || 0;
+      const weekCostExStorage = weekThreepl.threeplCosts - weekStorage;
+      threeplCosts = weekCostExStorage * ratio;
       threeplBreakdown = weekThreepl.threeplBreakdown ? {
-        storage: (weekThreepl.threeplBreakdown.storage || 0) * ratio,
+        storage: 0, // Excluded from daily
         shipping: (weekThreepl.threeplBreakdown.shipping || 0) * ratio,
         pickFees: (weekThreepl.threeplBreakdown.pickFees || 0) * ratio,
         boxCharges: (weekThreepl.threeplBreakdown.boxCharges || 0) * ratio,
@@ -16661,9 +16668,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         isProrated: true,
       } : { totalCost: threeplCosts, isProrated: true };
     } else {
-      // Fallback to stored day data
-      threeplCosts = shopify.threeplCosts || dayData.threeplCosts || 0;
-      threeplBreakdown = shopify.threeplBreakdown || dayData.threeplBreakdown || {};
+      // Fallback to stored day data - also exclude storage
+      const rawCost = shopify.threeplCosts || dayData.threeplCosts || 0;
+      const rawBreakdown = shopify.threeplBreakdown || dayData.threeplBreakdown || {};
+      const storageCost = rawBreakdown.storage || 0;
+      threeplCosts = rawCost - storageCost;
+      threeplBreakdown = { ...rawBreakdown, storage: 0 };
       threeplMetrics = shopify.threeplMetrics || dayData.threeplMetrics || {};
     }
     
