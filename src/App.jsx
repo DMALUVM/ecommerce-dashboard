@@ -8174,8 +8174,8 @@ Analyze the data and respond with ONLY this JSON:
     };
     
     return (
-      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 overflow-y-auto" onClick={() => { setViewingDayDetails(null); setEditingDayAdSpend(false); }}>
-        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-4xl w-full my-8" onClick={e => e.stopPropagation()}>
+      <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 p-4 overflow-y-auto" onClick={() => { setViewingDayDetails(null); setEditingDayAdSpend(false); }}>
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-4xl w-full my-4 max-h-[calc(100vh-2rem)] overflow-y-auto" onClick={e => e.stopPropagation()}>
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
             <div>
@@ -10709,6 +10709,15 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
     const computeCategoryBreakdown = (weekKeys) => {
       const categories = {};
       
+      // SKU patterns for categorization (fallback if product name doesn't match)
+      const skuPatterns = {
+        'Lip Balm': [/lip/i, /balm.*pack/i, /orange.*pack/i, /peppermint.*pack/i, /unscented.*pack/i, /assorted.*pack/i, /vanilla.*pack/i, /lavender.*pack/i, /mint.*pack/i],
+        'Deodorant': [/deo/i, /deod/i],
+        'Tallow Soap Bars': [/soap/i, /bar/i],
+        'Sun Balm': [/sun/i, /spf/i],
+        'Tallow Balm': [/tallow.*balm/i, /moisturiz/i, /hydrat/i],
+      };
+      
       weekKeys.forEach(weekKey => {
         const weekData = allWeeksData[weekKey];
         if (!weekData) return;
@@ -10716,30 +10725,50 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
         // Process all SKUs and group by category
         const processSkus = (skuData, channel) => {
           (skuData || []).forEach(s => {
-            const sku = s.sku || s.msku;
+            const sku = s.sku || s.msku || '';
             const productName = (savedProductNames[sku] || s.name || s.title || sku).toLowerCase();
             const units = s.unitsSold || s.units || 0;
             const revenue = s.netSales || s.revenue || 0;
             const profit = channel === 'Amazon' ? (s.netProceeds || revenue) : (revenue - (s.cogs || 0));
             
-            // Determine category from product name ONLY (not SKU prefix)
-            // Order matters - check specific patterns before general ones
+            // Determine category from product name first
             let category = 'Other';
-            if (productName.includes('lip balm')) category = 'Lip Balm';
+            
+            // Explicit product name matching
+            if (productName.includes('lip balm') || productName.includes('lip-balm')) category = 'Lip Balm';
             else if (productName.includes('sensitive') && productName.includes('deodorant')) category = 'Sensitive Skin Deodorant';
             else if (productName.includes('extra strength') && productName.includes('deodorant')) category = 'Extra Strength Deodorant';
-            else if (productName.includes('deodorant')) category = 'Deodorant';
+            else if (productName.includes('deodorant') || productName.includes('deo')) category = 'Deodorant';
             else if (productName.includes('athlete') && productName.includes('soap')) category = "Athlete's Shield Soap";
-            else if (productName.includes('soap')) category = 'Tallow Soap Bars';
-            else if (productName.includes('sun balm')) category = 'Sun Balm';
-            else if (productName.includes('tallow balm') || (productName.includes('moisturizer') && productName.includes('tallow'))) category = 'Tallow Balm';
-            // "balm" alone without other keywords - check what it is
-            else if (productName.includes('balm')) {
-              // Distinguish between lip balm, tallow balm, sun balm
-              if (productName.includes('lip')) category = 'Lip Balm';
-              else if (productName.includes('sun')) category = 'Sun Balm';
-              else if (productName.includes('hydration') || productName.includes('moisturizer')) category = 'Tallow Balm';
-              else category = 'Other Balm';
+            else if (productName.includes('soap') || productName.includes('bar soap')) category = 'Tallow Soap Bars';
+            else if (productName.includes('sun balm') || productName.includes('spf')) category = 'Sun Balm';
+            else if (productName.includes('tallow balm') || productName.includes('moisturizer')) category = 'Tallow Balm';
+            
+            // If still "Other", try SKU-based pattern matching (common lip balm packs)
+            if (category === 'Other') {
+              const combined = (sku + ' ' + productName).toLowerCase();
+              // Check for common lip balm indicators: 3-pack, pack, flavors like orange/peppermint/vanilla
+              if (combined.match(/\d-?pack/i) && (
+                combined.includes('orange') || combined.includes('peppermint') || 
+                combined.includes('vanilla') || combined.includes('lavender') ||
+                combined.includes('unscented') || combined.includes('assorted') ||
+                combined.includes('mint') || combined.includes('honey')
+              )) {
+                category = 'Lip Balm';
+              }
+            }
+            
+            // Final fallback: check SKU patterns
+            if (category === 'Other') {
+              for (const [cat, patterns] of Object.entries(skuPatterns)) {
+                for (const pattern of patterns) {
+                  if (pattern.test(sku) || pattern.test(productName)) {
+                    category = cat;
+                    break;
+                  }
+                }
+                if (category !== 'Other') break;
+              }
             }
             
             if (!categories[category]) {
@@ -11237,23 +11266,24 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       
       const systemPrompt = `You are an expert e-commerce analyst and business advisor for "${ctx.storeName}". You have access to ALL uploaded sales data and can answer questions about any aspect of the business.
 
-⚠️ CRITICAL - HOW TO ANSWER TIMEFRAME QUESTIONS:
-Use the PRE-COMPUTED timeframe data structures - they are already calculated correctly!
+🚨🚨🚨 CRITICAL - READ THIS FIRST 🚨🚨🚨
+When user asks about a TIMEFRAME (last week, last month, etc.) you MUST use the PRE-COMPUTED data below.
+DO NOT use skuAnalysis - that's ALL-TIME data and will give WRONG answers for timeframe questions!
 
-| User asks about... | Use this data |
-|-------------------|---------------|
-| "last week" | lastWeekByCategory |
-| "last 2 weeks" / "past 2 weeks" | last2WeeksByCategory |
-| "last month" / "last 4 weeks" | last4WeeksByCategory |
-| "all time" / "total" | allTimeByCategory |
+| User asks about... | ONLY USE THIS DATA |
+|-------------------|-------------------|
+| "last week" | lastWeekByCategory (below) |
+| "last 2 weeks" | last2WeeksByCategory (below) |
+| "last month" / "last 4 weeks" | last4WeeksByCategory (below) |
+| "all time" / "total" | allTimeByCategory (below) |
 
-For category questions (e.g., "how much lip balm?"):
-→ Look up: [timeframe]ByCategory.byCategory["Lip Balm"]
+For category questions (e.g., "how much lip balm last week?"):
+→ Look up: lastWeekByCategory.byCategory["Lip Balm"]
 → The data includes: units, revenue, profit, margin
 
-❌ NEVER sum from skuByWeek array (contains multiple weeks)
-❌ NEVER use skuAnalysis (those are ALL-TIME totals)
-✅ ALWAYS use the pre-computed byCategory data
+⛔ NEVER use skuAnalysis for timeframe questions - it contains ALL-TIME totals
+⛔ NEVER sum from skuByWeek array - those are historical weeks
+✅ ALWAYS use the pre-computed byCategory data for the matching timeframe
 
 IMPORTANT PROFIT CALCULATION NOTES:
 - Amazon "Net Proceeds" IS the profit - it already has COGS, fees, and ad spend deducted
@@ -11371,9 +11401,9 @@ ${JSON.stringify(ctx.productCatalog)}
 ${JSON.stringify(ctx.skusByCategory)}
 When user asks about a product type (e.g., "lip balm", "deodorant", "soap"), find the matching category and aggregate data for those SKUs.
 
-=== PRE-COMPUTED TIMEFRAME DATA (USE THESE FOR TIMEFRAME QUESTIONS) ===
+=== 🎯🎯🎯 PRE-COMPUTED TIMEFRAME DATA - USE THIS FOR TIMEFRAME QUESTIONS 🎯🎯🎯 ===
 
-**LAST WEEK (${ctx.lastWeekByCategory?.weekLabel || 'No data'}):**
+**LAST WEEK (${ctx.lastWeekByCategory?.weekLabel || 'No data'}):** ← USE THIS FOR "last week" questions
 ${ctx.lastWeekByCategory ? `
 Week: ${ctx.lastWeekByCategory.weekEnding}
 Total Revenue: $${ctx.lastWeekByCategory.totalRevenue.toFixed(2)}
@@ -11382,7 +11412,7 @@ Total Units: ${ctx.lastWeekByCategory.totalUnits}
 BY CATEGORY: ${JSON.stringify(ctx.lastWeekByCategory.byCategory)}
 ` : 'No data'}
 
-**LAST 2 WEEKS (${ctx.last2WeeksByCategory?.dateRange || 'No data'}):**
+**LAST 2 WEEKS (${ctx.last2WeeksByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "last 2 weeks" questions
 ${ctx.last2WeeksByCategory ? `
 Weeks included: ${ctx.last2WeeksByCategory.weeks?.join(', ')}
 Total Revenue: $${ctx.last2WeeksByCategory.totalRevenue.toFixed(2)}
@@ -11391,7 +11421,7 @@ Total Units: ${ctx.last2WeeksByCategory.totalUnits}
 BY CATEGORY: ${JSON.stringify(ctx.last2WeeksByCategory.byCategory)}
 ` : 'No data'}
 
-**LAST 4 WEEKS / LAST MONTH (${ctx.last4WeeksByCategory?.dateRange || 'No data'}):**
+**LAST 4 WEEKS / LAST MONTH (${ctx.last4WeeksByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "last month" questions
 ${ctx.last4WeeksByCategory ? `
 Weeks included: ${ctx.last4WeeksByCategory.weeks?.join(', ')}
 Total Revenue: $${ctx.last4WeeksByCategory.totalRevenue.toFixed(2)}
@@ -11400,7 +11430,7 @@ Total Units: ${ctx.last4WeeksByCategory.totalUnits}
 BY CATEGORY: ${JSON.stringify(ctx.last4WeeksByCategory.byCategory)}
 ` : 'No data'}
 
-**ALL TIME (${ctx.allTimeByCategory?.weeks || 0} weeks):**
+**ALL TIME (${ctx.allTimeByCategory?.weeks || 0} weeks):** ← USE THIS FOR "all time/total" questions
 ${ctx.allTimeByCategory ? `
 Total Revenue: $${ctx.allTimeByCategory.totalRevenue.toFixed(2)}
 Total Profit: $${ctx.allTimeByCategory.totalProfit.toFixed(2)}
@@ -11408,14 +11438,8 @@ Total Units: ${ctx.allTimeByCategory.totalUnits}
 BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
 ` : 'No data'}
 
-⚠️ CRITICAL INSTRUCTIONS FOR TIMEFRAME QUESTIONS:
-1. "last week" → Use lastWeekByCategory
-2. "last 2 weeks" / "past 2 weeks" → Use last2WeeksByCategory  
-3. "last month" / "last 4 weeks" / "past month" → Use last4WeeksByCategory
-4. "all time" / "total" / "overall" → Use allTimeByCategory
-5. ALWAYS use the pre-computed byCategory data - it's already calculated correctly
-6. DO NOT try to sum from skuByWeek or skuAnalysis - those can cause errors
-7. If user asks about a specific category (e.g., "lip balm"), look up that category key
+⚠️ REMINDER: For "how much X sold last week" → use lastWeekByCategory.byCategory["X"]
+⚠️ DO NOT use skuAnalysis below - that is ALL-TIME data!
 
 === WEEKLY DATA (most recent 12 weeks) ===
 ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
@@ -11483,13 +11507,16 @@ Typical healthy range: 70-85% for Amazon, 95-98% for Shopify
 === WEEK NOTES (user annotations) ===
 ${notesData.length > 0 ? JSON.stringify(notesData) : 'No notes added'}
 
-=== TOP SKUS BY REVENUE (with profit/unit trends) ===
+=== ⛔⛔⛔ ALL-TIME SKU DATA BELOW - DO NOT USE FOR TIMEFRAME QUESTIONS ⛔⛔⛔ ===
+The data below is ALL-TIME totals. For "last week", "last month" etc. use the PRE-COMPUTED TIMEFRAME DATA sections above!
+
+=== TOP SKUS BY REVENUE (ALL-TIME totals - NOT for timeframe questions) ===
 ${JSON.stringify(ctx.skuAnalysis.slice(0, 15))}
 
-=== SKUS WITH DECLINING PROFITABILITY ===
+=== SKUS WITH DECLINING PROFITABILITY (ALL-TIME) ===
 ${JSON.stringify(ctx.decliningSkus)}
 
-=== SKUS WITH IMPROVING PROFITABILITY ===
+=== SKUS WITH IMPROVING PROFITABILITY (ALL-TIME) ===
 ${JSON.stringify(ctx.improvingSkus)}
 
 === INVENTORY STATUS ===
