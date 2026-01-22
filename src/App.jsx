@@ -26780,28 +26780,59 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 
                 {hasShopifyTaxData ? (
                   <>
+                    {/* Main Summary Cards */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                      <div className="bg-slate-800/50 rounded-xl p-3 text-center">
-                        <p className="text-2xl font-bold text-emerald-400">{formatCurrency(taxData.totalTax)}</p>
-                        <p className="text-slate-400 text-xs">Tax to Remit</p>
+                      <div className="bg-gradient-to-br from-rose-600/30 to-rose-900/30 border-2 border-rose-500/50 rounded-xl p-4 text-center">
+                        <p className="text-xs text-rose-300 font-semibold uppercase tracking-wide mb-1">💰 YOU OWE</p>
+                        <p className="text-3xl font-bold text-rose-400">{formatCurrency(taxData.totalTax)}</p>
+                        <p className="text-rose-300/70 text-xs mt-1">Tax to remit this period</p>
                       </div>
-                      <div className="bg-slate-800/50 rounded-xl p-3 text-center">
+                      <div className="bg-slate-800/50 rounded-xl p-4 text-center">
+                        <p className="text-xs text-violet-400 font-semibold uppercase tracking-wide mb-1">Shop Pay Auto-Remit</p>
                         <p className="text-2xl font-bold text-violet-400">{formatCurrency(taxData.shopPayExcluded)}</p>
-                        <p className="text-slate-400 text-xs">Shop Pay (auto-remitted)</p>
+                        <p className="text-slate-500 text-xs mt-1">Shopify handles this ✓</p>
                       </div>
-                      <div className="bg-slate-800/50 rounded-xl p-3 text-center">
+                      <div className="bg-slate-800/50 rounded-xl p-4 text-center">
+                        <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">States</p>
                         <p className="text-2xl font-bold text-white">{taxData.byState.length}</p>
-                        <p className="text-slate-400 text-xs">States</p>
+                        <p className="text-slate-500 text-xs mt-1">with sales this period</p>
                       </div>
-                      <div className="bg-slate-800/50 rounded-xl p-3 text-center">
+                      <div className="bg-slate-800/50 rounded-xl p-4 text-center">
+                        <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Days Synced</p>
                         <p className="text-2xl font-bold text-white">{taxData.daysWithData}</p>
-                        <p className="text-slate-400 text-xs">Days with Data</p>
+                        <p className="text-slate-500 text-xs mt-1">in selected period</p>
                       </div>
                     </div>
                     
+                    {/* States Where You Owe Tax */}
+                    {taxData.byState.filter(s => s.tax > 0).length > 0 && (
+                      <div className="bg-rose-900/20 border border-rose-500/30 rounded-xl p-4 mb-4">
+                        <h4 className="text-rose-400 font-semibold mb-3 flex items-center gap-2">
+                          <AlertCircle className="w-5 h-5" />
+                          States Where You Owe Tax
+                        </h4>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                          {taxData.byState.filter(s => s.tax > 0).map(state => {
+                            const hasNexus = nexusStates[state.stateCode]?.hasNexus;
+                            return (
+                              <div key={state.stateCode} className={`p-3 rounded-lg ${hasNexus ? 'bg-rose-800/30 border border-rose-500/50' : 'bg-slate-800/50 border border-slate-600/50'}`}>
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-white font-bold">{state.stateCode}</span>
+                                  {hasNexus && <span className="text-xs bg-rose-600 text-white px-1.5 py-0.5 rounded">NEXUS</span>}
+                                </div>
+                                <p className="text-xl font-bold text-rose-400">{formatCurrency(state.tax)}</p>
+                                <p className="text-slate-500 text-xs">{state.orders} orders • {formatCurrency(state.sales)} sales</p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    
                     {taxData.byState.length > 0 && (
                       <>
-                        <div className="flex justify-end mb-2">
+                        <div className="flex justify-between items-center mb-2">
+                          <h4 className="text-white font-medium">All States with Sales</h4>
                           <button
                             onClick={() => {
                               // Export tax data as CSV for filing
@@ -26815,11 +26846,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                 : taxPeriodValue.split('-')[0];
                               
                               // Create CSV with all fields states typically need
-                              let csv = 'State,State Code,Gross Sales,Taxable Sales,Tax Collected,Order Count,Period,Start Date,End Date\n';
+                              let csv = 'State,State Code,Gross Sales,Taxable Sales,Tax Collected,Order Count,Has Nexus,Period,Start Date,End Date\n';
                               taxData.byState.forEach(state => {
-                                csv += `"${state.stateName}",${state.stateCode},${(state.sales || 0).toFixed(2)},${(state.sales || 0).toFixed(2)},${(state.tax || 0).toFixed(2)},${state.orders || 0},"${periodLabel}",${start},${end}\n`;
+                                const hasNexus = nexusStates[state.stateCode]?.hasNexus ? 'Yes' : 'No';
+                                csv += `"${state.stateName}",${state.stateCode},${(state.sales || 0).toFixed(2)},${(state.sales || 0).toFixed(2)},${(state.tax || 0).toFixed(2)},${state.orders || 0},${hasNexus},"${periodLabel}",${start},${end}\n`;
                               });
-                              csv += `"TOTAL",,${taxData.byState.reduce((s, st) => s + (st.sales || 0), 0).toFixed(2)},${taxData.byState.reduce((s, st) => s + (st.sales || 0), 0).toFixed(2)},${taxData.totalTax.toFixed(2)},${taxData.byState.reduce((s, st) => s + (st.orders || 0), 0)},"${periodLabel}",${start},${end}\n`;
+                              csv += `"TOTAL",,${taxData.byState.reduce((s, st) => s + (st.sales || 0), 0).toFixed(2)},${taxData.byState.reduce((s, st) => s + (st.sales || 0), 0).toFixed(2)},${taxData.totalTax.toFixed(2)},${taxData.byState.reduce((s, st) => s + (st.orders || 0), 0)},,"${periodLabel}",${start},${end}\n`;
                               csv += '\n"Note: Shop Pay tax excluded - Shopify remits automatically"\n';
                               csv += `"Shop Pay Tax Excluded:",${taxData.shopPayExcluded.toFixed(2)}\n`;
                               
@@ -26842,34 +26874,39 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           <thead>
                             <tr className="border-b border-slate-700">
                               <th className="text-left text-slate-400 py-2 px-2">State</th>
-                              <th className="text-right text-slate-400 py-2 px-2">Tax Collected</th>
+                              <th className="text-right text-slate-400 py-2 px-2">YOU OWE</th>
                               <th className="text-right text-slate-400 py-2 px-2">Taxable Sales</th>
                               <th className="text-right text-slate-400 py-2 px-2">Orders</th>
-                              <th className="text-center text-slate-400 py-2 px-2">Nexus?</th>
+                              <th className="text-center text-slate-400 py-2 px-2">Status</th>
                             </tr>
                           </thead>
                           <tbody>
                             {taxData.byState.map(state => {
                               const hasNexus = nexusStates[state.stateCode]?.hasNexus;
+                              const owes = state.tax > 0;
                               return (
-                                <tr key={state.stateCode} className="border-b border-slate-700/50 hover:bg-slate-800/50">
+                                <tr key={state.stateCode} className={`border-b border-slate-700/50 ${owes && hasNexus ? 'bg-rose-900/20' : 'hover:bg-slate-800/50'}`}>
                                   <td className="py-2 px-2">
                                     <span className="text-white font-medium">{state.stateName}</span>
                                     <span className="text-slate-500 ml-2 text-xs">{state.stateCode}</span>
                                   </td>
-                                  <td className="py-2 px-2 text-right text-emerald-400 font-medium">{formatCurrency(state.tax)}</td>
+                                  <td className={`py-2 px-2 text-right font-bold ${owes ? 'text-rose-400' : 'text-slate-500'}`}>
+                                    {owes ? formatCurrency(state.tax) : '—'}
+                                  </td>
                                   <td className="py-2 px-2 text-right text-slate-300">{formatCurrency(state.sales)}</td>
                                   <td className="py-2 px-2 text-right text-slate-400">{state.orders}</td>
                                   <td className="py-2 px-2 text-center">
                                     {hasNexus ? (
-                                      <span className="text-emerald-400"><Check className="w-4 h-4 inline" /></span>
-                                    ) : (
+                                      <span className="text-xs bg-rose-600/80 text-white px-2 py-0.5 rounded font-medium">NEXUS</span>
+                                    ) : owes ? (
                                       <button
                                         onClick={() => toggleNexus(state.stateCode)}
                                         className="text-xs text-amber-400 hover:text-amber-300"
                                       >
-                                        + Add
+                                        + Add Nexus
                                       </button>
+                                    ) : (
+                                      <span className="text-xs text-slate-600">No tax</span>
                                     )}
                                   </td>
                                 </tr>
@@ -26877,11 +26914,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             })}
                           </tbody>
                           <tfoot>
-                            <tr className="border-t border-slate-600">
-                              <td className="py-2 px-2 font-semibold text-white">Total</td>
-                              <td className="py-2 px-2 text-right font-bold text-emerald-400">{formatCurrency(taxData.totalTax)}</td>
-                              <td className="py-2 px-2 text-right text-slate-300">{formatCurrency(taxData.byState.reduce((s, st) => s + st.sales, 0))}</td>
-                              <td className="py-2 px-2 text-right text-slate-400">{taxData.byState.reduce((s, st) => s + st.orders, 0)}</td>
+                            <tr className="border-t-2 border-rose-500/50 bg-rose-900/10">
+                              <td className="py-3 px-2 font-bold text-white">TOTAL YOU OWE</td>
+                              <td className="py-3 px-2 text-right font-bold text-2xl text-rose-400">{formatCurrency(taxData.totalTax)}</td>
+                              <td className="py-3 px-2 text-right text-slate-300 font-medium">{formatCurrency(taxData.byState.reduce((s, st) => s + st.sales, 0))}</td>
+                              <td className="py-3 px-2 text-right text-slate-400">{taxData.byState.reduce((s, st) => s + st.orders, 0)}</td>
                               <td></td>
                             </tr>
                           </tfoot>
