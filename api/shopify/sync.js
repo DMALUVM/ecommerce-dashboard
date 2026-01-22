@@ -542,14 +542,18 @@ export default async function handler(req, res) {
       return date.toISOString().split('T')[0];
     };
     
-    // Helper to check if order used Shop Pay
+    // Helper to check if order used Shop Pay (accelerated checkout)
+    // IMPORTANT: "shopify_payments" is just credit card processing - NOT Shop Pay
+    // Only actual "shop_pay" orders have tax remitted by Shopify
     const isShopPayOrder = (order) => {
       const gateways = order.payment_gateway_names || [];
-      return gateways.some(g => 
-        g.toLowerCase().includes('shopify_payments') || 
-        g.toLowerCase().includes('shop_pay') ||
-        g.toLowerCase() === 'shopify payments'
-      );
+      return gateways.some(g => {
+        const lower = g.toLowerCase();
+        // Only match actual Shop Pay, not regular Shopify Payments (credit cards)
+        return lower === 'shop_pay' || 
+               lower.includes('shop_pay') ||
+               lower === 'shop pay';
+      });
     };
     
     // Helper to get state code from order
