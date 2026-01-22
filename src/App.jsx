@@ -1078,7 +1078,7 @@ export default function Dashboard() {
   const [storeLogo, setStoreLogo] = useState(() => localStorage.getItem('ecommerce_store_logo') || null);
   
   // Shopify Integration
-  const [shopifyCredentials, setShopifyCredentials] = useState({ storeUrl: '', accessToken: '', connected: false, lastSync: null });
+  const [shopifyCredentials, setShopifyCredentials] = useState({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
   const [shopifySyncStatus, setShopifySyncStatus] = useState({ loading: false, error: null, progress: '' });
   const [shopifySyncRange, setShopifySyncRange] = useState({ start: '', end: '' });
   const [shopifySyncPreview, setShopifySyncPreview] = useState(null);
@@ -16624,7 +16624,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 storeUrl: shopifyCredentials.storeUrl,
-                                accessToken: shopifyCredentials.accessToken,
+                                clientId: shopifyCredentials.clientId, clientSecret: shopifyCredentials.clientSecret,
                                 startDate: shopifySyncRange.start,
                                 endDate: shopifySyncRange.end,
                                 preview: true,
@@ -16659,7 +16659,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 storeUrl: shopifyCredentials.storeUrl,
-                                accessToken: shopifyCredentials.accessToken,
+                                clientId: shopifyCredentials.clientId, clientSecret: shopifyCredentials.clientSecret,
                                 startDate: shopifySyncRange.start,
                                 endDate: shopifySyncRange.end,
                                 preview: false,
@@ -16780,7 +16780,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 storeUrl: shopifyCredentials.storeUrl,
-                                accessToken: shopifyCredentials.accessToken,
+                                clientId: shopifyCredentials.clientId, clientSecret: shopifyCredentials.clientSecret,
                                 syncType: 'inventory',
                               }),
                             });
@@ -16809,7 +16809,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 storeUrl: shopifyCredentials.storeUrl,
-                                accessToken: shopifyCredentials.accessToken,
+                                clientId: shopifyCredentials.clientId, clientSecret: shopifyCredentials.clientSecret,
                                 syncType: 'inventory',
                               }),
                             });
@@ -16995,7 +16995,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 storeUrl: shopifyCredentials.storeUrl,
-                                accessToken: shopifyCredentials.accessToken,
+                                clientId: shopifyCredentials.clientId, clientSecret: shopifyCredentials.clientSecret,
                                 syncType: 'products',
                               }),
                             });
@@ -29345,7 +29345,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           
           {/* Shopify Connection */}
           <SettingSection title="🛒 Shopify Connection">
-            <p className="text-slate-400 text-sm mb-4">Connect your Shopify store to automatically sync orders</p>
+            <p className="text-slate-400 text-sm mb-4">Connect your Shopify store to automatically sync orders, inventory, and tax data</p>
             
             {shopifyCredentials.connected ? (
               <div className="space-y-4">
@@ -29363,7 +29363,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     <button
                       onClick={() => {
                         if (confirm('Disconnect from Shopify? Your synced data will remain.')) {
-                          setShopifyCredentials({ storeUrl: '', accessToken: '', connected: false, lastSync: null });
+                          setShopifyCredentials({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
                           setToast({ message: 'Shopify disconnected', type: 'success' });
                         }
                       }}
@@ -29398,20 +29398,31 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       <p className="text-slate-500 text-xs mt-1">Just the store name, e.g. "mystore.myshopify.com"</p>
                     </div>
                     <div>
-                      <label className="block text-slate-300 text-sm font-medium mb-2">Admin API Access Token</label>
+                      <label className="block text-slate-300 text-sm font-medium mb-2">Client ID</label>
                       <input
-                        type="password"
-                        placeholder="shpat_xxxxxxxxxxxxx"
-                        value={shopifyCredentials.accessToken}
-                        onChange={(e) => setShopifyCredentials(p => ({ ...p, accessToken: e.target.value }))}
+                        type="text"
+                        placeholder="Your app's Client ID"
+                        value={shopifyCredentials.clientId}
+                        onChange={(e) => setShopifyCredentials(p => ({ ...p, clientId: e.target.value }))}
                         className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-green-500"
                       />
-                      <p className="text-slate-500 text-xs mt-1">From your Shopify Custom App settings</p>
+                      <p className="text-slate-500 text-xs mt-1">From Dev Dashboard → Your App → Settings</p>
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 text-sm font-medium mb-2">Client Secret</label>
+                      <input
+                        type="password"
+                        placeholder="Your app's Client Secret"
+                        value={shopifyCredentials.clientSecret}
+                        onChange={(e) => setShopifyCredentials(p => ({ ...p, clientSecret: e.target.value }))}
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                      />
+                      <p className="text-slate-500 text-xs mt-1">Keep this secret! Never share it.</p>
                     </div>
                     <button
                       onClick={async () => {
-                        if (!shopifyCredentials.storeUrl || !shopifyCredentials.accessToken) {
-                          setToast({ message: 'Please enter both store URL and access token', type: 'error' });
+                        if (!shopifyCredentials.storeUrl || !shopifyCredentials.clientId || !shopifyCredentials.clientSecret) {
+                          setToast({ message: 'Please enter store URL, Client ID, and Client Secret', type: 'error' });
                           return;
                         }
                         // Test connection
@@ -29421,7 +29432,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                               storeUrl: shopifyCredentials.storeUrl,
-                              accessToken: shopifyCredentials.accessToken,
+                              clientId: shopifyCredentials.clientId,
+                              clientSecret: shopifyCredentials.clientSecret,
                               test: true,
                             }),
                           });
@@ -29435,7 +29447,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           setToast({ message: 'Connection failed: ' + err.message, type: 'error' });
                         }
                       }}
-                      disabled={!shopifyCredentials.storeUrl || !shopifyCredentials.accessToken}
+                      disabled={!shopifyCredentials.storeUrl || !shopifyCredentials.clientId || !shopifyCredentials.clientSecret}
                       className="w-full py-3 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:hover:bg-green-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
                     >
                       <ShoppingBag className="w-5 h-5" />
@@ -29447,14 +29459,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4">
                   <h4 className="text-blue-400 font-medium mb-2 flex items-center gap-2">
                     <HelpCircle className="w-4 h-4" />
-                    How to get your API token
+                    How to get your credentials (Updated Jan 2026)
                   </h4>
                   <ol className="text-slate-300 text-sm space-y-2">
-                    <li>1. Go to Shopify Admin → Settings → Apps and sales channels → Develop apps</li>
-                    <li>2. Create a custom app and name it (e.g., "Dashboard Sync")</li>
-                    <li>3. Configure Admin API scopes: enable <code className="bg-slate-800 px-1 rounded">read_orders</code> and <code className="bg-slate-800 px-1 rounded">read_products</code></li>
-                    <li>4. Install the app and copy the Admin API access token</li>
+                    <li>1. Go to <a href="https://partners.shopify.com" target="_blank" className="text-blue-400 underline">Shopify Partners</a> → Apps → Create app</li>
+                    <li>2. Or in your store: Settings → Apps → Develop apps → Create app</li>
+                    <li>3. Configure Admin API scopes: <code className="bg-slate-800 px-1 rounded">read_orders</code>, <code className="bg-slate-800 px-1 rounded">read_products</code>, <code className="bg-slate-800 px-1 rounded">read_inventory</code>, <code className="bg-slate-800 px-1 rounded">read_locations</code></li>
+                    <li>4. Go to app Settings to find your <strong>Client ID</strong> and <strong>Client Secret</strong></li>
+                    <li>5. Install the app on your store</li>
                   </ol>
+                  <p className="text-slate-500 text-xs mt-3">Note: As of Jan 2026, Shopify uses OAuth. Tokens are generated automatically and refresh every 24 hours.</p>
                 </div>
               </div>
             )}

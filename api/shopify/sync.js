@@ -2,6 +2,9 @@
 // Path: /api/shopify/sync.js
 // This handles secure communication with Shopify's Admin API
 // 
+// Updated for 2026: Supports Client Credentials Grant (OAuth 2.0)
+// New apps use clientId/clientSecret, tokens expire after 24 hours
+//
 // Features:
 // - Syncs orders, SKU data, and tax information
 // - EXCLUDES Shop Pay orders from tax calculations (Shopify remits those automatically)
@@ -13,13 +16,20 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { storeUrl, accessToken, startDate, endDate, preview, test, syncType } = req.body;
+  const { storeUrl, accessToken, clientId, clientSecret, startDate, endDate, preview, test, syncType } = req.body;
   
-  // syncType can be: 'orders' (default), 'inventory', 'both'
+  // syncType can be: 'orders' (default), 'inventory', 'products', 'both'
 
   // Validate required fields
-  if (!storeUrl || !accessToken) {
-    return res.status(400).json({ error: 'Missing store URL or access token' });
+  if (!storeUrl) {
+    return res.status(400).json({ error: 'Store URL is required' });
+  }
+  
+  // Support both legacy (accessToken) and new 2026 (clientId/clientSecret) auth methods
+  const useOAuth = clientId && clientSecret;
+  
+  if (!useOAuth && !accessToken) {
+    return res.status(400).json({ error: 'Either accessToken OR clientId + clientSecret are required' });
   }
 
   // Clean up store URL
@@ -31,13 +41,54 @@ export default async function handler(req, res) {
   }
 
   const baseUrl = `https://${cleanStoreUrl}/admin/api/2024-01`;
+  
+  // Helper function to get access token (handles both old and new auth)
+  const getAccessToken = async () => {
+    if (!useOAuth) {
+      // Legacy: Use static access token (shpat_ tokens)
+      return accessToken;
+    }
+    
+    // New 2026 OAuth: Exchange client credentials for access token
+    try {
+      const tokenResponse = await fetch(`https://${cleanStoreUrl}/admin/oauth/access_token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          grant_type: 'client_credentials',
+          client_id: clientId,
+          client_secret: clientSecret,
+        }).toString(),
+      });
+      
+      if (!tokenResponse.ok) {
+        const errorText = await tokenResponse.text();
+        console.error('OAuth token error:', tokenResponse.status, errorText);
+        
+        if (tokenResponse.status === 401 || tokenResponse.status === 403) {
+          throw new Error('Invalid Client ID or Secret. Check your Dev Dashboard credentials.');
+        }
+        throw new Error(`Failed to get access token: ${tokenResponse.status}`);
+      }
+      
+      const tokenData = await tokenResponse.json();
+      return tokenData.access_token;
+    } catch (err) {
+      console.error('OAuth error:', err);
+      throw new Error(`Authentication failed: ${err.message}`);
+    }
+  };
 
   // Test connection
   if (test) {
     try {
+      const token = await getAccessToken();
+      
       const shopRes = await fetch(`${baseUrl}/shop.json`, {
         headers: {
-          'X-Shopify-Access-Token': accessToken,
+          'X-Shopify-Access-Token': token,
           'Content-Type': 'application/json',
         },
       });
@@ -46,7 +97,7 @@ export default async function handler(req, res) {
         const errorText = await shopRes.text();
         console.error('Shopify API error:', shopRes.status, errorText);
         if (shopRes.status === 401) {
-          return res.status(401).json({ error: 'Invalid access token. Please check your credentials.' });
+          return res.status(401).json({ error: 'Invalid credentials. Check your Client ID and Secret in Dev Dashboard.' });
         }
         if (shopRes.status === 404) {
           return res.status(404).json({ error: 'Store not found. Please check your store URL.' });
@@ -59,11 +110,20 @@ export default async function handler(req, res) {
         success: true, 
         shopName: shopData.shop?.name || cleanStoreUrl,
         email: shopData.shop?.email,
+        authMethod: useOAuth ? 'oauth2026' : 'legacy',
       });
     } catch (err) {
       console.error('Connection test error:', err);
-      return res.status(500).json({ error: `Connection failed: ${err.message}` });
+      return res.status(500).json({ error: err.message || 'Connection failed' });
     }
+  }
+  
+  // Get access token for all other operations
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    return res.status(401).json({ error: err.message });
   }
 
   // ============ PRODUCT CATALOG SYNC ============
@@ -81,7 +141,7 @@ export default async function handler(req, res) {
         
         const productsRes = await fetch(url, {
           headers: {
-            'X-Shopify-Access-Token': accessToken,
+            'X-Shopify-Access-Token': token,
             'Content-Type': 'application/json',
           },
         });
@@ -165,7 +225,7 @@ export default async function handler(req, res) {
       // Step 1: Get all locations (warehouses)
       const locationsRes = await fetch(`${baseUrl}/locations.json`, {
         headers: {
-          'X-Shopify-Access-Token': accessToken,
+          'X-Shopify-Access-Token': token,
           'Content-Type': 'application/json',
         },
       });
@@ -216,7 +276,7 @@ export default async function handler(req, res) {
         
         const productsRes = await fetch(url, {
           headers: {
-            'X-Shopify-Access-Token': accessToken,
+            'X-Shopify-Access-Token': token,
             'Content-Type': 'application/json',
           },
         });
@@ -284,7 +344,7 @@ export default async function handler(req, res) {
           `${baseUrl}/inventory_levels.json?inventory_item_ids=${batchIds}&location_ids=${locationIds}`,
           {
             headers: {
-              'X-Shopify-Access-Token': accessToken,
+              'X-Shopify-Access-Token': token,
               'Content-Type': 'application/json',
             },
           }
@@ -427,7 +487,7 @@ export default async function handler(req, res) {
       
       const ordersRes = await fetch(url, {
         headers: {
-          'X-Shopify-Access-Token': accessToken,
+          'X-Shopify-Access-Token': token,
           'Content-Type': 'application/json',
         },
       });
