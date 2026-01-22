@@ -2576,8 +2576,6 @@ const switchStore = useCallback(async (storeId) => {
 }, [activeStoreId, stores, combinedData, pushToCloudNow, loadFromCloud, storeName]);
 
 const deleteStore = useCallback(async (storeId) => {
-  console.log('deleteStore called with:', storeId, 'stores:', stores.length);
-  
   const store = stores.find(s => s.id === storeId);
   if (!store) {
     setToast({ message: 'Store not found', type: 'error' });
@@ -2612,10 +2610,10 @@ const deleteStore = useCallback(async (storeId) => {
   // Clear all data for fresh start if last store was deleted
   if (stores.length === 1) {
     // Reset all state to defaults
-    setAllWeeksData([]);
+    setAllWeeksData({});
     setAllDaysData({});
-    setInvHistory([]);
-    setAllPeriodsData([]);
+    setInvHistory({});
+    setAllPeriodsData({});
     setBankingData({
       transactions: [],
       lastUpload: null,
@@ -2657,7 +2655,6 @@ const deleteStore = useCallback(async (storeId) => {
       };
       
       await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
-      console.log('Store deleted from cloud');
     } catch (err) {
       console.error('Failed to delete store from cloud:', err);
       setToast({ message: 'Deleted locally but cloud sync failed', type: 'warning' });
@@ -2727,7 +2724,6 @@ const StoreSelectorModal = () => {
                       onClick={(e) => { 
                         e.preventDefault();
                         e.stopPropagation(); 
-                        console.log('Delete button clicked for store:', store.id);
                         deleteStore(store.id); 
                       }}
                       className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/20 rounded transition-colors"
@@ -2974,8 +2970,6 @@ const savePeriods = async (d) => {
             if (workbook.SheetNames.includes('Summary')) {
               const summarySheet = workbook.Sheets['Summary'];
               const rows = xlsx.utils.sheet_to_json(summarySheet);
-              console.log('3PL Excel parsed (weekly) - Summary sheet:', rows);
-              // This gives us the format parse3PLData expects
               setFiles(p => ({ ...p, threepl: [...(p.threepl || []), rows] }));
               setFileNames(p => ({ ...p, threepl: [...(p.threepl || []), file.name] }));
               setToast({ message: `Loaded ${rows.length} 3PL charges from Excel`, type: 'success' });
@@ -2983,7 +2977,6 @@ const savePeriods = async (d) => {
               // Try first sheet as fallback
               const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
               const rows = xlsx.utils.sheet_to_json(firstSheet);
-              console.log('3PL Excel parsed (weekly) - First sheet:', rows);
               setFiles(p => ({ ...p, threepl: [...(p.threepl || []), rows] }));
               setFileNames(p => ({ ...p, threepl: [...(p.threepl || []), file.name] }));
               setToast({ message: `Loaded ${rows.length} rows from 3PL Excel`, type: 'success' });
@@ -3039,14 +3032,12 @@ const savePeriods = async (d) => {
             if (workbook.SheetNames.includes('Summary')) {
               const summarySheet = workbook.Sheets['Summary'];
               const rows = xlsx.utils.sheet_to_json(summarySheet);
-              console.log('3PL Excel parsed (period) - Summary:', rows);
               setPeriodFiles(p => ({ ...p, threepl: [...(p.threepl || []), rows] }));
               setPeriodFileNames(p => ({ ...p, threepl: [...(p.threepl || []), file.name] }));
               setToast({ message: `Loaded ${rows.length} 3PL charges from Excel`, type: 'success' });
             } else {
               const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
               const rows = xlsx.utils.sheet_to_json(firstSheet);
-              console.log('3PL Excel parsed (period) - First sheet:', rows);
               setPeriodFiles(p => ({ ...p, threepl: [...(p.threepl || []), rows] }));
               setPeriodFileNames(p => ({ ...p, threepl: [...(p.threepl || []), file.name] }));
               setToast({ message: `Loaded ${rows.length} rows from 3PL Excel`, type: 'success' });
@@ -3096,14 +3087,12 @@ const savePeriods = async (d) => {
             if (workbook.SheetNames.includes('Summary')) {
               const summarySheet = workbook.Sheets['Summary'];
               const rows = xlsx.utils.sheet_to_json(summarySheet);
-              console.log('3PL Excel parsed - Summary sheet rows:', rows);
               setReprocessFiles(p => ({ ...p, [type]: rows }));
               setReprocessFileNames(p => ({ ...p, [type]: file.name }));
               setToast({ message: `Loaded ${rows.length} charges from 3PL Excel`, type: 'success' });
             } else {
               const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
               const rows = xlsx.utils.sheet_to_json(firstSheet);
-              console.log('3PL Excel parsed - First sheet rows:', rows);
               setReprocessFiles(p => ({ ...p, [type]: rows }));
               setReprocessFileNames(p => ({ ...p, [type]: file.name }));
               setToast({ message: `Loaded ${rows.length} rows from 3PL Excel`, type: 'success' });
@@ -3821,7 +3810,6 @@ const savePeriods = async (d) => {
         message: `No complete weeks to aggregate. ${incompleteWeeks.length > 0 ? `Incomplete weeks need all 7 days (Mon-Sun).` : ''}`, 
         type: 'error' 
       });
-      console.log('Incomplete weeks:', incompleteInfo);
       return;
     }
     
@@ -5412,7 +5400,6 @@ const savePeriods = async (d) => {
         // CRITICAL: Push all merged data to cloud to ensure sync
         if (session?.user?.id && supabase) {
           queueCloudSave(mergedData);
-          console.log('📤 Pushed imported data to cloud');
         }
         
         setToast({ message: `Restored: ${restored.join(', ')}. Syncing to cloud...`, type: 'success' });
@@ -6127,8 +6114,6 @@ const savePeriods = async (d) => {
     const newComparisons = getAmazonForecastComparison.filter(c => !existingWeeks.has(c.weekEnding));
     
     if (newComparisons.length > 0) {
-      console.log(`🧠 Learning: Found ${newComparisons.length} new forecast comparisons to learn from`);
-      
       // Add new records to history
       const updatedRecords = [
         ...forecastAccuracyHistory.records,
@@ -6267,11 +6252,6 @@ const savePeriods = async (d) => {
           samplesUsed: records.length,
           lastUpdated: new Date().toISOString(),
         });
-        
-        console.log(`🧠 Learning complete: ${records.length} samples, ${confidence.toFixed(1)}% confidence`);
-        console.log(`   Revenue correction: ${overallCorrections.revenue.toFixed(3)}x`);
-        console.log(`   Units correction: ${overallCorrections.units.toFixed(3)}x`);
-        console.log(`   SKU-specific corrections: ${Object.keys(bySku).length} SKUs`);
       }
     }
   }, [getAmazonForecastComparison, forecastAccuracyHistory.records]);
@@ -6757,6 +6737,7 @@ Respond with ONLY this JSON:
         body: JSON.stringify({
           system: 'You are an elite e-commerce forecasting AI. You receive pre-calculated signals and synthesize them into accurate predictions. Trust the weighted calculation provided but adjust based on patterns you identify. Always respond with valid JSON only.',
           messages: [{ role: 'user', content: prompt }],
+          model: 'claude-sonnet-4-20250514',
         }),
       });
       
@@ -7008,6 +6989,7 @@ Respond with ONLY this JSON:
         body: JSON.stringify({
           system: 'You are an expert e-commerce sales forecaster. Provide accurate, data-driven predictions. Always respond with valid JSON only.',
           messages: [{ role: 'user', content: prompt }],
+          model: 'claude-sonnet-4-20250514',
         }),
       });
       
@@ -7163,6 +7145,7 @@ Respond with ONLY this JSON:
         body: JSON.stringify({
           system: 'You are an expert inventory planner for e-commerce. Provide specific, actionable reorder recommendations. Always respond with valid JSON only.',
           messages: [{ role: 'user', content: prompt }],
+          model: 'claude-sonnet-4-20250514',
         }),
       });
       
@@ -7273,6 +7256,7 @@ Respond with ONLY this JSON:
         body: JSON.stringify({
           system: `You are an expert ${channel === 'amazon' ? 'Amazon marketplace' : 'Shopify/DTC'} analyst. Provide accurate channel-specific forecasts. Always respond with valid JSON only.`,
           messages: [{ role: 'user', content: prompt }],
+          model: 'claude-sonnet-4-20250514',
         }),
       });
       
@@ -7372,6 +7356,7 @@ Analyze the data and respond with ONLY this JSON:
         body: JSON.stringify({
           system: 'You are an expert forecast accuracy analyst. Compare prediction models and identify improvement opportunities. Always respond with valid JSON only.',
           messages: [{ role: 'user', content: prompt }],
+          model: 'claude-sonnet-4-20250514',
         }),
       });
       
@@ -10028,7 +10013,8 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
               messages: [{ 
                 role: 'user', 
                 content: `Extract invoice details from this data:\n\n${textContent.slice(0, 5000)}`
-              }]
+              }],
+              model: 'claude-sonnet-4-20250514',
             }),
           });
           
@@ -10077,7 +10063,8 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
                   { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 }},
                   { type: 'text', text: 'Extract the invoice details from this PDF.' }
                 ]
-              }]
+              }],
+              model: 'claude-sonnet-4-20250514',
             }),
           });
           
@@ -11850,10 +11837,13 @@ ${ctx.salesTax?.nexusStates?.length > 0 ? `Nexus states: ${JSON.stringify(ctx.sa
 Total sales tax paid all-time: $${ctx.salesTax?.totalPaidAllTime?.toFixed(2) || 0}
 
 === UPCOMING BILLS & INVOICES ===
-${invoices.filter(i => !i.paid).length > 0 ? `
-Upcoming bills (${invoices.filter(i => !i.paid).length} total, $${invoices.filter(i => !i.paid).reduce((s, i) => s + i.amount, 0).toFixed(2)}):
-${JSON.stringify(invoices.filter(i => !i.paid).map(i => ({ vendor: i.vendor, amount: i.amount, dueDate: i.dueDate, category: i.category, daysUntilDue: Math.ceil((new Date(i.dueDate) - new Date()) / (1000 * 60 * 60 * 24)) })))}
-` : 'No upcoming bills'}
+${(() => {
+  const unpaid = invoices.filter(i => !i.paid);
+  if (unpaid.length === 0) return 'No upcoming bills';
+  const total = unpaid.reduce((s, i) => s + i.amount, 0);
+  return `Upcoming bills (${unpaid.length} total, $${total.toFixed(2)}):
+${JSON.stringify(unpaid.map(i => ({ vendor: i.vendor, amount: i.amount, dueDate: i.dueDate, category: i.category, daysUntilDue: Math.ceil((new Date(i.dueDate) - new Date()) / (1000 * 60 * 60 * 24)) })))}`;
+})()}
 
 === AMAZON FORECASTS (from Amazon's projections) ===
 ${upcomingAmazonForecasts.length > 0 ? `
@@ -12210,7 +12200,11 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system: systemPrompt, messages: [...aiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }] }),
+        body: JSON.stringify({ 
+          system: systemPrompt, 
+          messages: [...aiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
+          model: 'claude-sonnet-4-20250514',
+        }),
       });
       
       if (!response.ok) throw new Error(`API error: ${response.status}`);
@@ -12286,7 +12280,8 @@ Be specific with numbers and suggest actionable improvements.`;
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           system: systemPrompt, 
-          messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }] 
+          messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
+          model: 'claude-sonnet-4-20250514',
         }),
       });
       
@@ -12574,7 +12569,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           system: `E-commerce analyst for ${storeName || 'Store'}. Write detailed reports from compact data. Be specific with numbers.`,
-          messages: [{ role: 'user', content: p }]
+          messages: [{ role: 'user', content: p }],
+          model: 'claude-sonnet-4-20250514',
         }),
       });
 
@@ -17251,7 +17247,8 @@ Provide a concise analysis covering:
 5. **Specific Actions** - What should I do this week?
 
 Be specific with SKU names and numbers. Use bullet points for clarity.`
-                        }]
+                        }],
+                        model: 'claude-sonnet-4-20250514',
                       })
                     });
                     const result = await response.json();
@@ -17485,7 +17482,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             messages: [{
                               role: 'user',
                               content: `Extract production/manufacturing order data from this document. Return ONLY a JSON array with objects containing: sku, productName, quantity (number), expectedDate (YYYY-MM-DD format), notes (optional). If you can't find a date, use empty string. If you can't find SKU, use the product name. Here's the document:\n\n${productionFile}`
-                            }]
+                            }],
+                            model: 'claude-sonnet-4-20250514',
                           })
                         });
                         const data = await response.json();
@@ -27928,7 +27926,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            console.log('Delete button clicked in modal for store:', store.id);
                             deleteStore(store.id);
                           }}
                           className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
@@ -28279,11 +28276,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               <p className="text-slate-400 text-sm mb-4">Remove specific days, weeks or periods from your data.</p>
               
               {/* Daily Data */}
-              {Object.keys(allDaysData).length > 0 && (
+              {Object.keys(allDaysData).length > 0 && (() => {
+                const allDays = Object.keys(allDaysData);
+                const withSales = allDays.filter(d => hasDailySalesData(allDaysData[d])).length;
+                const adsOnly = allDays.length - withSales;
+                return (
                 <div className="mb-4">
-                  <p className="text-slate-300 text-sm mb-2">Daily Data ({Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length} with sales, {Object.keys(allDaysData).filter(d => !hasDailySalesData(allDaysData[d])).length} ads-only)</p>
+                  <p className="text-slate-300 text-sm mb-2">Daily Data ({withSales} with sales, {adsOnly} ads-only)</p>
                   <div className="flex flex-wrap gap-2">
-                    {Object.keys(allDaysData).sort().reverse().slice(0, 14).map(dayKey => {
+                    {allDays.sort().reverse().slice(0, 14).map(dayKey => {
                       const hasRealData = hasDailySalesData(allDaysData[dayKey]);
                       return (
                       <div key={dayKey} className={`flex items-center gap-1 rounded-lg px-2 py-1 ${hasRealData ? 'bg-cyan-900/30 border border-cyan-500/30' : 'bg-amber-900/20 border border-amber-500/20'}`}>
@@ -28291,12 +28292,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <button
                           onClick={() => {
                             if (confirm(`Delete ${dayKey}? This cannot be undone.`)) {
-                              setAllDaysData(prev => {
-                                const updated = { ...prev };
-                                delete updated[dayKey];
-                                lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated));
-                                return updated;
-                              });
+                              const updated = { ...allDaysData };
+                              delete updated[dayKey];
+                              setAllDaysData(updated);
+                              lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated));
+                              queueCloudSave({ ...combinedData, dailySales: updated });
                               setToast({ message: 'Day deleted', type: 'success' });
                             }
                           }}
@@ -28306,10 +28306,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         </button>
                       </div>
                     );})}
-                    {Object.keys(allDaysData).length > 14 && <span className="text-slate-500 text-xs self-center">+{Object.keys(allDaysData).length - 14} more</span>}
+                    {allDays.length > 14 && <span className="text-slate-500 text-xs self-center">+{allDays.length - 14} more</span>}
                   </div>
                 </div>
-              )}
+              );})()}
               
               {/* Weekly Data */}
               {Object.keys(allWeeksData).length > 0 && (
@@ -28322,11 +28322,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <button
                           onClick={() => {
                             if (confirm(`Delete week ${weekKey}? This cannot be undone.`)) {
-                              setAllWeeksData(prev => {
-                                const updated = { ...prev };
-                                delete updated[weekKey];
-                                return updated;
-                              });
+                              const updated = { ...allWeeksData };
+                              delete updated[weekKey];
+                              setAllWeeksData(updated);
+                              save(updated);
                               setToast({ message: 'Week deleted', type: 'success' });
                             }
                           }}
@@ -28395,12 +28394,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <button
                           onClick={() => {
                             if (confirm(`Delete period "${p.label || periodKey}"? This cannot be undone.`)) {
-                              setAllPeriodsData(prev => {
-                                const updated = { ...prev };
-                                delete updated[periodKey];
-                                savePeriods(updated);
-                                return updated;
-                              });
+                              const updated = { ...allPeriodsData };
+                              delete updated[periodKey];
+                              setAllPeriodsData(updated);
+                              savePeriods(updated);
                               setToast({ message: 'Period deleted', type: 'success' });
                             }
                           }}
@@ -28425,12 +28422,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <button
                           onClick={() => {
                             if (confirm(`Delete inventory snapshot ${invKey}? This cannot be undone.`)) {
-                              setInvHistory(prev => {
-                                const updated = { ...prev };
-                                delete updated[invKey];
-                                return updated;
-                              });
-                              toast('Inventory snapshot deleted', 'success');
+                              const updated = { ...invHistory };
+                              delete updated[invKey];
+                              setInvHistory(updated);
+                              saveInv(updated);
+                              setToast({ message: 'Inventory snapshot deleted', type: 'success' });
                             }
                           }}
                           className="text-rose-400 hover:text-rose-300 p-0.5"
