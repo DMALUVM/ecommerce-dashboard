@@ -20197,20 +20197,43 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           }
         });
         
+        // Calculate profit using COGS lookup for period data
+        const amazonProfit = data.amazon?.netProfit || 0;
+        const shopifyRevenue = data.shopify?.revenue || 0;
+        const shopifyUnits = data.shopify?.units || 0;
+        
+        // Calculate Shopify COGS from SKU data using savedCogs lookup
+        let shopifyCogs = data.shopify?.cogs || 0;
+        if (shopifyCogs === 0 && data.shopify?.skuData) {
+          shopifyCogs = (data.shopify.skuData || []).reduce((sum, sku) => {
+            const skuKey = sku.sku || sku.title || '';
+            const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+            return sum + (unitCost * (sku.unitsSold || sku.units || 0));
+          }, 0);
+        }
+        
+        const shopifyFees = data.shopify?.fees || 0;
+        const shopifyShipping = data.shopify?.shipping || 0;
+        const shopifyAdSpend = data.shopify?.adSpend || 0;
+        const shopifyProfit = data.shopify?.netProfit || (shopifyRevenue - shopifyCogs - shopifyFees - shopifyShipping - shopifyAdSpend);
+        const totalRevenue = data.total?.revenue || (data.amazon?.revenue || 0) + shopifyRevenue;
+        const totalProfit = data.total?.netProfit || (amazonProfit + shopifyProfit);
+        const totalMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+        
         monthData[monthKey] = {
           key: p,
           label: data.label || p,
           source: 'period',
-          revenue: data.total?.revenue || 0,
-          profit: data.total?.netProfit || 0,
-          units: data.total?.units || 0,
-          margin: data.total?.netMargin || 0,
+          revenue: totalRevenue,
+          profit: totalProfit,
+          units: data.total?.units || (data.amazon?.units || 0) + shopifyUnits,
+          margin: data.total?.netMargin || totalMargin,
           amazonRev: data.amazon?.revenue || 0,
-          amazonProfit: data.amazon?.netProfit || 0,
+          amazonProfit: amazonProfit,
           amazonUnits: data.amazon?.units || 0,
-          shopifyRev: data.shopify?.revenue || 0,
-          shopifyProfit: data.shopify?.netProfit || 0,
-          shopifyUnits: data.shopify?.units || 0,
+          shopifyRev: shopifyRevenue,
+          shopifyProfit: shopifyProfit,
+          shopifyUnits: shopifyUnits,
           adSpend: data.total?.adSpend || 0,
           roas: data.total?.roas || 0,
           skuData: [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])],
@@ -20236,16 +20259,38 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         }
         if (monthData[monthKey].source === 'weekly') {
           const week = allWeeksData[w];
-          monthData[monthKey].revenue += week.total?.revenue || 0;
-          monthData[monthKey].profit += week.total?.netProfit || 0;
-          monthData[monthKey].units += week.total?.units || 0;
+          
+          // Calculate profit using COGS lookup for weekly aggregation
+          const wkAmazonProfit = week.amazon?.netProfit || 0;
+          const wkShopifyRev = week.shopify?.revenue || 0;
+          const wkShopifyUnits = week.shopify?.units || 0;
+          
+          // Calculate Shopify COGS from SKU data
+          let wkShopifyCogs = week.shopify?.cogs || 0;
+          if (wkShopifyCogs === 0 && week.shopify?.skuData) {
+            wkShopifyCogs = (week.shopify.skuData || []).reduce((sum, sku) => {
+              const skuKey = sku.sku || sku.title || '';
+              const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+              return sum + (unitCost * (sku.unitsSold || sku.units || 0));
+            }, 0);
+          }
+          
+          const wkShopifyFees = week.shopify?.fees || 0;
+          const wkShopifyShipping = week.shopify?.shipping || 0;
+          const wkShopifyAdSpend = week.shopify?.adSpend || 0;
+          const wkShopifyProfit = week.shopify?.netProfit || (wkShopifyRev - wkShopifyCogs - wkShopifyFees - wkShopifyShipping - wkShopifyAdSpend);
+          const wkTotalProfit = week.total?.netProfit || (wkAmazonProfit + wkShopifyProfit);
+          
+          monthData[monthKey].revenue += week.total?.revenue || (week.amazon?.revenue || 0) + wkShopifyRev;
+          monthData[monthKey].profit += wkTotalProfit;
+          monthData[monthKey].units += week.total?.units || (week.amazon?.units || 0) + wkShopifyUnits;
           monthData[monthKey].amazonRev += week.amazon?.revenue || 0;
-          monthData[monthKey].amazonProfit += week.amazon?.netProfit || 0;
+          monthData[monthKey].amazonProfit += wkAmazonProfit;
           monthData[monthKey].amazonUnits += week.amazon?.units || 0;
-          monthData[monthKey].shopifyRev += week.shopify?.revenue || 0;
-          monthData[monthKey].shopifyProfit += week.shopify?.netProfit || 0;
-          monthData[monthKey].shopifyUnits += week.shopify?.units || 0;
-          monthData[monthKey].adSpend += week.total?.adSpend || 0;
+          monthData[monthKey].shopifyRev += wkShopifyRev;
+          monthData[monthKey].shopifyProfit += wkShopifyProfit;
+          monthData[monthKey].shopifyUnits += wkShopifyUnits;
+          monthData[monthKey].adSpend += week.total?.adSpend || (week.amazon?.adSpend || 0) + wkShopifyAdSpend;
           monthData[monthKey].weekCount = (monthData[monthKey].weekCount || 0) + 1;
           // Aggregate SKU data
           const weekSkus = [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])];
@@ -20367,29 +20412,61 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       }
       
       // Calculate accuracy if we have both forecast and actual
-      const actualRevenue = week.total?.revenue || 0;
+      const actualRevenue = week.total?.revenue || (week.amazon?.revenue || 0) + (week.shopify?.revenue || 0);
       let accuracy = null;
       let variance = null;
+      
+      // Sanity check: if forecast is wildly off (>5x or <0.2x actual), ignore it
       if (forecastRevenue !== null && actualRevenue > 0) {
-        variance = actualRevenue - forecastRevenue;
-        accuracy = 100 - (Math.abs(variance) / actualRevenue * 100);
+        const forecastRatio = forecastRevenue / actualRevenue;
+        if (forecastRatio > 5 || forecastRatio < 0.2) {
+          // Bad forecast data - ignore for accuracy calculation
+          console.warn(`Ignoring suspicious forecast for ${w}: forecast $${forecastRevenue} vs actual $${actualRevenue}`);
+          forecastRevenue = null;
+          forecastSource = null;
+        } else {
+          variance = actualRevenue - forecastRevenue;
+          accuracy = Math.max(-100, 100 - (Math.abs(variance) / actualRevenue * 100)); // Clamp to -100 min
+        }
       }
+      
+      // Calculate profit using COGS lookup (same as rest of app)
+      const amazonProfit = week.amazon?.netProfit || 0;
+      const shopifyRevenue = week.shopify?.revenue || 0;
+      const shopifyUnits = week.shopify?.units || 0;
+      
+      // Calculate Shopify COGS from SKU data using savedCogs lookup
+      let shopifyCogs = week.shopify?.cogs || 0;
+      if (shopifyCogs === 0 && week.shopify?.skuData) {
+        shopifyCogs = (week.shopify.skuData || []).reduce((sum, sku) => {
+          const skuKey = sku.sku || sku.title || '';
+          const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+          return sum + (unitCost * (sku.unitsSold || sku.units || 0));
+        }, 0);
+      }
+      
+      const shopifyFees = week.shopify?.fees || 0;
+      const shopifyShipping = week.shopify?.shipping || 0;
+      const shopifyAdSpend = week.shopify?.adSpend || 0;
+      const shopifyProfit = week.shopify?.netProfit || (shopifyRevenue - shopifyCogs - shopifyFees - shopifyShipping - shopifyAdSpend);
+      const totalProfit = week.total?.netProfit || (amazonProfit + shopifyProfit);
+      const totalMargin = actualRevenue > 0 ? (totalProfit / actualRevenue) * 100 : 0;
       
       return {
         key: w,
         label: new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         source: 'weekly',
         revenue: actualRevenue,
-        profit: week.total?.netProfit || 0,
-        units: week.total?.units || 0,
-        margin: week.total?.netMargin || 0,
+        profit: totalProfit,
+        units: week.total?.units || (week.amazon?.units || 0) + shopifyUnits,
+        margin: week.total?.netMargin || totalMargin,
         amazonRev: week.amazon?.revenue || 0,
-        amazonProfit: week.amazon?.netProfit || 0,
+        amazonProfit: amazonProfit,
         amazonUnits: week.amazon?.units || 0,
-        shopifyRev: week.shopify?.revenue || 0,
-        shopifyProfit: week.shopify?.netProfit || 0,
-        shopifyUnits: week.shopify?.units || 0,
-        adSpend: week.total?.adSpend || 0,
+        shopifyRev: shopifyRevenue,
+        shopifyProfit: shopifyProfit,
+        shopifyUnits: shopifyUnits,
+        adSpend: week.total?.adSpend || (week.amazon?.adSpend || 0) + shopifyAdSpend,
         roas: week.total?.roas || 0,
         skuData: [...(week.amazon?.skuData || []), ...(week.shopify?.skuData || [])],
         // Forecast data for comparison
@@ -20425,6 +20502,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const aiForecast = enhancedForecast || generateForecast;
     const aiWeeklyForecast = aiForecast?.weekly || [];
     
+    // Sanity check: max reasonable forecast is 3x the average (to catch bad data)
+    const maxReasonableForecast = avgWeeklyRevenue * 3;
+    const minReasonableForecast = avgWeeklyRevenue * 0.1; // At least 10% of average
+    
     for (let i = 1; i <= 8; i++) {
       const futureDate = new Date(lastWeekDate.getTime() + i * 7 * 24 * 60 * 60 * 1000);
       const weekKey = futureDate.toISOString().split('T')[0];
@@ -20432,9 +20513,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       // Priority 1: Use AI forecast for first 4 weeks
       const aiWeek = aiWeeklyForecast[i - 1];
       
-      // Priority 2: Check Amazon forecasts
+      // Priority 2: Check Amazon forecasts (with sanity check)
       const amazonForecast = amazonForecasts[weekKey];
-      const amazonRevenue = amazonForecast?.totals?.sales || amazonForecast?.totals?.revenue || null;
+      let amazonRevenue = amazonForecast?.totals?.sales || amazonForecast?.totals?.revenue || null;
+      
+      // Sanity check: if Amazon forecast is wildly off, ignore it
+      if (amazonRevenue && avgWeeklyRevenue > 0) {
+        if (amazonRevenue > maxReasonableForecast || amazonRevenue < minReasonableForecast) {
+          console.warn(`Ignoring suspicious Amazon forecast for ${weekKey}: $${amazonRevenue} (avg: $${avgWeeklyRevenue})`);
+          amazonRevenue = null; // Ignore bad data
+        }
+      }
       
       // Priority 3: Fall back to trend calculation
       const growthMultiplier = Math.pow(1 + Math.max(-0.1, Math.min(0.1, avgGrowth)), i);
@@ -20447,12 +20536,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
       
       if (aiWeek && i <= 4) {
         // Use AI forecast (includes Amazon blending if available)
-        projectedRevenue = aiWeek.revenue || trendRevenue;
+        let aiRevenue = aiWeek.revenue || trendRevenue;
+        // Sanity check AI forecast too
+        if (aiRevenue > maxReasonableForecast) aiRevenue = trendRevenue;
+        projectedRevenue = aiRevenue;
         projectedProfit = aiWeek.profit || trendProfit;
         projectedUnits = aiWeek.units || trendUnits;
         forecastSource = aiWeek.hasAmazonForecast ? 'ai-amazon' : 'ai-trend';
       } else if (amazonRevenue) {
-        // Use direct Amazon forecast
+        // Use direct Amazon forecast (already sanity checked)
         projectedRevenue = amazonRevenue;
         projectedProfit = trendProfit; // Estimate profit from trend
         projectedUnits = trendUnits;
@@ -20503,21 +20595,46 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     
     const dailyData = sortedDays.slice(-daysToShow).map(d => {
       const day = allDaysData[d];
+      
+      // Calculate profit using COGS lookup (same as rest of app)
+      const amazonProfit = day.amazon?.netProfit || 0;
+      const shopifyRevenue = day.shopify?.revenue || 0;
+      const shopifyUnits = day.shopify?.units || 0;
+      
+      // Calculate Shopify COGS from SKU data using savedCogs lookup
+      let shopifyCogs = day.shopify?.cogs || 0;
+      if (shopifyCogs === 0 && day.shopify?.skuData) {
+        shopifyCogs = (day.shopify.skuData || []).reduce((sum, sku) => {
+          const skuKey = sku.sku || sku.title || '';
+          const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+          return sum + (unitCost * (sku.unitsSold || sku.units || 0));
+        }, 0);
+      }
+      
+      const shopifyFees = day.shopify?.fees || 0;
+      const shopifyShipping = day.shopify?.shipping || 0;
+      const shopifyAdSpend = day.shopify?.adSpend || 0;
+      const shopifyProfit = day.shopify?.netProfit || (shopifyRevenue - shopifyCogs - shopifyFees - shopifyShipping - shopifyAdSpend);
+      
+      const totalRevenue = day.total?.revenue || (day.amazon?.revenue || 0) + shopifyRevenue;
+      const totalProfit = day.total?.netProfit || (amazonProfit + shopifyProfit);
+      const totalMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+      
       return {
         key: d,
         label: new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         source: 'daily',
-        revenue: day.total?.revenue || 0,
-        profit: day.total?.netProfit || 0,
-        units: day.total?.units || 0,
-        margin: day.total?.netMargin || 0,
+        revenue: totalRevenue,
+        profit: totalProfit,
+        units: day.total?.units || (day.amazon?.units || 0) + shopifyUnits,
+        margin: day.total?.netMargin || totalMargin,
         amazonRev: day.amazon?.revenue || 0,
-        amazonProfit: day.amazon?.netProfit || 0,
+        amazonProfit: amazonProfit,
         amazonUnits: day.amazon?.units || 0,
-        shopifyRev: day.shopify?.revenue || 0,
-        shopifyProfit: day.shopify?.netProfit || 0,
-        shopifyUnits: day.shopify?.units || 0,
-        adSpend: day.total?.adSpend || 0,
+        shopifyRev: shopifyRevenue,
+        shopifyProfit: shopifyProfit,
+        shopifyUnits: shopifyUnits,
+        adSpend: day.total?.adSpend || (day.amazon?.adSpend || 0) + shopifyAdSpend,
         roas: day.total?.roas || 0,
         skuData: [...(day.amazon?.skuData || []), ...(day.shopify?.skuData || [])],
       };
@@ -20948,9 +21065,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   const barMinWidth = currentData.length > 30 ? '4px' : currentData.length > 20 ? '8px' : '16px';
                   
                   // Calculate overall forecast accuracy (only for periods with actual data)
-                  const weeksWithForecasts = currentData.filter(d => d.forecastRevenue !== null && d.revenue > 0);
+                  // Filter out outliers with extreme accuracy values (indicates bad forecast data)
+                  const weeksWithForecasts = currentData.filter(d => 
+                    d.forecastRevenue !== null && d.revenue > 0 && 
+                    d.accuracy !== null && d.accuracy > -100 // Filter out extreme outliers
+                  );
                   const avgAccuracy = weeksWithForecasts.length > 0 
-                    ? weeksWithForecasts.reduce((s, d) => s + (d.accuracy || 0), 0) / weeksWithForecasts.length 
+                    ? Math.max(-100, Math.min(100, weeksWithForecasts.reduce((s, d) => s + (d.accuracy || 0), 0) / weeksWithForecasts.length))
                     : null;
                   
                   // Count projected periods
