@@ -1084,6 +1084,7 @@ export default function Dashboard() {
   const [shopifySyncPreview, setShopifySyncPreview] = useState(null);
   const [shopifyInventoryStatus, setShopifyInventoryStatus] = useState({ loading: false, error: null, lastSync: null });
   const [shopifyInventoryPreview, setShopifyInventoryPreview] = useState(null);
+  const [shopifySmartSync, setShopifySmartSync] = useState({ enabled: true, missingDays: [], existingDays: [] });
   
   // Sales Tax Period Calculator
   const [taxPeriodType, setTaxPeriodType] = useState('month');
@@ -16561,7 +16562,27 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                         <input
                           type="date"
                           value={shopifySyncRange.start}
-                          onChange={(e) => setShopifySyncRange(p => ({ ...p, start: e.target.value }))}
+                          onChange={(e) => {
+                            const newStart = e.target.value;
+                            setShopifySyncRange(p => ({ ...p, start: newStart }));
+                            // Calculate missing days
+                            if (newStart && shopifySyncRange.end) {
+                              const start = new Date(newStart);
+                              const end = new Date(shopifySyncRange.end);
+                              const missing = [];
+                              const existing = [];
+                              for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+                                const dateStr = d.toISOString().split('T')[0];
+                                const hasShopifyData = allDaysData[dateStr]?.shopify?.revenue > 0;
+                                if (hasShopifyData) {
+                                  existing.push(dateStr);
+                                } else {
+                                  missing.push(dateStr);
+                                }
+                              }
+                              setShopifySmartSync(p => ({ ...p, missingDays: missing, existingDays: existing }));
+                            }
+                          }}
                           className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white"
                         />
                       </div>
@@ -16570,7 +16591,27 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                         <input
                           type="date"
                           value={shopifySyncRange.end}
-                          onChange={(e) => setShopifySyncRange(p => ({ ...p, end: e.target.value }))}
+                          onChange={(e) => {
+                            const newEnd = e.target.value;
+                            setShopifySyncRange(p => ({ ...p, end: newEnd }));
+                            // Calculate missing days
+                            if (shopifySyncRange.start && newEnd) {
+                              const start = new Date(shopifySyncRange.start);
+                              const end = new Date(newEnd);
+                              const missing = [];
+                              const existing = [];
+                              for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+                                const dateStr = d.toISOString().split('T')[0];
+                                const hasShopifyData = allDaysData[dateStr]?.shopify?.revenue > 0;
+                                if (hasShopifyData) {
+                                  existing.push(dateStr);
+                                } else {
+                                  missing.push(dateStr);
+                                }
+                              }
+                              setShopifySmartSync(p => ({ ...p, missingDays: missing, existingDays: existing }));
+                            }
+                          }}
                           className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white"
                         />
                       </div>
@@ -16598,17 +16639,120 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             } else {
                               start.setDate(end.getDate() - days);
                             }
-                            setShopifySyncRange({
-                              start: start.toISOString().split('T')[0],
-                              end: end.toISOString().split('T')[0],
-                            });
+                            const startStr = start.toISOString().split('T')[0];
+                            const endStr = end.toISOString().split('T')[0];
+                            setShopifySyncRange({ start: startStr, end: endStr });
+                            
+                            // Calculate missing days
+                            const missing = [];
+                            const existing = [];
+                            for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+                              const dateStr = d.toISOString().split('T')[0];
+                              const hasShopifyData = allDaysData[dateStr]?.shopify?.revenue > 0;
+                              if (hasShopifyData) {
+                                existing.push(dateStr);
+                              } else {
+                                missing.push(dateStr);
+                              }
+                            }
+                            setShopifySmartSync(p => ({ ...p, missingDays: missing, existingDays: existing }));
                           }}
                           className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300"
                         >
                           {label}
                         </button>
                       ))}
+                      <button
+                        onClick={() => {
+                          // Find the full range of data (earliest to today)
+                          const allDates = Object.keys(allDaysData).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+                          if (allDates.length === 0) {
+                            // No data yet - default to last 30 days
+                            const end = new Date();
+                            const start = new Date();
+                            start.setDate(end.getDate() - 30);
+                            setShopifySyncRange({ start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] });
+                            
+                            const missing = [];
+                            for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+                              missing.push(d.toISOString().split('T')[0]);
+                            }
+                            setShopifySmartSync(p => ({ ...p, missingDays: missing, existingDays: [] }));
+                            return;
+                          }
+                          
+                          const start = new Date(allDates[0]);
+                          const end = new Date();
+                          
+                          // Calculate all missing days in the full range
+                          const missing = [];
+                          const existing = [];
+                          for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+                            const dateStr = d.toISOString().split('T')[0];
+                            const hasShopifyData = allDaysData[dateStr]?.shopify?.revenue > 0;
+                            if (hasShopifyData) {
+                              existing.push(dateStr);
+                            } else {
+                              missing.push(dateStr);
+                            }
+                          }
+                          
+                          setShopifySyncRange({ start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] });
+                          setShopifySmartSync(p => ({ ...p, missingDays: missing, existingDays: existing }));
+                          
+                          if (missing.length === 0) {
+                            setToast({ message: 'All days already have Shopify data!', type: 'success' });
+                          } else {
+                            setToast({ message: `Found ${missing.length} days missing Shopify data`, type: 'info' });
+                          }
+                        }}
+                        className="px-3 py-1.5 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-1"
+                      >
+                        <Zap className="w-3 h-3" />
+                        Find Missing
+                      </button>
                     </div>
+                    
+                    {/* Smart Sync Panel */}
+                    {shopifySyncRange.start && shopifySyncRange.end && (shopifySmartSync.missingDays.length > 0 || shopifySmartSync.existingDays.length > 0) && (
+                      <div className="bg-slate-800/50 border border-slate-600/50 rounded-lg p-4 mb-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-white font-medium flex items-center gap-2">
+                            <Zap className="w-4 h-4 text-amber-400" />
+                            Smart Sync
+                          </h4>
+                          <div className="flex items-center gap-3 text-sm">
+                            <span className="text-emerald-400">{shopifySmartSync.existingDays.length} synced</span>
+                            <span className="text-amber-400">{shopifySmartSync.missingDays.length} missing</span>
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center gap-3 mb-3">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={shopifySmartSync.enabled}
+                              onChange={(e) => setShopifySmartSync(p => ({ ...p, enabled: e.target.checked }))}
+                              className="w-4 h-4 rounded bg-slate-700 border-slate-500 text-emerald-500 focus:ring-emerald-500"
+                            />
+                            <span className="text-slate-300 text-sm">Only sync missing days</span>
+                            <span className="text-slate-500 text-xs">(recommended)</span>
+                          </label>
+                        </div>
+                        
+                        {shopifySmartSync.enabled ? (
+                          <p className="text-slate-400 text-xs">
+                            Will sync <strong className="text-amber-400">{shopifySmartSync.missingDays.length}</strong> days, 
+                            skip <strong className="text-emerald-400">{shopifySmartSync.existingDays.length}</strong> days that already have data.
+                          </p>
+                        ) : (
+                          <p className="text-slate-400 text-xs">
+                            Will re-sync <strong className="text-white">{shopifySmartSync.missingDays.length + shopifySmartSync.existingDays.length}</strong> days 
+                            (overwrites {shopifySmartSync.existingDays.length} days with existing data).
+                          </p>
+                        )}
+                      </div>
+                    )}
                     
                     <div className="flex gap-3">
                       <button
@@ -16650,7 +16794,19 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             setToast({ message: 'Please select a date range', type: 'error' });
                             return;
                           }
-                          if (!confirm(`Sync Shopify orders from ${shopifySyncRange.start} to ${shopifySyncRange.end}?\n\nThis will merge with existing data for those dates.`)) return;
+                          
+                          // Smart sync: check if there are days to sync
+                          const daysToSync = shopifySmartSync.enabled ? shopifySmartSync.missingDays : [...shopifySmartSync.missingDays, ...shopifySmartSync.existingDays];
+                          if (shopifySmartSync.enabled && shopifySmartSync.missingDays.length === 0) {
+                            setToast({ message: 'All days in this range already have Shopify data. Uncheck "Only sync missing days" to re-sync.', type: 'info' });
+                            return;
+                          }
+                          
+                          const confirmMsg = shopifySmartSync.enabled 
+                            ? `Sync ${shopifySmartSync.missingDays.length} missing days from Shopify?\n\n(Skipping ${shopifySmartSync.existingDays.length} days that already have data)`
+                            : `Sync ALL ${daysToSync.length} days from ${shopifySyncRange.start} to ${shopifySyncRange.end}?\n\nThis will overwrite ${shopifySmartSync.existingDays.length} days with existing data.`;
+                          
+                          if (!confirm(confirmMsg)) return;
                           
                           setShopifySyncStatus({ loading: true, error: null, progress: 'Fetching orders from Shopify...' });
                           try {
@@ -16670,24 +16826,47 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             
                             setShopifySyncStatus({ loading: true, error: null, progress: 'Processing orders...' });
                             
-                            // Merge daily data
+                            // Create set of days to include (smart sync filter)
+                            const daysToInclude = new Set(daysToSync);
+                            
+                            // Merge daily data (only for selected days if smart sync enabled)
+                            // IMPORTANT: Preserve all Amazon data, only add/update Shopify data
                             const updatedDays = { ...allDaysData };
+                            let syncedDayCount = 0;
                             Object.entries(data.dailyData || {}).forEach(([dateKey, dayData]) => {
-                              if (updatedDays[dateKey]) {
-                                updatedDays[dateKey] = {
-                                  ...updatedDays[dateKey],
-                                  shopify: dayData.shopify,
-                                  total: {
-                                    ...updatedDays[dateKey].total,
-                                    revenue: (updatedDays[dateKey].amazon?.revenue || 0) + (dayData.shopify?.revenue || 0),
-                                    units: (updatedDays[dateKey].amazon?.units || 0) + (dayData.shopify?.units || 0),
-                                  },
-                                };
-                              } else {
-                                updatedDays[dateKey] = dayData;
+                              // Skip this day if smart sync is enabled and it's not in the missing days list
+                              if (shopifySmartSync.enabled && !daysToInclude.has(dateKey)) {
+                                return;
                               }
+                              syncedDayCount++;
+                              
+                              const existing = updatedDays[dateKey] || {};
+                              
+                              // Preserve ALL existing Amazon data
+                              const amazonData = existing.amazon || { revenue: 0, units: 0, orders: 0 };
+                              const shopifyData = dayData.shopify || { revenue: 0, units: 0, orders: 0 };
+                              
+                              updatedDays[dateKey] = {
+                                ...existing,
+                                // Keep Amazon exactly as-is
+                                amazon: amazonData,
+                                // Update Shopify with new data
+                                shopify: shopifyData,
+                                // Recalculate total from both channels
+                                total: {
+                                  revenue: (amazonData.revenue || 0) + (shopifyData.revenue || 0),
+                                  units: (amazonData.units || 0) + (shopifyData.units || 0),
+                                  orders: (amazonData.orders || 0) + (shopifyData.orders || 0),
+                                },
+                                // Keep any other existing data (ads, expenses, etc)
+                                ads: existing.ads,
+                                expenses: existing.expenses,
+                                notes: existing.notes,
+                              };
                             });
                             setAllDaysData(updatedDays);
+                            // Save daily data to localStorage
+                            try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
                             
                             // Merge weekly data
                             const updatedWeeks = { ...allWeeksData };
@@ -16714,8 +16893,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             
                             setShopifySyncStatus({ loading: false, error: null, progress: '' });
                             setShopifySyncPreview(null);
+                            
+                            // Reset smart sync state
+                            setShopifySmartSync({ enabled: true, missingDays: [], existingDays: [] });
+                            
+                            const skippedCount = shopifySmartSync.enabled ? shopifySmartSync.existingDays.length : 0;
                             setToast({ 
-                              message: `Synced ${data.orderCount} orders across ${Object.keys(data.dailyData || {}).length} days`, 
+                              message: `Synced ${data.orderCount} orders across ${syncedDayCount} days` + (skippedCount > 0 ? ` (skipped ${skippedCount} existing)` : ''), 
                               type: 'success' 
                             });
                           } catch (err) {
@@ -16816,47 +17000,100 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             const data = await res.json();
                             if (data.error) throw new Error(data.error);
                             
-                            // Create inventory snapshot in app's format
+                            // Get existing inventory data to preserve Amazon quantities
+                            const existingDates = Object.keys(invHistory).sort().reverse();
+                            const existingSnapshot = existingDates.length > 0 ? invHistory[existingDates[0]] : null;
+                            const existingItemsBySku = {};
+                            if (existingSnapshot?.items) {
+                              existingSnapshot.items.forEach(item => {
+                                existingItemsBySku[item.sku] = item;
+                              });
+                            }
+                            
+                            // Create inventory snapshot - MERGE with existing data
                             const snapshotDate = data.date || new Date().toISOString().split('T')[0];
+                            
+                            // Build items with merged data
+                            const mergedItems = data.items.map(item => {
+                              const existing = existingItemsBySku[item.sku] || {};
+                              // Use COGS if available, then Shopify cost, then existing cost
+                              const cost = savedCogs[item.sku]?.cost || item.cost || existing.cost || 0;
+                              // Preserve Amazon quantities from existing data
+                              const amazonQty = existing.amazonQty || 0;
+                              const amazonInbound = existing.amazonInbound || 0;
+                              const threeplQty = item.threeplQty || item.totalQty || 0;
+                              const homeQty = item.homeQty || 0;
+                              const totalQty = amazonQty + threeplQty + homeQty;
+                              
+                              return {
+                                sku: item.sku,
+                                name: savedProductNames[item.sku] || item.name || existing.name || item.sku,
+                                asin: existing.asin || '',
+                                amazonQty: amazonQty, // PRESERVED from existing
+                                threeplQty: threeplQty, // FROM SHOPIFY
+                                homeQty: homeQty, // FROM SHOPIFY
+                                totalQty: totalQty,
+                                cost: cost, // FROM COGS or Shopify
+                                totalValue: totalQty * cost,
+                                weeklyVel: existing.weeklyVel || 0,
+                                daysOfSupply: existing.daysOfSupply || 999,
+                                health: existing.health || 'unknown',
+                                amazonInbound: amazonInbound, // PRESERVED
+                                threeplInbound: existing.threeplInbound || 0,
+                                locations: item.locations,
+                                byLocation: item.byLocation,
+                              };
+                            });
+                            
+                            // Also include SKUs that exist in previous snapshot but not in Shopify
+                            // (These might be Amazon-only products)
+                            Object.entries(existingItemsBySku).forEach(([sku, existing]) => {
+                              if (!mergedItems.find(i => i.sku === sku) && (existing.amazonQty > 0 || existing.amazonInbound > 0)) {
+                                const cost = savedCogs[sku]?.cost || existing.cost || 0;
+                                mergedItems.push({
+                                  ...existing,
+                                  cost: cost,
+                                  totalValue: (existing.amazonQty + (existing.threeplQty || 0)) * cost,
+                                  threeplQty: 0, // Not in Shopify
+                                  homeQty: 0,
+                                  totalQty: existing.amazonQty + existing.amazonInbound,
+                                });
+                              }
+                            });
+                            
+                            // Calculate summary totals
+                            let totalUnits = 0, totalValue = 0, amazonUnits = 0, amazonValue = 0, threeplUnits = 0, threeplValue = 0;
+                            mergedItems.forEach(item => {
+                              totalUnits += item.totalQty || 0;
+                              totalValue += item.totalValue || 0;
+                              amazonUnits += item.amazonQty || 0;
+                              amazonValue += (item.amazonQty || 0) * (item.cost || 0);
+                              threeplUnits += item.threeplQty || 0;
+                              threeplValue += (item.threeplQty || 0) * (item.cost || 0);
+                            });
+                            
                             const snapshot = {
                               date: snapshotDate,
                               createdAt: new Date().toISOString(),
-                              velocitySource: 'Shopify inventory sync',
-                              source: 'shopify-api',
+                              velocitySource: 'Shopify inventory sync (merged)',
+                              source: 'shopify-api-merged',
                               locations: data.locations,
                               summary: {
-                                totalUnits: data.summary.totalUnits,
-                                totalValue: data.summary.totalValue,
-                                amazonUnits: 0, // Amazon inventory still manual
-                                amazonValue: 0,
-                                amazonInbound: 0,
-                                threeplUnits: data.summary.threeplUnits,
-                                threeplValue: data.summary.totalValue * (data.summary.threeplUnits / data.summary.totalUnits) || 0,
-                                threeplInbound: 0,
-                                skuCount: data.summary.skuCount,
+                                totalUnits,
+                                totalValue,
+                                amazonUnits,
+                                amazonValue,
+                                amazonInbound: existingSnapshot?.summary?.amazonInbound || 0,
+                                threeplUnits,
+                                threeplValue,
+                                threeplInbound: existingSnapshot?.summary?.threeplInbound || 0,
+                                skuCount: mergedItems.length,
                                 critical: 0,
                                 low: 0,
                                 healthy: 0,
                                 overstock: 0,
                               },
-                              items: data.items.map(item => ({
-                                sku: item.sku,
-                                name: item.name,
-                                asin: '',
-                                amazonQty: 0, // Keep Amazon manual
-                                threeplQty: item.threeplQty || item.totalQty,
-                                homeQty: item.homeQty || 0,
-                                totalQty: item.totalQty,
-                                cost: item.cost || 0,
-                                totalValue: item.totalValue || 0,
-                                weeklyVel: 0, // Will be calculated when combined with sales data
-                                daysOfSupply: 999,
-                                health: 'unknown',
-                                amazonInbound: 0,
-                                threeplInbound: 0,
-                                locations: item.locations,
-                                byLocation: item.byLocation,
-                              })),
+                              items: mergedItems.sort((a, b) => (b.totalValue || 0) - (a.totalValue || 0)),
                             };
                             
                             // Save to inventory history
@@ -26558,8 +26795,45 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     </div>
                     
                     {taxData.byState.length > 0 && (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
+                      <>
+                        <div className="flex justify-end mb-2">
+                          <button
+                            onClick={() => {
+                              // Export tax data as CSV for filing
+                              const { start, end } = getDateRange();
+                              const periodLabel = taxPeriodType === 'month' 
+                                ? new Date(start).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+                                : taxPeriodType === 'quarter'
+                                ? `Q${taxPeriodValue.split('-')[1]} ${taxPeriodValue.split('-')[0]}`
+                                : taxPeriodType === 'semiannual'
+                                ? `${taxPeriodValue.split('-')[1] === '1' ? 'H1' : 'H2'} ${taxPeriodValue.split('-')[0]}`
+                                : taxPeriodValue.split('-')[0];
+                              
+                              // Create CSV with all fields states typically need
+                              let csv = 'State,State Code,Gross Sales,Taxable Sales,Tax Collected,Order Count,Period,Start Date,End Date\n';
+                              taxData.byState.forEach(state => {
+                                csv += `"${state.stateName}",${state.stateCode},${(state.sales || 0).toFixed(2)},${(state.sales || 0).toFixed(2)},${(state.tax || 0).toFixed(2)},${state.orders || 0},"${periodLabel}",${start},${end}\n`;
+                              });
+                              csv += `"TOTAL",,${taxData.byState.reduce((s, st) => s + (st.sales || 0), 0).toFixed(2)},${taxData.byState.reduce((s, st) => s + (st.sales || 0), 0).toFixed(2)},${taxData.totalTax.toFixed(2)},${taxData.byState.reduce((s, st) => s + (st.orders || 0), 0)},"${periodLabel}",${start},${end}\n`;
+                              csv += '\n"Note: Shop Pay tax excluded - Shopify remits automatically"\n';
+                              csv += `"Shop Pay Tax Excluded:",${taxData.shopPayExcluded.toFixed(2)}\n`;
+                              
+                              const blob = new Blob([csv], { type: 'text/csv' });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = `sales-tax-${periodLabel.replace(/\s+/g, '-')}.csv`;
+                              a.click();
+                              URL.revokeObjectURL(url);
+                            }}
+                            className="px-3 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-sm text-emerald-300 flex items-center gap-1"
+                          >
+                            <Download className="w-4 h-4" />
+                            Export for Filing
+                          </button>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
                           <thead>
                             <tr className="border-b border-slate-700">
                               <th className="text-left text-slate-400 py-2 px-2">State</th>
@@ -26608,6 +26882,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           </tfoot>
                         </table>
                       </div>
+                        <div className="mt-4 p-3 bg-slate-800/50 rounded-lg">
+                          <p className="text-slate-400 text-xs">
+                            💡 <strong className="text-slate-300">Filing Tips:</strong> Most states need Gross Sales, Taxable Sales, and Tax Collected. 
+                            Use the Export button to get a CSV formatted for filing. Shop Pay orders are excluded because Shopify auto-remits that tax.
+                          </p>
+                        </div>
+                      </>
                     )}
                   </>
                 ) : (
