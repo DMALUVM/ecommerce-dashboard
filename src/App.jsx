@@ -1076,6 +1076,21 @@ export default function Dashboard() {
 
   const [storeName, setStoreName] = useState('');
   const [storeLogo, setStoreLogo] = useState(() => localStorage.getItem('ecommerce_store_logo') || null);
+  
+  // Shopify Integration
+  const [shopifyCredentials, setShopifyCredentials] = useState({ storeUrl: '', accessToken: '', connected: false, lastSync: null });
+  const [shopifySyncStatus, setShopifySyncStatus] = useState({ loading: false, error: null, progress: '' });
+  const [shopifySyncRange, setShopifySyncRange] = useState({ start: '', end: '' });
+  const [shopifySyncPreview, setShopifySyncPreview] = useState(null);
+  const [shopifyInventoryStatus, setShopifyInventoryStatus] = useState({ loading: false, error: null, lastSync: null });
+  const [shopifyInventoryPreview, setShopifyInventoryPreview] = useState(null);
+  
+  // Sales Tax Period Calculator
+  const [taxPeriodType, setTaxPeriodType] = useState('month');
+  const [taxPeriodValue, setTaxPeriodValue] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
 
   // Goals & Targets
   const [goals, setGoals] = useState({ weeklyRevenue: 0, weeklyProfit: 0, monthlyRevenue: 0, monthlyProfit: 0 });
@@ -15066,6 +15081,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             <button onClick={() => setUploadTab('forecast')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'forecast' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <TrendingUp className="w-5 h-5" />Forecast
             </button>
+            <button onClick={() => setUploadTab('shopify-sync')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'shopify-sync' ? 'bg-green-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <ShoppingBag className="w-5 h-5" />Shopify Sync
+            </button>
           </div>
           
           {/* ============ DATA STATUS DASHBOARD ============ */}
@@ -16478,6 +16496,762 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* ============ SHOPIFY SYNC TAB ============ */}
+          {uploadTab === 'shopify-sync' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+                <ShoppingBag className="w-5 h-5 text-green-400" />
+                Shopify Sync
+              </h2>
+              <p className="text-slate-400 text-sm mb-6">Automatically import orders from your Shopify store</p>
+              
+              {/* Connection Status */}
+              <div className={`rounded-xl p-4 mb-6 ${shopifyCredentials.connected ? 'bg-emerald-900/30 border border-emerald-500/30' : 'bg-slate-700/30 border border-slate-600'}`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {shopifyCredentials.connected ? (
+                      <>
+                        <div className="w-10 h-10 bg-emerald-500/20 rounded-full flex items-center justify-center">
+                          <Check className="w-5 h-5 text-emerald-400" />
+                        </div>
+                        <div>
+                          <p className="text-emerald-400 font-medium">Connected to Shopify</p>
+                          <p className="text-slate-400 text-sm">{shopifyCredentials.storeUrl}</p>
+                          {shopifyCredentials.lastSync && (
+                            <p className="text-slate-500 text-xs">Last sync: {new Date(shopifyCredentials.lastSync).toLocaleString()}</p>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="w-10 h-10 bg-slate-600/50 rounded-full flex items-center justify-center">
+                          <ShoppingBag className="w-5 h-5 text-slate-400" />
+                        </div>
+                        <div>
+                          <p className="text-slate-300 font-medium">Not Connected</p>
+                          <p className="text-slate-500 text-sm">Set up your Shopify connection in Settings</p>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setView('settings')}
+                    className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm text-white flex items-center gap-2"
+                  >
+                    <Settings className="w-4 h-4" />
+                    {shopifyCredentials.connected ? 'Manage' : 'Connect'}
+                  </button>
+                </div>
+              </div>
+              
+              {shopifyCredentials.connected ? (
+                <>
+                  {/* Sync Controls */}
+                  <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
+                    <h3 className="text-white font-medium mb-4">Select Date Range to Sync</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-slate-400 text-sm mb-2">Start Date</label>
+                        <input
+                          type="date"
+                          value={shopifySyncRange.start}
+                          onChange={(e) => setShopifySyncRange(p => ({ ...p, start: e.target.value }))}
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-400 text-sm mb-2">End Date</label>
+                        <input
+                          type="date"
+                          value={shopifySyncRange.end}
+                          onChange={(e) => setShopifySyncRange(p => ({ ...p, end: e.target.value }))}
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white"
+                        />
+                      </div>
+                    </div>
+                    
+                    {/* Quick Select Buttons */}
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {[
+                        { label: 'Last 7 Days', days: 7 },
+                        { label: 'Last 14 Days', days: 14 },
+                        { label: 'Last 30 Days', days: 30 },
+                        { label: 'This Month', days: 'month' },
+                        { label: 'Last Month', days: 'lastMonth' },
+                      ].map(({ label, days }) => (
+                        <button
+                          key={label}
+                          onClick={() => {
+                            const end = new Date();
+                            let start = new Date();
+                            if (days === 'month') {
+                              start = new Date(end.getFullYear(), end.getMonth(), 1);
+                            } else if (days === 'lastMonth') {
+                              start = new Date(end.getFullYear(), end.getMonth() - 1, 1);
+                              end.setDate(0);
+                            } else {
+                              start.setDate(end.getDate() - days);
+                            }
+                            setShopifySyncRange({
+                              start: start.toISOString().split('T')[0],
+                              end: end.toISOString().split('T')[0],
+                            });
+                          }}
+                          className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    
+                    <div className="flex gap-3">
+                      <button
+                        onClick={async () => {
+                          if (!shopifySyncRange.start || !shopifySyncRange.end) {
+                            setToast({ message: 'Please select a date range', type: 'error' });
+                            return;
+                          }
+                          setShopifySyncStatus({ loading: true, error: null, progress: 'Fetching preview...' });
+                          try {
+                            const res = await fetch('/api/shopify/sync', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                storeUrl: shopifyCredentials.storeUrl,
+                                accessToken: shopifyCredentials.accessToken,
+                                startDate: shopifySyncRange.start,
+                                endDate: shopifySyncRange.end,
+                                preview: true,
+                              }),
+                            });
+                            const data = await res.json();
+                            if (data.error) throw new Error(data.error);
+                            setShopifySyncPreview(data);
+                            setShopifySyncStatus({ loading: false, error: null, progress: '' });
+                          } catch (err) {
+                            setShopifySyncStatus({ loading: false, error: err.message, progress: '' });
+                          }
+                        }}
+                        disabled={shopifySyncStatus.loading || !shopifySyncRange.start || !shopifySyncRange.end}
+                        className="px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 rounded-lg text-white flex items-center gap-2"
+                      >
+                        <Eye className="w-4 h-4" />
+                        Preview
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (!shopifySyncRange.start || !shopifySyncRange.end) {
+                            setToast({ message: 'Please select a date range', type: 'error' });
+                            return;
+                          }
+                          if (!confirm(`Sync Shopify orders from ${shopifySyncRange.start} to ${shopifySyncRange.end}?\n\nThis will merge with existing data for those dates.`)) return;
+                          
+                          setShopifySyncStatus({ loading: true, error: null, progress: 'Fetching orders from Shopify...' });
+                          try {
+                            const res = await fetch('/api/shopify/sync', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                storeUrl: shopifyCredentials.storeUrl,
+                                accessToken: shopifyCredentials.accessToken,
+                                startDate: shopifySyncRange.start,
+                                endDate: shopifySyncRange.end,
+                                preview: false,
+                              }),
+                            });
+                            const data = await res.json();
+                            if (data.error) throw new Error(data.error);
+                            
+                            setShopifySyncStatus({ loading: true, error: null, progress: 'Processing orders...' });
+                            
+                            // Merge daily data
+                            const updatedDays = { ...allDaysData };
+                            Object.entries(data.dailyData || {}).forEach(([dateKey, dayData]) => {
+                              if (updatedDays[dateKey]) {
+                                updatedDays[dateKey] = {
+                                  ...updatedDays[dateKey],
+                                  shopify: dayData.shopify,
+                                  total: {
+                                    ...updatedDays[dateKey].total,
+                                    revenue: (updatedDays[dateKey].amazon?.revenue || 0) + (dayData.shopify?.revenue || 0),
+                                    units: (updatedDays[dateKey].amazon?.units || 0) + (dayData.shopify?.units || 0),
+                                  },
+                                };
+                              } else {
+                                updatedDays[dateKey] = dayData;
+                              }
+                            });
+                            setAllDaysData(updatedDays);
+                            
+                            // Merge weekly data
+                            const updatedWeeks = { ...allWeeksData };
+                            Object.entries(data.weeklyData || {}).forEach(([weekKey, weekData]) => {
+                              if (updatedWeeks[weekKey]) {
+                                updatedWeeks[weekKey] = {
+                                  ...updatedWeeks[weekKey],
+                                  shopify: weekData.shopify,
+                                  total: {
+                                    ...updatedWeeks[weekKey].total,
+                                    revenue: (updatedWeeks[weekKey].amazon?.revenue || 0) + (weekData.shopify?.revenue || 0),
+                                    units: (updatedWeeks[weekKey].amazon?.units || 0) + (weekData.shopify?.units || 0),
+                                  },
+                                };
+                              } else {
+                                updatedWeeks[weekKey] = weekData;
+                              }
+                            });
+                            setAllWeeksData(updatedWeeks);
+                            save(updatedWeeks);
+                            
+                            const updatedCreds = { ...shopifyCredentials, lastSync: new Date().toISOString() };
+                            setShopifyCredentials(updatedCreds);
+                            
+                            setShopifySyncStatus({ loading: false, error: null, progress: '' });
+                            setShopifySyncPreview(null);
+                            setToast({ 
+                              message: `Synced ${data.orderCount} orders across ${Object.keys(data.dailyData || {}).length} days`, 
+                              type: 'success' 
+                            });
+                          } catch (err) {
+                            setShopifySyncStatus({ loading: false, error: err.message, progress: '' });
+                          }
+                        }}
+                        disabled={shopifySyncStatus.loading || !shopifySyncRange.start || !shopifySyncRange.end}
+                        className="px-6 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 rounded-lg text-white font-medium flex items-center gap-2"
+                      >
+                        {shopifySyncStatus.loading ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Syncing...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="w-4 h-4" />
+                            Sync Orders
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    
+                    {shopifySyncStatus.progress && (
+                      <p className="text-slate-400 text-sm mt-3 flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        {shopifySyncStatus.progress}
+                      </p>
+                    )}
+                    {shopifySyncStatus.error && (
+                      <p className="text-rose-400 text-sm mt-3 flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4" />
+                        {shopifySyncStatus.error}
+                      </p>
+                    )}
+                  </div>
+                  
+                  {/* Inventory Sync Section */}
+                  <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-white font-medium flex items-center gap-2">
+                          <Boxes className="w-5 h-5 text-emerald-400" />
+                          Inventory Sync
+                        </h3>
+                        <p className="text-slate-400 text-sm">Pull current inventory levels from Shopify (includes 3PL)</p>
+                      </div>
+                      {shopifyCredentials.lastInventorySync && (
+                        <span className="text-xs text-slate-500">
+                          Last: {new Date(shopifyCredentials.lastInventorySync).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                    
+                    <div className="flex gap-3">
+                      <button
+                        onClick={async () => {
+                          setShopifyInventoryStatus({ loading: true, error: null });
+                          try {
+                            const res = await fetch('/api/shopify/sync', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                storeUrl: shopifyCredentials.storeUrl,
+                                accessToken: shopifyCredentials.accessToken,
+                                syncType: 'inventory',
+                              }),
+                            });
+                            const data = await res.json();
+                            if (data.error) throw new Error(data.error);
+                            setShopifyInventoryPreview(data);
+                            setShopifyInventoryStatus({ loading: false, error: null, lastSync: new Date().toISOString() });
+                          } catch (err) {
+                            setShopifyInventoryStatus({ loading: false, error: err.message });
+                          }
+                        }}
+                        disabled={shopifyInventoryStatus.loading}
+                        className="px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 rounded-lg text-white flex items-center gap-2"
+                      >
+                        <Eye className="w-4 h-4" />
+                        Preview Inventory
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (!confirm('Sync inventory from Shopify? This will create a new inventory snapshot.')) return;
+                          
+                          setShopifyInventoryStatus({ loading: true, error: null });
+                          try {
+                            const res = await fetch('/api/shopify/sync', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                storeUrl: shopifyCredentials.storeUrl,
+                                accessToken: shopifyCredentials.accessToken,
+                                syncType: 'inventory',
+                              }),
+                            });
+                            const data = await res.json();
+                            if (data.error) throw new Error(data.error);
+                            
+                            // Create inventory snapshot in app's format
+                            const snapshotDate = data.date || new Date().toISOString().split('T')[0];
+                            const snapshot = {
+                              date: snapshotDate,
+                              createdAt: new Date().toISOString(),
+                              velocitySource: 'Shopify inventory sync',
+                              source: 'shopify-api',
+                              locations: data.locations,
+                              summary: {
+                                totalUnits: data.summary.totalUnits,
+                                totalValue: data.summary.totalValue,
+                                amazonUnits: 0, // Amazon inventory still manual
+                                amazonValue: 0,
+                                amazonInbound: 0,
+                                threeplUnits: data.summary.threeplUnits,
+                                threeplValue: data.summary.totalValue * (data.summary.threeplUnits / data.summary.totalUnits) || 0,
+                                threeplInbound: 0,
+                                skuCount: data.summary.skuCount,
+                                critical: 0,
+                                low: 0,
+                                healthy: 0,
+                                overstock: 0,
+                              },
+                              items: data.items.map(item => ({
+                                sku: item.sku,
+                                name: item.name,
+                                asin: '',
+                                amazonQty: 0, // Keep Amazon manual
+                                threeplQty: item.threeplQty || item.totalQty,
+                                homeQty: item.homeQty || 0,
+                                totalQty: item.totalQty,
+                                cost: item.cost || 0,
+                                totalValue: item.totalValue || 0,
+                                weeklyVel: 0, // Will be calculated when combined with sales data
+                                daysOfSupply: 999,
+                                health: 'unknown',
+                                amazonInbound: 0,
+                                threeplInbound: 0,
+                                locations: item.locations,
+                                byLocation: item.byLocation,
+                              })),
+                            };
+                            
+                            // Save to inventory history
+                            const updated = { ...invHistory, [snapshotDate]: snapshot };
+                            setInvHistory(updated);
+                            saveInv(updated);
+                            
+                            // Update credentials with last sync time
+                            setShopifyCredentials(p => ({ ...p, lastInventorySync: new Date().toISOString() }));
+                            
+                            setShopifyInventoryStatus({ loading: false, error: null, lastSync: new Date().toISOString() });
+                            setShopifyInventoryPreview(null);
+                            setToast({ 
+                              message: `Synced ${data.summary.skuCount} SKUs, ${formatNumber(data.summary.totalUnits)} units from ${data.locations?.length || 0} locations`, 
+                              type: 'success' 
+                            });
+                          } catch (err) {
+                            setShopifyInventoryStatus({ loading: false, error: err.message });
+                          }
+                        }}
+                        disabled={shopifyInventoryStatus.loading}
+                        className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-white font-medium flex items-center gap-2"
+                      >
+                        {shopifyInventoryStatus.loading ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Syncing...
+                          </>
+                        ) : (
+                          <>
+                            <Boxes className="w-4 h-4" />
+                            Sync Inventory
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    
+                    {shopifyInventoryStatus.error && (
+                      <p className="text-rose-400 text-sm mt-3 flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4" />
+                        {shopifyInventoryStatus.error}
+                      </p>
+                    )}
+                    
+                    {/* Inventory Preview */}
+                    {shopifyInventoryPreview && (
+                      <div className="mt-4 pt-4 border-t border-slate-700">
+                        <h4 className="text-emerald-400 font-medium mb-3 flex items-center gap-2">
+                          <Eye className="w-4 h-4" />
+                          Inventory Preview
+                        </h4>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                          <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                            <p className="text-xl font-bold text-white">{formatNumber(shopifyInventoryPreview.summary?.totalUnits || 0)}</p>
+                            <p className="text-slate-400 text-xs">Total Units</p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                            <p className="text-xl font-bold text-emerald-400">{formatCurrency(shopifyInventoryPreview.summary?.totalValue || 0)}</p>
+                            <p className="text-slate-400 text-xs">Total Value</p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                            <p className="text-xl font-bold text-white">{shopifyInventoryPreview.summary?.skuCount || 0}</p>
+                            <p className="text-slate-400 text-xs">SKUs</p>
+                          </div>
+                          <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                            <p className="text-xl font-bold text-white">{shopifyInventoryPreview.locations?.length || 0}</p>
+                            <p className="text-slate-400 text-xs">Locations</p>
+                          </div>
+                        </div>
+                        
+                        {/* Location Breakdown */}
+                        {shopifyInventoryPreview.locations && shopifyInventoryPreview.locations.length > 0 && (
+                          <div className="mb-4">
+                            <p className="text-slate-400 text-sm mb-2">Locations:</p>
+                            <div className="flex flex-wrap gap-2">
+                              {shopifyInventoryPreview.locations.map(loc => (
+                                <span key={loc.id} className={`px-3 py-1 rounded-lg text-xs ${
+                                  loc.type === '3pl' ? 'bg-violet-900/50 text-violet-300 border border-violet-500/30' :
+                                  loc.type === 'home' ? 'bg-amber-900/50 text-amber-300 border border-amber-500/30' :
+                                  'bg-slate-700 text-slate-300'
+                                }`}>
+                                  {loc.name}
+                                  {loc.type === '3pl' && ' (3PL)'}
+                                  {loc.type === 'home' && ' (Home)'}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Top SKUs */}
+                        {shopifyInventoryPreview.items && shopifyInventoryPreview.items.length > 0 && (
+                          <div>
+                            <p className="text-slate-400 text-sm mb-2">Top SKUs by Value:</p>
+                            <div className="space-y-1 max-h-40 overflow-y-auto">
+                              {shopifyInventoryPreview.items.slice(0, 8).map(item => (
+                                <div key={item.sku} className="flex items-center justify-between text-xs bg-slate-800/30 rounded px-2 py-1">
+                                  <span className="text-slate-300 truncate flex-1">{item.name}</span>
+                                  <span className="text-white font-medium ml-2">{formatNumber(item.totalQty)}</span>
+                                  <span className="text-emerald-400 ml-2">{formatCurrency(item.totalValue)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
+                    <p className="text-slate-500 text-xs mt-3">
+                      💡 Includes inventory from all Shopify locations (3PL, warehouse, etc). Amazon FBA inventory requires separate upload.
+                    </p>
+                  </div>
+                  
+                  {/* Product Catalog Sync Section */}
+                  <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-white font-medium flex items-center gap-2">
+                          <Package className="w-5 h-5 text-violet-400" />
+                          Product Catalog Sync
+                        </h3>
+                        <p className="text-slate-400 text-sm">Sync SKU → Product Name mappings from Shopify</p>
+                      </div>
+                      <span className="text-xs text-slate-500">
+                        {Object.keys(savedProductNames).length} SKUs mapped
+                      </span>
+                    </div>
+                    
+                    <div className="flex gap-3">
+                      <button
+                        onClick={async () => {
+                          setShopifySyncStatus(p => ({ ...p, loading: true, progress: 'Fetching product catalog...' }));
+                          try {
+                            const res = await fetch('/api/shopify/sync', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                storeUrl: shopifyCredentials.storeUrl,
+                                accessToken: shopifyCredentials.accessToken,
+                                syncType: 'products',
+                              }),
+                            });
+                            const data = await res.json();
+                            if (data.error) throw new Error(data.error);
+                            
+                            // Merge with existing product names (SKU is the key!)
+                            // Shopify names don't overwrite manually set names
+                            const mergedNames = { ...savedProductNames };
+                            let newCount = 0;
+                            let updatedCount = 0;
+                            
+                            Object.entries(data.catalog || {}).forEach(([sku, product]) => {
+                              if (!mergedNames[sku]) {
+                                // New SKU - add it
+                                mergedNames[sku] = product.name;
+                                newCount++;
+                              } else if (mergedNames[sku] === sku) {
+                                // SKU exists but name is just the SKU itself - update it
+                                mergedNames[sku] = product.name;
+                                updatedCount++;
+                              }
+                              // Otherwise keep existing name (user may have customized it)
+                            });
+                            
+                            setSavedProductNames(mergedNames);
+                            localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(mergedNames));
+                            
+                            setShopifySyncStatus(p => ({ ...p, loading: false, progress: '' }));
+                            setToast({ 
+                              message: `Synced ${data.skuCount} SKUs (${newCount} new, ${updatedCount} updated)`, 
+                              type: 'success' 
+                            });
+                          } catch (err) {
+                            setShopifySyncStatus(p => ({ ...p, loading: false, error: err.message, progress: '' }));
+                          }
+                        }}
+                        disabled={shopifySyncStatus.loading}
+                        className="px-6 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg text-white font-medium flex items-center gap-2"
+                      >
+                        {shopifySyncStatus.loading && shopifySyncStatus.progress?.includes('catalog') ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Syncing...
+                          </>
+                        ) : (
+                          <>
+                            <Package className="w-4 h-4" />
+                            Sync Product Names
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    
+                    <div className="mt-3 p-3 bg-slate-800/50 rounded-lg">
+                      <p className="text-slate-300 text-xs mb-2 font-medium">How SKU Matching Works:</p>
+                      <ul className="text-slate-400 text-xs space-y-1">
+                        <li>• <strong className="text-white">SKU is the primary key</strong> - matches across Amazon & Shopify</li>
+                        <li>• Product names are display-only (can differ between platforms)</li>
+                        <li>• Existing custom names you've set won't be overwritten</li>
+                        <li>• SKUs without a match show as the raw SKU code</li>
+                      </ul>
+                    </div>
+                  </div>
+                  
+                  {/* Preview Results */}
+                  {shopifySyncPreview && (
+                    <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-xl p-4 mb-6">
+                      <h3 className="text-emerald-400 font-medium mb-3 flex items-center gap-2">
+                        <Eye className="w-4 h-4" />
+                        Sync Preview
+                      </h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                        <div className="text-center">
+                          <p className="text-2xl font-bold text-white">{shopifySyncPreview.orderCount}</p>
+                          <p className="text-slate-400 text-sm">Orders</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-2xl font-bold text-emerald-400">{formatCurrency(shopifySyncPreview.totalRevenue)}</p>
+                          <p className="text-slate-400 text-sm">Revenue</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-2xl font-bold text-white">{shopifySyncPreview.totalUnits}</p>
+                          <p className="text-slate-400 text-sm">Units</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-2xl font-bold text-white">{shopifySyncPreview.uniqueDays}</p>
+                          <p className="text-slate-400 text-sm">Days</p>
+                        </div>
+                      </div>
+                      {shopifySyncPreview.skuBreakdown && shopifySyncPreview.skuBreakdown.length > 0 && (
+                        <div className="border-t border-emerald-500/30 pt-3 mt-3">
+                          <p className="text-slate-400 text-sm mb-2">Top SKUs:</p>
+                          <div className="flex flex-wrap gap-2">
+                            {shopifySyncPreview.skuBreakdown.slice(0, 5).map(sku => (
+                              <span key={sku.sku} className="px-2 py-1 bg-slate-800 rounded text-xs text-slate-300">
+                                {sku.sku}: {sku.units} units
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Tax Preview */}
+                      {shopifySyncPreview.tax && (
+                        <div className="border-t border-emerald-500/30 pt-3 mt-3">
+                          <p className="text-slate-400 text-sm mb-2 flex items-center gap-2">
+                            <DollarSign className="w-4 h-4" />
+                            Sales Tax Summary:
+                          </p>
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+                            <div className="bg-slate-800/50 rounded-lg p-2 text-center">
+                              <p className="text-lg font-semibold text-emerald-400">{formatCurrency(shopifySyncPreview.tax.totalCollected)}</p>
+                              <p className="text-xs text-slate-400">Tax to Remit</p>
+                            </div>
+                            <div className="bg-slate-800/50 rounded-lg p-2 text-center">
+                              <p className="text-lg font-semibold text-violet-400">{formatCurrency(shopifySyncPreview.tax.shopPayExcluded)}</p>
+                              <p className="text-xs text-slate-400">Shop Pay (auto-remitted)</p>
+                            </div>
+                            <div className="bg-slate-800/50 rounded-lg p-2 text-center">
+                              <p className="text-lg font-semibold text-slate-300">{shopifySyncPreview.tax.shopPayOrderCount}</p>
+                              <p className="text-xs text-slate-400">Shop Pay Orders</p>
+                            </div>
+                          </div>
+                          {shopifySyncPreview.tax.byState && shopifySyncPreview.tax.byState.length > 0 && (
+                            <div className="space-y-1">
+                              <p className="text-slate-500 text-xs uppercase">Tax by State (excludes Shop Pay):</p>
+                              <div className="flex flex-wrap gap-2">
+                                {shopifySyncPreview.tax.byState.slice(0, 8).map(state => (
+                                  <span key={state.stateCode} className="px-2 py-1 bg-slate-800 rounded text-xs text-slate-300">
+                                    {state.stateCode}: {formatCurrency(state.taxCollected)}
+                                  </span>
+                                ))}
+                                {shopifySyncPreview.tax.byState.length > 8 && (
+                                  <span className="px-2 py-1 text-xs text-slate-500">+{shopifySyncPreview.tax.byState.length - 8} more</span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          <p className="text-xs text-slate-500 mt-2">
+                            💡 Shop Pay orders are excluded because Shopify automatically collects and remits tax for those.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* What Gets Synced */}
+                  <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4">
+                    <h3 className="text-blue-400 font-medium mb-3 flex items-center gap-2">
+                      <HelpCircle className="w-4 h-4" />
+                      What Gets Synced
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-slate-300 text-sm font-medium mb-2">📦 Orders Sync:</p>
+                        <ul className="text-slate-400 text-sm space-y-1">
+                          <li className="flex items-start gap-2">
+                            <Check className="w-3 h-3 text-emerald-400 mt-1 shrink-0" />
+                            <span>Daily & weekly revenue</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <Check className="w-3 h-3 text-emerald-400 mt-1 shrink-0" />
+                            <span>SKU-level units sold</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <Check className="w-3 h-3 text-emerald-400 mt-1 shrink-0" />
+                            <span>Tax by state (excl. Shop Pay)</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <Check className="w-3 h-3 text-emerald-400 mt-1 shrink-0" />
+                            <span>Discounts applied</span>
+                          </li>
+                        </ul>
+                      </div>
+                      <div>
+                        <p className="text-slate-300 text-sm font-medium mb-2">📋 Inventory Sync:</p>
+                        <ul className="text-slate-400 text-sm space-y-1">
+                          <li className="flex items-start gap-2">
+                            <Check className="w-3 h-3 text-emerald-400 mt-1 shrink-0" />
+                            <span>3PL stock levels</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <Check className="w-3 h-3 text-emerald-400 mt-1 shrink-0" />
+                            <span>All Shopify locations</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <Check className="w-3 h-3 text-emerald-400 mt-1 shrink-0" />
+                            <span>SKU/product details</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <Check className="w-3 h-3 text-emerald-400 mt-1 shrink-0" />
+                            <span>Cost values</span>
+                          </li>
+                        </ul>
+                      </div>
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-blue-500/20">
+                      <p className="text-blue-300 text-xs flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <span><strong>Shop Pay orders excluded from tax</strong> - Shopify remits tax for Shop Pay automatically. <strong>Amazon inventory still requires manual upload</strong> since it's not in Shopify.</span>
+                      </p>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-4">
+                  <div className="bg-gradient-to-r from-green-900/30 to-emerald-900/30 rounded-xl border border-green-500/30 p-6">
+                    <h3 className="text-green-400 font-semibold mb-4 flex items-center gap-2">
+                      <Zap className="w-5 h-5" />
+                      Quick Setup Guide (5 minutes)
+                    </h3>
+                    <ol className="space-y-4 text-slate-300">
+                      <li className="flex gap-3">
+                        <span className="w-6 h-6 rounded-full bg-green-600 text-white text-sm flex items-center justify-center shrink-0">1</span>
+                        <div>
+                          <p className="font-medium">Go to Shopify Admin</p>
+                          <p className="text-slate-400 text-sm">Settings → Apps and sales channels → Develop apps</p>
+                        </div>
+                      </li>
+                      <li className="flex gap-3">
+                        <span className="w-6 h-6 rounded-full bg-green-600 text-white text-sm flex items-center justify-center shrink-0">2</span>
+                        <div>
+                          <p className="font-medium">Create a Custom App</p>
+                          <p className="text-slate-400 text-sm">Click "Allow custom app development" if prompted, then "Create an app"</p>
+                        </div>
+                      </li>
+                      <li className="flex gap-3">
+                        <span className="w-6 h-6 rounded-full bg-green-600 text-white text-sm flex items-center justify-center shrink-0">3</span>
+                        <div>
+                          <p className="font-medium">Configure API Scopes</p>
+                          <p className="text-slate-400 text-sm">Enable: <code className="bg-slate-800 px-1 rounded">read_orders</code>, <code className="bg-slate-800 px-1 rounded">read_products</code>, <code className="bg-slate-800 px-1 rounded">read_inventory</code>, <code className="bg-slate-800 px-1 rounded">read_locations</code></p>
+                        </div>
+                      </li>
+                      <li className="flex gap-3">
+                        <span className="w-6 h-6 rounded-full bg-green-600 text-white text-sm flex items-center justify-center shrink-0">4</span>
+                        <div>
+                          <p className="font-medium">Install & Get Token</p>
+                          <p className="text-slate-400 text-sm">Click Install, then copy the Admin API access token</p>
+                        </div>
+                      </li>
+                      <li className="flex gap-3">
+                        <span className="w-6 h-6 rounded-full bg-green-600 text-white text-sm flex items-center justify-center shrink-0">5</span>
+                        <div>
+                          <p className="font-medium">Connect Here</p>
+                          <p className="text-slate-400 text-sm">Go to Settings and enter your store URL + token</p>
+                        </div>
+                      </li>
+                    </ol>
+                    <button
+                      onClick={() => setView('settings')}
+                      className="mt-6 w-full py-3 bg-green-600 hover:bg-green-500 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
+                    >
+                      <Settings className="w-5 h-5" />
+                      Go to Settings to Connect
+                    </button>
                   </div>
                 </div>
               )}
@@ -25613,6 +26387,246 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             </div>
           </div>
           
+          {/* Shopify Tax Calculator */}
+          {(() => {
+            // Calculate date range based on period selection
+            const getDateRange = () => {
+              const [year, periodNum] = taxPeriodValue.split('-').map(Number);
+              let start, end;
+              
+              if (taxPeriodType === 'month') {
+                start = new Date(year, periodNum - 1, 1);
+                end = new Date(year, periodNum, 0);
+              } else if (taxPeriodType === 'quarter') {
+                const quarterStart = (periodNum - 1) * 3;
+                start = new Date(year, quarterStart, 1);
+                end = new Date(year, quarterStart + 3, 0);
+              } else if (taxPeriodType === 'semiannual') {
+                const halfStart = (periodNum - 1) * 6;
+                start = new Date(year, halfStart, 1);
+                end = new Date(year, halfStart + 6, 0);
+              } else { // annual
+                start = new Date(year, 0, 1);
+                end = new Date(year, 11, 31);
+              }
+              
+              return { start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] };
+            };
+            
+            // Aggregate tax by state from daily data
+            const calculateTaxByState = () => {
+              const { start, end } = getDateRange();
+              const taxByStateMap = {};
+              let totalTax = 0;
+              let shopPayExcluded = 0;
+              let daysWithData = 0;
+              
+              Object.entries(allDaysData).forEach(([dateKey, dayData]) => {
+                if (dateKey >= start && dateKey <= end && dayData.shopify?.taxByState) {
+                  daysWithData++;
+                  Object.entries(dayData.shopify.taxByState).forEach(([stateCode, stateTax]) => {
+                    if (!taxByStateMap[stateCode]) {
+                      taxByStateMap[stateCode] = { tax: 0, sales: 0, orders: 0 };
+                    }
+                    // Handle both old format (number) and new format (object)
+                    if (typeof stateTax === 'number') {
+                      taxByStateMap[stateCode].tax += stateTax;
+                    } else {
+                      taxByStateMap[stateCode].tax += stateTax.tax || 0;
+                      taxByStateMap[stateCode].sales += stateTax.sales || 0;
+                      taxByStateMap[stateCode].orders += stateTax.orders || 0;
+                    }
+                  });
+                  totalTax += dayData.shopify.taxTotal || 0;
+                  shopPayExcluded += dayData.shopify.shopPayTaxExcluded || 0;
+                }
+              });
+              
+              return {
+                byState: Object.entries(taxByStateMap)
+                  .map(([code, data]) => ({ stateCode: code, stateName: US_STATES_TAX_INFO[code]?.name || code, ...data }))
+                  .sort((a, b) => b.tax - a.tax),
+                totalTax,
+                shopPayExcluded,
+                daysWithData,
+              };
+            };
+            
+            const taxData = calculateTaxByState();
+            const hasShopifyTaxData = taxData.daysWithData > 0;
+            
+            // Period options based on type
+            const getPeriodOptions = () => {
+              const currentYear = new Date().getFullYear();
+              const options = [];
+              
+              if (taxPeriodType === 'month') {
+                for (let y = currentYear; y >= currentYear - 1; y--) {
+                  for (let m = 12; m >= 1; m--) {
+                    if (y === currentYear && m > new Date().getMonth() + 1) continue;
+                    options.push({ value: `${y}-${String(m).padStart(2, '0')}`, label: `${new Date(y, m - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}` });
+                  }
+                }
+              } else if (taxPeriodType === 'quarter') {
+                for (let y = currentYear; y >= currentYear - 1; y--) {
+                  for (let q = 4; q >= 1; q--) {
+                    if (y === currentYear && q > Math.ceil((new Date().getMonth() + 1) / 3)) continue;
+                    options.push({ value: `${y}-${q}`, label: `Q${q} ${y}` });
+                  }
+                }
+              } else if (taxPeriodType === 'semiannual') {
+                for (let y = currentYear; y >= currentYear - 1; y--) {
+                  for (let h = 2; h >= 1; h--) {
+                    if (y === currentYear && h === 2 && new Date().getMonth() < 6) continue;
+                    options.push({ value: `${y}-${h}`, label: `${h === 1 ? 'H1' : 'H2'} ${y} (${h === 1 ? 'Jan-Jun' : 'Jul-Dec'})` });
+                  }
+                }
+              } else {
+                for (let y = currentYear; y >= currentYear - 2; y--) {
+                  options.push({ value: `${y}-1`, label: `${y}` });
+                }
+              }
+              
+              return options;
+            };
+            
+            return (
+              <div className="mb-6 bg-gradient-to-r from-green-900/20 to-emerald-900/20 border border-green-500/30 rounded-2xl p-5">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                      <ShoppingBag className="w-5 h-5 text-green-400" />
+                      Shopify Tax Calculator
+                    </h3>
+                    <p className="text-slate-400 text-sm">Tax collected from synced Shopify orders (excludes Shop Pay)</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={taxPeriodType}
+                      onChange={(e) => {
+                        setTaxPeriodType(e.target.value);
+                        // Reset to first option of new type
+                        const currentYear = new Date().getFullYear();
+                        if (e.target.value === 'month') {
+                          setTaxPeriodValue(`${currentYear}-${String(new Date().getMonth() + 1).padStart(2, '0')}`);
+                        } else if (e.target.value === 'quarter') {
+                          setTaxPeriodValue(`${currentYear}-${Math.ceil((new Date().getMonth() + 1) / 3)}`);
+                        } else if (e.target.value === 'semiannual') {
+                          setTaxPeriodValue(`${currentYear}-${new Date().getMonth() < 6 ? 1 : 2}`);
+                        } else {
+                          setTaxPeriodValue(`${currentYear}-1`);
+                        }
+                      }}
+                      className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white"
+                    >
+                      <option value="month">Monthly</option>
+                      <option value="quarter">Quarterly</option>
+                      <option value="semiannual">Semi-Annual</option>
+                      <option value="annual">Annual</option>
+                    </select>
+                    <select
+                      value={taxPeriodValue}
+                      onChange={(e) => setTaxPeriodValue(e.target.value)}
+                      className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white"
+                    >
+                      {getPeriodOptions().map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                
+                {hasShopifyTaxData ? (
+                  <>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                      <div className="bg-slate-800/50 rounded-xl p-3 text-center">
+                        <p className="text-2xl font-bold text-emerald-400">{formatCurrency(taxData.totalTax)}</p>
+                        <p className="text-slate-400 text-xs">Tax to Remit</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl p-3 text-center">
+                        <p className="text-2xl font-bold text-violet-400">{formatCurrency(taxData.shopPayExcluded)}</p>
+                        <p className="text-slate-400 text-xs">Shop Pay (auto-remitted)</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl p-3 text-center">
+                        <p className="text-2xl font-bold text-white">{taxData.byState.length}</p>
+                        <p className="text-slate-400 text-xs">States</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl p-3 text-center">
+                        <p className="text-2xl font-bold text-white">{taxData.daysWithData}</p>
+                        <p className="text-slate-400 text-xs">Days with Data</p>
+                      </div>
+                    </div>
+                    
+                    {taxData.byState.length > 0 && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-700">
+                              <th className="text-left text-slate-400 py-2 px-2">State</th>
+                              <th className="text-right text-slate-400 py-2 px-2">Tax Collected</th>
+                              <th className="text-right text-slate-400 py-2 px-2">Taxable Sales</th>
+                              <th className="text-right text-slate-400 py-2 px-2">Orders</th>
+                              <th className="text-center text-slate-400 py-2 px-2">Nexus?</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {taxData.byState.map(state => {
+                              const hasNexus = nexusStates[state.stateCode]?.hasNexus;
+                              return (
+                                <tr key={state.stateCode} className="border-b border-slate-700/50 hover:bg-slate-800/50">
+                                  <td className="py-2 px-2">
+                                    <span className="text-white font-medium">{state.stateName}</span>
+                                    <span className="text-slate-500 ml-2 text-xs">{state.stateCode}</span>
+                                  </td>
+                                  <td className="py-2 px-2 text-right text-emerald-400 font-medium">{formatCurrency(state.tax)}</td>
+                                  <td className="py-2 px-2 text-right text-slate-300">{formatCurrency(state.sales)}</td>
+                                  <td className="py-2 px-2 text-right text-slate-400">{state.orders}</td>
+                                  <td className="py-2 px-2 text-center">
+                                    {hasNexus ? (
+                                      <span className="text-emerald-400"><Check className="w-4 h-4 inline" /></span>
+                                    ) : (
+                                      <button
+                                        onClick={() => toggleNexus(state.stateCode)}
+                                        className="text-xs text-amber-400 hover:text-amber-300"
+                                      >
+                                        + Add
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t border-slate-600">
+                              <td className="py-2 px-2 font-semibold text-white">Total</td>
+                              <td className="py-2 px-2 text-right font-bold text-emerald-400">{formatCurrency(taxData.totalTax)}</td>
+                              <td className="py-2 px-2 text-right text-slate-300">{formatCurrency(taxData.byState.reduce((s, st) => s + st.sales, 0))}</td>
+                              <td className="py-2 px-2 text-right text-slate-400">{taxData.byState.reduce((s, st) => s + st.orders, 0)}</td>
+                              <td></td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-center py-6">
+                    <ShoppingBag className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                    <p className="text-slate-400">No Shopify tax data for this period</p>
+                    <p className="text-slate-500 text-sm mb-4">Sync Shopify orders to see tax breakdown by state</p>
+                    <button
+                      onClick={() => { setUploadTab('shopify-sync'); setView('upload'); }}
+                      className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm text-white"
+                    >
+                      Sync Shopify
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          
           {/* Main Content Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Nexus States List */}
@@ -28328,6 +29342,123 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               <p className="text-slate-500 text-xs mt-2">Each store has separate data. Great for multiple brands or demo data.</p>
             </SettingSection>
           )}
+          
+          {/* Shopify Connection */}
+          <SettingSection title="🛒 Shopify Connection">
+            <p className="text-slate-400 text-sm mb-4">Connect your Shopify store to automatically sync orders</p>
+            
+            {shopifyCredentials.connected ? (
+              <div className="space-y-4">
+                <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-emerald-500/20 rounded-full flex items-center justify-center">
+                        <Check className="w-5 h-5 text-emerald-400" />
+                      </div>
+                      <div>
+                        <p className="text-emerald-400 font-medium">Connected</p>
+                        <p className="text-slate-400 text-sm">{shopifyCredentials.storeUrl}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (confirm('Disconnect from Shopify? Your synced data will remain.')) {
+                          setShopifyCredentials({ storeUrl: '', accessToken: '', connected: false, lastSync: null });
+                          setToast({ message: 'Shopify disconnected', type: 'success' });
+                        }
+                      }}
+                      className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                </div>
+                <SettingRow label="Go to Sync" desc="Sync orders from your Shopify store">
+                  <button
+                    onClick={() => { setUploadTab('shopify-sync'); setView('upload'); }}
+                    className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm text-white flex items-center gap-2"
+                  >
+                    <RefreshCw className="w-4 h-4" />Sync Now
+                  </button>
+                </SettingRow>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-slate-900/50 rounded-xl p-4">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-slate-300 text-sm font-medium mb-2">Store URL</label>
+                      <input
+                        type="text"
+                        placeholder="your-store.myshopify.com"
+                        value={shopifyCredentials.storeUrl}
+                        onChange={(e) => setShopifyCredentials(p => ({ ...p, storeUrl: e.target.value }))}
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                      />
+                      <p className="text-slate-500 text-xs mt-1">Just the store name, e.g. "mystore.myshopify.com"</p>
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 text-sm font-medium mb-2">Admin API Access Token</label>
+                      <input
+                        type="password"
+                        placeholder="shpat_xxxxxxxxxxxxx"
+                        value={shopifyCredentials.accessToken}
+                        onChange={(e) => setShopifyCredentials(p => ({ ...p, accessToken: e.target.value }))}
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                      />
+                      <p className="text-slate-500 text-xs mt-1">From your Shopify Custom App settings</p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!shopifyCredentials.storeUrl || !shopifyCredentials.accessToken) {
+                          setToast({ message: 'Please enter both store URL and access token', type: 'error' });
+                          return;
+                        }
+                        // Test connection
+                        try {
+                          const res = await fetch('/api/shopify/sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              storeUrl: shopifyCredentials.storeUrl,
+                              accessToken: shopifyCredentials.accessToken,
+                              test: true,
+                            }),
+                          });
+                          const data = await res.json();
+                          if (data.error) throw new Error(data.error);
+                          if (data.success) {
+                            setShopifyCredentials(p => ({ ...p, connected: true }));
+                            setToast({ message: `Connected to ${data.shopName || 'Shopify'}!`, type: 'success' });
+                          }
+                        } catch (err) {
+                          setToast({ message: 'Connection failed: ' + err.message, type: 'error' });
+                        }
+                      }}
+                      disabled={!shopifyCredentials.storeUrl || !shopifyCredentials.accessToken}
+                      className="w-full py-3 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:hover:bg-green-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
+                    >
+                      <ShoppingBag className="w-5 h-5" />
+                      Test & Connect
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4">
+                  <h4 className="text-blue-400 font-medium mb-2 flex items-center gap-2">
+                    <HelpCircle className="w-4 h-4" />
+                    How to get your API token
+                  </h4>
+                  <ol className="text-slate-300 text-sm space-y-2">
+                    <li>1. Go to Shopify Admin → Settings → Apps and sales channels → Develop apps</li>
+                    <li>2. Create a custom app and name it (e.g., "Dashboard Sync")</li>
+                    <li>3. Configure Admin API scopes: enable <code className="bg-slate-800 px-1 rounded">read_orders</code> and <code className="bg-slate-800 px-1 rounded">read_products</code></li>
+                    <li>4. Install the app and copy the Admin API access token</li>
+                  </ol>
+                </div>
+              </div>
+            )}
+          </SettingSection>
           
           {/* Inventory Thresholds */}
           <SettingSection title="📦 Inventory Thresholds">
