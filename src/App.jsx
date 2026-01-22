@@ -4233,12 +4233,12 @@ const savePeriods = async (d) => {
   const deletePeriod = (k) => { if (!confirm(`Delete ${k}?`)) return; const u = { ...allPeriodsData }; delete u[k]; setAllPeriodsData(u); savePeriods(u); const r = Object.keys(u).sort().reverse(); if (r.length) setSelectedPeriod(r[0]); else { setUploadTab('period'); setView('upload'); setSelectedPeriod(null); }};
 
   const processInventory = useCallback(() => {
-    if (!invFiles.amazon || !invFiles.threepl || !invSnapshotDate) { alert('Upload files and select date'); return; }
+    if (!invFiles.amazon || !invSnapshotDate) { alert('Upload Amazon FBA file and select date'); return; }
     setIsProcessing(true);
 
     const cogsLookup = { ...savedCogs };
     if (invFiles.cogs) invFiles.cogs.forEach(r => { const s = r['SKU'] || r['sku']; if (s) cogsLookup[s] = parseFloat(r['Cost Per Unit'] || 0); });
-    invFiles.threepl.forEach(r => { const s = r['sku']; const c = parseFloat(r['cost'] || 0); if (s && c && !cogsLookup[s]) cogsLookup[s] = c; });
+    if (invFiles.threepl) invFiles.threepl.forEach(r => { const s = r['sku']; const c = parseFloat(r['cost'] || 0); if (s && c && !cogsLookup[s]) cogsLookup[s] = c; });
 
     // Build Shopify velocity from actual SKU sales data
     const sortedWeeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
@@ -4274,13 +4274,15 @@ const savePeriods = async (d) => {
       if (sku) amzInv[sku] = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel: t30 / 4.3 };
     });
 
-    invFiles.threepl.forEach(r => {
-      const sku = r['sku'] || '', name = r['name'] || '', qty = parseInt(r['quantity_on_hand'] || 0);
-      const inb = parseInt(r['quantity_inbound'] || 0), cost = parseFloat(r['cost'] || 0) || cogsLookup[sku] || 0;
-      if (sku.includes('Bundle') || name.includes('Gift Card') || name.includes('FREE') || qty === 0) return;
-      tplTotal += qty; tplValue += qty * cost; tplInbound += inb;
-      if (sku) tplInv[sku] = { sku, name, total: qty, inbound: inb, cost };
-    });
+    if (invFiles.threepl) {
+      invFiles.threepl.forEach(r => {
+        const sku = r['sku'] || '', name = r['name'] || '', qty = parseInt(r['quantity_on_hand'] || 0);
+        const inb = parseInt(r['quantity_inbound'] || 0), cost = parseFloat(r['cost'] || 0) || cogsLookup[sku] || 0;
+        if (sku.includes('Bundle') || name.includes('Gift Card') || name.includes('FREE') || qty === 0) return;
+        tplTotal += qty; tplValue += qty * cost; tplInbound += inb;
+        if (sku) tplInv[sku] = { sku, name, total: qty, inbound: inb, cost };
+      });
+    }
 
     const allSkus = new Set([...Object.keys(amzInv), ...Object.keys(tplInv)]);
     const items = [];
@@ -16095,10 +16097,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 <FileBox type="amazon" label="Amazon FBA Inventory" desc="Inventory health report" req isInv />
-                <FileBox type="threepl" label="3PL Inventory" desc="Products export" req isInv />
+                <FileBox type="threepl" label="3PL Inventory" desc="Products export (optional - use Shopify Sync instead)" isInv />
               </div>
               
-              <button onClick={processInventory} disabled={isProcessing || !invFiles.amazon || !invFiles.threepl || !invSnapshotDate} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Process Inventory'}</button>
+              <button onClick={processInventory} disabled={isProcessing || !invFiles.amazon || !invSnapshotDate} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Process Inventory'}</button>
             </div>
           )}
           
