@@ -631,68 +631,89 @@ export default async function handler(req, res) {
 
       // Process tax - EXCLUDE Shop Pay orders from tax totals
       // (Shopify remits tax automatically for Shop Pay orders)
+      // BUT still track ALL orders in taxByState for visibility
+      
+      // First, track this order in daily/weekly taxByState regardless of Shop Pay status
+      // This ensures we have complete sales data by state
+      if (stateCode) {
+        // Daily state tracking (ALL orders)
+        if (!dailyData[orderDate].shopify.taxByState[stateCode]) {
+          dailyData[orderDate].shopify.taxByState[stateCode] = { 
+            tax: 0, 
+            sales: 0, 
+            orders: 0,
+            shopPayTax: 0,
+            shopPaySales: 0,
+            shopPayOrders: 0
+          };
+        }
+        dailyData[orderDate].shopify.taxByState[stateCode].sales += orderRevenue - orderDiscount;
+        dailyData[orderDate].shopify.taxByState[stateCode].orders += 1;
+        
+        // Weekly state tracking (ALL orders)
+        if (!weeklyData[weekEnding].shopify.taxByState[stateCode]) {
+          weeklyData[weekEnding].shopify.taxByState[stateCode] = { 
+            tax: 0, 
+            sales: 0, 
+            orders: 0,
+            shopPayTax: 0,
+            shopPaySales: 0,
+            shopPayOrders: 0
+          };
+        }
+        weeklyData[weekEnding].shopify.taxByState[stateCode].sales += orderRevenue - orderDiscount;
+        weeklyData[weekEnding].shopify.taxByState[stateCode].orders += 1;
+        
+        // Global state tracking
+        if (!taxByState[stateCode]) {
+          taxByState[stateCode] = {
+            stateCode,
+            taxCollected: 0,
+            taxableSales: 0,
+            orderCount: 0,
+            excludedShopPayTax: 0,
+            shopPaySales: 0,
+            shopPayOrders: 0,
+          };
+        }
+        taxByState[stateCode].taxableSales += orderRevenue - orderDiscount;
+        taxByState[stateCode].orderCount += 1;
+      }
+      
+      // Now handle tax amounts based on Shop Pay status
       if (isShopPay) {
-        // Track excluded tax for reporting
+        // Track excluded tax for reporting (Shopify remits this)
         dailyData[orderDate].shopify.shopPayOrders += 1;
         dailyData[orderDate].shopify.shopPayTaxExcluded += orderTax;
         weeklyData[weekEnding].shopify.shopPayOrders += 1;
         weeklyData[weekEnding].shopify.shopPayTaxExcluded += orderTax;
         totalShopPayTaxExcluded += orderTax;
         
-        // Also track Shop Pay by state for visibility
+        // Track Shop Pay tax separately by state (for visibility, not filing)
         if (stateCode) {
-          if (!taxByState[stateCode]) {
-            taxByState[stateCode] = {
-              stateCode,
-              taxCollected: 0,
-              taxableSales: 0,
-              orderCount: 0,
-              excludedShopPayTax: 0,
-              shopPaySales: 0,
-              shopPayOrders: 0,
-            };
-          }
+          dailyData[orderDate].shopify.taxByState[stateCode].shopPayTax += orderTax;
+          dailyData[orderDate].shopify.taxByState[stateCode].shopPaySales += orderRevenue - orderDiscount;
+          dailyData[orderDate].shopify.taxByState[stateCode].shopPayOrders += 1;
+          
+          weeklyData[weekEnding].shopify.taxByState[stateCode].shopPayTax += orderTax;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].shopPaySales += orderRevenue - orderDiscount;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].shopPayOrders += 1;
+          
           taxByState[stateCode].excludedShopPayTax += orderTax;
-          taxByState[stateCode].shopPaySales = (taxByState[stateCode].shopPaySales || 0) + (orderRevenue - orderDiscount);
-          taxByState[stateCode].shopPayOrders = (taxByState[stateCode].shopPayOrders || 0) + 1;
+          taxByState[stateCode].shopPaySales += orderRevenue - orderDiscount;
+          taxByState[stateCode].shopPayOrders += 1;
         }
       } else {
-        // Include tax in totals for non-Shop Pay orders
+        // Include tax in totals for non-Shop Pay orders (YOU owe this tax)
         dailyData[orderDate].shopify.taxTotal += orderTax;
         weeklyData[weekEnding].shopify.taxTotal += orderTax;
         totalTaxCollected += orderTax;
         
-        // Track by state for filing purposes - track ALL sales, not just taxed
+        // Add to taxByState for non-Shop Pay (this is what you file)
         if (stateCode) {
-          // Initialize state tracking
-          if (!taxByState[stateCode]) {
-            taxByState[stateCode] = {
-              stateCode,
-              taxCollected: 0,
-              taxableSales: 0,
-              orderCount: 0,
-              excludedShopPayTax: 0,
-            };
-          }
-          taxByState[stateCode].taxCollected += orderTax;
-          taxByState[stateCode].taxableSales += orderRevenue - orderDiscount;
-          taxByState[stateCode].orderCount += 1;
-          
-          // Daily state tracking
-          if (!dailyData[orderDate].shopify.taxByState[stateCode]) {
-            dailyData[orderDate].shopify.taxByState[stateCode] = { tax: 0, sales: 0, orders: 0 };
-          }
           dailyData[orderDate].shopify.taxByState[stateCode].tax += orderTax;
-          dailyData[orderDate].shopify.taxByState[stateCode].sales += orderRevenue - orderDiscount;
-          dailyData[orderDate].shopify.taxByState[stateCode].orders += 1;
-          
-          // Weekly state tracking
-          if (!weeklyData[weekEnding].shopify.taxByState[stateCode]) {
-            weeklyData[weekEnding].shopify.taxByState[stateCode] = { tax: 0, sales: 0, orders: 0 };
-          }
           weeklyData[weekEnding].shopify.taxByState[stateCode].tax += orderTax;
-          weeklyData[weekEnding].shopify.taxByState[stateCode].sales += orderRevenue - orderDiscount;
-          weeklyData[weekEnding].shopify.taxByState[stateCode].orders += 1;
+          taxByState[stateCode].taxCollected += orderTax;
         }
       }
 
