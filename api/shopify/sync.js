@@ -547,13 +547,28 @@ export default async function handler(req, res) {
     // Only actual "shop_pay" orders have tax remitted by Shopify
     const isShopPayOrder = (order) => {
       const gateways = order.payment_gateway_names || [];
-      return gateways.some(g => {
-        const lower = g.toLowerCase();
-        // Only match actual Shop Pay, not regular Shopify Payments (credit cards)
-        return lower === 'shop_pay' || 
-               lower.includes('shop_pay') ||
-               lower === 'shop pay';
+      const sourceName = (order.source_name || '').toLowerCase();
+      const tags = (order.tags || '').toLowerCase();
+      
+      // Check payment gateways
+      const hasShopPayGateway = gateways.some(g => {
+        const lower = g.toLowerCase().replace(/[\s_-]/g, '');
+        return lower === 'shoppay' || 
+               lower.includes('shoppay') ||
+               lower === 'shopifyinstallments' ||
+               lower.includes('shopifyinstallments');
       });
+      
+      // Also check source_name and tags for Shop Pay indicators
+      const hasShopPaySource = sourceName.includes('shop_pay') || 
+                               sourceName.includes('shoppay') ||
+                               tags.includes('shop_pay') ||
+                               tags.includes('shoppay');
+      
+      // Check if payment was processed through Shop Pay Installments
+      const hasInstallments = order.payment_terms?.payment_terms_type === 'INSTALLMENTS';
+      
+      return hasShopPayGateway || hasShopPaySource || hasInstallments;
     };
     
     // Helper to get state code from order
