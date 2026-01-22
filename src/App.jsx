@@ -7792,6 +7792,7 @@ Analyze the data and respond with ONLY this JSON:
               <p className="text-slate-500 text-xs uppercase mb-1">{isAmz ? 'Fees' : '3PL Costs'}</p>
               <p className="text-lg font-semibold text-white">{formatCurrency(isAmz ? data.fees : data.threeplCosts)}</p>
               {has3plData && <button onClick={() => setShow3plBreakdown(!show3plBreakdown)} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"><Truck className="w-3 h-3" />{show3plBreakdown ? 'Hide Details' : 'View Details'}</button>}
+              {!isAmz && data.threeplMetrics?.isProrated && <span className="text-xs text-amber-400">~estimated</span>}
             </div>
             <div><p className="text-slate-500 text-xs uppercase mb-1">Ad Spend</p><p className="text-lg font-semibold text-white">{formatCurrency(data.adSpend)}</p></div>
             <div><p className="text-slate-500 text-xs uppercase mb-1">TACOS</p><p className="text-lg font-semibold text-white">{(data.roas || 0).toFixed(2)}x</p></div>
@@ -16593,11 +16594,78 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     const metaCTR = dayData.metaCtr || (metaImpressions > 0 ? (metaClicks / metaImpressions) * 100 : 0);
     const metaCPC = dayData.metaCpc || (metaClicks > 0 ? metaSpend / metaClicks : 0);
     
-    // Get 3PL costs from ledger first, then fallback to dayData/shopify
-    const ledger3PL = get3PLForDay(threeplLedger, selectedDay);
-    const threeplCosts = ledger3PL?.metrics?.totalCost || shopify.threeplCosts || dayData.threeplCosts || 0;
-    const threeplBreakdown = ledger3PL?.breakdown || shopify.threeplBreakdown || dayData.threeplBreakdown || {};
-    const threeplMetrics = ledger3PL?.metrics || shopify.threeplMetrics || dayData.threeplMetrics || {};
+    // Get 3PL costs from ledger first (exact day match), then try week ledger, then weekly data, then fallback
+    const ledger3PLDay = get3PLForDay(threeplLedger, selectedDay);
+    // Calculate the week key (Sunday) for this day
+    const weekKey = getSunday(new Date(selectedDay + 'T12:00:00'));
+    const ledger3PLWeek = !ledger3PLDay ? get3PLForWeek(threeplLedger, weekKey) : null;
+    const weekData = allWeeksData[weekKey];
+    
+    // Use day data if available, otherwise prorate week data
+    let threeplCosts = 0;
+    let threeplBreakdown = {};
+    let threeplMetrics = {};
+    
+    if (ledger3PLDay && ledger3PLDay.metrics.totalCost > 0) {
+      // Exact day match from ledger
+      threeplCosts = ledger3PLDay.metrics.totalCost;
+      threeplBreakdown = ledger3PLDay.breakdown;
+      threeplMetrics = ledger3PLDay.metrics;
+    } else if (ledger3PLWeek && ledger3PLWeek.metrics.totalCost > 0) {
+      // Prorate from week ledger data
+      const weekShopifyUnits = weekData?.shopify?.units || 0;
+      const dayShopifyUnits = shopify.units || 0;
+      const ratio = weekShopifyUnits > 0 && dayShopifyUnits > 0 
+        ? dayShopifyUnits / weekShopifyUnits 
+        : 1/7;
+      
+      threeplCosts = ledger3PLWeek.metrics.totalCost * ratio;
+      threeplBreakdown = {
+        storage: (ledger3PLWeek.breakdown.storage || 0) * ratio,
+        shipping: (ledger3PLWeek.breakdown.shipping || 0) * ratio,
+        pickFees: (ledger3PLWeek.breakdown.pickFees || 0) * ratio,
+        boxCharges: (ledger3PLWeek.breakdown.boxCharges || 0) * ratio,
+        receiving: (ledger3PLWeek.breakdown.receiving || 0) * ratio,
+        other: (ledger3PLWeek.breakdown.other || 0) * ratio,
+      };
+      threeplMetrics = {
+        ...ledger3PLWeek.metrics,
+        totalCost: threeplCosts,
+        orderCount: Math.round(ledger3PLWeek.metrics.orderCount * ratio),
+        totalUnits: Math.round(ledger3PLWeek.metrics.totalUnits * ratio),
+        isProrated: true,
+      };
+    } else if (weekData?.shopify?.threeplCosts > 0) {
+      // Use weekly processed data's 3PL costs (prorate by units)
+      const weekShopifyUnits = weekData.shopify.units || 0;
+      const dayShopifyUnits = shopify.units || 0;
+      const ratio = weekShopifyUnits > 0 && dayShopifyUnits > 0 
+        ? dayShopifyUnits / weekShopifyUnits 
+        : 1/7;
+      
+      const weekThreepl = weekData.shopify;
+      threeplCosts = weekThreepl.threeplCosts * ratio;
+      threeplBreakdown = weekThreepl.threeplBreakdown ? {
+        storage: (weekThreepl.threeplBreakdown.storage || 0) * ratio,
+        shipping: (weekThreepl.threeplBreakdown.shipping || 0) * ratio,
+        pickFees: (weekThreepl.threeplBreakdown.pickFees || 0) * ratio,
+        boxCharges: (weekThreepl.threeplBreakdown.boxCharges || 0) * ratio,
+        receiving: (weekThreepl.threeplBreakdown.receiving || 0) * ratio,
+        other: (weekThreepl.threeplBreakdown.other || 0) * ratio,
+      } : {};
+      threeplMetrics = weekThreepl.threeplMetrics ? {
+        ...weekThreepl.threeplMetrics,
+        totalCost: threeplCosts,
+        orderCount: Math.round((weekThreepl.threeplMetrics.orderCount || 0) * ratio),
+        totalUnits: Math.round((weekThreepl.threeplMetrics.totalUnits || 0) * ratio),
+        isProrated: true,
+      } : { totalCost: threeplCosts, isProrated: true };
+    } else {
+      // Fallback to stored day data
+      threeplCosts = shopify.threeplCosts || dayData.threeplCosts || 0;
+      threeplBreakdown = shopify.threeplBreakdown || dayData.threeplBreakdown || {};
+      threeplMetrics = shopify.threeplMetrics || dayData.threeplMetrics || {};
+    }
     
     // Build proper data structures for ChannelCard component
     const amazonData = {
