@@ -1255,6 +1255,7 @@ const handleLogout = async () => {
   const [showBankingUpload, setShowBankingUpload] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState(null); // Transaction being edited
   const [bankingDrilldown, setBankingDrilldown] = useState(null); // { category: string, type: 'expense'|'income' } for drill-down view
+  const [editingAccountBalance, setEditingAccountBalance] = useState(null); // { name: string, balance: number } for manual balance edit
   const [confirmedRecurring, setConfirmedRecurring] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('ecommerce_recurring_v1')) || {};
@@ -2247,7 +2248,9 @@ const combinedData = useMemo(() => ({
   bankingData,
   // Recurring expenses
   confirmedRecurring,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, weeklyReports, aiMessages, bankingData, confirmedRecurring]);
+  // Shopify Integration credentials
+  shopifyCredentials,
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -2314,6 +2317,12 @@ const loadFromLocal = useCallback(() => {
   try {
     const r = lsGet(THREEPL_LEDGER_KEY);
     if (r) setThreeplLedger(JSON.parse(r));
+  } catch {}
+
+  // Load Shopify credentials from localStorage
+  try {
+    const r = lsGet('ecommerce_shopify_creds_v1');
+    if (r) setShopifyCredentials(JSON.parse(r));
   } catch {}
 }, []);
 
@@ -2407,7 +2416,16 @@ useEffect(() => {
   if (!session?.user?.id || !supabase) return;
   if (isLoadingDataRef.current) return; // Don't sync during initial load
   queueCloudSave(combinedData);
-}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring]);
+}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, shopifyCredentials]);
+
+// Persist Shopify credentials to localStorage for offline backup
+useEffect(() => {
+  if (shopifyCredentials.storeUrl || shopifyCredentials.connected) {
+    try {
+      lsSet('ecommerce_shopify_creds_v1', JSON.stringify(shopifyCredentials));
+    } catch {}
+  }
+}, [shopifyCredentials]);
 
 const loadFromCloud = useCallback(async (storeId = null) => {
   if (!supabase || !session?.user?.id) return { ok: false, stores: [] };
@@ -2507,6 +2525,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages) setAiMessages(cloud.aiMessages);
     if (cloud.bankingData) setBankingData(cloud.bankingData);
     if (cloud.confirmedRecurring) setConfirmedRecurring(cloud.confirmedRecurring);
+    if (cloud.shopifyCredentials) setShopifyCredentials(cloud.shopifyCredentials);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -2540,6 +2559,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages && cloud.aiMessages.length > 0) writeToLocal('ecommerce_ai_chat_history_v1', JSON.stringify(cloud.aiMessages));
     if (cloud.bankingData) writeToLocal('ecommerce_banking_v1', JSON.stringify(cloud.bankingData));
     if (cloud.confirmedRecurring) writeToLocal('ecommerce_recurring_v1', JSON.stringify(cloud.confirmedRecurring));
+    if (cloud.shopifyCredentials) writeToLocal('ecommerce_shopify_creds_v1', JSON.stringify(cloud.shopifyCredentials));
 
     setCloudStatus('');
     return { ok: true, stores: loadedStores };
@@ -2604,6 +2624,8 @@ const createStore = useCallback(async (name) => {
       categoryOverrides: {},
       settings: {},
     },
+    // Shopify credentials for new store
+    shopifyCredentials: { storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null },
   };
   
   // Save to cloud immediately with the new stores list
@@ -26668,7 +26690,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                   daysWithData++;
                   Object.entries(dayData.shopify.taxByState).forEach(([stateCode, stateTax]) => {
                     if (!taxByStateMap[stateCode]) {
-                      taxByStateMap[stateCode] = { tax: 0, sales: 0, orders: 0 };
+                      taxByStateMap[stateCode] = { 
+                        tax: 0, 
+                        sales: 0, 
+                        orders: 0,
+                        shopPayTax: 0,
+                        shopPaySales: 0,
+                        shopPayOrders: 0
+                      };
                     }
                     // Handle both old format (number) and new format (object)
                     if (typeof stateTax === 'number') {
@@ -26677,6 +26706,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       taxByStateMap[stateCode].tax += stateTax.tax || 0;
                       taxByStateMap[stateCode].sales += stateTax.sales || 0;
                       taxByStateMap[stateCode].orders += stateTax.orders || 0;
+                      // New Shop Pay breakdown
+                      taxByStateMap[stateCode].shopPayTax += stateTax.shopPayTax || 0;
+                      taxByStateMap[stateCode].shopPaySales += stateTax.shopPaySales || 0;
+                      taxByStateMap[stateCode].shopPayOrders += stateTax.shopPayOrders || 0;
                     }
                   });
                   totalTax += dayData.shopify.taxTotal || 0;
@@ -26686,8 +26719,24 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               
               return {
                 byState: Object.entries(taxByStateMap)
-                  .map(([code, data]) => ({ stateCode: code, stateName: US_STATES_TAX_INFO[code]?.name || code, ...data }))
-                  .sort((a, b) => b.tax - a.tax),
+                  .map(([code, data]) => ({ 
+                    stateCode: code, 
+                    stateName: US_STATES_TAX_INFO[code]?.name || code, 
+                    // Total sales and orders (Shop Pay + non-Shop Pay)
+                    totalSales: data.sales + data.shopPaySales,
+                    totalOrders: data.orders + data.shopPayOrders,
+                    totalTax: data.tax + data.shopPayTax,
+                    // What YOU owe (non-Shop Pay only)
+                    taxOwed: data.tax,
+                    salesYouOwe: data.sales,
+                    ordersYouOwe: data.orders,
+                    // Shop Pay (Shopify remits this)
+                    shopPayTax: data.shopPayTax,
+                    shopPaySales: data.shopPaySales,
+                    shopPayOrders: data.shopPayOrders,
+                    ...data 
+                  }))
+                  .sort((a, b) => b.totalSales - a.totalSales), // Sort by total sales
                 totalTax,
                 shopPayExcluded,
                 daysWithData,
@@ -26846,14 +26895,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                 : taxPeriodValue.split('-')[0];
                               
                               // Create CSV with all fields states typically need
-                              let csv = 'State,State Code,Gross Sales,Taxable Sales,Tax Collected,Order Count,Has Nexus,Period,Start Date,End Date\n';
+                              let csv = 'State,State Code,Total Sales,Total Tax,Tax You Owe,Shop Pay Tax (Shopify Remits),Total Orders,Has Nexus,Period,Start Date,End Date\n';
                               taxData.byState.forEach(state => {
                                 const hasNexus = nexusStates[state.stateCode]?.hasNexus ? 'Yes' : 'No';
-                                csv += `"${state.stateName}",${state.stateCode},${(state.sales || 0).toFixed(2)},${(state.sales || 0).toFixed(2)},${(state.tax || 0).toFixed(2)},${state.orders || 0},${hasNexus},"${periodLabel}",${start},${end}\n`;
+                                const totalSales = state.totalSales || state.sales || 0;
+                                const totalTax = state.totalTax || state.tax || 0;
+                                const taxOwed = state.taxOwed || state.tax || 0;
+                                const shopPayTax = state.shopPayTax || 0;
+                                const totalOrders = state.totalOrders || state.orders || 0;
+                                csv += `"${state.stateName}",${state.stateCode},${totalSales.toFixed(2)},${totalTax.toFixed(2)},${taxOwed.toFixed(2)},${shopPayTax.toFixed(2)},${totalOrders},${hasNexus},"${periodLabel}",${start},${end}\n`;
                               });
-                              csv += `"TOTAL",,${taxData.byState.reduce((s, st) => s + (st.sales || 0), 0).toFixed(2)},${taxData.byState.reduce((s, st) => s + (st.sales || 0), 0).toFixed(2)},${taxData.totalTax.toFixed(2)},${taxData.byState.reduce((s, st) => s + (st.orders || 0), 0)},,"${periodLabel}",${start},${end}\n`;
-                              csv += '\n"Note: Shop Pay tax excluded - Shopify remits automatically"\n';
-                              csv += `"Shop Pay Tax Excluded:",${taxData.shopPayExcluded.toFixed(2)}\n`;
+                              const grandTotalSales = taxData.byState.reduce((s, st) => s + (st.totalSales || st.sales || 0), 0);
+                              const grandTotalTax = taxData.byState.reduce((s, st) => s + (st.totalTax || st.tax || 0), 0);
+                              const grandTotalOrders = taxData.byState.reduce((s, st) => s + (st.totalOrders || st.orders || 0), 0);
+                              csv += `"TOTAL",,${grandTotalSales.toFixed(2)},${grandTotalTax.toFixed(2)},${taxData.totalTax.toFixed(2)},${taxData.shopPayExcluded.toFixed(2)},${grandTotalOrders},,"${periodLabel}",${start},${end}\n`;
+                              csv += '\n"Tax You Owe = What you need to file and pay yourself"\n';
+                              csv += '"Shop Pay Tax = Shopify already collected and remits this for you"\n';
+                              csv += '"Total Sales = All orders (use for nexus threshold tracking)"\n';
                               
                               const blob = new Blob([csv], { type: 'text/csv' });
                               const url = URL.createObjectURL(blob);
@@ -26874,8 +26932,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           <thead>
                             <tr className="border-b border-slate-700">
                               <th className="text-left text-slate-400 py-2 px-2">State</th>
-                              <th className="text-right text-slate-400 py-2 px-2">YOU OWE</th>
-                              <th className="text-right text-slate-400 py-2 px-2">Taxable Sales</th>
+                              <th className="text-right text-slate-400 py-2 px-2">Total Sales</th>
+                              <th className="text-right text-slate-400 py-2 px-2">Total Tax</th>
+                              <th className="text-right text-slate-400 py-2 px-2">
+                                <span className="text-rose-400">YOU OWE</span>
+                              </th>
+                              <th className="text-right text-slate-400 py-2 px-2">
+                                <span className="text-emerald-400" title="Shopify remits this for you">Shop Pay ✓</span>
+                              </th>
                               <th className="text-right text-slate-400 py-2 px-2">Orders</th>
                               <th className="text-center text-slate-400 py-2 px-2">Status</th>
                             </tr>
@@ -26883,18 +26947,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           <tbody>
                             {taxData.byState.map(state => {
                               const hasNexus = nexusStates[state.stateCode]?.hasNexus;
-                              const owes = state.tax > 0;
+                              const owes = state.taxOwed > 0;
+                              const hasShopPay = state.shopPayTax > 0;
                               return (
                                 <tr key={state.stateCode} className={`border-b border-slate-700/50 ${owes && hasNexus ? 'bg-rose-900/20' : 'hover:bg-slate-800/50'}`}>
                                   <td className="py-2 px-2">
                                     <span className="text-white font-medium">{state.stateName}</span>
                                     <span className="text-slate-500 ml-2 text-xs">{state.stateCode}</span>
                                   </td>
+                                  <td className="py-2 px-2 text-right text-slate-300">{formatCurrency(state.totalSales || state.sales || 0)}</td>
+                                  <td className="py-2 px-2 text-right text-slate-400">{formatCurrency(state.totalTax || state.tax || 0)}</td>
                                   <td className={`py-2 px-2 text-right font-bold ${owes ? 'text-rose-400' : 'text-slate-500'}`}>
-                                    {owes ? formatCurrency(state.tax) : '—'}
+                                    {owes ? formatCurrency(state.taxOwed || state.tax) : '—'}
                                   </td>
-                                  <td className="py-2 px-2 text-right text-slate-300">{formatCurrency(state.sales)}</td>
-                                  <td className="py-2 px-2 text-right text-slate-400">{state.orders}</td>
+                                  <td className={`py-2 px-2 text-right ${hasShopPay ? 'text-emerald-400' : 'text-slate-600'}`}>
+                                    {hasShopPay ? formatCurrency(state.shopPayTax) : '—'}
+                                  </td>
+                                  <td className="py-2 px-2 text-right text-slate-400">{state.totalOrders || state.orders || 0}</td>
                                   <td className="py-2 px-2 text-center">
                                     {hasNexus ? (
                                       <span className="text-xs bg-rose-600/80 text-white px-2 py-0.5 rounded font-medium">NEXUS</span>
@@ -26915,10 +26984,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           </tbody>
                           <tfoot>
                             <tr className="border-t-2 border-rose-500/50 bg-rose-900/10">
-                              <td className="py-3 px-2 font-bold text-white">TOTAL YOU OWE</td>
-                              <td className="py-3 px-2 text-right font-bold text-2xl text-rose-400">{formatCurrency(taxData.totalTax)}</td>
-                              <td className="py-3 px-2 text-right text-slate-300 font-medium">{formatCurrency(taxData.byState.reduce((s, st) => s + st.sales, 0))}</td>
-                              <td className="py-3 px-2 text-right text-slate-400">{taxData.byState.reduce((s, st) => s + st.orders, 0)}</td>
+                              <td className="py-3 px-2 font-bold text-white">TOTAL</td>
+                              <td className="py-3 px-2 text-right text-slate-300 font-medium">{formatCurrency(taxData.byState.reduce((s, st) => s + (st.totalSales || st.sales || 0), 0))}</td>
+                              <td className="py-3 px-2 text-right text-slate-400">{formatCurrency(taxData.byState.reduce((s, st) => s + (st.totalTax || st.tax || 0), 0))}</td>
+                              <td className="py-3 px-2 text-right font-bold text-xl text-rose-400">{formatCurrency(taxData.totalTax)}</td>
+                              <td className="py-3 px-2 text-right text-emerald-400">{formatCurrency(taxData.shopPayExcluded)}</td>
+                              <td className="py-3 px-2 text-right text-slate-400">{taxData.byState.reduce((s, st) => s + (st.totalOrders || st.orders || 0), 0)}</td>
                               <td></td>
                             </tr>
                           </tfoot>
@@ -26926,8 +26997,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       </div>
                         <div className="mt-4 p-3 bg-slate-800/50 rounded-lg">
                           <p className="text-slate-400 text-xs">
-                            💡 <strong className="text-slate-300">Filing Tips:</strong> Most states need Gross Sales, Taxable Sales, and Tax Collected. 
-                            Use the Export button to get a CSV formatted for filing. Shop Pay orders are excluded because Shopify auto-remits that tax.
+                            💡 <strong className="text-rose-300">YOU OWE</strong> = Tax you must file/pay yourself. 
+                            <strong className="text-emerald-300 ml-2">Shop Pay ✓</strong> = Shopify already collected and remits this tax for you.
+                            Total Sales includes all orders for nexus threshold tracking.
                           </p>
                         </div>
                       </>
@@ -27473,16 +27545,24 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         const categories = {};
         const monthlySnapshots = {};
         
+        // Track net change from new transactions for each account
+        const newTxnNetByAccount = {};
+        
         mergedTransactions.forEach(txn => {
           // Account aggregates
           if (!accounts[txn.account]) {
+            // Start with existing balance if we have prior data, otherwise use parsed balance
+            const existingBalance = bankingData.accounts?.[txn.account]?.balance;
+            const existingInitialBalance = bankingData.accounts?.[txn.account]?.initialBalance;
             accounts[txn.account] = { 
               name: txn.account, 
               type: txn.accountType, 
               transactions: 0, 
               totalIn: 0, 
               totalOut: 0,
-              balance: parsed.accounts[txn.account]?.balance || bankingData.accounts?.[txn.account]?.balance || 0,
+              // Preserve initial balance if set, or use existing balance as starting point
+              initialBalance: existingInitialBalance ?? existingBalance ?? 0,
+              balance: existingBalance ?? parsed.accounts[txn.account]?.balance ?? 0,
             };
           }
           accounts[txn.account].transactions++;
@@ -27510,12 +27590,42 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           }
         });
         
-        // Update account balances from new upload (most current)
-        Object.entries(parsed.accounts).forEach(([name, acct]) => {
-          if (accounts[name] && acct.balance) {
-            accounts[name].balance = acct.balance;
-          }
-        });
+        // Update account balances properly:
+        // - If balance was manually set, preserve it and add net of new transactions
+        // - If we had existing data, add the NET of new transactions to existing balance
+        // - If this is first upload, use parsed balance from QBO
+        if (bankingData.transactions?.length > 0 && newCount > 0) {
+          // Calculate net change from NEW transactions only
+          const newTxns = parsed.transactions.filter(t => !new Set(bankingData.transactions.map(bt => bt.id)).has(t.id));
+          const netByAccount = {};
+          newTxns.forEach(txn => {
+            if (!netByAccount[txn.account]) netByAccount[txn.account] = 0;
+            if (txn.isIncome) netByAccount[txn.account] += txn.amount;
+            if (txn.isExpense) netByAccount[txn.account] -= txn.amount;
+          });
+          
+          // Apply net change to existing balances
+          Object.entries(netByAccount).forEach(([acctName, netChange]) => {
+            if (accounts[acctName]) {
+              const existingBal = bankingData.accounts?.[acctName]?.balance || 0;
+              const wasManuallySet = bankingData.accounts?.[acctName]?.balanceManuallySet;
+              accounts[acctName].balance = existingBal + netChange;
+              // Preserve manual set flag
+              if (wasManuallySet) {
+                accounts[acctName].balanceManuallySet = true;
+                accounts[acctName].balanceSetDate = bankingData.accounts[acctName].balanceSetDate;
+              }
+            }
+          });
+        } else {
+          // First upload - use parsed balances (net of transactions in report)
+          // User may need to set initial balance manually
+          Object.entries(parsed.accounts).forEach(([name, acct]) => {
+            if (accounts[name]) {
+              accounts[name].balance = acct.balance || 0;
+            }
+          });
+        }
         
         // Calculate date range
         const dates = mergedTransactions.map(t => t.date).sort();
@@ -27741,15 +27851,24 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               <span className="text-white text-sm">{shortName}</span>
                               <span className="text-slate-500 text-xs">({acct.transactions} txns)</span>
                             </div>
-                            <span className={`font-bold ${isCard ? 'text-rose-400' : 'text-emerald-400'}`}>
-                              {formatCurrency(balance)}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className={`font-bold ${isCard ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                {formatCurrency(balance)}
+                              </span>
+                              <button
+                                onClick={() => setEditingAccountBalance({ name, balance: Math.abs(balance), isCard })}
+                                className="p-1 text-slate-500 hover:text-white hover:bg-slate-700 rounded transition-colors"
+                                title="Edit balance"
+                              >
+                                <Settings className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </div>
                         );
                       })}
                     </div>
                     <p className="text-xs text-slate-500 mt-3 text-center">
-                      Balances as of QBO export • Re-upload for latest
+                      Click ⚙️ to manually correct balances • Re-upload QBO for latest transactions
                     </p>
                   </div>
                 );
@@ -28736,6 +28855,81 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         className="flex-1 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium"
                       >
                         Save Category
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {/* Account Balance Edit Modal */}
+              {editingAccountBalance && (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                  <div className="bg-slate-800 rounded-xl border border-slate-600 p-6 max-w-md w-full">
+                    <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      {editingAccountBalance.isCard ? <CreditCard className="w-5 h-5 text-rose-400" /> : <Wallet className="w-5 h-5 text-emerald-400" />}
+                      Edit Account Balance
+                    </h3>
+                    <p className="text-slate-400 text-sm mb-4">
+                      {editingAccountBalance.name?.split('(')[0]?.trim()}
+                    </p>
+                    <div className="mb-4">
+                      <label className="block text-sm text-slate-400 mb-1">
+                        Current Balance {editingAccountBalance.isCard ? '(amount owed)' : '(available)'}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-400">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          id="account-balance-input"
+                          defaultValue={editingAccountBalance.balance.toFixed(2)}
+                          className="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <p className="text-xs text-slate-500 mt-2">
+                        Enter the actual balance from your bank/card statement
+                      </p>
+                    </div>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => setEditingAccountBalance(null)}
+                        className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => {
+                          const newBalance = parseFloat(document.getElementById('account-balance-input').value) || 0;
+                          // For credit cards, store as positive (debt owed)
+                          const finalBalance = editingAccountBalance.isCard ? newBalance : newBalance;
+                          
+                          // Update bankingData with new balance
+                          const updatedAccounts = { ...bankingData.accounts };
+                          if (updatedAccounts[editingAccountBalance.name]) {
+                            updatedAccounts[editingAccountBalance.name] = {
+                              ...updatedAccounts[editingAccountBalance.name],
+                              balance: finalBalance,
+                              balanceManuallySet: true,
+                              balanceSetDate: new Date().toISOString(),
+                            };
+                          }
+                          
+                          const newBankingData = {
+                            ...bankingData,
+                            accounts: updatedAccounts,
+                          };
+                          
+                          setBankingData(newBankingData);
+                          localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+                          queueCloudSave({ ...combinedData, bankingData: newBankingData });
+                          
+                          setToast({ message: `Balance updated for ${editingAccountBalance.name.split('(')[0].trim()}`, type: 'success' });
+                          setEditingAccountBalance(null);
+                        }}
+                        className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white font-medium"
+                      >
+                        Save Balance
                       </button>
                     </div>
                   </div>
