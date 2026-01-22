@@ -17017,7 +17017,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             const mergedItems = data.items.map(item => {
                               const existing = existingItemsBySku[item.sku] || {};
                               // Use COGS if available, then Shopify cost, then existing cost
-                              const cost = savedCogs[item.sku]?.cost || item.cost || existing.cost || 0;
+                              // savedCogs stores cost directly as number: savedCogs[sku] = 3.97
+                              const cogsCost = typeof savedCogs[item.sku] === 'number' ? savedCogs[item.sku] : (savedCogs[item.sku]?.cost || 0);
+                              const cost = cogsCost || item.cost || existing.cost || 0;
                               // Preserve Amazon quantities from existing data
                               const amazonQty = existing.amazonQty || 0;
                               const amazonInbound = existing.amazonInbound || 0;
@@ -17049,7 +17051,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             // (These might be Amazon-only products)
                             Object.entries(existingItemsBySku).forEach(([sku, existing]) => {
                               if (!mergedItems.find(i => i.sku === sku) && (existing.amazonQty > 0 || existing.amazonInbound > 0)) {
-                                const cost = savedCogs[sku]?.cost || existing.cost || 0;
+                                const cogsCost = typeof savedCogs[sku] === 'number' ? savedCogs[sku] : (savedCogs[sku]?.cost || 0);
+                                const cost = cogsCost || existing.cost || 0;
                                 mergedItems.push({
                                   ...existing,
                                   cost: cost,
