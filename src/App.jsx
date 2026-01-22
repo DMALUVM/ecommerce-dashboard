@@ -8,34 +8,73 @@ const loadXLSX = async () => {
   if (XLSX) return XLSX;
   if (window.XLSX) { XLSX = window.XLSX; return XLSX; }
   
-  return new Promise((resolve, reject) => {
+  const loadScript = (src, integrity = null) => new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = 'https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js';
+    script.src = src;
+    script.crossOrigin = 'anonymous';
+    if (integrity) script.integrity = integrity;
     script.onload = () => { XLSX = window.XLSX; resolve(XLSX); };
     script.onerror = reject;
     document.head.appendChild(script);
   });
+  
+  // Try primary CDN first, fallback to secondary
+  try {
+    return await loadScript(
+      'https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js'
+    );
+  } catch {
+    // Fallback to cdnjs if primary fails
+    return await loadScript(
+      'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+      'sha512-5qGFH9V9GqAH7BTKxqDBFQQj7DrHLRddBHPpHEHMDvO7L7NxBPjL7Wd7Mt981LVs9F/VGBI4RlnGJbxPzRIGlA=='
+    );
+  }
 };
 
 const parseCSV = (text) => {
-  const lines = text.split('\n').filter(line => line.trim());
+  // Normalize line endings (CRLF → LF) and remove BOM
+  const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = normalized.split('\n').filter(line => line.trim());
   if (lines.length === 0) return [];
   const headers = parseCSVLine(lines[0]);
   return lines.slice(1).map(line => {
     const values = parseCSVLine(line);
     const obj = {};
-    headers.forEach((header, i) => { obj[header.trim().replace(/^\uFEFF/, '')] = values[i]?.trim() || ''; });
+    headers.forEach((header, i) => { obj[header.trim()] = values[i]?.trim() || ''; });
     return obj;
   });
 };
 
 const parseCSVLine = (line) => {
-  const result = []; let current = '', inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
+  const result = []; 
+  let current = '', inQuotes = false, i = 0;
+  while (i < line.length) {
     const char = line[i];
-    if (char === '"') inQuotes = !inQuotes;
-    else if (char === ',' && !inQuotes) { result.push(current); current = ''; }
-    else current += char;
+    if (inQuotes) {
+      if (char === '"') {
+        // Check for escaped quote ("")
+        if (line[i + 1] === '"') {
+          current += '"';
+          i += 2;
+          continue;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === ',') {
+        result.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    i++;
   }
   result.push(current);
   return result;
