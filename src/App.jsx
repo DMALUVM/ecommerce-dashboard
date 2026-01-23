@@ -8880,18 +8880,58 @@ Respond with ONLY this JSON:
         return;
       }
       
-      const currentInventory = (invHistory[latestInvKey]?.items || []).map(item => ({
-        sku: item.sku,
-        name: savedProductNames[item.sku] || item.name || item.sku,
-        currentStock: item.totalQty || 0,
-        amazonStock: item.amazonQty || 0,
-        threeplStock: item.threeplQty || 0,
-        weeklyVelocity: item.weeklyVel || 0,
-        daysOfSupply: item.daysOfSupply || 0,
-        health: item.health,
-        leadTimeDays: getLeadTime(item.sku),
-        cost: savedCogs[item.sku] || item.cost || 0,
-      }));
+      // Pre-calculate stockout dates - don't rely on AI for date math
+      const today = new Date();
+      const currentInventory = (invHistory[latestInvKey]?.items || []).map(item => {
+        const currentStock = item.totalQty || 0;
+        const weeklyVelocity = item.weeklyVel || 0;
+        const dailyVelocity = weeklyVelocity / 7;
+        const daysOfSupply = dailyVelocity > 0 ? Math.round(currentStock / dailyVelocity) : 999;
+        const leadTimeDays = getLeadTime(item.sku);
+        
+        // Calculate stockout date: today + days of supply
+        let stockoutDate = null;
+        if (dailyVelocity > 0 && daysOfSupply < 365) {
+          const stockout = new Date(today);
+          stockout.setDate(stockout.getDate() + daysOfSupply);
+          stockoutDate = stockout.toISOString().split('T')[0];
+        }
+        
+        // Calculate reorder date: stockout date - lead time
+        let reorderByDate = null;
+        if (stockoutDate && leadTimeDays > 0) {
+          const reorderBy = new Date(stockoutDate);
+          reorderBy.setDate(reorderBy.getDate() - leadTimeDays - (leadTimeSettings.reorderBuffer || 7));
+          reorderByDate = reorderBy.toISOString().split('T')[0];
+        }
+        
+        // Determine urgency based on days until reorder needed
+        let calculatedUrgency = 'healthy';
+        if (reorderByDate) {
+          const daysUntilReorder = Math.ceil((new Date(reorderByDate) - today) / (1000 * 60 * 60 * 24));
+          if (daysUntilReorder < 0) calculatedUrgency = 'critical'; // Already past reorder date
+          else if (daysUntilReorder < 7) calculatedUrgency = 'critical';
+          else if (daysUntilReorder < 14) calculatedUrgency = 'reorder';
+          else if (daysUntilReorder < 30) calculatedUrgency = 'monitor';
+        }
+        
+        return {
+          sku: item.sku,
+          name: savedProductNames[item.sku] || item.name || item.sku,
+          currentStock,
+          amazonStock: item.amazonQty || 0,
+          threeplStock: item.threeplQty || 0,
+          weeklyVelocity: Math.round(weeklyVelocity * 10) / 10,
+          dailyVelocity: Math.round(dailyVelocity * 10) / 10,
+          daysOfSupply,
+          stockoutDate,
+          reorderByDate,
+          calculatedUrgency,
+          health: item.health,
+          leadTimeDays,
+          cost: savedCogs[item.sku] || item.cost || 0,
+        };
+      });
       
       // Get production pipeline
       const pendingProduction = productionPipeline.map(p => ({
@@ -8901,26 +8941,27 @@ Respond with ONLY this JSON:
         daysUntilArrival: Math.ceil((new Date(p.expectedDate) - new Date()) / (1000 * 60 * 60 * 24)),
       }));
       
-      const prompt = `You are an expert inventory planner. Analyze current stock levels, velocity, lead times, and pending production to provide reorder recommendations.
+      const prompt = `You are an expert inventory planner. Review the pre-calculated inventory analysis and provide reorder recommendations.
 
-## TODAY'S DATE: ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+## TODAY'S DATE: ${today.toISOString().split('T')[0]}
 
 ## LEAD TIME SETTINGS
 Default Lead Time: ${leadTimeSettings.defaultLeadTimeDays} days
 Reorder Buffer: ${leadTimeSettings.reorderBuffer} days (extra safety margin)
 
-## CURRENT INVENTORY (${currentInventory.length} SKUs)
+## CURRENT INVENTORY (${currentInventory.length} SKUs) - STOCKOUT DATES PRE-CALCULATED
 ${JSON.stringify(currentInventory.slice(0, 30), null, 2)}
 
 ## PENDING PRODUCTION ORDERS (${pendingProduction.length} orders)
 ${pendingProduction.length > 0 ? JSON.stringify(pendingProduction, null, 2) : 'No pending production orders'}
 
-## ANALYSIS RULES
-1. Reorder Point = (Weekly Velocity / 7) × (Lead Time + Buffer Days)
-2. If Days of Supply < Lead Time + Buffer → CRITICAL
-3. If Days of Supply < Lead Time + Buffer + 14 → REORDER NOW
-4. Factor in pending production - if it arrives before stockout, adjust urgency
-5. Calculate optimal reorder quantity (typically 4-8 weeks of supply)
+## IMPORTANT: Use the pre-calculated stockoutDate and reorderByDate values - do NOT recalculate them.
+- stockoutDate = Today + (currentStock / dailyVelocity)
+- reorderByDate = stockoutDate - leadTimeDays - buffer
+- If reorderByDate is in the past or within 7 days → CRITICAL
+- If reorderByDate is within 14 days → REORDER
+- If reorderByDate is within 30 days → MONITOR
+- Factor in pending production arrivals - if production arrives before stockout, adjust urgency accordingly
 
 Respond with ONLY this JSON:
 {
@@ -8940,9 +8981,9 @@ Respond with ONLY this JSON:
       "daysOfSupply": number,
       "leadTimeDays": number,
       "weeklyVelocity": number,
-      "suggestedOrderQty": number,
-      "reorderDate": "YYYY-MM-DD when to place order",
-      "stockoutDate": "YYYY-MM-DD estimated stockout if no action",
+      "suggestedOrderQty": number (typically 4-8 weeks of supply),
+      "reorderDate": "use the reorderByDate from input",
+      "stockoutDate": "use the stockoutDate from input",
       "pendingProduction": number or null,
       "pendingArrivalDate": "date or null",
       "reasoning": "why this recommendation"
