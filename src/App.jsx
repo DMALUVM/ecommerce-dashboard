@@ -35558,13 +35558,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         
                         // Update current inventory snapshot with fresh Packiyo 3PL data
                         console.log('=== PACKIYO SYNC - UPDATING INVENTORY ===');
-                        console.log('selectedInvDate:', selectedInvDate);
-                        console.log('invHistory keys:', Object.keys(invHistory));
-                        console.log('data.inventoryBySku count:', Object.keys(data.inventoryBySku || {}).length);
+                        const today = new Date().toISOString().split('T')[0];
                         
-                        if (selectedInvDate && invHistory[selectedInvDate] && data.inventoryBySku) {
-                          console.log('=== UPDATING EXISTING SNAPSHOT ===');
-                          const currentSnapshot = invHistory[selectedInvDate];
+                        // Find the best snapshot to update: today's, selected, or most recent
+                        const targetDate = invHistory[today] ? today : 
+                                          (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
+                                          Object.keys(invHistory).sort().reverse()[0];
+                        
+                        console.log('Target date for update:', targetDate);
+                        console.log('invHistory keys:', Object.keys(invHistory));
+                        
+                        if (targetDate && invHistory[targetDate] && data.inventoryBySku) {
+                          console.log('=== UPDATING EXISTING SNAPSHOT:', targetDate, '===');
+                          const currentSnapshot = invHistory[targetDate];
                           console.log('Current snapshot items:', currentSnapshot.items?.length);
                           const packiyoData = data.inventoryBySku;
                           const today = new Date();
@@ -35717,24 +35723,24 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           };
                           
                           console.log('UPDATED SNAPSHOT:', {
-                            date: selectedInvDate,
+                            date: targetDate,
                             threeplUnits: newTplTotal,
                             threeplValue: newTplValue,
                             totalItems: updatedItems.length
                           });
                           
-                          const updatedHistory = { ...invHistory, [selectedInvDate]: updatedSnapshot };
+                          const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
                           setInvHistory(updatedHistory);
+                          setSelectedInvDate(targetDate); // Make sure the updated snapshot is selected
                           saveInv(updatedHistory);
                           setToast({ message: `Updated inventory with ${newTplTotal.toLocaleString()} 3PL units (${formatCurrency(newTplValue)})`, type: 'success' });
                         } else if (data.inventoryBySku && Object.keys(data.inventoryBySku).length > 0) {
                           // No existing snapshot - create new one from Packiyo data alone
                           console.log('=== NO EXISTING SNAPSHOT - CREATING NEW ===');
-                          console.log('Reason: selectedInvDate=', selectedInvDate, 'hasSnapshot=', !!invHistory[selectedInvDate]);
-                          const today = new Date().toISOString().split('T')[0];
+                          const todayDate = new Date().toISOString().split('T')[0];
                           const packiyoData = data.inventoryBySku;
                           
-                          console.log('Creating snapshot for date:', today);
+                          console.log('Creating snapshot for date:', todayDate);
                           console.log('Packiyo items count:', Object.keys(packiyoData).length);
                           
                           let totalUnits = 0;
@@ -35769,7 +35775,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           }).sort((a, b) => b.totalValue - a.totalValue);
                           
                           const newSnapshot = {
-                            date: today,
+                            date: todayDate,
                             items,
                             summary: {
                               totalUnits,
@@ -35791,16 +35797,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             },
                           };
                           
-                          const newHistory = { ...invHistory, [today]: newSnapshot };
+                          const newHistory = { ...invHistory, [todayDate]: newSnapshot };
                           console.log('NEW SNAPSHOT created:', {
-                            date: today,
+                            date: todayDate,
                             totalUnits,
                             totalValue,
                             itemCount: items.length,
                             threeplUnits: newSnapshot.summary.threeplUnits
                           });
                           setInvHistory(newHistory);
-                          setSelectedInvDate(today);
+                          setSelectedInvDate(todayDate);
                           saveInv(newHistory);
                           setToast({ message: `Created inventory snapshot with ${totalUnits.toLocaleString()} 3PL units (${formatCurrency(totalValue)})`, type: 'success' });
                         }
