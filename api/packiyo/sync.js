@@ -58,7 +58,7 @@ export default async function handler(req, res) {
   if (test) {
     try {
       const testEndpoints = [
-        `${baseUrl}/products?filter[customer_id]=${customerId}&page[size]=1`,
+        `${baseUrl}/products?page[size]=1`,
         `${baseUrl}/customers/${customerId}`,
       ];
       
@@ -141,10 +141,10 @@ export default async function handler(req, res) {
       let retryWithoutInclude = false;
       
       while (hasMore) {
-        // JSON:API pagination uses page[number] and page[size]
+        // JSON:API pagination - API key is already scoped to customer
         const url = useInclude 
-          ? `${baseUrl}/products?filter[customer_id]=${customerId}&page[number]=${page}&page[size]=100&include=inventory_levels`
-          : `${baseUrl}/products?filter[customer_id]=${customerId}&page[number]=${page}&page[size]=100`;
+          ? `${baseUrl}/products?page[number]=${page}&page[size]=100&include=inventory_levels`
+          : `${baseUrl}/products?page[number]=${page}&page[size]=100`;
         
         console.log('Fetching:', url);
         
@@ -219,7 +219,7 @@ export default async function handler(req, res) {
         // Try the inventory endpoint
         try {
           const invRes = await fetch(
-            `${baseUrl}/inventory?filter[customer_id]=${customerId}&page[size]=500`,
+            `${baseUrl}/inventory?page[size]=500`,
             { headers: invHeaders }
           );
           
@@ -387,7 +387,7 @@ export default async function handler(req, res) {
       
       while (hasMore) {
         const shipmentsRes = await fetch(
-          `${baseUrl}/shipments?filter[customer_id]=${customerId}&page[number]=${page}&page[size]=100&filter[shipped_after]=${startDate}&filter[shipped_before]=${endDate}`, 
+          `${baseUrl}/shipments?page[number]=${page}&page[size]=100&filter[shipped_after]=${startDate}&filter[shipped_before]=${endDate}`, 
           { headers: shipHeaders }
         );
         
