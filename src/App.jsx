@@ -1661,9 +1661,44 @@ const handleLogout = async () => {
         reorderBuffer: saved.reorderBuffer || 7, // Extra days buffer for reorder alerts
         reorderTriggerDays: saved.reorderTriggerDays || 60, // Want shipment to arrive when stock reaches X days
         minOrderWeeks: saved.minOrderWeeks || 22, // Minimum order size (5 months ≈ 22 weeks)
+        
+        // Channel-specific inventory rules
+        channelRules: saved.channelRules || {
+          amazon: {
+            minDaysOfSupply: 60, // Alert when Amazon inventory falls below X days
+            alertEnabled: true,
+          },
+          threepl: {
+            alertEnabled: true,
+            // Default quantity threshold for all SKUs
+            defaultQtyThreshold: 50,
+            // SKU-specific thresholds (SKU pattern → threshold)
+            skuThresholds: {}, // e.g., { "SOAP-": 50, "LIP-": 100 }
+            // Category thresholds (by keyword match)
+            categoryThresholds: saved.channelRules?.threepl?.categoryThresholds || {
+              'soap': 50,
+              'balm': 100,
+              'lip': 100,
+            },
+          },
+        },
+        
+        // Storage cost allocation: 'shopify' (legacy), 'proportional' (by revenue), 'total' (separate line)
+        storageCostAllocation: saved.storageCostAllocation || 'proportional',
       }; 
     } catch { 
-      return { defaultLeadTimeDays: 14, skuLeadTimes: {}, reorderBuffer: 7, reorderTriggerDays: 60, minOrderWeeks: 22 }; 
+      return { 
+        defaultLeadTimeDays: 14, 
+        skuLeadTimes: {}, 
+        reorderBuffer: 7, 
+        reorderTriggerDays: 60, 
+        minOrderWeeks: 22,
+        channelRules: {
+          amazon: { minDaysOfSupply: 60, alertEnabled: true },
+          threepl: { alertEnabled: true, defaultQtyThreshold: 50, skuThresholds: {}, categoryThresholds: { 'soap': 50, 'balm': 100, 'lip': 100 } },
+        },
+        storageCostAllocation: 'proportional',
+      }; 
     }
   });
   
@@ -4197,25 +4232,64 @@ const savePeriods = async (d) => {
 
     // Use enhanced 3PL parser
     const threeplData = parse3PLData(reprocessFiles.threepl);
-    const threeplCost = threeplData.metrics.totalCost;
     const threeplBreakdown = threeplData.breakdown;
     const threeplMetrics = threeplData.metrics;
-
+    
+    // Separate storage from fulfillment costs
+    const storageCost = threeplBreakdown.storage || 0;
+    const fulfillmentCost = threeplData.metrics.totalCost - storageCost;
+    
+    // Storage allocation: proportional by revenue OR to total (not just Shopify)
+    const totalRev = amzRev + shopRev;
+    const shopifyShare = totalRev > 0 ? shopRev / totalRev : 1;
+    const amazonShare = totalRev > 0 ? amzRev / totalRev : 0;
+    
+    // Storage cost allocation based on settings
+    const storageAlloc = leadTimeSettings.storageCostAllocation || 'proportional';
+    let shopStorageCost = 0;
+    let amzStorageCost = 0;
+    
+    if (storageAlloc === 'shopify') {
+      // Legacy: all storage to Shopify (not recommended)
+      shopStorageCost = storageCost;
+    } else if (storageAlloc === 'proportional') {
+      // Split by revenue share
+      shopStorageCost = storageCost * shopifyShare;
+      amzStorageCost = storageCost * amazonShare;
+    }
+    // 'total' = storage shown separately, not deducted from either channel
+    
     const metaS = parseFloat(reprocessAdSpend.meta) || 0, googleS = parseFloat(reprocessAdSpend.google) || 0, shopAds = metaS + googleS;
-    const shopProfit = shopRev - shopCogs - threeplCost - shopAds;
-    const totalRev = amzRev + shopRev, totalProfit = amzProfit + shopProfit, totalCogs = amzCogs + shopCogs;
+    
+    // Shopify profit: fulfillment cost + proportional storage (if not 'total' mode)
+    const shopThreeplCost = fulfillmentCost + (storageAlloc !== 'total' ? shopStorageCost : 0);
+    const shopProfit = shopRev - shopCogs - shopThreeplCost - shopAds;
+    
+    // Adjust Amazon profit for storage share (if proportional)
+    const adjustedAmzProfit = storageAlloc === 'proportional' ? amzProfit - amzStorageCost : amzProfit;
+    
+    const totalProfit = adjustedAmzProfit + shopProfit - (storageAlloc === 'total' ? storageCost : 0);
+    const totalCogs = amzCogs + shopCogs;
 
     const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
     const shopifySkus = Object.values(shopifySkuData).sort((a, b) => b.netSales - a.netSales);
 
     const weekData = {
       weekEnding: weekKey, createdAt: new Date().toISOString(),
-      amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, netProfit: amzProfit, 
-        margin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
+      amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, 
+        storageCost: amzStorageCost, // Proportional storage share
+        netProfit: adjustedAmzProfit, 
+        margin: amzRev > 0 ? (adjustedAmzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
         returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
-      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, threeplCosts: threeplCost, threeplBreakdown, threeplMetrics, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
+      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, 
+        threeplCosts: shopThreeplCost, // Fulfillment + proportional storage
+        fulfillmentCost, storageCost: shopStorageCost, // Breakdown for display
+        threeplBreakdown, threeplMetrics, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
         netMargin: shopRev > 0 ? (shopProfit/shopRev)*100 : 0, aov: shopUnits > 0 ? shopRev/shopUnits : 0, roas: shopAds > 0 ? shopRev/shopAds : 0, skuData: shopifySkus },
-      total: { revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds, netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0, roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0, amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0, shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0 }
+      total: { revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds, 
+        storageCost, storageCostAllocation: storageAlloc, // Total storage and method
+        netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0, roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0, 
+        amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0, shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0 }
     };
 
     const updated = { ...allWeeksData, [weekKey]: weekData };
@@ -4539,13 +4613,34 @@ const savePeriods = async (d) => {
 
     // Use enhanced 3PL parser
     const threeplData = parse3PLData(files.threepl);
-    const threeplCost = threeplData.metrics.totalCost;
     const threeplBreakdown = threeplData.breakdown;
     const threeplMetrics = threeplData.metrics;
+    
+    // Separate storage from fulfillment costs
+    const storageCost = threeplBreakdown.storage || 0;
+    const fulfillmentCost = threeplData.metrics.totalCost - storageCost;
+    
+    // Storage allocation: proportional by revenue
+    const totalRev = amzRev + shopRev;
+    const shopifyShare = totalRev > 0 ? shopRev / totalRev : 1;
+    const amazonShare = totalRev > 0 ? amzRev / totalRev : 0;
+    
+    const storageAlloc = leadTimeSettings.storageCostAllocation || 'proportional';
+    let shopStorageCost = 0, amzStorageCost = 0;
+    
+    if (storageAlloc === 'shopify') {
+      shopStorageCost = storageCost;
+    } else if (storageAlloc === 'proportional') {
+      shopStorageCost = storageCost * shopifyShare;
+      amzStorageCost = storageCost * amazonShare;
+    }
 
     const metaS = parseFloat(adSpend.meta) || 0, googleS = parseFloat(adSpend.google) || 0, shopAds = metaS + googleS;
-    const shopProfit = shopRev - shopCogs - threeplCost - shopAds;
-    const totalRev = amzRev + shopRev, totalProfit = amzProfit + shopProfit, totalCogs = amzCogs + shopCogs;
+    const shopThreeplCost = fulfillmentCost + (storageAlloc !== 'total' ? shopStorageCost : 0);
+    const shopProfit = shopRev - shopCogs - shopThreeplCost - shopAds;
+    const adjustedAmzProfit = storageAlloc === 'proportional' ? amzProfit - amzStorageCost : amzProfit;
+    const totalProfit = adjustedAmzProfit + shopProfit - (storageAlloc === 'total' ? storageCost : 0);
+    const totalCogs = amzCogs + shopCogs;
 
     // Convert SKU data to sorted arrays
     const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
@@ -4553,12 +4648,18 @@ const savePeriods = async (d) => {
 
     const weekData = {
       weekEnding, createdAt: new Date().toISOString(),
-      amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, netProfit: amzProfit, 
-        margin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
+      amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, 
+        storageCost: amzStorageCost, netProfit: adjustedAmzProfit, 
+        margin: amzRev > 0 ? (adjustedAmzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
         returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
-      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, threeplCosts: threeplCost, threeplBreakdown, threeplMetrics, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
+      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, 
+        threeplCosts: shopThreeplCost, fulfillmentCost, storageCost: shopStorageCost,
+        threeplBreakdown, threeplMetrics, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
         netMargin: shopRev > 0 ? (shopProfit/shopRev)*100 : 0, aov: shopUnits > 0 ? shopRev/shopUnits : 0, roas: shopAds > 0 ? shopRev/shopAds : 0, skuData: shopifySkus },
-      total: { revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds, netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0, roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0, amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0, shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0 }
+      total: { revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds, 
+        storageCost, storageCostAllocation: storageAlloc,
+        netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0, roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0, 
+        amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0, shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0 }
     };
 
     const updated = { ...allWeeksData, [weekEnding]: weekData };
@@ -5145,25 +5246,51 @@ const savePeriods = async (d) => {
 
     // Use enhanced 3PL parser
     const threeplData = parse3PLData(periodFiles.threepl);
-    const threeplCost = threeplData.metrics.totalCost;
     const threeplBreakdown = threeplData.breakdown;
     const threeplMetrics = threeplData.metrics;
+    
+    // Separate storage from fulfillment costs
+    const storageCost = threeplBreakdown.storage || 0;
+    const fulfillmentCost = threeplData.metrics.totalCost - storageCost;
+    
+    const totalRev = amzRev + shopRev;
+    const shopifyShare = totalRev > 0 ? shopRev / totalRev : 1;
+    const amazonShare = totalRev > 0 ? amzRev / totalRev : 0;
+    
+    const storageAlloc = leadTimeSettings.storageCostAllocation || 'proportional';
+    let shopStorageCost = 0, amzStorageCost = 0;
+    
+    if (storageAlloc === 'shopify') {
+      shopStorageCost = storageCost;
+    } else if (storageAlloc === 'proportional') {
+      shopStorageCost = storageCost * shopifyShare;
+      amzStorageCost = storageCost * amazonShare;
+    }
 
     const metaS = parseFloat(periodAdSpend.meta) || 0, googleS = parseFloat(periodAdSpend.google) || 0, shopAds = metaS + googleS;
-    const shopProfit = shopRev - shopCogs - threeplCost - shopAds;
-    const totalRev = amzRev + shopRev, totalProfit = amzProfit + shopProfit, totalCogs = amzCogs + shopCogs;
+    const shopThreeplCost = fulfillmentCost + (storageAlloc !== 'total' ? shopStorageCost : 0);
+    const shopProfit = shopRev - shopCogs - shopThreeplCost - shopAds;
+    const adjustedAmzProfit = storageAlloc === 'proportional' ? amzProfit - amzStorageCost : amzProfit;
+    const totalProfit = adjustedAmzProfit + shopProfit - (storageAlloc === 'total' ? storageCost : 0);
+    const totalCogs = amzCogs + shopCogs;
 
     const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
     const shopifySkus = Object.values(shopifySkuData).sort((a, b) => b.netSales - a.netSales);
 
     const periodData = {
       label: periodLabel.trim(), createdAt: new Date().toISOString(),
-      amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, netProfit: amzProfit, 
-        margin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
+      amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, 
+        storageCost: amzStorageCost, netProfit: adjustedAmzProfit, 
+        margin: amzRev > 0 ? (adjustedAmzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
         returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
-      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, threeplCosts: threeplCost, threeplBreakdown, threeplMetrics, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
+      shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, 
+        threeplCosts: shopThreeplCost, fulfillmentCost, storageCost: shopStorageCost,
+        threeplBreakdown, threeplMetrics, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
         netMargin: shopRev > 0 ? (shopProfit/shopRev)*100 : 0, aov: shopUnits > 0 ? shopRev/shopUnits : 0, roas: shopAds > 0 ? shopRev/shopAds : 0, skuData: shopifySkus },
-      total: { revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds, netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0, roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0, amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0, shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0 }
+      total: { revenue: totalRev, units: amzUnits + shopUnits, cogs: totalCogs, adSpend: amzAds + shopAds, 
+        storageCost, storageCostAllocation: storageAlloc,
+        netProfit: totalProfit, netMargin: totalRev > 0 ? (totalProfit/totalRev)*100 : 0, roas: (amzAds + shopAds) > 0 ? totalRev/(amzAds + shopAds) : 0, 
+        amazonShare: totalRev > 0 ? (amzRev/totalRev)*100 : 0, shopifyShare: totalRev > 0 ? (shopRev/totalRev)*100 : 0 }
     };
 
     const periodKey = periodLabel.trim().toLowerCase().replace(/\s+/g, '-');
@@ -10093,8 +10220,8 @@ Analyze the data and respond with ONLY this JSON:
               </>
             ) : (
               <>
-                <div><p className="text-slate-500 text-xs uppercase mb-1">Meta Ads</p><p className="text-lg font-semibold text-white">{formatCurrency(data.metaSpend || 0)}</p></div>
-                <div><p className="text-slate-500 text-xs uppercase mb-1">Google Ads</p><p className="text-lg font-semibold text-white">{formatCurrency(data.googleSpend || 0)}</p></div>
+                <div><p className="text-slate-500 text-xs uppercase mb-1">Meta Ads</p><p className="text-lg font-semibold text-white">{formatCurrency(data.metaSpend || data.metaAds || 0)}</p></div>
+                <div><p className="text-slate-500 text-xs uppercase mb-1">Google Ads</p><p className="text-lg font-semibold text-white">{formatCurrency(data.googleSpend || data.googleAds || 0)}</p></div>
               </>
             )}
             <div><p className="text-slate-500 text-xs uppercase mb-1">{isAmz ? 'COGS/Unit' : 'Discounts'}</p><p className="text-lg font-semibold text-white">{isAmz ? formatCurrency(data.units > 0 ? data.cogs / data.units : 0) : formatCurrency(data.discounts || 0)}</p></div>
@@ -23199,9 +23326,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const decliningSkus = skuTrends.filter(s => s.trend < -10).slice(0, 8);
     const improvingSkus = skuTrends.filter(s => s.trend > 10).sort((a, b) => b.trend - a.trend).slice(0, 8);
     
-    const periodLabel = trendsTab === 'daily' ? 'Daily' : trendsTab === 'weekly' ? 'Weekly' : trendsTab === 'monthly' ? 'Monthly' : 'Yearly';
-    const periodLabelShort = trendsTab === 'daily' ? 'Day' : trendsTab === 'weekly' ? 'Week' : trendsTab === 'monthly' ? 'Month' : 'Year';
-    const dataAvailable = currentData.length > 0;
+    const periodLabel = trendsTab === 'daily' ? 'Daily' : trendsTab === 'weekly' ? 'Weekly' : trendsTab === 'monthly' ? 'Monthly' : trendsTab === 'yearly' ? 'Yearly' : 'Returns';
+    const periodLabelShort = trendsTab === 'daily' ? 'Day' : trendsTab === 'weekly' ? 'Week' : trendsTab === 'monthly' ? 'Month' : trendsTab === 'yearly' ? 'Year' : 'SKU';
+    const dataAvailable = trendsTab === 'returns' ? Object.keys(returnRates.bySku || {}).length > 0 : currentData.length > 0;
 
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
@@ -23239,6 +23366,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'yearly' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
             >
               📆 Yearly ({yearlyTrends.length})
+            </button>
+            <button 
+              onClick={() => setTrendsTab('returns')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'returns' ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              🔄 Returns ({Object.keys(returnRates.bySku || {}).length} SKUs)
             </button>
           </div>
           
@@ -23348,6 +23481,143 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             </div>
           ) : (
             <>
+              {/* RETURNS TAB CONTENT */}
+              {trendsTab === 'returns' ? (
+                <div className="space-y-6">
+                  {/* Overall Return Rate Summary */}
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="bg-gradient-to-br from-rose-900/40 to-rose-800/20 rounded-xl border border-rose-500/30 p-4">
+                      <p className="text-rose-400 text-sm mb-1">Overall Return Rate</p>
+                      <p className="text-3xl font-bold text-white">{(returnRates.overall?.returnRate || 0).toFixed(2)}%</p>
+                      <p className="text-slate-400 text-xs mt-1">{formatNumber(returnRates.overall?.unitsReturned || 0)} of {formatNumber(returnRates.overall?.unitsSold || 0)} units</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                      <p className="text-slate-400 text-sm mb-1">Total Units Sold</p>
+                      <p className="text-2xl font-bold text-white">{formatNumber(returnRates.overall?.unitsSold || 0)}</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                      <p className="text-slate-400 text-sm mb-1">Total Units Returned</p>
+                      <p className="text-2xl font-bold text-rose-400">{formatNumber(returnRates.overall?.unitsReturned || 0)}</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                      <p className="text-slate-400 text-sm mb-1">SKUs Tracked</p>
+                      <p className="text-2xl font-bold text-white">{Object.keys(returnRates.bySku || {}).length}</p>
+                    </div>
+                  </div>
+                  
+                  {/* Monthly Return Rate Trend */}
+                  {Object.keys(returnRates.byMonth || {}).length > 0 && (
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                      <h3 className="text-lg font-semibold text-white mb-4">📊 Monthly Return Rate Trend</h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-700">
+                              <th className="text-left text-slate-400 pb-2">Month</th>
+                              <th className="text-right text-slate-400 pb-2">Units Sold</th>
+                              <th className="text-right text-slate-400 pb-2">Returns</th>
+                              <th className="text-right text-slate-400 pb-2">Return Rate</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(returnRates.byMonth || {}).sort((a, b) => b[0].localeCompare(a[0])).map(([month, data]) => (
+                              <tr key={month} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                <td className="py-2 text-white font-medium">{month}</td>
+                                <td className="py-2 text-right text-slate-300">{formatNumber(data.unitsSold)}</td>
+                                <td className="py-2 text-right text-rose-400">{formatNumber(data.unitsReturned)}</td>
+                                <td className={`py-2 text-right font-medium ${data.returnRate > 5 ? 'text-rose-400' : data.returnRate > 2 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                  {data.returnRate.toFixed(2)}%
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* SKU Return Rates - Problematic SKUs */}
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                    <h3 className="text-lg font-semibold text-white mb-4">🔴 SKU Return Rates (Sorted by Worst)</h3>
+                    <div className="overflow-x-auto max-h-96">
+                      <table className="w-full text-sm">
+                        <thead className="sticky top-0 bg-slate-800">
+                          <tr className="border-b border-slate-700">
+                            <th className="text-left text-slate-400 pb-2 px-2">SKU</th>
+                            <th className="text-left text-slate-400 pb-2 px-2">Product</th>
+                            <th className="text-right text-slate-400 pb-2 px-2">Units Sold</th>
+                            <th className="text-right text-slate-400 pb-2 px-2">Returns</th>
+                            <th className="text-right text-slate-400 pb-2 px-2">Return Rate</th>
+                            <th className="text-right text-slate-400 pb-2 px-2">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(returnRates.bySku || {})
+                            .filter(([sku, data]) => data.unitsSold >= 5) // Only show SKUs with enough data
+                            .sort((a, b) => b[1].returnRate - a[1].returnRate)
+                            .map(([sku, data]) => (
+                              <tr key={sku} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                <td className="py-2 px-2 text-cyan-400 font-mono text-xs">{sku}</td>
+                                <td className="py-2 px-2 text-white truncate max-w-[200px]">{savedProductNames[sku] || sku}</td>
+                                <td className="py-2 px-2 text-right text-slate-300">{formatNumber(data.unitsSold)}</td>
+                                <td className="py-2 px-2 text-right text-rose-400">{formatNumber(data.unitsReturned)}</td>
+                                <td className={`py-2 px-2 text-right font-bold ${data.returnRate > 10 ? 'text-rose-500' : data.returnRate > 5 ? 'text-rose-400' : data.returnRate > 2 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                  {data.returnRate.toFixed(2)}%
+                                </td>
+                                <td className="py-2 px-2 text-right">
+                                  {data.returnRate > 10 ? (
+                                    <span className="px-2 py-1 bg-rose-900/50 text-rose-300 text-xs rounded-full">⚠️ Critical</span>
+                                  ) : data.returnRate > 5 ? (
+                                    <span className="px-2 py-1 bg-amber-900/50 text-amber-300 text-xs rounded-full">⚡ High</span>
+                                  ) : data.returnRate > 2 ? (
+                                    <span className="px-2 py-1 bg-yellow-900/50 text-yellow-300 text-xs rounded-full">📊 Monitor</span>
+                                  ) : (
+                                    <span className="px-2 py-1 bg-emerald-900/50 text-emerald-300 text-xs rounded-full">✅ Good</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                      {Object.entries(returnRates.bySku || {}).filter(([sku, data]) => data.unitsSold >= 5).length === 0 && (
+                        <p className="text-slate-500 text-center py-4">No SKUs with enough data (minimum 5 units sold)</p>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {/* Weekly Return Rate Trend */}
+                  {Object.keys(returnRates.byWeek || {}).length > 0 && (
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                      <h3 className="text-lg font-semibold text-white mb-4">📅 Weekly Return Rate (Last 12 Weeks)</h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-700">
+                              <th className="text-left text-slate-400 pb-2">Week Ending</th>
+                              <th className="text-right text-slate-400 pb-2">Units Sold</th>
+                              <th className="text-right text-slate-400 pb-2">Returns</th>
+                              <th className="text-right text-slate-400 pb-2">Return Rate</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(returnRates.byWeek || {}).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 12).map(([week, data]) => (
+                              <tr key={week} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                <td className="py-2 text-white font-medium">{week}</td>
+                                <td className="py-2 text-right text-slate-300">{formatNumber(data.unitsSold)}</td>
+                                <td className="py-2 text-right text-rose-400">{formatNumber(data.unitsReturned)}</td>
+                                <td className={`py-2 text-right font-medium ${data.returnRate > 5 ? 'text-rose-400' : data.returnRate > 2 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                  {data.returnRate.toFixed(2)}%
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+              <>
               {/* Channel indicator */}
               {trendsChannel !== 'combined' && (
                 <div className={`mb-4 px-4 py-2 rounded-lg inline-flex items-center gap-2 ${trendsChannel === 'amazon' ? 'bg-orange-900/30 border border-orange-500/30 text-orange-300' : 'bg-green-900/30 border border-green-500/30 text-green-300'}`}>
@@ -24070,6 +24340,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 </div>
               )}
             </>
+            )}
           )}
         </div>
       </div>
@@ -32970,7 +33241,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 const recurringMonthlyExpenses = totalMonthlyRecurring || 0;
                 const recurringCostsRemaining = recurringMonthlyExpenses * monthsRemaining;
                 
-                if (hasActualSalesData && actualYTDRevenue > 0) {
+                // Determine which data source to use - default to banking data on banking tab
+                const hasBothDataSources = hasActualSalesData && actualYTDRevenue > 0 && ytdMonths.length > 0;
+                
+                // Use banking data by default on banking tab, fall back to sales if no banking data
+                const effectiveBasis = ytdMonths.length > 0 ? 'cashflow' : 'sales';
+                
+                if (effectiveBasis === 'sales' && hasActualSalesData && actualYTDRevenue > 0) {
                   // Use actual sales profit data
                   forecastBasis = 'sales';
                   const avgWeeklyProfit = actualYTDProfit / Math.max(weeksWithData, 1);
@@ -33714,6 +33991,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl">
             {[
               { id: 'general', label: 'General', mobileLabel: '🏪', icon: Store },
+              { id: 'inventory', label: 'Inventory', mobileLabel: '📦', icon: Package },
               { id: 'integrations', label: 'Integrations', mobileLabel: '🔗', icon: RefreshCw },
               { id: 'thresholds', label: 'Thresholds', mobileLabel: '📊', icon: Target },
               { id: 'display', label: 'Display', mobileLabel: '🎨', icon: Eye },
@@ -33890,6 +34168,273 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               </div>
             </SettingRow>
             <p className="text-slate-500 text-xs mt-3">Your logo will appear in the dashboard header next to your store name.</p>
+          </SettingSection>
+            </>
+          )}
+          
+          {/* ========== INVENTORY TAB ========== */}
+          {settingsTab === 'inventory' && (
+            <>
+          <SettingSection title="📦 Inventory Alert Rules">
+            <p className="text-slate-400 text-sm mb-4">Configure alerts for low inventory across different channels</p>
+            
+            {/* Amazon Inventory Alerts */}
+            <div className="bg-orange-900/20 border border-orange-500/30 rounded-xl p-4 mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-orange-400 font-medium flex items-center gap-2">
+                  🛒 Amazon FBA Inventory
+                </h4>
+                <label className="flex items-center gap-2">
+                  <input 
+                    type="checkbox" 
+                    checked={leadTimeSettings.channelRules?.amazon?.alertEnabled ?? true}
+                    onChange={(e) => setLeadTimeSettings(prev => ({
+                      ...prev,
+                      channelRules: {
+                        ...prev.channelRules,
+                        amazon: { ...prev.channelRules?.amazon, alertEnabled: e.target.checked }
+                      }
+                    }))}
+                    className="w-4 h-4 rounded bg-slate-700 border-slate-600"
+                  />
+                  <span className="text-slate-300 text-sm">Enabled</span>
+                </label>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Minimum Days of Supply</label>
+                  <input 
+                    type="number"
+                    value={leadTimeSettings.channelRules?.amazon?.minDaysOfSupply || 60}
+                    onChange={(e) => setLeadTimeSettings(prev => ({
+                      ...prev,
+                      channelRules: {
+                        ...prev.channelRules,
+                        amazon: { ...prev.channelRules?.amazon, minDaysOfSupply: parseInt(e.target.value) || 60 }
+                      }
+                    }))}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white"
+                    min="1"
+                  />
+                  <p className="text-slate-500 text-xs mt-1">Alert when Amazon inventory falls below this many days of supply</p>
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Production Lead Time (days)</label>
+                  <input 
+                    type="number"
+                    value={leadTimeSettings.defaultLeadTimeDays || 14}
+                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, defaultLeadTimeDays: parseInt(e.target.value) || 14 }))}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white"
+                    min="1"
+                  />
+                  <p className="text-slate-500 text-xs mt-1">Time from placing order to receiving inventory</p>
+                </div>
+              </div>
+            </div>
+            
+            {/* 3PL / Packiyo Inventory Alerts */}
+            <div className="bg-cyan-900/20 border border-cyan-500/30 rounded-xl p-4 mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-cyan-400 font-medium flex items-center gap-2">
+                  📦 3PL / Packiyo Inventory
+                </h4>
+                <label className="flex items-center gap-2">
+                  <input 
+                    type="checkbox" 
+                    checked={leadTimeSettings.channelRules?.threepl?.alertEnabled ?? true}
+                    onChange={(e) => setLeadTimeSettings(prev => ({
+                      ...prev,
+                      channelRules: {
+                        ...prev.channelRules,
+                        threepl: { ...prev.channelRules?.threepl, alertEnabled: e.target.checked }
+                      }
+                    }))}
+                    className="w-4 h-4 rounded bg-slate-700 border-slate-600"
+                  />
+                  <span className="text-slate-300 text-sm">Enabled</span>
+                </label>
+              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm text-slate-400 mb-1">Default Quantity Threshold (all SKUs)</label>
+                <input 
+                  type="number"
+                  value={leadTimeSettings.channelRules?.threepl?.defaultQtyThreshold || 50}
+                  onChange={(e) => setLeadTimeSettings(prev => ({
+                    ...prev,
+                    channelRules: {
+                      ...prev.channelRules,
+                      threepl: { ...prev.channelRules?.threepl, defaultQtyThreshold: parseInt(e.target.value) || 50 }
+                    }
+                  }))}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white"
+                  min="1"
+                />
+                <p className="text-slate-500 text-xs mt-1">Alert when any 3PL SKU falls below this quantity</p>
+              </div>
+              
+              {/* Category-based thresholds */}
+              <div className="mb-4">
+                <label className="block text-sm text-slate-400 mb-2">Category Thresholds (by keyword in product name)</label>
+                <div className="space-y-2">
+                  {Object.entries(leadTimeSettings.channelRules?.threepl?.categoryThresholds || { soap: 50, balm: 100, lip: 100 }).map(([keyword, threshold]) => (
+                    <div key={keyword} className="flex items-center gap-2">
+                      <input 
+                        type="text"
+                        value={keyword}
+                        readOnly
+                        className="flex-1 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm"
+                      />
+                      <input 
+                        type="number"
+                        value={threshold}
+                        onChange={(e) => {
+                          const newThreshold = parseInt(e.target.value) || 50;
+                          setLeadTimeSettings(prev => ({
+                            ...prev,
+                            channelRules: {
+                              ...prev.channelRules,
+                              threepl: {
+                                ...prev.channelRules?.threepl,
+                                categoryThresholds: {
+                                  ...prev.channelRules?.threepl?.categoryThresholds,
+                                  [keyword]: newThreshold
+                                }
+                              }
+                            }
+                          }));
+                        }}
+                        className="w-24 px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm"
+                        min="1"
+                      />
+                      <button
+                        onClick={() => {
+                          const newThresholds = { ...leadTimeSettings.channelRules?.threepl?.categoryThresholds };
+                          delete newThresholds[keyword];
+                          setLeadTimeSettings(prev => ({
+                            ...prev,
+                            channelRules: {
+                              ...prev.channelRules,
+                              threepl: { ...prev.channelRules?.threepl, categoryThresholds: newThresholds }
+                            }
+                          }));
+                        }}
+                        className="p-2 text-rose-400 hover:bg-rose-900/30 rounded-lg"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                  
+                  {/* Add new category threshold */}
+                  <div className="flex items-center gap-2 mt-2">
+                    <input 
+                      type="text"
+                      placeholder="keyword (e.g., soap, lotion)"
+                      id="new-category-keyword"
+                      className="flex-1 px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm placeholder:text-slate-500"
+                    />
+                    <input 
+                      type="number"
+                      placeholder="qty"
+                      id="new-category-threshold"
+                      className="w-24 px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm placeholder:text-slate-500"
+                      min="1"
+                    />
+                    <button
+                      onClick={() => {
+                        const keywordEl = document.getElementById('new-category-keyword');
+                        const thresholdEl = document.getElementById('new-category-threshold');
+                        const keyword = keywordEl?.value?.trim().toLowerCase();
+                        const threshold = parseInt(thresholdEl?.value) || 50;
+                        if (keyword) {
+                          setLeadTimeSettings(prev => ({
+                            ...prev,
+                            channelRules: {
+                              ...prev.channelRules,
+                              threepl: {
+                                ...prev.channelRules?.threepl,
+                                categoryThresholds: {
+                                  ...prev.channelRules?.threepl?.categoryThresholds,
+                                  [keyword]: threshold
+                                }
+                              }
+                            }
+                          }));
+                          if (keywordEl) keywordEl.value = '';
+                          if (thresholdEl) thresholdEl.value = '';
+                        }
+                      }}
+                      className="p-2 text-emerald-400 hover:bg-emerald-900/30 rounded-lg"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+                <p className="text-slate-500 text-xs mt-2">Products containing these keywords will use the specified threshold</p>
+              </div>
+            </div>
+          </SettingSection>
+          
+          <SettingSection title="💰 Storage Cost Allocation">
+            <p className="text-slate-400 text-sm mb-4">Choose how 3PL storage costs are allocated across channels</p>
+            
+            <div className="space-y-3">
+              {[
+                { id: 'proportional', label: 'Proportional by Revenue', desc: 'Split storage costs based on each channel\'s revenue share (recommended)' },
+                { id: 'total', label: 'Show as Separate Line', desc: 'Storage costs shown separately, not deducted from either channel profit' },
+                { id: 'shopify', label: 'All to Shopify (Legacy)', desc: 'Deduct all storage costs from Shopify only (not recommended)' },
+              ].map(option => (
+                <label 
+                  key={option.id}
+                  className={`flex items-start gap-3 p-4 rounded-xl border cursor-pointer transition-all ${
+                    leadTimeSettings.storageCostAllocation === option.id 
+                      ? 'bg-violet-900/30 border-violet-500/50' 
+                      : 'bg-slate-800/50 border-slate-700 hover:border-slate-600'
+                  }`}
+                >
+                  <input 
+                    type="radio"
+                    name="storageCostAllocation"
+                    value={option.id}
+                    checked={leadTimeSettings.storageCostAllocation === option.id}
+                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, storageCostAllocation: e.target.value }))}
+                    className="mt-1"
+                  />
+                  <div>
+                    <p className="text-white font-medium">{option.label}</p>
+                    <p className="text-slate-400 text-sm">{option.desc}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </SettingSection>
+          
+          <SettingSection title="📅 Reorder Settings">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">Target Buffer (days)</label>
+                <input 
+                  type="number"
+                  value={leadTimeSettings.reorderTriggerDays || 60}
+                  onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, reorderTriggerDays: parseInt(e.target.value) || 60 }))}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white"
+                  min="1"
+                />
+                <p className="text-slate-500 text-xs mt-1">Want shipment to arrive when stock reaches this many days</p>
+              </div>
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">Minimum Order Size (weeks)</label>
+                <input 
+                  type="number"
+                  value={leadTimeSettings.minOrderWeeks || 22}
+                  onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, minOrderWeeks: parseInt(e.target.value) || 22 }))}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white"
+                  min="1"
+                />
+                <p className="text-slate-500 text-xs mt-1">Minimum weeks of supply per order ({Math.round((leadTimeSettings.minOrderWeeks || 22) / 4.3)} months)</p>
+              </div>
+            </div>
           </SettingSection>
             </>
           )}
