@@ -422,11 +422,120 @@ const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY)
     })
   : null;
 
-const lsGet = (key) => {
-  try { return localStorage.getItem(key); } catch { return null; }
+// ============ LOCALSTORAGE COMPRESSION ============
+// Simple LZW-based compression for localStorage (handles large datasets efficiently)
+const LZCompress = {
+  compress: (str) => {
+    if (!str || str.length < 1000) return str; // Don't compress small strings
+    try {
+      const dict = new Map();
+      let dictSize = 256;
+      for (let i = 0; i < 256; i++) dict.set(String.fromCharCode(i), i);
+      
+      let w = '';
+      const result = [];
+      for (const c of str) {
+        const wc = w + c;
+        if (dict.has(wc)) {
+          w = wc;
+        } else {
+          result.push(dict.get(w));
+          dict.set(wc, dictSize++);
+          w = c;
+        }
+      }
+      if (w) result.push(dict.get(w));
+      
+      // Convert to base64-safe string with marker
+      return 'LZ1:' + result.map(n => String.fromCharCode(n + 32)).join('');
+    } catch (e) {
+      console.warn('LZCompress: compression failed, storing uncompressed', e);
+      return str; // Return uncompressed on error
+    }
+  },
+  decompress: (compressed) => {
+    if (!compressed || !compressed.startsWith('LZ1:')) return compressed;
+    try {
+      const str = compressed.slice(4);
+      const codes = [...str].map(c => c.charCodeAt(0) - 32);
+      
+      const dict = new Map();
+      let dictSize = 256;
+      for (let i = 0; i < 256; i++) dict.set(i, String.fromCharCode(i));
+      
+      let w = String.fromCharCode(codes[0]);
+      let result = w;
+      for (let i = 1; i < codes.length; i++) {
+        const k = codes[i];
+        let entry;
+        if (dict.has(k)) {
+          entry = dict.get(k);
+        } else if (k === dictSize) {
+          entry = w + w[0];
+        } else {
+          console.warn('LZCompress: invalid dictionary entry, returning raw data');
+          return compressed.slice(4); // Invalid, return as-is minus marker
+        }
+        result += entry;
+        dict.set(dictSize++, w + entry[0]);
+        w = entry;
+      }
+      return result;
+    } catch (e) {
+      console.warn('LZCompress: decompression failed, returning raw data', e);
+      return compressed.slice(4); // Return without marker on error
+    }
+  }
 };
+
+// Keys that benefit from compression (large JSON data)
+const COMPRESSED_KEYS = [
+  'ecommerce_sales_data_v2',
+  'ecommerce_daily_sales_v1', 
+  'ecommerce_inventory_v1',
+  'ecommerce_periods_v1',
+  'ecommerce_3pl_ledger_v1',
+  'ecommerce_banking_v1',
+  'ecommerce_ai_chat_history_v1',
+];
+
+const lsGet = (key) => {
+  try { 
+    const raw = localStorage.getItem(key);
+    if (COMPRESSED_KEYS.includes(key) && raw?.startsWith('LZ1:')) {
+      return LZCompress.decompress(raw);
+    }
+    return raw; 
+  } catch { return null; }
+};
+
 const lsSet = (key, value) => {
-  try { localStorage.setItem(key, value); } catch {}
+  try { 
+    // Compress large data for specific keys
+    const toStore = COMPRESSED_KEYS.includes(key) ? LZCompress.compress(value) : value;
+    localStorage.setItem(key, toStore);
+  } catch (e) {
+    // Handle quota exceeded
+    if (e.name === 'QuotaExceededError') {
+      console.warn(`localStorage quota exceeded for ${key}. Attempting cleanup...`);
+      // Try to clear old chat history to make room
+      try {
+        const chatKey = 'ecommerce_ai_chat_history_v1';
+        const chat = localStorage.getItem(chatKey);
+        if (chat) {
+          const messages = JSON.parse(LZCompress.decompress(chat) || chat);
+          if (messages.length > 50) {
+            localStorage.setItem(chatKey, LZCompress.compress(JSON.stringify(messages.slice(-50))));
+          }
+        }
+        // Retry the save
+        const toStore = COMPRESSED_KEYS.includes(key) ? LZCompress.compress(value) : value;
+        localStorage.setItem(key, toStore);
+      } catch {
+        console.error('Failed to save to localStorage even after cleanup');
+      }
+    }
+  }
 };
 
 // Enhanced 3PL parsing - extracts detailed metrics from 3PL CSV files
@@ -1026,6 +1135,20 @@ export default function Dashboard() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [toast, setToast] = useState(null); // { message: string, type: 'success' | 'error' }
+  
+  // Settings tab state
+  const [settingsTab, setSettingsTab] = useState(() => {
+    try { return localStorage.getItem('ecommerce_settings_tab') || 'general'; } catch { return 'general'; }
+  }); // 'general' | 'integrations' | 'thresholds' | 'display' | 'data' | 'account'
+  
+  // Persist settings tab selection
+  useEffect(() => {
+    try { localStorage.setItem('ecommerce_settings_tab', settingsTab); } catch {}
+  }, [settingsTab]);
+  
+  // Undo deletion state - stores recently deleted items for 10-second undo window
+  const [deletedItems, setDeletedItems] = useState([]); // Array of { type, key, data, expiry, undoTimer }
+  
   const [reprocessPeriod, setReprocessPeriod] = useState(null); // For period reprocessing
   const [threeplTimeView, setThreeplTimeView] = useState('weekly'); // For 3PL analytics view
   const [threeplDateRange, setThreeplDateRange] = useState('all'); // 'week' | '4weeks' | 'month' | 'quarter' | 'year' | 'all' | 'custom'
@@ -1215,13 +1338,13 @@ const handleLogout = async () => {
   const [show3PLBulkUpload, setShow3PLBulkUpload] = useState(false);
   const [threeplUploadStatus, setThreeplUploadStatus] = useState(null); // { processing: bool, results: [] }
   const [threeplSelectedFiles, setThreeplSelectedFiles] = useState([]);
-  const [threeplProcessing, setThreeplProcessing] = useState(false);
+  const [threeplProcessing, setThreeplProcessing] = useState(null); // null or { current: number, total: number, fileName: string }
   const [threeplResults, setThreeplResults] = useState(null);
   
   // Ads Bulk Upload (Meta & Google)
   const [showAdsBulkUpload, setShowAdsBulkUpload] = useState(false);
   const [adsSelectedFiles, setAdsSelectedFiles] = useState([]);
-  const [adsProcessing, setAdsProcessing] = useState(false);
+  const [adsProcessing, setAdsProcessing] = useState(null); // null or { current: number, total: number, fileName: string }
   const [adsResults, setAdsResults] = useState(null);
   
   // Banking Module - QBO Transaction Data
@@ -1312,6 +1435,8 @@ const handleLogout = async () => {
   const [viewingStateHistory, setViewingStateHistory] = useState(null); // state code to view history for
   const [taxViewTab, setTaxViewTab] = useState('states'); // 'states' | 'history' | 'nexus-info'
   const [filingDetailState, setFilingDetailState] = useState(null); // { stateCode, data } for filing format modal
+  const [editingPortalUrl, setEditingPortalUrl] = useState(null); // stateCode being edited
+  const [editPortalUrlValue, setEditPortalUrlValue] = useState('');
   
   // AI Chatbot state
   const [showAIChat, setShowAIChat] = useState(false);
@@ -1410,6 +1535,79 @@ const handleLogout = async () => {
     try { return JSON.parse(localStorage.getItem('ecommerce_ai_learning_v1')) || { predictions: [], accuracy: {} }; } 
     catch { return { predictions: [], accuracy: {} }; }
   });
+  
+  // ============ UNIFIED AI MODEL ============
+  // Single source of truth for all AI learning - combines forecasts, patterns, and corrections
+  const [unifiedAIModel, setUnifiedAIModel] = useState(() => {
+    try { 
+      return JSON.parse(localStorage.getItem('ecommerce_unified_ai_v1')) || {
+        version: '1.0',
+        lastUpdated: null,
+        
+        // Data availability tracking - knows what data exists for each channel/period
+        dataAvailability: {
+          amazon: { daily: [], weekly: [], periods: [] },  // Dates/periods with data
+          shopify: { daily: [], weekly: [], periods: [] },
+          lastScanned: null,
+        },
+        
+        // Learned correction factors (from forecast vs actual comparisons)
+        corrections: {
+          overall: { revenue: 1, units: 1, profit: 1 },
+          byChannel: { amazon: { revenue: 1, units: 1 }, shopify: { revenue: 1, units: 1 } },
+          bySku: {},      // { [sku]: { units: 1.05, samples: 5 } }
+          byMonth: {},    // { [1-12]: { revenue: 0.95, samples: 3 } } - seasonality
+          byQuarter: {},  // { [1-4]: { revenue: 1.1, samples: 2 } }
+          byDayOfWeek: {}, // { 'Monday': { revenue: 0.85 }, ... }
+        },
+        
+        // Signal weights - learned weights for different forecast inputs
+        signalWeights: {
+          dailyTrend: 0.4,      // Weight for recent daily trends
+          weeklyAverage: 0.25,  // Weight for weekly averages
+          amazonForecast: 0.15, // Weight for Amazon's forecasts (if available)
+          seasonality: 0.1,     // Weight for seasonal patterns
+          momentum: 0.1,        // Weight for momentum (acceleration/deceleration)
+        },
+        
+        // Learned patterns
+        patterns: {
+          bestDays: [],         // ['Friday', 'Saturday'] - highest revenue days
+          worstDays: [],        // ['Tuesday'] - lowest revenue days
+          peakHours: [],        // If we ever get hourly data
+          seasonalPeaks: [],    // ['November', 'December']
+          skuVelocity: {},      // { [sku]: { avgUnitsPerWeek: 10, trend: 'growing' } }
+        },
+        
+        // Prediction history with outcomes
+        predictions: [],  // { id, date, type, predicted, actual, error, context }
+        
+        // Model accuracy metrics
+        accuracy: {
+          overall: null,        // Overall accuracy %
+          last30Days: null,     // Recent accuracy
+          byType: {},           // { 'daily': 85, 'weekly': 78, 'monthly': 82 }
+          trend: 'stable',      // 'improving', 'declining', 'stable'
+        },
+        
+        // Confidence levels based on data quality
+        confidence: {
+          amazon: 0,    // 0-100 based on data completeness
+          shopify: 0,
+          overall: 0,
+        },
+      }; 
+    } catch { 
+      return { version: '1.0', lastUpdated: null, dataAvailability: {}, corrections: {}, signalWeights: {}, patterns: {}, predictions: [], accuracy: {}, confidence: {} }; 
+    }
+  });
+  
+  // Persist unified AI model
+  useEffect(() => {
+    if (unifiedAIModel.lastUpdated) {
+      localStorage.setItem('ecommerce_unified_ai_v1', JSON.stringify(unifiedAIModel));
+    }
+  }, [unifiedAIModel]);
   
   useEffect(() => {
     localStorage.setItem('ecommerce_ai_learning_v1', JSON.stringify(aiLearningHistory));
@@ -2044,54 +2242,54 @@ const US_STATES_TAX_INFO = {
   AL: { name: 'Alabama', hasStateTax: true, stateRate: 0.04, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 250000, transactions: null }, marketplaceFacilitator: true, sst: true, note: 'Simplified Seller Use Tax (SSUT) program available' },
   AK: { name: 'Alaska', hasStateTax: false, stateRate: 0, filingTypes: ['local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'No state tax, but must collect for ARSSTC member localities' },
   AZ: { name: 'Arizona', hasStateTax: true, stateRate: 0.056, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'TPT license required' },
-  AR: { name: 'Arkansas', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  AR: { name: 'Arkansas', hasStateTax: true, stateRate: 0.065, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
   CA: { name: 'California', hasStateTax: true, stateRate: 0.0725, filingTypes: ['state', 'district'], reportFormat: 'district', nexusThreshold: { sales: 500000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Highest threshold - $500K sales required' },
   CO: { name: 'Colorado', hasStateTax: true, stateRate: 0.029, filingTypes: ['state', 'county', 'city', 'special'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Home rule cities (Denver, Aurora, etc.) require separate registration' },
-  CT: { name: 'Connecticut', hasStateTax: true, stateRate: 0.0635, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
+  CT: { name: 'Connecticut', hasStateTax: true, stateRate: 0.0635, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
   DE: { name: 'Delaware', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
   FL: { name: 'Florida', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false },
-  GA: { name: 'Georgia', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
-  HI: { name: 'Hawaii', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'county'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'GET (Gross Excise Tax) not traditional sales tax - applies to seller' },
+  GA: { name: 'Georgia', hasStateTax: true, stateRate: 0.04, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  HI: { name: 'Hawaii', hasStateTax: true, stateRate: 0.04, shippingTaxable: true, filingTypes: ['state', 'county'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'GET (Gross Excise Tax) not traditional sales tax - applies to seller' },
   ID: { name: 'Idaho', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
-  IL: { name: 'Illinois', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'ROT (Retailers Occupation Tax) - multiple local taxes' },
-  IN: { name: 'Indiana', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  IL: { name: 'Illinois', hasStateTax: true, stateRate: 0.0625, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'ROT (Retailers Occupation Tax) - multiple local taxes' },
+  IN: { name: 'Indiana', hasStateTax: true, stateRate: 0.07, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
   IA: { name: 'Iowa', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
-  KS: { name: 'Kansas', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
-  KY: { name: 'Kentucky', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  KS: { name: 'Kansas', hasStateTax: true, stateRate: 0.065, shippingTaxable: true, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  KY: { name: 'Kentucky', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
   LA: { name: 'Louisiana', hasStateTax: true, stateRate: 0.0445, filingTypes: ['state', 'parish'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'Parish taxes filed through Louisiana Sales Tax Commission' },
   ME: { name: 'Maine', hasStateTax: true, stateRate: 0.055, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
   MD: { name: 'Maryland', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'Annual report & LLC fees required separately' },
   MA: { name: 'Massachusetts', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false },
-  MI: { name: 'Michigan', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
-  MN: { name: 'Minnesota', hasStateTax: true, stateRate: 0.06875, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
-  MS: { name: 'Mississippi', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 250000, transactions: null }, marketplaceFacilitator: true, sst: false },
+  MI: { name: 'Michigan', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  MN: { name: 'Minnesota', hasStateTax: true, stateRate: 0.06875, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  MS: { name: 'Mississippi', hasStateTax: true, stateRate: 0.07, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 250000, transactions: null }, marketplaceFacilitator: true, sst: false },
   MO: { name: 'Missouri', hasStateTax: true, stateRate: 0.04225, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false },
   MT: { name: 'Montana', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
-  NE: { name: 'Nebraska', hasStateTax: true, stateRate: 0.055, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  NE: { name: 'Nebraska', hasStateTax: true, stateRate: 0.055, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
   NV: { name: 'Nevada', hasStateTax: true, stateRate: 0.0685, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
   NH: { name: 'New Hampshire', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
-  NJ: { name: 'New Jersey', hasStateTax: true, stateRate: 0.06625, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
-  NM: { name: 'New Mexico', hasStateTax: true, stateRate: 0.05125, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Gross Receipts Tax (GRT) - not traditional sales tax' },
-  NY: { name: 'New York', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 500000, transactions: 100 }, marketplaceFacilitator: true, sst: false, note: 'High threshold - $500K AND 100+ transactions required' },
-  NC: { name: 'North Carolina', hasStateTax: true, stateRate: 0.0475, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
-  ND: { name: 'North Dakota', hasStateTax: true, stateRate: 0.05, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
-  OH: { name: 'Ohio', hasStateTax: true, stateRate: 0.0575, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  NJ: { name: 'New Jersey', hasStateTax: true, stateRate: 0.06625, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  NM: { name: 'New Mexico', hasStateTax: true, stateRate: 0.05125, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Gross Receipts Tax (GRT) - not traditional sales tax' },
+  NY: { name: 'New York', hasStateTax: true, stateRate: 0.04, shippingTaxable: true, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 500000, transactions: 100 }, marketplaceFacilitator: true, sst: false, note: 'High threshold - $500K AND 100+ transactions required' },
+  NC: { name: 'North Carolina', hasStateTax: true, stateRate: 0.0475, shippingTaxable: true, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  ND: { name: 'North Dakota', hasStateTax: true, stateRate: 0.05, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  OH: { name: 'Ohio', hasStateTax: true, stateRate: 0.0575, shippingTaxable: true, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
   OK: { name: 'Oklahoma', hasStateTax: true, stateRate: 0.045, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
   OR: { name: 'Oregon', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
-  PA: { name: 'Pennsylvania', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Philadelphia & Allegheny County have additional local taxes' },
+  PA: { name: 'Pennsylvania', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Philadelphia & Allegheny County have additional local taxes' },
   RI: { name: 'Rhode Island', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
-  SC: { name: 'South Carolina', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
-  SD: { name: 'South Dakota', hasStateTax: true, stateRate: 0.045, filingTypes: ['state', 'municipal'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true, note: 'Origin of Wayfair decision' },
-  TN: { name: 'Tennessee', hasStateTax: true, stateRate: 0.07, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
-  TX: { name: 'Texas', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 500000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'High threshold - $500K sales required' },
+  SC: { name: 'South Carolina', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  SD: { name: 'South Dakota', hasStateTax: true, stateRate: 0.045, shippingTaxable: true, filingTypes: ['state', 'municipal'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true, note: 'Origin of Wayfair decision' },
+  TN: { name: 'Tennessee', hasStateTax: true, stateRate: 0.07, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  TX: { name: 'Texas', hasStateTax: true, stateRate: 0.0625, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 500000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'High threshold - $500K sales required' },
   UT: { name: 'Utah', hasStateTax: true, stateRate: 0.0485, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
-  VT: { name: 'Vermont', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  VT: { name: 'Vermont', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
   VA: { name: 'Virginia', hasStateTax: true, stateRate: 0.043, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
-  WA: { name: 'Washington', hasStateTax: true, stateRate: 0.065, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true, note: 'B&O tax also applies to some sellers' },
-  WV: { name: 'West Virginia', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
-  WI: { name: 'Wisconsin', hasStateTax: true, stateRate: 0.05, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  WA: { name: 'Washington', hasStateTax: true, stateRate: 0.065, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true, note: 'B&O tax also applies to some sellers' },
+  WV: { name: 'West Virginia', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  WI: { name: 'Wisconsin', hasStateTax: true, stateRate: 0.05, shippingTaxable: true, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
   WY: { name: 'Wyoming', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
-  DC: { name: 'District of Columbia', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
+  DC: { name: 'District of Columbia', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
 };
 
 // State-specific filing formats - defines exact fields needed for each state's return
@@ -2345,6 +2543,88 @@ const STATE_FILING_FORMATS = {
     }),
   },
   // Generic format for states without specific config
+  OK: {
+    name: 'Oklahoma',
+    formName: 'Form STS 20002 - Sales Tax Return',
+    website: 'https://oktap.tax.ok.gov/',
+    requiresJurisdictions: true,  // Flag for jurisdiction-level reporting
+    jurisdictionType: 'county',
+    fields: [
+      { name: 'State Tax (4.5%)', key: 'stateTax', description: 'Total state tax collected' },
+      { name: 'County/City Taxes', key: 'localTax', description: 'Breakdown by jurisdiction required' },
+      { name: 'Total Tax Due', key: 'totalTax', description: 'State + Local' },
+    ],
+    note: 'Oklahoma requires county/city breakdown. Use OkTAP portal to report by jurisdiction. Local rates vary (0-6.5% additional).',
+    calculate: (data, stateInfo) => ({
+      stateTax: (data.totalSales || data.sales || 0) * 0.045,
+      localTax: (data.taxOwed || data.tax || 0) - ((data.totalSales || data.sales || 0) * 0.045),
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+    exportFormat: 'jurisdiction', // Triggers jurisdiction-level CSV export
+  },
+  CO: {
+    name: 'Colorado',
+    formName: 'DR 0100 - Colorado Retail Sales Tax Return',
+    website: 'https://mytax.colorado.gov/',
+    requiresJurisdictions: true,
+    jurisdictionType: 'city/county',
+    fields: [
+      { name: 'State Tax (2.9%)', key: 'stateTax', description: 'State sales tax' },
+      { name: 'RTD/CD/FD Taxes', key: 'specialTax', description: 'Regional transit, cultural, football district taxes' },
+      { name: 'County Taxes', key: 'countyTax', description: 'Breakdown by county' },
+      { name: 'City/Local Taxes', key: 'cityTax', description: 'Home rule cities require separate filing!' },
+      { name: 'Total Tax Due', key: 'totalTax', description: 'All taxes' },
+    ],
+    note: 'Colorado home rule cities (Denver, Aurora, Colorado Springs, etc.) require SEPARATE registration and filing directly with the city. State-administered localities can be filed together.',
+    calculate: (data, stateInfo) => ({
+      stateTax: (data.totalSales || data.sales || 0) * 0.029,
+      specialTax: 0,
+      countyTax: 0,
+      cityTax: (data.taxOwed || data.tax || 0) - ((data.totalSales || data.sales || 0) * 0.029),
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+    exportFormat: 'jurisdiction',
+  },
+  KS: {
+    name: 'Kansas',
+    formName: 'ST-36 - Retailers Sales Tax Return',
+    website: 'https://www.ksrevenue.gov/custservsalestax.html',
+    requiresJurisdictions: true,
+    jurisdictionType: 'jurisdiction',
+    fields: [
+      { name: 'Gross Sales', key: 'grossSales', description: 'Total sales' },
+      { name: 'Exempt Sales', key: 'exemptSales', description: 'Non-taxable sales' },
+      { name: 'Taxable Sales', key: 'taxableSales', description: 'Gross minus exempt' },
+      { name: 'Tax by Jurisdiction', key: 'jurisdictionTax', description: 'Breakdown by city/county' },
+    ],
+    note: 'Kansas requires jurisdiction-level reporting. Use StreamlinedSalesTax.org or the Kansas WebFile system.',
+    calculate: (data, stateInfo) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      jurisdictionTax: data.taxOwed || data.tax || 0,
+    }),
+    exportFormat: 'jurisdiction',
+  },
+  LA: {
+    name: 'Louisiana',
+    formName: 'R-1029 - Louisiana Sales Tax Return',
+    website: 'https://latap.revenue.louisiana.gov/',
+    requiresJurisdictions: true,
+    jurisdictionType: 'parish',
+    fields: [
+      { name: 'State Tax (4.45%)', key: 'stateTax', description: 'State sales tax' },
+      { name: 'Parish Taxes', key: 'parishTax', description: 'Local parish taxes (vary widely)' },
+      { name: 'Total Tax Due', key: 'totalTax', description: 'State + Parish' },
+    ],
+    note: 'Louisiana requires parish-level reporting. Remote sellers can use the Louisiana Sales & Use Tax Commission single return for most parishes.',
+    calculate: (data, stateInfo) => ({
+      stateTax: (data.totalSales || data.sales || 0) * 0.0445,
+      parishTax: (data.taxOwed || data.tax || 0) - ((data.totalSales || data.sales || 0) * 0.0445),
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+    exportFormat: 'jurisdiction',
+  },
   DEFAULT: {
     name: 'Standard',
     formName: 'State Sales Tax Return',
@@ -2514,6 +2794,8 @@ const combinedData = useMemo(() => ({
   leadTimeSettings,
   aiForecastModule,
   aiLearningHistory,
+  // UNIFIED AI MODEL - single source of truth for all learning
+  unifiedAIModel,
   // AI Reports & Chat
   weeklyReports,
   aiMessages, // Chat history
@@ -2523,7 +2805,7 @@ const combinedData = useMemo(() => ({
   confirmedRecurring,
   // Shopify Integration credentials
   shopifyCredentials,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials]);
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -2794,6 +3076,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.leadTimeSettings) setLeadTimeSettings(cloud.leadTimeSettings);
     if (cloud.aiForecastModule) setAiForecastModule(cloud.aiForecastModule);
     if (cloud.aiLearningHistory) setAiLearningHistory(cloud.aiLearningHistory);
+    if (cloud.unifiedAIModel) setUnifiedAIModel(cloud.unifiedAIModel);
     if (cloud.weeklyReports) setWeeklyReports(cloud.weeklyReports);
     if (cloud.aiMessages) setAiMessages(cloud.aiMessages);
     if (cloud.bankingData) setBankingData(cloud.bankingData);
@@ -2828,6 +3111,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiForecasts) writeToLocal('ecommerce_ai_forecasts_v1', JSON.stringify(cloud.aiForecasts));
     if (cloud.leadTimeSettings) writeToLocal('ecommerce_lead_times_v1', JSON.stringify(cloud.leadTimeSettings));
     if (cloud.aiLearningHistory) writeToLocal('ecommerce_ai_learning_v1', JSON.stringify(cloud.aiLearningHistory));
+    if (cloud.unifiedAIModel) writeToLocal('ecommerce_unified_ai_v1', JSON.stringify(cloud.unifiedAIModel));
     if (cloud.weeklyReports) writeToLocal(WEEKLY_REPORTS_KEY, JSON.stringify(cloud.weeklyReports));
     if (cloud.aiMessages && cloud.aiMessages.length > 0) writeToLocal('ecommerce_ai_chat_history_v1', JSON.stringify(cloud.aiMessages));
     if (cloud.bankingData) writeToLocal('ecommerce_banking_v1', JSON.stringify(cloud.bankingData));
@@ -4042,24 +4326,56 @@ const savePeriods = async (d) => {
       
       // CRITICAL: Merge with existing data - preserve channels that weren't uploaded
       const existingDayData = allDaysData[selectedDay] || {};
+      const existingShopify = existingDayData.shopify || {};
+      
+      // Preserve ALL existing ads data
+      const metaSpend = existingDayData.metaSpend || existingShopify.metaSpend || 0;
+      const googleSpend = existingDayData.googleSpend || existingShopify.googleSpend || 0;
+      const totalAds = metaSpend + googleSpend;
       
       // Only update channels that were actually uploaded, preserve others
+      // But merge ad data into shopify object
+      const uploadedShopify = dailyFiles.shopify ? dayData.shopify : existingShopify;
+      const mergedShopify = {
+        ...uploadedShopify,
+        metaSpend: metaSpend,
+        metaAds: metaSpend,
+        googleSpend: googleSpend,
+        googleAds: googleSpend,
+        adSpend: totalAds,
+      };
+      
+      // Recalculate profit if we have ad spend
+      if (totalAds > 0 && mergedShopify.revenue > 0) {
+        const grossProfit = (mergedShopify.revenue || 0) - (mergedShopify.cogs || 0) - (mergedShopify.threeplCosts || 0);
+        mergedShopify.netProfit = grossProfit - totalAds;
+        mergedShopify.netMargin = mergedShopify.revenue > 0 ? (mergedShopify.netProfit / mergedShopify.revenue) * 100 : 0;
+        mergedShopify.roas = totalAds > 0 ? mergedShopify.revenue / totalAds : 0;
+      }
+      
       const mergedDayData = {
         ...existingDayData,
         date: selectedDay,
         createdAt: new Date().toISOString(),
         // Preserve existing Amazon data if no new Amazon file uploaded
         amazon: dailyFiles.amazon ? dayData.amazon : existingDayData.amazon,
-        // Preserve existing Shopify data if no new Shopify file uploaded
-        shopify: dailyFiles.shopify ? dayData.shopify : existingDayData.shopify,
-        // Preserve any existing ads data (Meta/Google from bulk upload)
-        metaSpend: existingDayData.metaSpend,
+        // Shopify with merged ad data
+        shopify: mergedShopify,
+        // Preserve ALL existing ads data (Meta/Google from bulk upload)
+        metaSpend: metaSpend,
+        metaAds: metaSpend,
         metaImpressions: existingDayData.metaImpressions,
         metaClicks: existingDayData.metaClicks,
+        metaCpc: existingDayData.metaCpc,
+        metaCpa: existingDayData.metaCpa,
+        metaConversions: existingDayData.metaConversions,
         metaPurchases: existingDayData.metaPurchases,
-        googleSpend: existingDayData.googleSpend,
+        googleSpend: googleSpend,
+        googleAds: googleSpend,
         googleImpressions: existingDayData.googleImpressions,
         googleClicks: existingDayData.googleClicks,
+        googleCpc: existingDayData.googleCpc,
+        googleCpa: existingDayData.googleCpa,
         googleConversions: existingDayData.googleConversions,
       };
       
@@ -4525,7 +4841,48 @@ const savePeriods = async (d) => {
     setToast({ message: 'Period data saved successfully!', type: 'success' });
   }, [periodFiles, periodAdSpend, periodLabel, allPeriodsData, savedCogs, savePeriods]);
 
-  const deletePeriod = (k) => { if (!confirm(`Delete ${k}?`)) return; const u = { ...allPeriodsData }; delete u[k]; setAllPeriodsData(u); savePeriods(u); const r = Object.keys(u).sort().reverse(); if (r.length) setSelectedPeriod(r[0]); else { setUploadTab('period'); setView('upload'); setSelectedPeriod(null); }};
+  const deletePeriod = (k) => { 
+    const data = allPeriodsData[k];
+    if (!data) return;
+    
+    // Show preview of what's being deleted
+    const revenue = data.total?.revenue || 0;
+    const units = data.total?.units || 0;
+    
+    // Delete immediately but allow undo
+    const u = { ...allPeriodsData }; 
+    delete u[k]; 
+    setAllPeriodsData(u); 
+    savePeriods(u); 
+    
+    // Store deleted item for undo
+    const undoId = Date.now();
+    const undoTimer = setTimeout(() => {
+      setDeletedItems(prev => prev.filter(item => item.id !== undoId));
+    }, 10000);
+    
+    setDeletedItems(prev => [...prev, { id: undoId, type: 'period', key: k, data, undoTimer }]);
+    setToast({ 
+      message: `Deleted ${k} ($${revenue.toFixed(0)} rev, ${units} units)`, 
+      type: 'warning',
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          clearTimeout(undoTimer);
+          const restored = { ...allPeriodsData, [k]: data };
+          setAllPeriodsData(restored);
+          savePeriods(restored);
+          setSelectedPeriod(k);
+          setDeletedItems(prev => prev.filter(item => item.id !== undoId));
+          setToast({ message: `Restored ${k}`, type: 'success' });
+        }
+      }
+    });
+    
+    const r = Object.keys(u).sort().reverse(); 
+    if (r.length) setSelectedPeriod(r[0]); 
+    else { setUploadTab('period'); setView('upload'); setSelectedPeriod(null); }
+  };
 
   const processInventory = useCallback(() => {
     if (!invFiles.amazon || !invSnapshotDate) { alert('Upload Amazon FBA file and select date'); return; }
@@ -4646,8 +5003,88 @@ const savePeriods = async (d) => {
     setInvFiles({ amazon: null, threepl: null, cogs: null }); setInvFileNames({ amazon: '', threepl: '', cogs: '' }); setInvSnapshotDate('');
   }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, forecastCorrections]);
 
-  const deleteWeek = (k) => { if (!confirm(`Delete ${k}?`)) return; const u = { ...allWeeksData }; delete u[k]; setAllWeeksData(u); save(u); const r = Object.keys(u).sort().reverse(); if (r.length) setSelectedWeek(r[0]); else { setView('upload'); setSelectedWeek(null); }};
-  const deleteInv = (k) => { if (!confirm(`Delete ${k}?`)) return; const u = { ...invHistory }; delete u[k]; setInvHistory(u); saveInv(u); const r = Object.keys(u).sort().reverse(); if (r.length) setSelectedInvDate(r[0]); else setSelectedInvDate(null); };
+  const deleteWeek = (k) => { 
+    const data = allWeeksData[k];
+    if (!data) return;
+    
+    const revenue = data.total?.revenue || 0;
+    const units = data.total?.units || 0;
+    
+    // Delete immediately
+    const u = { ...allWeeksData }; 
+    delete u[k]; 
+    setAllWeeksData(u); 
+    save(u); 
+    
+    // Store for undo
+    const undoId = Date.now();
+    const undoTimer = setTimeout(() => {
+      setDeletedItems(prev => prev.filter(item => item.id !== undoId));
+    }, 10000);
+    
+    setDeletedItems(prev => [...prev, { id: undoId, type: 'week', key: k, data, undoTimer }]);
+    setToast({ 
+      message: `Deleted week ${k} ($${revenue.toFixed(0)} rev, ${units} units)`, 
+      type: 'warning',
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          clearTimeout(undoTimer);
+          const restored = { ...allWeeksData, [k]: data };
+          setAllWeeksData(restored);
+          save(restored);
+          setSelectedWeek(k);
+          setDeletedItems(prev => prev.filter(item => item.id !== undoId));
+          setToast({ message: `Restored week ${k}`, type: 'success' });
+        }
+      }
+    });
+    
+    const r = Object.keys(u).sort().reverse(); 
+    if (r.length) setSelectedWeek(r[0]); 
+    else { setView('upload'); setSelectedWeek(null); }
+  };
+  
+  const deleteInv = (k) => { 
+    const data = invHistory[k];
+    if (!data) return;
+    
+    const totalUnits = data.summary?.totalUnits || 0;
+    
+    // Delete immediately
+    const u = { ...invHistory }; 
+    delete u[k]; 
+    setInvHistory(u); 
+    saveInv(u); 
+    
+    // Store for undo
+    const undoId = Date.now();
+    const undoTimer = setTimeout(() => {
+      setDeletedItems(prev => prev.filter(item => item.id !== undoId));
+    }, 10000);
+    
+    setDeletedItems(prev => [...prev, { id: undoId, type: 'inventory', key: k, data, undoTimer }]);
+    setToast({ 
+      message: `Deleted inventory ${k} (${totalUnits} units)`, 
+      type: 'warning',
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          clearTimeout(undoTimer);
+          const restored = { ...invHistory, [k]: data };
+          setInvHistory(restored);
+          saveInv(restored);
+          setSelectedInvDate(k);
+          setDeletedItems(prev => prev.filter(item => item.id !== undoId));
+          setToast({ message: `Restored inventory ${k}`, type: 'success' });
+        }
+      }
+    });
+    
+    const r = Object.keys(u).sort().reverse(); 
+    if (r.length) setSelectedInvDate(r[0]); 
+    else setSelectedInvDate(null); 
+  };
 
   const updateWeekAdSpend = useCallback((weekKey, metaSpend, googleSpend) => {
     const week = allWeeksData[weekKey];
@@ -5357,29 +5794,68 @@ const savePeriods = async (d) => {
           
           const dayKey = d.date; // YYYY-MM-DD format
           const existingDay = updatedDays[dayKey] || {};
+          const existingShopify = existingDay.shopify || { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0 };
           
-          // Store ad spend in daily data
+          // Store ad spend in daily data - both at top level AND in shopify object
           if (platform === 'google') {
+            const newGoogleSpend = d.spend;
+            const existingMeta = existingDay.metaSpend || existingShopify.metaSpend || 0;
+            const totalAds = existingMeta + newGoogleSpend;
+            
+            // Recalculate profit with updated ad spend
+            const grossProfit = (existingShopify.revenue || 0) - (existingShopify.cogs || 0) - (existingShopify.threeplCosts || 0);
+            const newNetProfit = grossProfit - totalAds;
+            
             updatedDays[dayKey] = {
               ...existingDay,
-              googleSpend: d.spend,
-              googleAds: d.spend,
+              // Top level ad data
+              googleSpend: newGoogleSpend,
+              googleAds: newGoogleSpend,
               googleImpressions: d.impressions,
               googleClicks: d.clicks,
               googleCpc: d.cpc,
               googleCpa: d.cpa,
               googleConversions: d.conversions,
+              // Also update shopify object
+              shopify: {
+                ...existingShopify,
+                googleSpend: newGoogleSpend,
+                googleAds: newGoogleSpend,
+                adSpend: totalAds,
+                netProfit: existingShopify.revenue > 0 ? newNetProfit : existingShopify.netProfit,
+                netMargin: existingShopify.revenue > 0 ? (newNetProfit / existingShopify.revenue) * 100 : 0,
+                roas: totalAds > 0 ? existingShopify.revenue / totalAds : 0,
+              },
             };
           } else {
+            const newMetaSpend = d.spend;
+            const existingGoogle = existingDay.googleSpend || existingShopify.googleSpend || 0;
+            const totalAds = newMetaSpend + existingGoogle;
+            
+            // Recalculate profit with updated ad spend
+            const grossProfit = (existingShopify.revenue || 0) - (existingShopify.cogs || 0) - (existingShopify.threeplCosts || 0);
+            const newNetProfit = grossProfit - totalAds;
+            
             updatedDays[dayKey] = {
               ...existingDay,
-              metaSpend: d.spend,
-              metaAds: d.spend,
+              // Top level ad data
+              metaSpend: newMetaSpend,
+              metaAds: newMetaSpend,
               metaImpressions: d.impressions,
               metaClicks: d.clicks,
               metaCpc: d.cpc,
               metaCpa: d.cpa,
               metaConversions: d.conversions,
+              // Also update shopify object
+              shopify: {
+                ...existingShopify,
+                metaSpend: newMetaSpend,
+                metaAds: newMetaSpend,
+                adSpend: totalAds,
+                netProfit: existingShopify.revenue > 0 ? newNetProfit : existingShopify.netProfit,
+                netMargin: existingShopify.revenue > 0 ? (newNetProfit / existingShopify.revenue) * 100 : 0,
+                roas: totalAds > 0 ? existingShopify.revenue / totalAds : 0,
+              },
             };
           }
           dailyCount++;
@@ -5622,6 +6098,8 @@ const savePeriods = async (d) => {
       leadTimeSettings,
       aiForecastModule,
       aiLearningHistory,
+      // UNIFIED AI MODEL - single source of truth for all learning
+      unifiedAIModel,
       // AI & Reports
       weeklyReports,
       aiMessages,
@@ -5651,17 +6129,75 @@ const savePeriods = async (d) => {
         // Build merged data for cloud sync
         let mergedData = { ...combinedData };
         
-        // Core data
+        // Core data - deep merge to preserve ad data in weekly data
         if (d.sales && Object.keys(d.sales).length > 0) { 
-          const mergedSales = {...allWeeksData, ...d.sales};
+          const mergedSales = { ...allWeeksData };
+          Object.entries(d.sales).forEach(([weekKey, weekData]) => {
+            const existing = mergedSales[weekKey] || {};
+            const existingShopify = existing.shopify || {};
+            const newShopify = weekData.shopify || {};
+            
+            // Preserve ad data from both sources (existing takes precedence)
+            const metaSpend = existingShopify.metaSpend || existingShopify.metaAds || newShopify.metaSpend || newShopify.metaAds || 0;
+            const googleSpend = existingShopify.googleSpend || existingShopify.googleAds || newShopify.googleSpend || newShopify.googleAds || 0;
+            const totalAds = metaSpend + googleSpend;
+            
+            mergedSales[weekKey] = {
+              ...existing,
+              ...weekData,
+              shopify: {
+                ...newShopify,
+                metaSpend: metaSpend,
+                metaAds: metaSpend,
+                googleSpend: googleSpend,
+                googleAds: googleSpend,
+                adSpend: totalAds || newShopify.adSpend || 0,
+              },
+            };
+          });
           setAllWeeksData(mergedSales); 
           await save(mergedSales); 
           mergedData.sales = mergedSales;
           restored.push(`${Object.keys(d.sales).length} weeks`);
         }
-        // Daily data
+        // Daily data - deep merge to preserve ad data
         if (d.dailySales && Object.keys(d.dailySales).length > 0) {
-          const mergedDays = {...allDaysData, ...d.dailySales};
+          const mergedDays = { ...allDaysData };
+          Object.entries(d.dailySales).forEach(([dateKey, dayData]) => {
+            const existing = mergedDays[dateKey] || {};
+            // Preserve ad data from both sources
+            const metaSpend = existing.metaSpend || existing.shopify?.metaSpend || dayData.metaSpend || dayData.shopify?.metaSpend || 0;
+            const googleSpend = existing.googleSpend || existing.shopify?.googleSpend || dayData.googleSpend || dayData.shopify?.googleSpend || 0;
+            
+            mergedDays[dateKey] = {
+              ...existing,
+              ...dayData,
+              // Ensure ad data is preserved
+              metaSpend: metaSpend,
+              metaAds: metaSpend,
+              metaImpressions: existing.metaImpressions || dayData.metaImpressions,
+              metaClicks: existing.metaClicks || dayData.metaClicks,
+              metaCpc: existing.metaCpc || dayData.metaCpc,
+              metaCpa: existing.metaCpa || dayData.metaCpa,
+              metaConversions: existing.metaConversions || dayData.metaConversions,
+              googleSpend: googleSpend,
+              googleAds: googleSpend,
+              googleImpressions: existing.googleImpressions || dayData.googleImpressions,
+              googleClicks: existing.googleClicks || dayData.googleClicks,
+              googleCpc: existing.googleCpc || dayData.googleCpc,
+              googleCpa: existing.googleCpa || dayData.googleCpa,
+              googleConversions: existing.googleConversions || dayData.googleConversions,
+              // Merge shopify with ad data
+              shopify: dayData.shopify ? {
+                ...dayData.shopify,
+                metaSpend: metaSpend,
+                metaAds: metaSpend,
+                googleSpend: googleSpend,
+                googleAds: googleSpend,
+                adSpend: metaSpend + googleSpend,
+              } : existing.shopify,
+            };
+          });
           setAllDaysData(mergedDays);
           lsSet('ecommerce_daily_sales_v1', JSON.stringify(mergedDays));
           mergedData.dailySales = mergedDays;
@@ -5808,6 +6344,13 @@ const savePeriods = async (d) => {
           lsSet('ecommerce_ai_learning_v1', JSON.stringify(d.aiLearningHistory));
           mergedData.aiLearningHistory = d.aiLearningHistory;
           restored.push('AI learning history');
+        }
+        // UNIFIED AI MODEL - restore comprehensive learning state
+        if (d.unifiedAIModel && d.unifiedAIModel.lastUpdated) {
+          setUnifiedAIModel(d.unifiedAIModel);
+          lsSet('ecommerce_unified_ai_v1', JSON.stringify(d.unifiedAIModel));
+          mergedData.unifiedAIModel = d.unifiedAIModel;
+          restored.push('Unified AI model');
         }
         if (d.weeklyReports && Object.keys(d.weeklyReports).length > 0) {
           setWeeklyReports(d.weeklyReports);
@@ -6675,6 +7218,566 @@ const savePeriods = async (d) => {
     }
   }, [getAmazonForecastComparison, forecastAccuracyHistory.records]);
   // ============ END AUTO-LEARNING EFFECT ============
+
+  // ============ UNIFIED AI LEARNING SYSTEM ============
+  // This is the master learning system that combines all data sources and learns continuously
+  
+  // Helper: Scan data availability across all sources
+  const scanDataAvailability = useCallback(() => {
+    const amazon = { daily: [], weekly: [], periods: [] };
+    const shopify = { daily: [], weekly: [], periods: [] };
+    
+    // Scan daily data
+    Object.entries(allDaysData).forEach(([dateKey, dayData]) => {
+      if (dayData.amazon?.revenue > 0 || dayData.amazon?.units > 0) {
+        amazon.daily.push(dateKey);
+      }
+      if (dayData.shopify?.revenue > 0 || dayData.shopify?.units > 0) {
+        shopify.daily.push(dateKey);
+      }
+    });
+    
+    // Scan weekly data
+    Object.entries(allWeeksData).forEach(([weekKey, weekData]) => {
+      if (weekData.amazon?.revenue > 0 || weekData.amazon?.units > 0) {
+        amazon.weekly.push(weekKey);
+      }
+      if (weekData.shopify?.revenue > 0 || weekData.shopify?.units > 0) {
+        shopify.weekly.push(weekKey);
+      }
+    });
+    
+    // Scan period data (monthly, quarterly, yearly)
+    Object.entries(allPeriodsData).forEach(([periodKey, periodData]) => {
+      if (periodData.amazon?.revenue > 0 || periodData.amazon?.units > 0) {
+        amazon.periods.push(periodKey);
+      }
+      if (periodData.shopify?.revenue > 0 || periodData.shopify?.units > 0) {
+        shopify.periods.push(periodKey);
+      }
+    });
+    
+    return { amazon, shopify, lastScanned: new Date().toISOString() };
+  }, [allDaysData, allWeeksData, allPeriodsData]);
+  
+  // Helper: Get estimated daily average from period data when daily data isn't available
+  const getEstimatedDailyFromPeriod = useCallback((channel, dateKey) => {
+    // Find which period this date falls into
+    const date = new Date(dateKey + 'T12:00:00');
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    const quarter = Math.ceil(month / 3);
+    
+    // Try monthly first, then quarterly, then yearly
+    const monthKey = `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][month-1]} ${year}`;
+    const quarterKey = `Q${quarter} ${year}`;
+    const yearKey = `${year}`;
+    
+    for (const periodKey of [monthKey, quarterKey, yearKey]) {
+      const periodData = allPeriodsData[periodKey];
+      if (periodData && periodData[channel]?.revenue > 0) {
+        // Calculate days in period
+        let daysInPeriod = 30; // default for monthly
+        if (periodKey.startsWith('Q')) daysInPeriod = 91;
+        if (/^\d{4}$/.test(periodKey)) daysInPeriod = 365;
+        
+        return {
+          estimatedRevenue: periodData[channel].revenue / daysInPeriod,
+          estimatedUnits: periodData[channel].units / daysInPeriod,
+          estimatedProfit: periodData[channel].netProfit / daysInPeriod,
+          source: periodKey,
+          daysInPeriod,
+          isEstimate: true,
+        };
+      }
+    }
+    return null;
+  }, [allPeriodsData]);
+  
+  // Helper: Check if a day has complete data for a channel
+  const hasDayData = useCallback((channel, dateKey) => {
+    const dayData = allDaysData[dateKey];
+    if (!dayData) return false;
+    const channelData = dayData[channel];
+    return channelData && (channelData.revenue > 0 || channelData.units > 0);
+  }, [allDaysData]);
+  
+  // Helper: Get smart daily data that uses actuals when available, estimates when not
+  const getSmartDailyData = useCallback((dateKey) => {
+    const dayData = allDaysData[dateKey] || {};
+    const result = {
+      date: dateKey,
+      amazon: { revenue: 0, units: 0, profit: 0, isEstimate: false, source: 'none' },
+      shopify: { revenue: 0, units: 0, profit: 0, isEstimate: false, source: 'none' },
+      total: { revenue: 0, units: 0, profit: 0 },
+      hasActualAmazon: false,
+      hasActualShopify: false,
+      isComplete: false,
+    };
+    
+    // Amazon data
+    if (hasDayData('amazon', dateKey)) {
+      result.amazon = {
+        revenue: dayData.amazon.revenue || 0,
+        units: dayData.amazon.units || 0,
+        profit: dayData.amazon.netProfit || 0,
+        isEstimate: false,
+        source: 'daily',
+      };
+      result.hasActualAmazon = true;
+    } else {
+      // Try to get estimate from period data
+      const estimate = getEstimatedDailyFromPeriod('amazon', dateKey);
+      if (estimate) {
+        result.amazon = {
+          revenue: estimate.estimatedRevenue,
+          units: estimate.estimatedUnits,
+          profit: estimate.estimatedProfit,
+          isEstimate: true,
+          source: estimate.source,
+        };
+      }
+    }
+    
+    // Shopify data
+    if (hasDayData('shopify', dateKey)) {
+      result.shopify = {
+        revenue: dayData.shopify.revenue || 0,
+        units: dayData.shopify.units || 0,
+        profit: dayData.shopify.netProfit || 0,
+        isEstimate: false,
+        source: 'daily',
+      };
+      result.hasActualShopify = true;
+    } else {
+      const estimate = getEstimatedDailyFromPeriod('shopify', dateKey);
+      if (estimate) {
+        result.shopify = {
+          revenue: estimate.estimatedRevenue,
+          units: estimate.estimatedUnits,
+          profit: estimate.estimatedProfit,
+          isEstimate: true,
+          source: estimate.source,
+        };
+      }
+    }
+    
+    // Calculate totals
+    result.total = {
+      revenue: result.amazon.revenue + result.shopify.revenue,
+      units: result.amazon.units + result.shopify.units,
+      profit: result.amazon.profit + result.shopify.profit,
+    };
+    result.isComplete = result.hasActualAmazon && result.hasActualShopify;
+    
+    return result;
+  }, [allDaysData, hasDayData, getEstimatedDailyFromPeriod]);
+  
+  // Helper: Calculate trend excluding days without data (don't treat missing as $0)
+  const calculateSmartTrend = useCallback((daysCount = 14, channel = 'total') => {
+    const today = new Date();
+    const days = [];
+    
+    for (let i = 0; i < daysCount * 2; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const dateKey = d.toISOString().split('T')[0];
+      const smartData = getSmartDailyData(dateKey);
+      
+      // Only include days that have actual data for the requested channel
+      // For 'total', require at least one channel to have actual data
+      const hasData = channel === 'total' 
+        ? (smartData.hasActualAmazon || smartData.hasActualShopify)
+        : (channel === 'amazon' ? smartData.hasActualAmazon : smartData.hasActualShopify);
+      
+      if (hasData) {
+        days.push({
+          date: dateKey,
+          revenue: channel === 'total' ? smartData.total.revenue : smartData[channel].revenue,
+          profit: channel === 'total' ? smartData.total.profit : smartData[channel].profit,
+          isEstimate: channel === 'total' 
+            ? (smartData.amazon.isEstimate && smartData.shopify.isEstimate)
+            : smartData[channel].isEstimate,
+        });
+      }
+      
+      if (days.length >= daysCount) break;
+    }
+    
+    if (days.length < 4) return { trend: 0, recentAvg: 0, priorAvg: 0, daysAnalyzed: days.length, message: 'Insufficient data' };
+    
+    const half = Math.floor(days.length / 2);
+    const recent = days.slice(0, half);
+    const prior = days.slice(half);
+    
+    const recentAvg = recent.reduce((s, d) => s + d.revenue, 0) / recent.length;
+    const priorAvg = prior.reduce((s, d) => s + d.revenue, 0) / prior.length;
+    const trend = priorAvg > 0 ? ((recentAvg - priorAvg) / priorAvg) * 100 : 0;
+    
+    return {
+      trend,
+      recentAvg,
+      priorAvg,
+      daysAnalyzed: days.length,
+      recentDays: recent.length,
+      priorDays: prior.length,
+      excludedEstimates: daysCount - days.length,
+    };
+  }, [getSmartDailyData]);
+  
+  // Main unified AI model update effect
+  useEffect(() => {
+    // Don't run until we have some data
+    if (Object.keys(allDaysData).length === 0 && Object.keys(allWeeksData).length === 0 && Object.keys(allPeriodsData).length === 0) {
+      return;
+    }
+    
+    // Debounce updates
+    const updateModel = () => {
+      const dataAvailability = scanDataAvailability();
+      
+      // Calculate confidence based on data completeness
+      const amazonDailyCount = dataAvailability.amazon.daily.length;
+      const amazonPeriodCount = dataAvailability.amazon.periods.length;
+      const shopifyDailyCount = dataAvailability.shopify.daily.length;
+      const shopifyPeriodCount = dataAvailability.shopify.periods.length;
+      
+      // Amazon confidence: daily data is best, period data is okay
+      const amazonConfidence = Math.min(100, (amazonDailyCount * 3) + (amazonPeriodCount * 10));
+      const shopifyConfidence = Math.min(100, (shopifyDailyCount * 3) + (shopifyPeriodCount * 10));
+      const overallConfidence = Math.round((amazonConfidence + shopifyConfidence) / 2);
+      
+      // Learn day-of-week patterns from actual daily data only
+      const dayOfWeekPatterns = {};
+      Object.entries(allDaysData).forEach(([dateKey, dayData]) => {
+        // Only use days with actual sales data, not estimates
+        if (!dayData.total?.revenue && !dayData.shopify?.revenue && !dayData.amazon?.revenue) return;
+        
+        const dayName = new Date(dateKey + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' });
+        if (!dayOfWeekPatterns[dayName]) {
+          dayOfWeekPatterns[dayName] = { count: 0, totalRevenue: 0, totalProfit: 0 };
+        }
+        dayOfWeekPatterns[dayName].count++;
+        dayOfWeekPatterns[dayName].totalRevenue += dayData.total?.revenue || dayData.shopify?.revenue || dayData.amazon?.revenue || 0;
+        dayOfWeekPatterns[dayName].totalProfit += dayData.total?.netProfit || dayData.shopify?.netProfit || dayData.amazon?.netProfit || 0;
+      });
+      
+      // Calculate averages and find best/worst days
+      const dayStats = Object.entries(dayOfWeekPatterns).map(([day, data]) => ({
+        day,
+        avgRevenue: data.count > 0 ? data.totalRevenue / data.count : 0,
+        avgProfit: data.count > 0 ? data.totalProfit / data.count : 0,
+        samples: data.count,
+      })).sort((a, b) => b.avgRevenue - a.avgRevenue);
+      
+      const bestDays = dayStats.filter(d => d.samples >= 3).slice(0, 2).map(d => d.day);
+      const worstDays = dayStats.filter(d => d.samples >= 3).slice(-2).map(d => d.day);
+      
+      // Learn seasonal patterns from period data
+      const monthlyRevenue = {};
+      Object.entries(allPeriodsData).forEach(([periodKey, data]) => {
+        const monthMatch = periodKey.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i);
+        if (monthMatch) {
+          const month = monthMatch[1];
+          if (!monthlyRevenue[month]) monthlyRevenue[month] = [];
+          monthlyRevenue[month].push(data.total?.revenue || 0);
+        }
+      });
+      
+      // Find peak months
+      const monthAvgs = Object.entries(monthlyRevenue).map(([month, revenues]) => ({
+        month,
+        avgRevenue: revenues.reduce((a, b) => a + b, 0) / revenues.length,
+        samples: revenues.length,
+      })).sort((a, b) => b.avgRevenue - a.avgRevenue);
+      
+      const seasonalPeaks = monthAvgs.filter(m => m.samples >= 1).slice(0, 3).map(m => m.month);
+      
+      // Merge existing correction factors (don't overwrite, just enhance)
+      const existingCorrections = unifiedAIModel.corrections || {};
+      const mergedCorrections = {
+        ...existingCorrections,
+        overall: forecastCorrections.overall || existingCorrections.overall || { revenue: 1, units: 1, profit: 1 },
+        bySku: { ...existingCorrections.bySku, ...forecastCorrections.bySku },
+        byMonth: { ...existingCorrections.byMonth, ...forecastCorrections.byMonth },
+        byQuarter: { ...existingCorrections.byQuarter, ...forecastCorrections.byQuarter },
+        byDayOfWeek: Object.fromEntries(
+          dayStats.filter(d => d.samples >= 5).map(d => {
+            const overallAvg = dayStats.reduce((s, x) => s + x.avgRevenue, 0) / dayStats.length;
+            return [d.day, { revenue: overallAvg > 0 ? d.avgRevenue / overallAvg : 1 }];
+          })
+        ),
+      };
+      
+      // Update the model
+      setUnifiedAIModel(prev => ({
+        ...prev,
+        lastUpdated: new Date().toISOString(),
+        dataAvailability,
+        confidence: {
+          amazon: amazonConfidence,
+          shopify: shopifyConfidence,
+          overall: overallConfidence,
+        },
+        corrections: mergedCorrections,
+        patterns: {
+          ...prev.patterns,
+          bestDays,
+          worstDays,
+          seasonalPeaks,
+          dayOfWeekStats: dayStats,
+          monthlyStats: monthAvgs,
+        },
+        // Merge learning from forecastCorrections
+        signalWeights: {
+          dailyTrend: shopifyDailyCount > 14 ? 0.4 : 0.2,  // Less weight if little daily data
+          weeklyAverage: 0.25,
+          amazonForecast: amazonPeriodCount > 0 ? 0.2 : 0.1,
+          seasonality: monthAvgs.length > 3 ? 0.1 : 0.05,
+          momentum: 0.1,
+        },
+      }));
+    };
+    
+    // Debounce to avoid excessive updates
+    const timer = setTimeout(updateModel, 1000);
+    return () => clearTimeout(timer);
+  }, [allDaysData, allWeeksData, allPeriodsData, forecastCorrections, scanDataAvailability]);
+  
+  // ============ SMART DATA AGGREGATION ============
+  // Provides comprehensive business metrics that properly handle gaps in daily data
+  // Uses period data (monthly/quarterly) to fill in when daily data isn't available
+  const unifiedBusinessMetrics = useMemo(() => {
+    const metrics = {
+      // Overall totals - prefer period data for historical accuracy
+      allTime: { amazon: { revenue: 0, units: 0, profit: 0 }, shopify: { revenue: 0, units: 0, profit: 0 }, total: { revenue: 0, units: 0, profit: 0 } },
+      
+      // By year breakdown
+      byYear: {},
+      
+      // Data source tracking - helps AI understand data completeness
+      dataSources: {
+        amazon: { dailyDates: [], periodNames: [], hasDailyGaps: false, gapsCoveredByPeriods: [] },
+        shopify: { dailyDates: [], periodNames: [], hasDailyGaps: false, gapsCoveredByPeriods: [] },
+      },
+      
+      // Proper averages that don't treat missing days as $0
+      averages: {
+        dailyRevenue: { amazon: 0, shopify: 0, total: 0, daysUsed: 0 },
+        weeklyRevenue: { amazon: 0, shopify: 0, total: 0, weeksUsed: 0 },
+        monthlyRevenue: { amazon: 0, shopify: 0, total: 0, monthsUsed: 0 },
+      },
+    };
+    
+    // Track which periods/years we have data for
+    const yearlyTotals = {};
+    const periodsCounted = new Set();
+    
+    // First pass: Collect all period data (most accurate for historical totals)
+    Object.entries(allPeriodsData).forEach(([periodKey, data]) => {
+      // Extract year from period key
+      const yearMatch = periodKey.match(/(\d{4})/);
+      const year = yearMatch ? yearMatch[1] : 'Unknown';
+      
+      if (!yearlyTotals[year]) {
+        yearlyTotals[year] = { 
+          amazon: { revenue: 0, units: 0, profit: 0, sources: [] }, 
+          shopify: { revenue: 0, units: 0, profit: 0, sources: [] },
+          total: { revenue: 0, units: 0, profit: 0 },
+        };
+      }
+      
+      // Check if this is a monthly period (most granular period data)
+      const isMonthly = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i.test(periodKey);
+      const isQuarterly = /^Q\d/i.test(periodKey);
+      const isYearly = /^\d{4}$/.test(periodKey);
+      
+      // For yearly totals, prefer monthly data, then quarterly, then yearly
+      // Only add if we haven't already counted this data
+      if (isMonthly) {
+        // Monthly data - most accurate, always use
+        if (data.amazon?.revenue > 0) {
+          yearlyTotals[year].amazon.revenue += data.amazon.revenue;
+          yearlyTotals[year].amazon.units += data.amazon.units || 0;
+          yearlyTotals[year].amazon.profit += data.amazon.netProfit || 0;
+          yearlyTotals[year].amazon.sources.push(periodKey);
+          metrics.dataSources.amazon.periodNames.push(periodKey);
+        }
+        if (data.shopify?.revenue > 0) {
+          yearlyTotals[year].shopify.revenue += data.shopify.revenue;
+          yearlyTotals[year].shopify.units += data.shopify.units || 0;
+          yearlyTotals[year].shopify.profit += data.shopify.netProfit || 0;
+          yearlyTotals[year].shopify.sources.push(periodKey);
+          metrics.dataSources.shopify.periodNames.push(periodKey);
+        }
+        periodsCounted.add(periodKey);
+      } else if (isQuarterly && !periodsCounted.has(periodKey)) {
+        // Check if we already have monthly data for this quarter
+        const quarterNum = parseInt(periodKey.match(/Q(\d)/)?.[1] || '0');
+        const monthsInQuarter = {
+          1: ['Jan', 'Feb', 'Mar'],
+          2: ['Apr', 'May', 'Jun'],
+          3: ['Jul', 'Aug', 'Sep'],
+          4: ['Oct', 'Nov', 'Dec'],
+        }[quarterNum] || [];
+        
+        const hasMonthlyData = monthsInQuarter.some(m => periodsCounted.has(`${m} ${year}`));
+        
+        if (!hasMonthlyData) {
+          // Use quarterly data since we don't have monthly
+          if (data.amazon?.revenue > 0) {
+            yearlyTotals[year].amazon.revenue += data.amazon.revenue;
+            yearlyTotals[year].amazon.units += data.amazon.units || 0;
+            yearlyTotals[year].amazon.profit += data.amazon.netProfit || 0;
+            yearlyTotals[year].amazon.sources.push(periodKey);
+            metrics.dataSources.amazon.periodNames.push(periodKey);
+          }
+          if (data.shopify?.revenue > 0) {
+            yearlyTotals[year].shopify.revenue += data.shopify.revenue;
+            yearlyTotals[year].shopify.units += data.shopify.units || 0;
+            yearlyTotals[year].shopify.profit += data.shopify.netProfit || 0;
+            yearlyTotals[year].shopify.sources.push(periodKey);
+            metrics.dataSources.shopify.periodNames.push(periodKey);
+          }
+          periodsCounted.add(periodKey);
+        }
+      }
+    });
+    
+    // For 2026 (current year), also check weekly data if no period data
+    const currentYear = new Date().getFullYear().toString();
+    if (!yearlyTotals[currentYear] || yearlyTotals[currentYear].amazon.sources.length === 0) {
+      if (!yearlyTotals[currentYear]) {
+        yearlyTotals[currentYear] = { 
+          amazon: { revenue: 0, units: 0, profit: 0, sources: [] }, 
+          shopify: { revenue: 0, units: 0, profit: 0, sources: [] },
+          total: { revenue: 0, units: 0, profit: 0 },
+        };
+      }
+      
+      // Use weekly data for current year
+      Object.entries(allWeeksData).forEach(([weekKey, data]) => {
+        if (weekKey.startsWith(currentYear)) {
+          if (data.amazon?.revenue > 0) {
+            yearlyTotals[currentYear].amazon.revenue += data.amazon.revenue;
+            yearlyTotals[currentYear].amazon.units += data.amazon.units || 0;
+            yearlyTotals[currentYear].amazon.profit += data.amazon.netProfit || 0;
+            yearlyTotals[currentYear].amazon.sources.push(`Week ${weekKey}`);
+          }
+          if (data.shopify?.revenue > 0) {
+            yearlyTotals[currentYear].shopify.revenue += data.shopify.revenue;
+            yearlyTotals[currentYear].shopify.units += data.shopify.units || 0;
+            yearlyTotals[currentYear].shopify.profit += data.shopify.netProfit || 0;
+            yearlyTotals[currentYear].shopify.sources.push(`Week ${weekKey}`);
+          }
+        }
+      });
+    }
+    
+    // Calculate totals by year
+    Object.entries(yearlyTotals).forEach(([year, data]) => {
+      data.total = {
+        revenue: data.amazon.revenue + data.shopify.revenue,
+        units: data.amazon.units + data.shopify.units,
+        profit: data.amazon.profit + data.shopify.profit,
+      };
+      metrics.byYear[year] = data;
+      
+      // Add to all-time totals
+      metrics.allTime.amazon.revenue += data.amazon.revenue;
+      metrics.allTime.amazon.units += data.amazon.units;
+      metrics.allTime.amazon.profit += data.amazon.profit;
+      metrics.allTime.shopify.revenue += data.shopify.revenue;
+      metrics.allTime.shopify.units += data.shopify.units;
+      metrics.allTime.shopify.profit += data.shopify.profit;
+    });
+    
+    metrics.allTime.total = {
+      revenue: metrics.allTime.amazon.revenue + metrics.allTime.shopify.revenue,
+      units: metrics.allTime.amazon.units + metrics.allTime.shopify.units,
+      profit: metrics.allTime.amazon.profit + metrics.allTime.shopify.profit,
+    };
+    
+    // Calculate proper averages from ACTUAL data only
+    // Daily averages - only from days with actual data
+    let amazonDailySum = 0, shopifyDailySum = 0, daysWithData = 0;
+    Object.entries(allDaysData).forEach(([dateKey, data]) => {
+      const hasAmazon = data.amazon?.revenue > 0;
+      const hasShopify = data.shopify?.revenue > 0;
+      if (hasAmazon || hasShopify) {
+        daysWithData++;
+        amazonDailySum += data.amazon?.revenue || 0;
+        shopifyDailySum += data.shopify?.revenue || 0;
+        if (hasAmazon) metrics.dataSources.amazon.dailyDates.push(dateKey);
+        if (hasShopify) metrics.dataSources.shopify.dailyDates.push(dateKey);
+      }
+    });
+    
+    if (daysWithData > 0) {
+      metrics.averages.dailyRevenue = {
+        amazon: amazonDailySum / daysWithData,
+        shopify: shopifyDailySum / daysWithData,
+        total: (amazonDailySum + shopifyDailySum) / daysWithData,
+        daysUsed: daysWithData,
+      };
+    }
+    
+    // Weekly averages - only from weeks with actual data
+    let amazonWeeklySum = 0, shopifyWeeklySum = 0, weeksWithData = 0;
+    Object.entries(allWeeksData).forEach(([weekKey, data]) => {
+      const hasAmazon = data.amazon?.revenue > 0;
+      const hasShopify = data.shopify?.revenue > 0;
+      if (hasAmazon || hasShopify) {
+        weeksWithData++;
+        amazonWeeklySum += data.amazon?.revenue || 0;
+        shopifyWeeklySum += data.shopify?.revenue || 0;
+      }
+    });
+    
+    if (weeksWithData > 0) {
+      metrics.averages.weeklyRevenue = {
+        amazon: amazonWeeklySum / weeksWithData,
+        shopify: shopifyWeeklySum / weeksWithData,
+        total: (amazonWeeklySum + shopifyWeeklySum) / weeksWithData,
+        weeksUsed: weeksWithData,
+      };
+    }
+    
+    // Monthly averages - from period data
+    let amazonMonthlySum = 0, shopifyMonthlySum = 0, monthsWithData = 0;
+    Object.entries(allPeriodsData).forEach(([periodKey, data]) => {
+      if (/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i.test(periodKey)) {
+        const hasAmazon = data.amazon?.revenue > 0;
+        const hasShopify = data.shopify?.revenue > 0;
+        if (hasAmazon || hasShopify) {
+          monthsWithData++;
+          amazonMonthlySum += data.amazon?.revenue || 0;
+          shopifyMonthlySum += data.shopify?.revenue || 0;
+        }
+      }
+    });
+    
+    if (monthsWithData > 0) {
+      metrics.averages.monthlyRevenue = {
+        amazon: amazonMonthlySum / monthsWithData,
+        shopify: shopifyMonthlySum / monthsWithData,
+        total: (amazonMonthlySum + shopifyMonthlySum) / monthsWithData,
+        monthsUsed: monthsWithData,
+      };
+    }
+    
+    // Detect data gaps
+    // For Amazon: check if we have monthly periods but few daily entries for 2025
+    const amazon2025Months = metrics.dataSources.amazon.periodNames.filter(p => p.includes('2025'));
+    const amazon2025Days = metrics.dataSources.amazon.dailyDates.filter(d => d.startsWith('2025'));
+    if (amazon2025Months.length > 0 && amazon2025Days.length < 30) {
+      metrics.dataSources.amazon.hasDailyGaps = true;
+      metrics.dataSources.amazon.gapsCoveredByPeriods = amazon2025Months;
+    }
+    
+    return metrics;
+  }, [allDaysData, allWeeksData, allPeriodsData]);
+  // ============ END UNIFIED AI LEARNING SYSTEM ============
 
   // Get upcoming Amazon forecasts (weeks we haven't reached yet)
   const upcomingAmazonForecasts = useMemo(() => {
@@ -8525,7 +9628,9 @@ Analyze the data and respond with ONLY this JSON:
   const Toast = () => {
     useEffect(() => {
       if (toast) {
-        const timer = setTimeout(() => setToast(null), 3000);
+        // Longer timeout for warnings with undo actions
+        const duration = toast.action ? 10000 : 3000;
+        const timer = setTimeout(() => setToast(null), duration);
         return () => clearTimeout(timer);
       }
     }, [toast]);
@@ -8535,12 +9640,26 @@ Analyze the data and respond with ONLY this JSON:
     }
     
     if (toast) {
+      const bgColor = toast.type === 'error' ? 'bg-rose-600' : 
+                      toast.type === 'warning' ? 'bg-amber-600' : 'bg-emerald-600';
+      const Icon = toast.type === 'error' ? AlertTriangle : 
+                   toast.type === 'warning' ? Trash2 : Check;
+      
       return (
-        <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 z-50 ${
-          toast.type === 'error' ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
-        }`}>
-          {toast.type === 'error' ? <AlertTriangle className="w-4 h-4" /> : <Check className="w-4 h-4" />}
-          {toast.message}
+        <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 z-50 ${bgColor} text-white`}>
+          <Icon className="w-4 h-4 flex-shrink-0" />
+          <span>{toast.message}</span>
+          {toast.action && (
+            <button 
+              onClick={() => {
+                toast.action.onClick();
+                setToast(null);
+              }}
+              className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors"
+            >
+              {toast.action.label}
+            </button>
+          )}
         </div>
       );
     }
@@ -9639,7 +10758,7 @@ Analyze the data and respond with ONLY this JSON:
     };
     
     const processFiles = async () => {
-      setProcessing(true);
+      const totalFiles = selectedFiles.length;
       const processResults = [];
       let newOrders = { ...threeplLedger.orders };
       let newSummaryCharges = { ...threeplLedger.summaryCharges };
@@ -9648,7 +10767,12 @@ Analyze the data and respond with ONLY this JSON:
       let totalSkipped = 0;
       let weeksAffected = new Set();
       
-      for (const file of selectedFiles) {
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i];
+        
+        // Update progress
+        setProcessing({ current: i + 1, total: totalFiles, fileName: file.name });
+        
         try {
           const parsed = await parse3PLExcel(file);
           let fileAdded = 0;
@@ -9731,7 +10855,7 @@ Analyze the data and respond with ONLY this JSON:
         totalSkipped,
         weeksAffected: weeksAffected.size,
       });
-      setProcessing(false);
+      setProcessing(null);
     };
     
     const ledgerStats = {
@@ -9818,6 +10942,25 @@ Analyze the data and respond with ONLY this JSON:
                     ))}
                   </div>
                   
+                  {/* Progress Bar */}
+                  {processing && (
+                    <div className="mt-4 space-y-2">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-400">Processing: {processing.fileName}</span>
+                        <span className="text-white font-medium">{processing.current} of {processing.total}</span>
+                      </div>
+                      <div className="w-full bg-slate-700 rounded-full h-3 overflow-hidden">
+                        <div 
+                          className="bg-blue-500 h-full rounded-full transition-all duration-300 ease-out"
+                          style={{ width: `${(processing.current / processing.total) * 100}%` }}
+                        />
+                      </div>
+                      <p className="text-slate-500 text-xs text-center">
+                        {Math.round((processing.current / processing.total) * 100)}% complete
+                      </p>
+                    </div>
+                  )}
+                  
                   <button
                     onClick={processFiles}
                     disabled={processing}
@@ -9826,7 +10969,7 @@ Analyze the data and respond with ONLY this JSON:
                     {processing ? (
                       <>
                         <RefreshCw className="w-5 h-5 animate-spin" />
-                        Processing...
+                        Processing {processing.current}/{processing.total}...
                       </>
                     ) : (
                       <>
@@ -10130,13 +11273,18 @@ Analyze the data and respond with ONLY this JSON:
     };
     
     const processFiles = async () => {
-      setAdsProcessing(true);
+      const totalFiles = adsSelectedFiles.length;
       const processResults = [];
       let updatedDays = { ...allDaysData };
       let totalDaysUpdated = 0;
       let allDatesAffected = new Set();
       
-      for (const file of adsSelectedFiles) {
+      for (let i = 0; i < adsSelectedFiles.length; i++) {
+        const file = adsSelectedFiles[i];
+        
+        // Update progress
+        setAdsProcessing({ current: i + 1, total: totalFiles, fileName: file.name });
+        
         try {
           const parsed = await parseAdsFile(file);
           let daysUpdated = 0;
@@ -10250,7 +11398,7 @@ Analyze the data and respond with ONLY this JSON:
         totalDaysUpdated,
         datesAffected: allDatesAffected.size,
       });
-      setAdsProcessing(false);
+      setAdsProcessing(null);
     };
     
     return (
@@ -10328,13 +11476,32 @@ Analyze the data and respond with ONLY this JSON:
                       ))}
                     </div>
                     
+                    {/* Progress Bar */}
+                    {adsProcessing && (
+                      <div className="mt-4 space-y-2">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-slate-400">Processing: {adsProcessing.fileName}</span>
+                          <span className="text-white font-medium">{adsProcessing.current} of {adsProcessing.total}</span>
+                        </div>
+                        <div className="w-full bg-slate-700 rounded-full h-3 overflow-hidden">
+                          <div 
+                            className="bg-violet-500 h-full rounded-full transition-all duration-300 ease-out"
+                            style={{ width: `${(adsProcessing.current / adsProcessing.total) * 100}%` }}
+                          />
+                        </div>
+                        <p className="text-slate-500 text-xs text-center">
+                          {Math.round((adsProcessing.current / adsProcessing.total) * 100)}% complete
+                        </p>
+                      </div>
+                    )}
+                    
                     <button
                       onClick={processFiles}
                       disabled={adsProcessing}
                       className="w-full mt-4 py-3 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
                     >
                       {adsProcessing ? (
-                        <><RefreshCw className="w-5 h-5 animate-spin" />Processing...</>
+                        <><RefreshCw className="w-5 h-5 animate-spin" />Processing {adsProcessing.current}/{adsProcessing.total}...</>
                       ) : (
                         <><Upload className="w-5 h-5" />Import {adsSelectedFiles.length} File{adsSelectedFiles.length > 1 ? 's' : ''}</>
                       )}
@@ -11829,6 +12996,45 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
             .map(([name, data]) => ({ name, total: data.totalIn, count: data.count })),
         };
       })() : null,
+      // ========= UNIFIED AI METRICS - COMPREHENSIVE DATA VIEW =========
+      // This provides the AI with a proper understanding of data availability
+      // IMPORTANT: Use these metrics for ALL-TIME totals, not the daily data
+      unifiedMetrics: unifiedBusinessMetrics,
+      
+      // Data availability explanation for AI
+      dataAvailability: {
+        // Amazon: Daily data may only exist for 2026, but 2024-2025 has monthly/quarterly period data
+        amazon: {
+          dailyDataDates: unifiedBusinessMetrics.dataSources?.amazon?.dailyDates?.length || 0,
+          periodDataCount: unifiedBusinessMetrics.dataSources?.amazon?.periodNames?.length || 0,
+          hasDailyGaps: unifiedBusinessMetrics.dataSources?.amazon?.hasDailyGaps || false,
+          gapsCoveredBy: unifiedBusinessMetrics.dataSources?.amazon?.gapsCoveredByPeriods || [],
+          explanation: unifiedBusinessMetrics.dataSources?.amazon?.hasDailyGaps 
+            ? 'Amazon has monthly period data for periods without daily uploads. DO NOT treat missing daily data as $0 sales.'
+            : 'Amazon has daily data available.',
+        },
+        shopify: {
+          dailyDataDates: unifiedBusinessMetrics.dataSources?.shopify?.dailyDates?.length || 0,
+          periodDataCount: unifiedBusinessMetrics.dataSources?.shopify?.periodNames?.length || 0,
+          hasDailyGaps: unifiedBusinessMetrics.dataSources?.shopify?.hasDailyGaps || false,
+          gapsCoveredBy: unifiedBusinessMetrics.dataSources?.shopify?.gapsCoveredByPeriods || [],
+        },
+        // Key instruction for AI
+        instructions: `
+⚠️ CRITICAL DATA AVAILABILITY RULES:
+1. Amazon daily data may not exist for all dates - we have MONTHLY period data instead
+2. NEVER treat missing daily Amazon data as $0 sales - this will severely undercount revenue
+3. For all-time totals, use the unifiedMetrics.allTime values which properly combine period + weekly data
+4. For averages, use unifiedMetrics.averages which only calculate from days WITH data
+5. When calculating trends, EXCLUDE days without data rather than counting them as $0
+6. Period data (monthly/quarterly) is AUTHORITATIVE for historical totals
+
+📊 DATA SOURCES HIERARCHY:
+- For 2024: Use quarterly period data (most accurate)
+- For 2025: Use monthly period data (most accurate)
+- For 2026: Use weekly/daily data (most current)
+`,
+      },
     };
   };
   
@@ -11939,7 +13145,34 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
       
       const systemPrompt = `You are an expert e-commerce analyst and business advisor for "${ctx.storeName}". You have access to ALL uploaded sales data and can answer questions about any aspect of the business.
 
-🚨🚨🚨 CRITICAL - READ THIS FIRST 🚨🚨🚨
+🚨🚨🚨 CRITICAL DATA AVAILABILITY RULES - READ FIRST 🚨🚨🚨
+
+${ctx.dataAvailability?.instructions || ''}
+
+**DATA AVAILABILITY STATUS:**
+- Amazon: ${ctx.dataAvailability?.amazon?.dailyDataDates || 0} days of daily data, ${ctx.dataAvailability?.amazon?.periodDataCount || 0} period records
+${ctx.dataAvailability?.amazon?.hasDailyGaps ? `  ⚠️ GAPS COVERED BY: ${ctx.dataAvailability.amazon.gapsCoveredBy?.join(', ') || 'monthly data'}` : ''}
+- Shopify: ${ctx.dataAvailability?.shopify?.dailyDataDates || 0} days of daily data
+
+**UNIFIED ALL-TIME TOTALS (USE THESE - includes period data):**
+${ctx.unifiedMetrics ? `
+- Amazon Revenue: $${ctx.unifiedMetrics.allTime?.amazon?.revenue?.toFixed(2) || 0}
+- Shopify Revenue: $${ctx.unifiedMetrics.allTime?.shopify?.revenue?.toFixed(2) || 0}
+- TOTAL Revenue: $${ctx.unifiedMetrics.allTime?.total?.revenue?.toFixed(2) || 0}
+- TOTAL Profit: $${ctx.unifiedMetrics.allTime?.total?.profit?.toFixed(2) || 0}
+
+By Year:
+${Object.entries(ctx.unifiedMetrics.byYear || {}).map(([year, data]) => 
+  `  ${year}: Amazon $${data.amazon?.revenue?.toFixed(0) || 0} | Shopify $${data.shopify?.revenue?.toFixed(0) || 0} | Total $${data.total?.revenue?.toFixed(0) || 0}`
+).join('\n')}
+
+Proper Averages (only from days WITH data):
+- Daily Avg Revenue: $${ctx.unifiedMetrics.averages?.dailyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.dailyRevenue?.daysUsed || 0} days with actual data)
+- Weekly Avg Revenue: $${ctx.unifiedMetrics.averages?.weeklyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.weeklyRevenue?.weeksUsed || 0} weeks)
+- Monthly Avg Revenue: $${ctx.unifiedMetrics.averages?.monthlyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.monthlyRevenue?.monthsUsed || 0} months)
+` : 'Unified metrics not available'}
+
+🚨🚨🚨 TIMEFRAME QUERIES - USE PRE-COMPUTED DATA 🚨🚨🚨
 When user asks about a TIMEFRAME (last week, last month, etc.) you MUST use the PRE-COMPUTED data below.
 DO NOT use skuAnalysis - that's ALL-TIME data and will give WRONG answers for timeframe questions!
 
@@ -11956,7 +13189,9 @@ For category questions (e.g., "how much lip balm last week?"):
 
 ⛔ NEVER use skuAnalysis for timeframe questions - it contains ALL-TIME totals
 ⛔ NEVER sum from skuByWeek array - those are historical weeks
+⛔ NEVER treat missing Amazon daily data as $0 - use period data instead
 ✅ ALWAYS use the pre-computed byCategory data for the matching timeframe
+✅ ALWAYS use unifiedMetrics for all-time totals (includes Amazon 2025 period data)
 
 IMPORTANT PROFIT CALCULATION NOTES:
 - Amazon "Net Proceeds" IS the profit - it already has COGS, fees, and ad spend deducted
@@ -17224,19 +18459,57 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               const amazonData = existing.amazon || { revenue: 0, units: 0, orders: 0 };
                               const shopifyData = dayData.shopify || { revenue: 0, units: 0, orders: 0 };
                               
+                              // Preserve existing ad data (from Meta/Google uploads)
+                              const existingMetaSpend = existing.metaSpend || existing.shopify?.metaSpend || 0;
+                              const existingGoogleSpend = existing.googleSpend || existing.shopify?.googleSpend || 0;
+                              
+                              // Merge ad data into shopify object for consistency
+                              const mergedShopifyData = {
+                                ...shopifyData,
+                                metaSpend: existingMetaSpend,
+                                metaAds: existingMetaSpend,
+                                googleSpend: existingGoogleSpend,
+                                googleAds: existingGoogleSpend,
+                                adSpend: existingMetaSpend + existingGoogleSpend,
+                              };
+                              
+                              // Recalculate profit with ad spend
+                              if (mergedShopifyData.adSpend > 0) {
+                                const grossProfit = (mergedShopifyData.revenue || 0) - (mergedShopifyData.cogs || 0) - (mergedShopifyData.threeplCosts || 0);
+                                mergedShopifyData.netProfit = grossProfit - mergedShopifyData.adSpend;
+                                mergedShopifyData.netMargin = mergedShopifyData.revenue > 0 ? (mergedShopifyData.netProfit / mergedShopifyData.revenue) * 100 : 0;
+                                mergedShopifyData.roas = mergedShopifyData.adSpend > 0 ? mergedShopifyData.revenue / mergedShopifyData.adSpend : 0;
+                              }
+                              
                               updatedDays[dateKey] = {
                                 ...existing,
                                 // Keep Amazon exactly as-is
                                 amazon: amazonData,
-                                // Update Shopify with new data
-                                shopify: shopifyData,
+                                // Update Shopify with merged data including ads
+                                shopify: mergedShopifyData,
                                 // Recalculate total from both channels
                                 total: {
-                                  revenue: (amazonData.revenue || 0) + (shopifyData.revenue || 0),
-                                  units: (amazonData.units || 0) + (shopifyData.units || 0),
-                                  orders: (amazonData.orders || 0) + (shopifyData.orders || 0),
+                                  revenue: (amazonData.revenue || 0) + (mergedShopifyData.revenue || 0),
+                                  units: (amazonData.units || 0) + (mergedShopifyData.units || 0),
+                                  orders: (amazonData.orders || 0) + (mergedShopifyData.orders || 0),
                                 },
-                                // Keep any other existing data (ads, expenses, etc)
+                                // PRESERVE all existing ad data at top level
+                                metaSpend: existingMetaSpend,
+                                metaAds: existingMetaSpend,
+                                metaImpressions: existing.metaImpressions,
+                                metaClicks: existing.metaClicks,
+                                metaCpc: existing.metaCpc,
+                                metaCpa: existing.metaCpa,
+                                metaConversions: existing.metaConversions,
+                                metaPurchases: existing.metaPurchases,
+                                googleSpend: existingGoogleSpend,
+                                googleAds: existingGoogleSpend,
+                                googleImpressions: existing.googleImpressions,
+                                googleClicks: existing.googleClicks,
+                                googleCpc: existing.googleCpc,
+                                googleCpa: existing.googleCpa,
+                                googleConversions: existing.googleConversions,
+                                // Keep any other existing data
                                 ads: existing.ads,
                                 expenses: existing.expenses,
                                 notes: existing.notes,
@@ -17246,17 +18519,45 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             // Save daily data to localStorage
                             try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
                             
-                            // Merge weekly data
+                            // Merge weekly data - PRESERVE existing ad data
                             const updatedWeeks = { ...allWeeksData };
                             Object.entries(data.weeklyData || {}).forEach(([weekKey, weekData]) => {
                               if (updatedWeeks[weekKey]) {
+                                const existingWeek = updatedWeeks[weekKey];
+                                const existingShopify = existingWeek.shopify || {};
+                                
+                                // Preserve existing ad data
+                                const metaSpend = existingShopify.metaSpend || existingShopify.metaAds || 0;
+                                const googleSpend = existingShopify.googleSpend || existingShopify.googleAds || 0;
+                                const totalAds = metaSpend + googleSpend;
+                                
+                                // Merge shopify data, preserving ads
+                                const mergedShopify = {
+                                  ...weekData.shopify,
+                                  metaSpend: metaSpend,
+                                  metaAds: metaSpend,
+                                  googleSpend: googleSpend,
+                                  googleAds: googleSpend,
+                                  adSpend: totalAds,
+                                };
+                                
+                                // Recalculate profit with ad spend
+                                if (totalAds > 0 && mergedShopify.revenue > 0) {
+                                  const grossProfit = (mergedShopify.revenue || 0) - (mergedShopify.cogs || 0) - (mergedShopify.threeplCosts || 0);
+                                  mergedShopify.netProfit = grossProfit - totalAds;
+                                  mergedShopify.netMargin = mergedShopify.revenue > 0 ? (mergedShopify.netProfit / mergedShopify.revenue) * 100 : 0;
+                                  mergedShopify.roas = totalAds > 0 ? mergedShopify.revenue / totalAds : 0;
+                                }
+                                
                                 updatedWeeks[weekKey] = {
-                                  ...updatedWeeks[weekKey],
-                                  shopify: weekData.shopify,
+                                  ...existingWeek,
+                                  shopify: mergedShopify,
                                   total: {
-                                    ...updatedWeeks[weekKey].total,
-                                    revenue: (updatedWeeks[weekKey].amazon?.revenue || 0) + (weekData.shopify?.revenue || 0),
-                                    units: (updatedWeeks[weekKey].amazon?.units || 0) + (weekData.shopify?.units || 0),
+                                    ...existingWeek.total,
+                                    revenue: (existingWeek.amazon?.revenue || 0) + (mergedShopify.revenue || 0),
+                                    units: (existingWeek.amazon?.units || 0) + (mergedShopify.units || 0),
+                                    adSpend: (existingWeek.amazon?.adSpend || 0) + totalAds,
+                                    netProfit: (existingWeek.amazon?.netProfit || 0) + (mergedShopify.netProfit || 0),
                                   },
                                 };
                               } else {
@@ -17724,23 +19025,19 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             <DollarSign className="w-4 h-4" />
                             Sales Tax Summary:
                           </p>
-                          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+                          <div className="grid grid-cols-2 gap-3 mb-3">
                             <div className="bg-slate-800/50 rounded-lg p-2 text-center">
                               <p className="text-lg font-semibold text-emerald-400">{formatCurrency(shopifySyncPreview.tax.totalCollected)}</p>
                               <p className="text-xs text-slate-400">Tax to Remit</p>
                             </div>
                             <div className="bg-slate-800/50 rounded-lg p-2 text-center">
-                              <p className="text-lg font-semibold text-violet-400">{formatCurrency(shopifySyncPreview.tax.shopPayExcluded)}</p>
-                              <p className="text-xs text-slate-400">Shop Pay (auto-remitted)</p>
-                            </div>
-                            <div className="bg-slate-800/50 rounded-lg p-2 text-center">
-                              <p className="text-lg font-semibold text-slate-300">{shopifySyncPreview.tax.shopPayOrderCount}</p>
-                              <p className="text-xs text-slate-400">Shop Pay Orders</p>
+                              <p className="text-lg font-semibold text-slate-300">{shopifySyncPreview.tax.byState?.length || 0}</p>
+                              <p className="text-xs text-slate-400">States</p>
                             </div>
                           </div>
                           {shopifySyncPreview.tax.byState && shopifySyncPreview.tax.byState.length > 0 && (
                             <div className="space-y-1">
-                              <p className="text-slate-500 text-xs uppercase">Tax by State (excludes Shop Pay):</p>
+                              <p className="text-slate-500 text-xs uppercase">Tax by State:</p>
                               <div className="flex flex-wrap gap-2">
                                 {shopifySyncPreview.tax.byState.slice(0, 8).map(state => (
                                   <span key={state.stateCode} className="px-2 py-1 bg-slate-800 rounded text-xs text-slate-300">
@@ -17753,30 +19050,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               </div>
                             </div>
                           )}
-                          <p className="text-xs text-slate-500 mt-2">
-                            💡 Shop Pay orders are excluded because Shopify automatically collects and remits tax for those.
-                          </p>
-                          {/* Payment Gateway Debug Info - Always show */}
-                          <details className="mt-3" open={shopifySyncPreview.tax.shopPayOrderCount === 0}>
-                            <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-400">
-                              🔍 Payment gateways found: {shopifySyncPreview.tax.paymentGateways?.length || 0} types
-                            </summary>
-                            <div className="mt-2 p-2 bg-slate-900/50 rounded text-xs">
-                              {shopifySyncPreview.tax.paymentGateways && shopifySyncPreview.tax.paymentGateways.length > 0 ? (
-                                <>
-                                  <p className="text-slate-400 mb-1">All gateways: {shopifySyncPreview.tax.paymentGateways.join(', ')}</p>
-                                  {shopifySyncPreview.tax.shopPayGatewaysMatched && shopifySyncPreview.tax.shopPayGatewaysMatched.length > 0 && (
-                                    <p className="text-violet-400">Shop Pay matches: {shopifySyncPreview.tax.shopPayGatewaysMatched.join(', ')}</p>
-                                  )}
-                                </>
-                              ) : (
-                                <p className="text-amber-400">No gateway info returned - sync.js may need redeployment</p>
-                              )}
-                              {shopifySyncPreview.tax.shopPayOrderCount === 0 && (
-                                <p className="text-slate-500 mt-1">ℹ️ No Shop Pay orders found. This is normal if customers used regular checkout instead of Shop Pay.</p>
-                              )}
-                            </div>
-                          </details>
                         </div>
                       )}
                     </div>
@@ -17802,7 +19075,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           </li>
                           <li className="flex items-start gap-2">
                             <Check className="w-3 h-3 text-emerald-400 mt-1 shrink-0" />
-                            <span>Tax by state (excl. Shop Pay)</span>
+                            <span>Tax by state</span>
                           </li>
                           <li className="flex items-start gap-2">
                             <Check className="w-3 h-3 text-emerald-400 mt-1 shrink-0" />
@@ -17835,7 +19108,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     <div className="mt-3 pt-3 border-t border-blue-500/20">
                       <p className="text-blue-300 text-xs flex items-start gap-2">
                         <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                        <span><strong>Shop Pay orders excluded from tax</strong> - Shopify remits tax for Shop Pay automatically. <strong>Amazon inventory still requires manual upload</strong> since it's not in Shopify.</span>
+                        <span><strong>Amazon inventory still requires manual upload</strong> since it's not in Shopify.</span>
                       </p>
                     </div>
                   </div>
@@ -18125,16 +19398,47 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     };
     
     const deleteDay = (dayKey) => {
-      if (!confirm(`Delete ${new Date(dayKey + 'T12:00:00').toLocaleDateString()}? This cannot be undone.`)) return;
+      const data = allDaysData[dayKey];
+      if (!data) return;
+      
+      const revenue = data.total?.revenue || 0;
+      const dateStr = new Date(dayKey + 'T12:00:00').toLocaleDateString();
+      
+      // Delete immediately
       const updated = { ...allDaysData };
       delete updated[dayKey];
       setAllDaysData(updated);
       lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated));
       queueCloudSave({ ...combinedData, dailySales: updated });
+      
+      // Store for undo
+      const undoId = Date.now();
+      const undoTimer = setTimeout(() => {
+        setDeletedItems(prev => prev.filter(item => item.id !== undoId));
+      }, 10000);
+      
+      setDeletedItems(prev => [...prev, { id: undoId, type: 'day', key: dayKey, data, undoTimer }]);
+      setToast({ 
+        message: `Deleted ${dateStr} ($${revenue.toFixed(0)} revenue)`, 
+        type: 'warning',
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            clearTimeout(undoTimer);
+            const restored = { ...allDaysData, [dayKey]: data };
+            setAllDaysData(restored);
+            lsSet('ecommerce_daily_sales_v1', JSON.stringify(restored));
+            queueCloudSave({ ...combinedData, dailySales: restored });
+            setSelectedDay(dayKey);
+            setDeletedItems(prev => prev.filter(item => item.id !== undoId));
+            setToast({ message: `Restored ${dateStr}`, type: 'success' });
+          }
+        }
+      });
+      
       const remaining = Object.keys(updated).filter(k => hasDailySalesData(updated[k])).sort().reverse();
       if (remaining.length) setSelectedDay(remaining[0]);
       else { setView('dashboard'); setSelectedDay(null); }
-      setToast({ message: 'Day deleted', type: 'success' });
     };
     
     return (
@@ -27451,11 +28755,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     if (!taxByStateMap[stateCode]) {
                       taxByStateMap[stateCode] = { 
                         tax: 0, 
-                        sales: 0, 
+                        sales: 0,  // Item sales only
+                        shipping: 0,  // Shipping charges
                         orders: 0,
                         shopPayTax: 0,
                         shopPaySales: 0,
-                        shopPayOrders: 0
+                        shopPayShipping: 0,
+                        shopPayOrders: 0,
+                        jurisdictions: {}  // Jurisdiction-level breakdown
                       };
                     }
                     // Handle both old format (number) and new format (object)
@@ -27464,11 +28771,27 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     } else {
                       taxByStateMap[stateCode].tax += stateTax.tax || 0;
                       taxByStateMap[stateCode].sales += stateTax.sales || 0;
+                      taxByStateMap[stateCode].shipping += stateTax.shipping || 0;
                       taxByStateMap[stateCode].orders += stateTax.orders || 0;
-                      // New Shop Pay breakdown
+                      // Shop Pay breakdown
                       taxByStateMap[stateCode].shopPayTax += stateTax.shopPayTax || 0;
                       taxByStateMap[stateCode].shopPaySales += stateTax.shopPaySales || 0;
+                      taxByStateMap[stateCode].shopPayShipping += stateTax.shopPayShipping || 0;
                       taxByStateMap[stateCode].shopPayOrders += stateTax.shopPayOrders || 0;
+                      
+                      // Aggregate jurisdiction data
+                      if (stateTax.jurisdictions) {
+                        Object.entries(stateTax.jurisdictions).forEach(([jurisdiction, jData]) => {
+                          if (!taxByStateMap[stateCode].jurisdictions[jurisdiction]) {
+                            taxByStateMap[stateCode].jurisdictions[jurisdiction] = {
+                              tax: 0, sales: 0, orders: 0, rate: jData.rate || 0
+                            };
+                          }
+                          taxByStateMap[stateCode].jurisdictions[jurisdiction].tax += jData.tax || 0;
+                          taxByStateMap[stateCode].jurisdictions[jurisdiction].sales += jData.sales || 0;
+                          taxByStateMap[stateCode].jurisdictions[jurisdiction].orders += jData.orders || 0;
+                        });
+                      }
                     }
                   });
                   totalTax += dayData.shopify.taxTotal || 0;
@@ -27478,23 +28801,49 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               
               return {
                 byState: Object.entries(taxByStateMap)
-                  .map(([code, data]) => ({ 
-                    stateCode: code, 
-                    stateName: US_STATES_TAX_INFO[code]?.name || code, 
-                    // Total sales and orders (Shop Pay + non-Shop Pay)
-                    totalSales: data.sales + data.shopPaySales,
-                    totalOrders: data.orders + data.shopPayOrders,
-                    totalTax: data.tax + data.shopPayTax,
-                    // What YOU owe (non-Shop Pay only)
-                    taxOwed: data.tax,
-                    salesYouOwe: data.sales,
-                    ordersYouOwe: data.orders,
-                    // Shop Pay (Shopify remits this)
-                    shopPayTax: data.shopPayTax,
-                    shopPaySales: data.shopPaySales,
-                    shopPayOrders: data.shopPayOrders,
-                    ...data 
-                  }))
+                  .map(([code, data]) => {
+                    const stateInfo = US_STATES_TAX_INFO[code];
+                    const shippingTaxable = stateInfo?.shippingTaxable || false;
+                    
+                    // Calculate taxable sales based on whether state taxes shipping
+                    const itemSales = data.sales + data.shopPaySales;
+                    const totalShipping = data.shipping + data.shopPayShipping;
+                    const taxableSales = shippingTaxable ? (itemSales + totalShipping) : itemSales;
+                    
+                    return { 
+                      stateCode: code, 
+                      stateName: stateInfo?.name || code,
+                      shippingTaxable,
+                      // Sales breakdown
+                      itemSales: itemSales,
+                      shipping: totalShipping,
+                      // Total taxable sales (includes shipping if state taxes it)
+                      totalSales: taxableSales,
+                      totalOrders: data.orders + data.shopPayOrders,
+                      totalTax: data.tax + data.shopPayTax,
+                      // What YOU owe (non-Shop Pay only)
+                      taxOwed: data.tax,
+                      salesYouOwe: shippingTaxable ? (data.sales + data.shipping) : data.sales,
+                      ordersYouOwe: data.orders,
+                      // Shop Pay (Shopify remits this)
+                      shopPayTax: data.shopPayTax,
+                      shopPaySales: data.shopPaySales,
+                      shopPayOrders: data.shopPayOrders,
+                      // Jurisdiction breakdown for county/city level reporting
+                      jurisdictions: Object.entries(data.jurisdictions || {})
+                        .map(([name, jData]) => ({
+                          name,
+                          tax: jData.tax,
+                          sales: jData.sales,
+                          orders: jData.orders,
+                          rate: jData.rate
+                        }))
+                        .filter(j => j.tax > 0 || j.sales > 0)
+                        .sort((a, b) => b.tax - a.tax),
+                      // Raw data
+                      ...data 
+                    };
+                  })
                   .sort((a, b) => b.totalSales - a.totalSales), // Sort by total sales
                 totalTax,
                 shopPayExcluded,
@@ -27551,7 +28900,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       <ShoppingBag className="w-5 h-5 text-green-400" />
                       Shopify Tax Calculator
                     </h3>
-                    <p className="text-slate-400 text-sm">Tax collected from synced Shopify orders (excludes Shop Pay)</p>
+                    <p className="text-slate-400 text-sm">Tax collected from synced Shopify orders</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <select
@@ -27599,16 +28948,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         <p className="text-rose-300/70 text-xs mt-1">Tax to remit this period</p>
                       </div>
                       <div className="bg-slate-800/50 rounded-xl p-4 text-center">
-                        <p className="text-xs text-violet-400 font-semibold uppercase tracking-wide mb-1">Shop Pay Auto-Remit</p>
-                        <p className="text-2xl font-bold text-violet-400">{formatCurrency(taxData.shopPayExcluded)}</p>
-                        <p className="text-slate-500 text-xs mt-1">
-                          {taxData.totalShopPayOrders > 0 
-                            ? `${taxData.totalShopPayOrders} orders • ${formatCurrency(taxData.totalShopPaySales)} sales`
-                            : 'No Shop Pay orders detected'}
-                        </p>
-                        {taxData.totalShopPayOrders === 0 && taxData.daysWithData > 0 && (
-                          <p className="text-amber-400/70 text-xs mt-1">Check sync preview for payment gateway info</p>
-                        )}
+                        <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Total Collected</p>
+                        <p className="text-2xl font-bold text-white">{formatCurrency(taxData.totalTax + taxData.shopPayExcluded)}</p>
+                        <p className="text-slate-500 text-xs mt-1">from all orders</p>
                       </div>
                       <div className="bg-slate-800/50 rounded-xl p-4 text-center">
                         <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">States</p>
@@ -27888,23 +29230,27 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               }
                               
                               // Create CSV with all fields states typically need
-                              let csv = 'State,State Code,Total Sales,Total Tax,Tax You Owe,Shop Pay Tax (Shopify Remits),Total Orders,Has Nexus,Period,Start Date,End Date\n';
+                              let csv = 'State,State Code,Item Sales,Shipping,Taxable Sales,Total Tax,Tax You Owe,Shipping Taxable,Total Orders,Has Nexus,Period,Start Date,End Date\n';
                               taxData.byState.forEach(state => {
                                 const hasNexus = nexusStates[state.stateCode]?.hasNexus ? 'Yes' : 'No';
-                                const totalSales = state.totalSales || state.sales || 0;
+                                const itemSales = state.itemSales || state.sales || 0;
+                                const shipping = state.shipping || 0;
+                                const taxableSales = state.totalSales || state.sales || 0;
                                 const totalTax = state.totalTax || state.tax || 0;
                                 const taxOwed = state.taxOwed || state.tax || 0;
-                                const shopPayTax = state.shopPayTax || 0;
+                                const shippingTaxable = state.shippingTaxable ? 'Yes' : 'No';
                                 const totalOrders = state.totalOrders || state.orders || 0;
-                                csv += `"${state.stateName}",${state.stateCode},${totalSales.toFixed(2)},${totalTax.toFixed(2)},${taxOwed.toFixed(2)},${shopPayTax.toFixed(2)},${totalOrders},${hasNexus},"${periodLabel}",${start},${end}\n`;
+                                csv += `"${state.stateName}",${state.stateCode},${itemSales.toFixed(2)},${shipping.toFixed(2)},${taxableSales.toFixed(2)},${totalTax.toFixed(2)},${taxOwed.toFixed(2)},${shippingTaxable},${totalOrders},${hasNexus},"${periodLabel}",${start},${end}\n`;
                               });
-                              const grandTotalSales = taxData.byState.reduce((s, st) => s + (st.totalSales || st.sales || 0), 0);
+                              const grandTotalItemSales = taxData.byState.reduce((s, st) => s + (st.itemSales || st.sales || 0), 0);
+                              const grandTotalShipping = taxData.byState.reduce((s, st) => s + (st.shipping || 0), 0);
+                              const grandTotalTaxableSales = taxData.byState.reduce((s, st) => s + (st.totalSales || st.sales || 0), 0);
                               const grandTotalTax = taxData.byState.reduce((s, st) => s + (st.totalTax || st.tax || 0), 0);
                               const grandTotalOrders = taxData.byState.reduce((s, st) => s + (st.totalOrders || st.orders || 0), 0);
-                              csv += `"TOTAL",,${grandTotalSales.toFixed(2)},${grandTotalTax.toFixed(2)},${taxData.totalTax.toFixed(2)},${taxData.shopPayExcluded.toFixed(2)},${grandTotalOrders},,"${periodLabel}",${start},${end}\n`;
-                              csv += '\n"Tax You Owe = What you need to file and pay yourself"\n';
-                              csv += '"Shop Pay Tax = Shopify already collected and remits this for you"\n';
-                              csv += '"Total Sales = All orders (use for nexus threshold tracking)"\n';
+                              csv += `"TOTAL",,${grandTotalItemSales.toFixed(2)},${grandTotalShipping.toFixed(2)},${grandTotalTaxableSales.toFixed(2)},${grandTotalTax.toFixed(2)},${taxData.totalTax.toFixed(2)},,${grandTotalOrders},,"${periodLabel}",${start},${end}\n`;
+                              csv += '\n"Item Sales = Product sales only (excludes shipping)"\n';
+                              csv += '"Taxable Sales = Item Sales + Shipping (if shipping is taxable in that state)"\n';
+                              csv += '"Tax You Owe = What you need to file and pay yourself"\n';
                               
                               const blob = new Blob([csv], { type: 'text/csv' });
                               const url = URL.createObjectURL(blob);
@@ -27925,13 +29271,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                           <thead>
                             <tr className="border-b border-slate-700">
                               <th className="text-left text-slate-400 py-2 px-2">State</th>
-                              <th className="text-right text-slate-400 py-2 px-2">Total Sales</th>
+                              <th className="text-right text-slate-400 py-2 px-2">
+                                <span title="Includes shipping if taxable in that state">Taxable Sales</span>
+                              </th>
                               <th className="text-right text-slate-400 py-2 px-2">Total Tax</th>
                               <th className="text-right text-slate-400 py-2 px-2">
                                 <span className="text-rose-400">YOU OWE</span>
-                              </th>
-                              <th className="text-right text-slate-400 py-2 px-2">
-                                <span className="text-emerald-400" title="Shopify remits this for you">Shop Pay ✓</span>
                               </th>
                               <th className="text-right text-slate-400 py-2 px-2">Orders</th>
                               <th className="text-center text-slate-400 py-2 px-2">Status</th>
@@ -27942,20 +29287,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             {taxData.byState.map(state => {
                               const hasNexus = nexusStates[state.stateCode]?.hasNexus;
                               const owes = state.taxOwed > 0;
-                              const hasShopPay = state.shopPayTax > 0;
                               return (
                                 <tr key={state.stateCode} className={`border-b border-slate-700/50 ${owes && hasNexus ? 'bg-rose-900/20' : 'hover:bg-slate-800/50'}`}>
                                   <td className="py-2 px-2">
                                     <span className="text-white font-medium">{state.stateName}</span>
                                     <span className="text-slate-500 ml-2 text-xs">{state.stateCode}</span>
+                                    {state.shippingTaxable && (
+                                      <span className="ml-1 text-xs text-cyan-400" title="Shipping is taxable in this state">📦</span>
+                                    )}
                                   </td>
-                                  <td className="py-2 px-2 text-right text-slate-300">{formatCurrency(state.totalSales || state.sales || 0)}</td>
+                                  <td className="py-2 px-2 text-right text-slate-300">
+                                    <span title={state.shippingTaxable ? `Items: ${formatCurrency(state.itemSales || 0)} + Ship: ${formatCurrency(state.shipping || 0)}` : `Items only (shipping exempt)`}>
+                                      {formatCurrency(state.totalSales || state.sales || 0)}
+                                    </span>
+                                  </td>
                                   <td className="py-2 px-2 text-right text-slate-400">{formatCurrency(state.totalTax || state.tax || 0)}</td>
                                   <td className={`py-2 px-2 text-right font-bold ${owes ? 'text-rose-400' : 'text-slate-500'}`}>
                                     {owes ? formatCurrency(state.taxOwed || state.tax) : '—'}
-                                  </td>
-                                  <td className={`py-2 px-2 text-right ${hasShopPay ? 'text-emerald-400' : 'text-slate-600'}`}>
-                                    {hasShopPay ? formatCurrency(state.shopPayTax) : '—'}
                                   </td>
                                   <td className="py-2 px-2 text-right text-slate-400">{state.totalOrders || state.orders || 0}</td>
                                   <td className="py-2 px-2 text-center">
@@ -27992,7 +29340,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                               <td className="py-3 px-2 text-right text-slate-300 font-medium">{formatCurrency(taxData.byState.reduce((s, st) => s + (st.totalSales || st.sales || 0), 0))}</td>
                               <td className="py-3 px-2 text-right text-slate-400">{formatCurrency(taxData.byState.reduce((s, st) => s + (st.totalTax || st.tax || 0), 0))}</td>
                               <td className="py-3 px-2 text-right font-bold text-xl text-rose-400">{formatCurrency(taxData.totalTax)}</td>
-                              <td className="py-3 px-2 text-right text-emerald-400">{formatCurrency(taxData.shopPayExcluded)}</td>
                               <td className="py-3 px-2 text-right text-slate-400">{taxData.byState.reduce((s, st) => s + (st.totalOrders || st.orders || 0), 0)}</td>
                               <td></td>
                               <td></td>
@@ -28002,9 +29349,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       </div>
                         <div className="mt-4 p-3 bg-slate-800/50 rounded-lg">
                           <p className="text-slate-400 text-xs">
-                            💡 <strong className="text-rose-300">YOU OWE</strong> = Tax you must file/pay yourself. 
-                            <strong className="text-emerald-300 ml-2">Shop Pay ✓</strong> = Shopify already collected and remits this tax for you.
-                            Click <strong className="text-violet-300">📋 File</strong> on NEXUS states to see state-specific filing format.
+                            💡 <strong className="text-rose-300">YOU OWE</strong> = Tax you must file and pay.
+                            <span className="ml-2">📦 = Shipping is taxable in that state (included in Taxable Sales).</span>
+                            <span className="ml-2">Click <strong className="text-violet-300">📋 File</strong> on NEXUS states for state-specific filing format.</span>
                           </p>
                         </div>
                         
@@ -28048,18 +29395,82 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                   </div>
                                 )}
                                 
-                                {/* Portal URL - Custom or Default */}
+                                {/* Portal URL - Custom or Default with Edit option */}
                                 {(() => {
                                   const portalUrl = nexusStates[stateCode]?.portalUrl || filingFormat.website;
-                                  if (!portalUrl) return null;
+                                  const isEditing = editingPortalUrl === stateCode;
+                                  
                                   return (
-                                    <button 
-                                      onClick={() => window.open(portalUrl, '_blank')}
-                                      className="w-full flex items-center justify-center gap-2 text-sm bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg mb-4 font-medium"
-                                    >
-                                      <ArrowUpRight className="w-4 h-4" />
-                                      Open {stateInfo?.name} Tax Portal
-                                    </button>
+                                    <div className="mb-4">
+                                      {!isEditing ? (
+                                        <div className="flex gap-2">
+                                          {portalUrl && (
+                                            <button 
+                                              onClick={() => window.open(portalUrl, '_blank')}
+                                              className="flex-1 flex items-center justify-center gap-2 text-sm bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-medium"
+                                            >
+                                              <ArrowUpRight className="w-4 h-4" />
+                                              Open {stateInfo?.name} Tax Portal
+                                            </button>
+                                          )}
+                                          <button 
+                                            onClick={() => {
+                                              setEditPortalUrlValue(portalUrl || '');
+                                              setEditingPortalUrl(stateCode);
+                                            }}
+                                            className="px-3 py-3 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg text-sm"
+                                            title="Edit portal URL"
+                                          >
+                                            ✏️
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <div className="space-y-2">
+                                          <label className="text-xs text-slate-400">Tax Portal URL:</label>
+                                          <div className="flex gap-2">
+                                            <input
+                                              type="url"
+                                              value={editPortalUrlValue}
+                                              onChange={(e) => setEditPortalUrlValue(e.target.value)}
+                                              placeholder="https://..."
+                                              className="flex-1 px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white text-sm"
+                                            />
+                                            <button
+                                              onClick={() => {
+                                                // Save custom URL to nexusStates
+                                                const updated = {
+                                                  ...nexusStates,
+                                                  [stateCode]: {
+                                                    ...nexusStates[stateCode],
+                                                    portalUrl: editPortalUrlValue || null
+                                                  }
+                                                };
+                                                setNexusStates(updated);
+                                                localStorage.setItem('nexusStates', JSON.stringify(updated));
+                                                setEditingPortalUrl(null);
+                                              }}
+                                              className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm"
+                                            >
+                                              Save
+                                            </button>
+                                            <button
+                                              onClick={() => setEditingPortalUrl(null)}
+                                              className="px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-sm"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                          {filingFormat.website && filingFormat.website !== editPortalUrlValue && (
+                                            <p className="text-xs text-slate-500">
+                                              Default: <button 
+                                                onClick={() => setEditPortalUrlValue(filingFormat.website)}
+                                                className="text-blue-400 hover:underline"
+                                              >{filingFormat.website}</button>
+                                            </p>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
                                   );
                                 })()}
                                 
@@ -28082,6 +29493,79 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                     ))}
                                   </div>
                                 </div>
+                                
+                                {/* Jurisdiction Breakdown - for states requiring county/city reporting */}
+                                {stateData.jurisdictions && stateData.jurisdictions.length > 0 && (
+                                  <div className="bg-slate-900 rounded-lg p-4 mb-4">
+                                    <div className="flex items-center justify-between mb-3">
+                                      <h4 className="text-sm font-semibold text-slate-300">
+                                        📍 {filingFormat.requiresJurisdictions ? `${filingFormat.jurisdictionType || 'Jurisdiction'} Breakdown` : 'Tax by Jurisdiction'}
+                                        {filingFormat.requiresJurisdictions && (
+                                          <span className="ml-2 text-xs bg-amber-600/30 text-amber-300 px-2 py-0.5 rounded">Required for Filing</span>
+                                        )}
+                                      </h4>
+                                      <button
+                                        onClick={() => {
+                                          // Export jurisdiction-level CSV
+                                          const { start, end } = getDateRange();
+                                          let csv = 'Jurisdiction,Tax Rate,Taxable Sales,Tax Collected,Orders\n';
+                                          stateData.jurisdictions.forEach(j => {
+                                            csv += `"${j.name}",${((j.rate || 0) * 100).toFixed(3)}%,${(j.sales || 0).toFixed(2)},${(j.tax || 0).toFixed(2)},${j.orders || 0}\n`;
+                                          });
+                                          csv += `\n"TOTAL",,${(stateData.totalSales || 0).toFixed(2)},${(stateData.taxOwed || 0).toFixed(2)},${stateData.totalOrders || 0}\n`;
+                                          csv += `\n"State: ${stateInfo?.name || stateCode}"\n`;
+                                          csv += `"Period: ${taxPeriodValue}"\n`;
+                                          csv += `"Date Range: ${start} to ${end}"\n`;
+                                          
+                                          const blob = new Blob([csv], { type: 'text/csv' });
+                                          const url = URL.createObjectURL(blob);
+                                          const a = document.createElement('a');
+                                          a.href = url;
+                                          a.download = `${stateCode}-jurisdiction-breakdown-${taxPeriodValue}.csv`;
+                                          a.click();
+                                          URL.revokeObjectURL(url);
+                                        }}
+                                        className="text-xs bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 px-2 py-1 rounded flex items-center gap-1"
+                                      >
+                                        <Download className="w-3 h-3" />
+                                        Export CSV
+                                      </button>
+                                    </div>
+                                    <div className="max-h-48 overflow-y-auto">
+                                      <table className="w-full text-sm">
+                                        <thead className="sticky top-0 bg-slate-900">
+                                          <tr className="text-slate-400 text-xs">
+                                            <th className="text-left py-1">Jurisdiction</th>
+                                            <th className="text-right py-1">Rate</th>
+                                            <th className="text-right py-1">Sales</th>
+                                            <th className="text-right py-1">Tax</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {stateData.jurisdictions.map((j, idx) => (
+                                            <tr key={idx} className="border-t border-slate-800">
+                                              <td className="py-1.5 text-white">{j.name}</td>
+                                              <td className="py-1.5 text-right text-slate-400">{((j.rate || 0) * 100).toFixed(2)}%</td>
+                                              <td className="py-1.5 text-right text-slate-300">{formatCurrency(j.sales || 0)}</td>
+                                              <td className="py-1.5 text-right text-emerald-400">{formatCurrency(j.tax || 0)}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* Note about jurisdiction requirements */}
+                                {filingFormat.requiresJurisdictions && (!stateData.jurisdictions || stateData.jurisdictions.length === 0) && (
+                                  <div className="bg-amber-900/20 border border-amber-500/30 rounded-lg p-3 mb-4">
+                                    <p className="text-amber-300 text-sm">
+                                      ⚠️ <strong>{stateInfo?.name}</strong> requires {filingFormat.jurisdictionType || 'jurisdiction'}-level breakdown, 
+                                      but no jurisdiction data is available. Re-sync your Shopify data to capture tax jurisdiction details, 
+                                      or manually check Shopify's tax report.
+                                    </p>
+                                  </div>
+                                )}
                                 
                                 {filingFormat.note && (
                                   <div className="bg-amber-900/20 border border-amber-500/30 rounded-lg p-3 mb-4">
@@ -30948,6 +32432,34 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
           
           <NavTabs />
           
+          {/* Settings Tabs */}
+          <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl">
+            {[
+              { id: 'general', label: 'General', mobileLabel: '🏪', icon: Store },
+              { id: 'integrations', label: 'Integrations', mobileLabel: '🔗', icon: RefreshCw },
+              { id: 'thresholds', label: 'Thresholds', mobileLabel: '📊', icon: Target },
+              { id: 'display', label: 'Display', mobileLabel: '🎨', icon: Eye },
+              { id: 'data', label: 'Data', mobileLabel: '🗄️', icon: Database },
+              { id: 'account', label: 'Account', mobileLabel: '👤', icon: User },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setSettingsTab(tab.id)}
+                className={`flex-1 min-w-[50px] sm:min-w-[90px] px-2 sm:px-4 py-2 sm:py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  settingsTab === tab.id 
+                    ? 'bg-violet-600 text-white shadow-lg' 
+                    : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+                }`}
+              >
+                <span className="sm:hidden">{tab.mobileLabel}</span>
+                <span className="hidden sm:inline">{tab.mobileLabel} {tab.label}</span>
+              </button>
+            ))}
+          </div>
+          
+          {/* ========== GENERAL TAB ========== */}
+          {settingsTab === 'general' && (
+            <>
           {/* Store Management - For Cloud Users */}
           {session && (
             <SettingSection title="🏪 Store Management">
@@ -31053,6 +32565,60 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
             </SettingSection>
           )}
           
+          {/* Store Branding - Always visible in General tab */}
+          <SettingSection title="🏪 Store Branding">
+            <SettingRow label="Store Name" desc="Displayed in the dashboard header">
+              <input 
+                type="text" 
+                value={storeName} 
+                onChange={(e) => setStoreName(e.target.value)} 
+                placeholder="Your Store Name"
+                className="w-48 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+              />
+            </SettingRow>
+            <SettingRow label="Store Logo" desc="Upload your logo (PNG, JPG - max 500KB)">
+              <div className="flex items-center gap-3">
+                {storeLogo && (
+                  <img src={storeLogo} alt="Store logo" className="w-10 h-10 object-contain rounded-lg bg-white p-1" />
+                )}
+                <label className="px-3 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 cursor-pointer flex items-center gap-2">
+                  <Upload className="w-4 h-4" />{storeLogo ? 'Change' : 'Upload'}
+                  <input 
+                    type="file" 
+                    accept="image/png,image/jpeg,image/jpg,image/webp"
+                    onChange={(e) => {
+                      const file = e.target.files[0];
+                      if (file) {
+                        if (file.size > 500 * 1024) {
+                          setToast({ message: 'Logo must be under 500KB', type: 'error' });
+                          return;
+                        }
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                          setStoreLogo(ev.target.result);
+                          setToast({ message: 'Logo uploaded successfully', type: 'success' });
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }} 
+                    className="hidden" 
+                  />
+                </label>
+                {storeLogo && (
+                  <button onClick={() => { setStoreLogo(null); setToast({ message: 'Logo removed', type: 'success' }); }} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300">
+                    Remove
+                  </button>
+                )}
+              </div>
+            </SettingRow>
+            <p className="text-slate-500 text-xs mt-3">Your logo will appear in the dashboard header next to your store name.</p>
+          </SettingSection>
+            </>
+          )}
+          
+          {/* ========== INTEGRATIONS TAB ========== */}
+          {settingsTab === 'integrations' && (
+            <>
           {/* Shopify Connection */}
           <SettingSection title="🛒 Shopify Connection">
             <p className="text-slate-400 text-sm mb-4">Connect your Shopify store to automatically sync orders, inventory, and tax data</p>
@@ -31183,7 +32749,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </div>
             )}
           </SettingSection>
+            </>
+          )}
           
+          {/* ========== THRESHOLDS TAB ========== */}
+          {settingsTab === 'thresholds' && (
+            <>
           {/* Inventory Thresholds */}
           <SettingSection title="📦 Inventory Thresholds">
             <p className="text-slate-400 text-sm mb-4">Define what stock levels trigger alerts</p>
@@ -31240,7 +32811,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               <NumberInput value={currentLocalSettings.alertSalesTaxDays} onChange={(v) => updateSetting('alertSalesTaxDays', v)} min={1} max={30} suffix="days" />
             </SettingRow>
           </SettingSection>
+            </>
+          )}
           
+          {/* ========== DISPLAY TAB ========== */}
+          {settingsTab === 'display' && (
+            <>
           {/* Module Visibility */}
           <SettingSection title="📱 Module Visibility">
             <p className="text-slate-400 text-sm mb-4">Show/hide sections to streamline your dashboard</p>
@@ -31332,7 +32908,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               <NumberInput value={currentLocalSettings.alertSalesTaxDays || 7} onChange={(v) => updateSetting('alertSalesTaxDays', v)} min={1} max={30} suffix="days" />
             </SettingRow>
           </SettingSection>
+            </>
+          )}
           
+          {/* ========== ACCOUNT TAB ========== */}
+          {settingsTab === 'account' && (
+            <>
           {/* Account */}
           {supabase && session && (
             <SettingSection title="👤 Account">
@@ -31346,56 +32927,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               </SettingRow>
             </SettingSection>
           )}
+            </>
+          )}
           
-          {/* Store Branding */}
-          <SettingSection title="🏪 Store Branding">
-            <SettingRow label="Store Name" desc="Displayed in the dashboard header">
-              <input 
-                type="text" 
-                value={storeName} 
-                onChange={(e) => setStoreName(e.target.value)} 
-                placeholder="Your Store Name"
-                className="w-48 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
-              />
-            </SettingRow>
-            <SettingRow label="Store Logo" desc="Upload your logo (PNG, JPG - max 500KB)">
-              <div className="flex items-center gap-3">
-                {storeLogo && (
-                  <img src={storeLogo} alt="Store logo" className="w-10 h-10 object-contain rounded-lg bg-white p-1" />
-                )}
-                <label className="px-3 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 cursor-pointer flex items-center gap-2">
-                  <Upload className="w-4 h-4" />{storeLogo ? 'Change' : 'Upload'}
-                  <input 
-                    type="file" 
-                    accept="image/png,image/jpeg,image/jpg,image/webp"
-                    onChange={(e) => {
-                      const file = e.target.files[0];
-                      if (file) {
-                        if (file.size > 500 * 1024) {
-                          setToast({ message: 'Logo must be under 500KB', type: 'error' });
-                          return;
-                        }
-                        const reader = new FileReader();
-                        reader.onload = (ev) => {
-                          setStoreLogo(ev.target.result);
-                          setToast({ message: 'Logo uploaded successfully', type: 'success' });
-                        };
-                        reader.readAsDataURL(file);
-                      }
-                    }} 
-                    className="hidden" 
-                  />
-                </label>
-                {storeLogo && (
-                  <button onClick={() => { setStoreLogo(null); setToast({ message: 'Logo removed', type: 'success' }); }} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300">
-                    Remove
-                  </button>
-                )}
-              </div>
-            </SettingRow>
-            <p className="text-slate-500 text-xs mt-3">Your logo will appear in the dashboard header next to your store name.</p>
-          </SettingSection>
-          
+          {/* ========== DATA TAB ========== */}
+          {settingsTab === 'data' && (
+            <>
           {/* Security & Privacy */}
           <SettingSection title="🔒 Security & Privacy">
             <div className="space-y-4">
@@ -31666,7 +33203,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
               )}
             </SettingRow>
           </SettingSection>
+            </>
+          )}
           
+          {/* ========== DANGER ZONE - ACCOUNT TAB ========== */}
+          {settingsTab === 'account' && (
+            <>
           {/* Danger Zone */}
           {session && (
             <SettingSection title="⚠️ Danger Zone">
@@ -31706,6 +33248,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 </button>
               </div>
             </SettingSection>
+          )}
+            </>
           )}
           
           {/* About */}
