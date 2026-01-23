@@ -553,7 +553,6 @@ export default async function handler(req, res) {
       const gateways = order.payment_gateway_names || [];
       const sourceName = (order.source_name || '').toLowerCase();
       const tags = (order.tags || '').toLowerCase();
-      const checkoutToken = (order.checkout_token || '').toLowerCase();
       
       // Track all gateways seen
       gateways.forEach(g => allPaymentGateways.add(g));
@@ -595,18 +594,47 @@ export default async function handler(req, res) {
       // Check for "accelerated_checkout" in source
       const hasAcceleratedCheckout = sourceName.includes('accelerated');
       
-      const isShopPay = hasShopPayGateway || hasShopPaySource || hasInstallments || hasShopPayDetails || hasAcceleratedCheckout;
+      // NEW: Check wallet_type on transactions
+      const transactions = order.transactions || [];
+      const hasShopPayWallet = transactions.some(t => 
+        t.receipt?.wallet_type?.toLowerCase() === 'shop_pay' ||
+        t.receipt?.wallet_payment_method?.toLowerCase()?.includes('shop_pay') ||
+        t.payment_details?.wallet_type?.toLowerCase() === 'shop_pay'
+      );
       
-      // Track which gateways matched
-      if (isShopPay && matchedGateway) {
-        shopPayGatewaysFound.add(matchedGateway);
-      }
-      if (isShopPay && !matchedGateway) {
-        shopPayGatewaysFound.add('detected via: ' + (hasShopPaySource ? 'source/tags' : hasInstallments ? 'installments' : hasShopPayDetails ? 'payment_details' : 'accelerated'));
+      // NEW: Check checkout_completion_target
+      const checkoutTarget = (order.checkout_completion_target || '').toLowerCase();
+      const hasShopCheckout = checkoutTarget.includes('shop');
+      
+      // NEW: Check buyer_accepts_marketing and customer - Shop Pay users often have these patterns
+      // This is less reliable but can help
+      const landingSite = (order.landing_site || '').toLowerCase();
+      const referringSite = (order.referring_site || '').toLowerCase();
+      const hasShopReferral = landingSite.includes('shop.app') || 
+                              referringSite.includes('shop.app') ||
+                              landingSite.includes('shop/') ||
+                              referringSite.includes('shop/');
+      
+      const isShopPay = hasShopPayGateway || hasShopPaySource || hasInstallments || 
+                        hasShopPayDetails || hasAcceleratedCheckout || hasShopPayWallet || hasShopCheckout;
+      
+      // Track which method matched
+      if (isShopPay) {
+        const method = hasShopPayGateway ? `gateway:${matchedGateway}` : 
+                       hasShopPaySource ? 'source/tags' :
+                       hasInstallments ? 'installments' :
+                       hasShopPayDetails ? 'payment_details' :
+                       hasAcceleratedCheckout ? 'accelerated' :
+                       hasShopPayWallet ? 'wallet_type' :
+                       hasShopCheckout ? 'checkout_target' : 'unknown';
+        shopPayGatewaysFound.add(method);
       }
       
       return isShopPay;
     };
+    
+    // Log first few orders with tax to help debug Shop Pay detection
+    let debugOrdersLogged = 0;
     
     // Helper to get state code from order
     const getStateCode = (order) => {
@@ -628,6 +656,31 @@ export default async function handler(req, res) {
       const weekEnding = getWeekEnding(orderDate);
       const isShopPay = isShopPayOrder(order);
       const stateCode = getStateCode(order);
+      
+      // Debug: Log sample orders to help identify Shop Pay indicators
+      const orderTax = parseFloat(order.total_tax) || 0;
+      if (debugOrdersLogged < 3 && orderTax > 0) {
+        console.log(`DEBUG Order #${order.order_number || order.id}:`, {
+          payment_gateway_names: order.payment_gateway_names,
+          source_name: order.source_name,
+          tags: order.tags,
+          processing_method: order.processing_method,
+          payment_details: order.payment_details,
+          checkout_token: order.checkout_token ? 'present' : 'none',
+          transactions: order.transactions?.map(t => ({
+            gateway: t.gateway,
+            kind: t.kind,
+            receipt_wallet: t.receipt?.wallet_type,
+            payment_details: t.payment_details
+          })),
+          browser_ip: order.browser_ip ? 'present' : 'none',
+          landing_site: order.landing_site,
+          referring_site: order.referring_site,
+          total_tax: orderTax,
+          isDetectedAsShopPay: isShopPay
+        });
+        debugOrdersLogged++;
+      }
       
       if (isShopPay) shopPayOrderCount++;
       
@@ -671,6 +724,15 @@ export default async function handler(req, res) {
       const orderRevenue = parseFloat(order.total_price) || 0;
       const orderDiscount = parseFloat(order.total_discounts) || 0;
       const orderTax = parseFloat(order.total_tax) || 0;
+      // Use subtotal_price for net item sales (excludes tax and shipping)
+      const orderSubtotal = parseFloat(order.subtotal_price) || 0;
+      // Track shipping separately
+      const orderShipping = parseFloat(order.total_shipping_price_set?.shop_money?.amount) || 
+                           parseFloat(order.shipping_lines?.reduce((s, l) => s + parseFloat(l.price || 0), 0)) || 0;
+      // Calculate shipping tax from tax_lines
+      const shippingTax = (order.tax_lines || [])
+        .filter(t => t.title?.toLowerCase().includes('shipping'))
+        .reduce((s, t) => s + parseFloat(t.price || 0), 0);
       
       dailyData[orderDate].shopify.revenue += orderRevenue;
       dailyData[orderDate].shopify.discounts += orderDiscount;
@@ -696,28 +758,34 @@ export default async function handler(req, res) {
         if (!dailyData[orderDate].shopify.taxByState[stateCode]) {
           dailyData[orderDate].shopify.taxByState[stateCode] = { 
             tax: 0, 
-            sales: 0, 
+            sales: 0,  // Item subtotal only
+            shipping: 0,  // Shipping charges
             orders: 0,
             shopPayTax: 0,
             shopPaySales: 0,
+            shopPayShipping: 0,
             shopPayOrders: 0
           };
         }
-        dailyData[orderDate].shopify.taxByState[stateCode].sales += orderRevenue - orderDiscount;
+        dailyData[orderDate].shopify.taxByState[stateCode].sales += orderSubtotal;
+        dailyData[orderDate].shopify.taxByState[stateCode].shipping += orderShipping;
         dailyData[orderDate].shopify.taxByState[stateCode].orders += 1;
         
         // Weekly state tracking (ALL orders)
         if (!weeklyData[weekEnding].shopify.taxByState[stateCode]) {
           weeklyData[weekEnding].shopify.taxByState[stateCode] = { 
             tax: 0, 
-            sales: 0, 
+            sales: 0,
+            shipping: 0,
             orders: 0,
             shopPayTax: 0,
             shopPaySales: 0,
+            shopPayShipping: 0,
             shopPayOrders: 0
           };
         }
-        weeklyData[weekEnding].shopify.taxByState[stateCode].sales += orderRevenue - orderDiscount;
+        weeklyData[weekEnding].shopify.taxByState[stateCode].sales += orderSubtotal;
+        weeklyData[weekEnding].shopify.taxByState[stateCode].shipping += orderShipping;
         weeklyData[weekEnding].shopify.taxByState[stateCode].orders += 1;
         
         // Global state tracking
@@ -725,14 +793,17 @@ export default async function handler(req, res) {
           taxByState[stateCode] = {
             stateCode,
             taxCollected: 0,
-            taxableSales: 0,
+            itemSales: 0,  // Renamed for clarity
+            shipping: 0,
             orderCount: 0,
             excludedShopPayTax: 0,
             shopPaySales: 0,
+            shopPayShipping: 0,
             shopPayOrders: 0,
           };
         }
-        taxByState[stateCode].taxableSales += orderRevenue - orderDiscount;
+        taxByState[stateCode].itemSales += orderSubtotal;
+        taxByState[stateCode].shipping += orderShipping;
         taxByState[stateCode].orderCount += 1;
       }
       
@@ -748,15 +819,18 @@ export default async function handler(req, res) {
         // Track Shop Pay tax separately by state (for visibility, not filing)
         if (stateCode) {
           dailyData[orderDate].shopify.taxByState[stateCode].shopPayTax += orderTax;
-          dailyData[orderDate].shopify.taxByState[stateCode].shopPaySales += orderRevenue - orderDiscount;
+          dailyData[orderDate].shopify.taxByState[stateCode].shopPaySales += orderSubtotal;
+          dailyData[orderDate].shopify.taxByState[stateCode].shopPayShipping += orderShipping;
           dailyData[orderDate].shopify.taxByState[stateCode].shopPayOrders += 1;
           
           weeklyData[weekEnding].shopify.taxByState[stateCode].shopPayTax += orderTax;
-          weeklyData[weekEnding].shopify.taxByState[stateCode].shopPaySales += orderRevenue - orderDiscount;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].shopPaySales += orderSubtotal;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].shopPayShipping += orderShipping;
           weeklyData[weekEnding].shopify.taxByState[stateCode].shopPayOrders += 1;
           
           taxByState[stateCode].excludedShopPayTax += orderTax;
-          taxByState[stateCode].shopPaySales += orderRevenue - orderDiscount;
+          taxByState[stateCode].shopPaySales += orderSubtotal;
+          taxByState[stateCode].shopPayShipping += orderShipping;
           taxByState[stateCode].shopPayOrders += 1;
         }
       } else {
@@ -773,19 +847,37 @@ export default async function handler(req, res) {
         }
       }
 
-      // Process tax jurisdictions (for detailed reporting)
+      // Process tax jurisdictions (for detailed reporting by state/county/city)
       for (const taxLine of order.tax_lines || []) {
         const jurisdiction = taxLine.title || 'Unknown';
         const taxAmount = parseFloat(taxLine.price) || 0;
+        const taxRate = parseFloat(taxLine.rate) || 0;
         
+        // Global jurisdiction tracking
         if (!taxByJurisdiction[jurisdiction]) {
-          taxByJurisdiction[jurisdiction] = { total: 0, shopPayExcluded: 0 };
+          taxByJurisdiction[jurisdiction] = { total: 0, shopPayExcluded: 0, rate: taxRate };
         }
         
         if (isShopPay) {
           taxByJurisdiction[jurisdiction].shopPayExcluded += taxAmount;
         } else {
           taxByJurisdiction[jurisdiction].total += taxAmount;
+        }
+        
+        // Track jurisdiction data by state for state-specific filing
+        if (stateCode) {
+          // Initialize jurisdiction tracking in daily/weekly data
+          if (!dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions) {
+            dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions = {};
+          }
+          if (!dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction]) {
+            dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction] = {
+              tax: 0, sales: 0, rate: taxRate, orders: 0
+            };
+          }
+          dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction].tax += isShopPay ? 0 : taxAmount;
+          dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction].sales += orderSubtotal;
+          dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction].orders += 1;
         }
       }
 
