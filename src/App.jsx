@@ -20998,6 +20998,24 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     const shopify = dayData.shopify || {};
     const total = dayData.total || {};
     
+    // Calculate amazonShare and shopifyShare if they're missing
+    const amzRev = amazon.revenue || 0;
+    const shopRev = shopify.revenue || 0;
+    const totalRev = total.revenue || (amzRev + shopRev);
+    if (totalRev > 0 && (!total.amazonShare && !total.shopifyShare)) {
+      total.amazonShare = amzRev > 0 ? (amzRev / totalRev) * 100 : 0;
+      total.shopifyShare = shopRev > 0 ? (shopRev / totalRev) * 100 : 0;
+    }
+    
+    // Fix COGS if missing
+    if (!total.cogs || total.cogs === 0) {
+      const amzCogs = amazon.cogs || 0;
+      const shopCogs = shopify.cogs || 0;
+      if (amzCogs > 0 || shopCogs > 0) {
+        total.cogs = amzCogs + shopCogs;
+      }
+    }
+    
     // Get ads metrics from either shopify object or top-level dayData (bulk uploads store at top level)
     const googleSpend = shopify.googleSpend || dayData.googleSpend || 0;
     const metaSpend = shopify.metaSpend || dayData.metaSpend || 0;
