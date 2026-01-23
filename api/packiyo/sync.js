@@ -171,6 +171,34 @@ export default async function handler(req, res) {
         const pageProducts = data.data || [];
         products.push(...pageProducts);
         
+        // JSON:API often returns related data in "included" section
+        // We need to merge this with products
+        if (data.included && Array.isArray(data.included)) {
+          console.log(`Page ${page}: Found ${data.included.length} included items`);
+          
+          // Group included items by type and relationship
+          const inventoryLevelsByProductId = {};
+          data.included.forEach(item => {
+            if (item.type === 'inventory_levels' || item.type === 'inventory-levels') {
+              const productId = item.relationships?.product?.data?.id || item.attributes?.product_id;
+              if (productId) {
+                if (!inventoryLevelsByProductId[productId]) inventoryLevelsByProductId[productId] = [];
+                inventoryLevelsByProductId[productId].push(item);
+              }
+            }
+          });
+          
+          // Attach inventory levels to their products
+          pageProducts.forEach(product => {
+            const productId = product.id;
+            if (productId && inventoryLevelsByProductId[productId]) {
+              product.inventory_levels = inventoryLevelsByProductId[productId];
+            }
+          });
+          
+          console.log(`Attached inventory levels to ${Object.keys(inventoryLevelsByProductId).length} products`);
+        }
+        
         console.log(`Page ${page}: fetched ${pageProducts.length} products, total: ${products.length}`);
         
         // Log full pagination structure to debug
@@ -291,7 +319,21 @@ export default async function handler(req, res) {
       let skippedNoSku = 0;
       let skippedZeroQty = 0;
       
-      products.forEach(product => {
+      products.forEach((product, idx) => {
+        // Log first product structure for debugging
+        if (idx === 0) {
+          console.log('=== FIRST PRODUCT STRUCTURE ===');
+          console.log('Keys:', Object.keys(product));
+          console.log('Has attributes?', !!product.attributes);
+          console.log('Has relationships?', !!product.relationships);
+          if (product.attributes) {
+            console.log('Attribute keys:', Object.keys(product.attributes));
+            console.log('quantity_on_hand:', product.attributes.quantity_on_hand);
+          }
+          console.log('Direct quantity_on_hand:', product.quantity_on_hand);
+          console.log('Full first product (truncated):', JSON.stringify(product).slice(0, 1000));
+        }
+        
         // JSON:API format has data in attributes, regular format has it directly
         const attrs = product.attributes || product;
         const sku = (attrs.sku || product.sku)?.trim();
@@ -310,6 +352,11 @@ export default async function handler(req, res) {
         let quantityAllocated = parseInt(attrs.quantity_allocated) || 0;
         let quantityReserved = parseInt(attrs.quantity_reserved) || 0;
         
+        // Log quantity finding for first few products
+        if (idx < 3) {
+          console.log(`Product ${idx} (${sku}): direct qty=${quantityOnHand}, available=${quantityAvailable}`);
+        }
+        
         // Priority 2: Check inventory_levels array if direct fields are 0
         if (quantityOnHand === 0) {
           let inventoryLevels = product.inventory_levels || attrs.inventory_levels || [];
@@ -319,12 +366,21 @@ export default async function handler(req, res) {
             inventoryLevels = product.relationships.inventory_levels.data;
           }
           
+          if (idx < 3 && inventoryLevels.length > 0) {
+            console.log(`Product ${idx} inventory_levels count:`, inventoryLevels.length);
+            console.log('First level:', JSON.stringify(inventoryLevels[0]).slice(0, 300));
+          }
+          
           inventoryLevels.forEach(level => {
             const levelAttrs = level.attributes || level;
             quantityOnHand += parseInt(levelAttrs.quantity_on_hand) || 0;
             quantityAvailable += parseInt(levelAttrs.quantity_available) || 0;
             quantityInbound += parseInt(levelAttrs.quantity_inbound) || 0;
           });
+          
+          if (idx < 3) {
+            console.log(`Product ${idx} (${sku}): after levels qty=${quantityOnHand}`);
+          }
         }
         
         // Skip products with no inventory at all (bundles, inactive, etc)
@@ -357,6 +413,13 @@ export default async function handler(req, res) {
       
       // Format response for app integration
       console.log(`Processing complete: ${products.length} products fetched, ${skippedNoSku} without SKU, ${skippedZeroQty} with zero qty, ${Object.keys(inventoryBySku).length} with inventory`);
+      console.log(`=== FINAL TOTALS: ${totalUnits} units, $${totalValue.toFixed(2)} value ===`);
+      
+      // Log top 5 products by quantity for verification
+      const topProducts = Object.values(inventoryBySku)
+        .sort((a, b) => b.quantityOnHand - a.quantityOnHand)
+        .slice(0, 5);
+      console.log('Top 5 products by qty:', topProducts.map(p => `${p.sku}: ${p.quantityOnHand}`).join(', '));
       
       const inventorySnapshot = {
         date: new Date().toISOString().split('T')[0],
