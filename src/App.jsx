@@ -1222,6 +1222,18 @@ export default function Dashboard() {
   const [shopifyInventoryPreview, setShopifyInventoryPreview] = useState(null);
   const [shopifySmartSync, setShopifySmartSync] = useState({ enabled: true, missingDays: [], existingDays: [] });
   
+  // Packiyo 3PL Direct Integration
+  const [packiyoCredentials, setPackiyoCredentials] = useState({ 
+    apiKey: '', 
+    customerId: '134',
+    baseUrl: 'https://excel3pl.packiyo.com/api/v1',
+    connected: false, 
+    lastSync: null,
+    customerName: ''
+  });
+  const [packiyoInventoryStatus, setPackiyoInventoryStatus] = useState({ loading: false, error: null, lastSync: null });
+  const [packiyoInventoryData, setPackiyoInventoryData] = useState(null);
+  
   // Sales Tax Period Calculator
   const [taxPeriodType, setTaxPeriodType] = useState('month');
   const [taxPeriodValue, setTaxPeriodValue] = useState(() => {
@@ -2816,7 +2828,9 @@ const combinedData = useMemo(() => ({
   confirmedRecurring,
   // Shopify Integration credentials
   shopifyCredentials,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials]);
+  // Packiyo 3PL Integration credentials
+  packiyoCredentials,
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -3045,6 +3059,15 @@ useEffect(() => {
   }
 }, [shopifyCredentials]);
 
+// Persist Packiyo credentials to localStorage for offline backup
+useEffect(() => {
+  if (packiyoCredentials.apiKey || packiyoCredentials.connected) {
+    try {
+      lsSet('ecommerce_packiyo_creds_v1', JSON.stringify(packiyoCredentials));
+    } catch {}
+  }
+}, [packiyoCredentials]);
+
 const loadFromCloud = useCallback(async (storeId = null) => {
   if (!supabase || !session?.user?.id) return { ok: false, stores: [] };
   setCloudStatus('Loading…');
@@ -3145,6 +3168,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.bankingData) setBankingData(cloud.bankingData);
     if (cloud.confirmedRecurring) setConfirmedRecurring(cloud.confirmedRecurring);
     if (cloud.shopifyCredentials) setShopifyCredentials(cloud.shopifyCredentials);
+    if (cloud.packiyoCredentials) setPackiyoCredentials(cloud.packiyoCredentials);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -3180,6 +3204,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.bankingData) writeToLocal('ecommerce_banking_v1', JSON.stringify(cloud.bankingData));
     if (cloud.confirmedRecurring) writeToLocal('ecommerce_recurring_v1', JSON.stringify(cloud.confirmedRecurring));
     if (cloud.shopifyCredentials) writeToLocal('ecommerce_shopify_creds_v1', JSON.stringify(cloud.shopifyCredentials));
+    if (cloud.packiyoCredentials) writeToLocal('ecommerce_packiyo_creds_v1', JSON.stringify(cloud.packiyoCredentials));
 
     setCloudStatus('');
     return { ok: true, stores: loadedStores };
@@ -3246,6 +3271,8 @@ const createStore = useCallback(async (name) => {
     },
     // Shopify credentials for new store
     shopifyCredentials: { storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null },
+    // Packiyo 3PL credentials for new store
+    packiyoCredentials: { apiKey: '', customerId: '134', baseUrl: 'https://excel3pl.packiyo.com/api/v1', connected: false, lastSync: null, customerName: '' },
   };
   
   // Save to cloud immediately with the new stores list
@@ -4947,21 +4974,25 @@ const savePeriods = async (d) => {
     else { setUploadTab('period'); setView('upload'); setSelectedPeriod(null); }
   };
 
-  const processInventory = useCallback(() => {
-    if (!invFiles.amazon || !invSnapshotDate) { alert('Upload Amazon FBA file and select date'); return; }
+  const processInventory = useCallback(async () => {
+    if (!invFiles.amazon || !invSnapshotDate) { 
+      alert('Upload Amazon FBA file and select date'); 
+      return; 
+    }
     setIsProcessing(true);
 
     const cogsLookup = { ...savedCogs };
-    if (invFiles.cogs) invFiles.cogs.forEach(r => { const s = r['SKU'] || r['sku']; if (s) cogsLookup[s] = parseFloat(r['Cost Per Unit'] || 0); });
-    if (invFiles.threepl) invFiles.threepl.forEach(r => { const s = r['sku']; const c = parseFloat(r['cost'] || 0); if (s && c && !cogsLookup[s]) cogsLookup[s] = c; });
+    if (invFiles.cogs) invFiles.cogs.forEach(r => { 
+      const s = r['SKU'] || r['sku']; 
+      if (s) cogsLookup[s] = parseFloat(r['Cost Per Unit'] || 0); 
+    });
 
     // Build Shopify velocity from actual SKU sales data
     const sortedWeeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
     const weeksCount = sortedWeeks.length;
-    const shopifySkuVelocity = {}; // sku -> weekly units
+    const shopifySkuVelocity = {};
     
     if (weeksCount > 0) {
-      // Aggregate Shopify SKU sales from recent weeks
       sortedWeeks.forEach(w => {
         const weekData = allWeeksData[w];
         if (weekData.shopify?.skuData) {
@@ -4971,14 +5002,14 @@ const savePeriods = async (d) => {
           });
         }
       });
-      // Convert totals to weekly averages
       Object.keys(shopifySkuVelocity).forEach(sku => {
         shopifySkuVelocity[sku] = shopifySkuVelocity[sku] / weeksCount;
       });
     }
 
-    const amzInv = {}, tplInv = {};
-    let amzTotal = 0, amzValue = 0, amzInbound = 0, tplTotal = 0, tplValue = 0, tplInbound = 0;
+    // Process Amazon FBA inventory
+    const amzInv = {};
+    let amzTotal = 0, amzValue = 0, amzInbound = 0;
 
     invFiles.amazon.forEach(r => {
       const sku = r['sku'] || '', avail = parseInt(r['available'] || 0), inb = parseInt(r['inbound-quantity'] || 0);
@@ -4989,7 +5020,56 @@ const savePeriods = async (d) => {
       if (sku) amzInv[sku] = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel: t30 / 4.3 };
     });
 
-    if (invFiles.threepl) {
+    // ===== 3PL INVENTORY - Use Packiyo if connected, otherwise fall back to file upload =====
+    let tplInv = {};
+    let tplTotal = 0, tplValue = 0, tplInbound = 0;
+    let tplSource = 'file';
+
+    if (packiyoCredentials.connected && packiyoCredentials.apiKey) {
+      // Fetch directly from Packiyo
+      try {
+        const res = await fetch('/api/packiyo/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey: packiyoCredentials.apiKey,
+            customerId: packiyoCredentials.customerId,
+            baseUrl: packiyoCredentials.baseUrl,
+            syncType: 'inventory',
+          }),
+        });
+        const data = await res.json();
+        
+        if (data.success && data.items) {
+          tplSource = 'packiyo-direct';
+          data.items.forEach(item => {
+            const sku = item.sku;
+            if (!sku || sku.includes('Bundle') || item.name?.includes('Gift Card') || item.name?.includes('FREE')) return;
+            
+            const qty = item.quantity_on_hand || 0;
+            const inb = item.quantity_inbound || 0;
+            const cost = item.cost || cogsLookup[sku] || 0;
+            
+            if (qty === 0 && inb === 0) return;
+            
+            tplTotal += qty;
+            tplValue += qty * cost;
+            tplInbound += inb;
+            tplInv[sku] = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
+          });
+          
+          // Update Packiyo last sync time
+          setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+        }
+      } catch (err) {
+        console.error('Packiyo sync failed, falling back to file:', err);
+        // Fall through to file-based processing
+      }
+    }
+    
+    // Fall back to uploaded 3PL file if Packiyo not connected or failed
+    if (Object.keys(tplInv).length === 0 && invFiles.threepl) {
+      tplSource = 'file-upload';
       invFiles.threepl.forEach(r => {
         const sku = r['sku'] || '', name = r['name'] || '', qty = parseInt(r['quantity_on_hand'] || 0);
         const inb = parseInt(r['quantity_inbound'] || 0), cost = parseFloat(r['cost'] || 0) || cogsLookup[sku] || 0;
@@ -4999,29 +5079,75 @@ const savePeriods = async (d) => {
       });
     }
 
-    const allSkus = new Set([...Object.keys(amzInv), ...Object.keys(tplInv)]);
+    // ===== HOME/OFFICE INVENTORY (Wormans Mill) from Shopify =====
+    let homeInv = {};
+    let homeTotal = 0, homeValue = 0;
+    let homeSource = 'none';
+
+    if (shopifyCredentials.connected) {
+      try {
+        const res = await fetch('/api/shopify/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storeUrl: shopifyCredentials.storeUrl,
+            clientId: shopifyCredentials.clientId,
+            clientSecret: shopifyCredentials.clientSecret,
+            syncType: 'inventory',
+          }),
+        });
+        const data = await res.json();
+        
+        if (data.success && data.items) {
+          homeSource = 'shopify-sync';
+          data.items.forEach(item => {
+            const sku = item.sku;
+            if (!sku) return;
+            
+            // Only get home/office location inventory (not 3PL locations)
+            const homeQty = item.homeQty || 0;
+            if (homeQty === 0) return;
+            
+            const cost = item.cost || cogsLookup[sku] || 0;
+            homeTotal += homeQty;
+            homeValue += homeQty * cost;
+            homeInv[sku] = { sku, name: item.name || sku, total: homeQty, cost };
+          });
+        }
+      } catch (err) {
+        console.error('Shopify inventory sync failed:', err);
+      }
+    }
+
+    // ===== COMBINE ALL INVENTORY SOURCES =====
+    const allSkus = new Set([...Object.keys(amzInv), ...Object.keys(tplInv), ...Object.keys(homeInv)]);
     const items = [];
     let critical = 0, low = 0, healthy = 0, overstock = 0;
     let hasShopifySkuData = Object.keys(shopifySkuVelocity).length > 0;
 
     allSkus.forEach(sku => {
-      const a = amzInv[sku] || {}, t = tplInv[sku] || {};
-      const aQty = a.total || 0, tQty = t.total || 0, totalQty = aQty + tQty;
-      const cost = a.cost || t.cost || cogsLookup[sku] || 0;
+      const a = amzInv[sku] || {};
+      const t = tplInv[sku] || {};
+      const h = homeInv[sku] || {};
+      
+      const aQty = a.total || 0;
+      const tQty = t.total || 0;
+      const hQty = h.total || 0;
+      const totalQty = aQty + tQty + hQty;
+      
+      const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || 0;
       const amzVel = a.amzWeeklyVel || 0;
       const shopVel = shopifySkuVelocity[sku] || 0;
       const totalVel = amzVel + shopVel;
       
-      // Apply learned corrections to velocity predictions if we have enough data
+      // Apply learned corrections
       let correctedVel = totalVel;
       let velocitySource = 'historical';
       if (forecastCorrections.confidence >= 30 && forecastCorrections.samplesUsed >= 2) {
-        // Check for SKU-specific correction first
         if (forecastCorrections.bySku[sku]?.samples >= 2) {
           correctedVel = totalVel * forecastCorrections.bySku[sku].units;
           velocitySource = 'sku-corrected';
         } else {
-          // Use overall correction
           correctedVel = totalVel * forecastCorrections.overall.units;
           velocitySource = 'overall-corrected';
         }
@@ -5035,24 +5161,72 @@ const savePeriods = async (d) => {
         else if (dos <= 90) { health = 'healthy'; healthy++; }
         else { health = 'overstock'; overstock++; }
       }
-      items.push({ sku, name: a.name || t.name || sku, asin: a.asin || '', amazonQty: aQty, threeplQty: tQty, totalQty, cost, totalValue: totalQty * cost, weeklyVel: totalVel, correctedVel: correctedVel, velocitySource, amzWeeklyVel: amzVel, shopWeeklyVel: shopVel, daysOfSupply: dos, health, amazonInbound: a.inbound || 0, threeplInbound: t.inbound || 0 });
+      
+      items.push({ 
+        sku, 
+        name: a.name || t.name || h.name || sku, 
+        asin: a.asin || '', 
+        amazonQty: aQty, 
+        threeplQty: tQty,
+        homeQty: hQty,
+        totalQty, 
+        cost, 
+        totalValue: totalQty * cost, 
+        weeklyVel: totalVel, 
+        correctedVel, 
+        velocitySource, 
+        amzWeeklyVel: amzVel, 
+        shopWeeklyVel: shopVel, 
+        daysOfSupply: dos, 
+        health, 
+        amazonInbound: a.inbound || 0, 
+        threeplInbound: t.inbound || 0 
+      });
     });
+    
     items.sort((a, b) => b.totalValue - a.totalValue);
 
     const velNote = hasShopifySkuData 
       ? `Amazon + Shopify SKU data (${weeksCount}wk avg)` 
       : weeksCount > 0 
-        ? `Amazon only (no Shopify SKU data - re-process weeks to add)` 
+        ? `Amazon only (no Shopify SKU data)` 
         : 'Amazon only';
     
     const learningNote = forecastCorrections.confidence >= 30 
       ? ` + AI-corrected (${forecastCorrections.confidence.toFixed(0)}% confidence)`
       : '';
     
+    const sourceNote = `3PL: ${tplSource}${homeSource !== 'none' ? `, Home: ${homeSource}` : ''}`;
+    
     const snapshot = {
-      date: invSnapshotDate, createdAt: new Date().toISOString(), velocitySource: velNote + learningNote,
-      summary: { totalUnits: amzTotal + tplTotal, totalValue: amzValue + tplValue, amazonUnits: amzTotal, amazonValue: amzValue, amazonInbound: amzInbound, threeplUnits: tplTotal, threeplValue: tplValue, threeplInbound: tplInbound, critical, low, healthy, overstock, skuCount: items.length },
+      date: invSnapshotDate, 
+      createdAt: new Date().toISOString(), 
+      velocitySource: velNote + learningNote,
+      inventorySources: sourceNote,
+      summary: { 
+        totalUnits: amzTotal + tplTotal + homeTotal, 
+        totalValue: amzValue + tplValue + homeValue, 
+        amazonUnits: amzTotal, 
+        amazonValue: amzValue, 
+        amazonInbound: amzInbound, 
+        threeplUnits: tplTotal, 
+        threeplValue: tplValue, 
+        threeplInbound: tplInbound,
+        homeUnits: homeTotal,
+        homeValue: homeValue,
+        critical, 
+        low, 
+        healthy, 
+        overstock, 
+        skuCount: items.length 
+      },
       items,
+      sources: {
+        threepl: tplSource,
+        home: homeSource,
+        packiyoConnected: packiyoCredentials.connected,
+        shopifyConnected: shopifyCredentials.connected,
+      },
       learningStatus: {
         correctionsApplied: forecastCorrections.confidence >= 30,
         confidence: forecastCorrections.confidence,
@@ -5062,9 +5236,20 @@ const savePeriods = async (d) => {
     };
 
     const updated = { ...invHistory, [invSnapshotDate]: snapshot };
-    setInvHistory(updated); saveInv(updated); setSelectedInvDate(invSnapshotDate); setView('inventory'); setIsProcessing(false);
-    setInvFiles({ amazon: null, threepl: null, cogs: null }); setInvFileNames({ amazon: '', threepl: '', cogs: '' }); setInvSnapshotDate('');
-  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, forecastCorrections]);
+    setInvHistory(updated); 
+    saveInv(updated); 
+    setSelectedInvDate(invSnapshotDate); 
+    setView('inventory'); 
+    setIsProcessing(false);
+    setInvFiles({ amazon: null, threepl: null, cogs: null }); 
+    setInvFileNames({ amazon: '', threepl: '', cogs: '' }); 
+    setInvSnapshotDate('');
+    
+    setToast({ 
+      message: `Inventory snapshot saved (3PL: ${tplSource}, ${items.length} SKUs)`, 
+      type: 'success' 
+    });
+  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, forecastCorrections, packiyoCredentials, shopifyCredentials]);
 
   const deleteWeek = (k) => { 
     const data = allWeeksData[k];
@@ -32937,6 +33122,265 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 </div>
               </div>
             )}
+          </SettingSection>
+          
+          {/* Packiyo 3PL Connection */}
+          <SettingSection title="📦 Packiyo 3PL Connection">
+            <p className="text-slate-400 text-sm mb-4">Connect directly to Packiyo for accurate 3PL inventory (Excel3PL)</p>
+            
+            {packiyoCredentials.connected ? (
+              <div className="space-y-4">
+                <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-emerald-500/20 rounded-full flex items-center justify-center">
+                        <Check className="w-5 h-5 text-emerald-400" />
+                      </div>
+                      <div>
+                        <p className="text-emerald-400 font-medium">Connected to Excel3PL</p>
+                        <p className="text-slate-400 text-sm">{packiyoCredentials.customerName || 'Packiyo'}</p>
+                        {packiyoCredentials.lastSync && (
+                          <p className="text-slate-500 text-xs">Last sync: {new Date(packiyoCredentials.lastSync).toLocaleString()}</p>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (confirm('Disconnect from Packiyo? Your synced inventory will remain.')) {
+                          setPackiyoCredentials({ apiKey: '', customerId: '134', baseUrl: 'https://excel3pl.packiyo.com/api/v1', connected: false, lastSync: null, customerName: '' });
+                          setPackiyoInventoryData(null);
+                          setToast({ message: 'Packiyo disconnected', type: 'success' });
+                        }
+                      }}
+                      className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Sync Inventory Button */}
+                <SettingRow label="Sync 3PL Inventory" desc="Pull latest inventory from Packiyo">
+                  <button
+                    onClick={async () => {
+                      setPackiyoInventoryStatus({ loading: true, error: null, lastSync: null });
+                      try {
+                        const res = await fetch('/api/packiyo/sync', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            apiKey: packiyoCredentials.apiKey,
+                            customerId: packiyoCredentials.customerId,
+                            baseUrl: packiyoCredentials.baseUrl,
+                            syncType: 'inventory',
+                          }),
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        
+                        setPackiyoInventoryData(data);
+                        setPackiyoInventoryStatus({ loading: false, error: null, lastSync: new Date().toISOString() });
+                        setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+                        setToast({ message: `Synced ${data.summary?.skuCount || 0} SKUs from Packiyo`, type: 'success' });
+                      } catch (err) {
+                        setPackiyoInventoryStatus({ loading: false, error: err.message, lastSync: null });
+                        setToast({ message: 'Packiyo sync failed: ' + err.message, type: 'error' });
+                      }
+                    }}
+                    disabled={packiyoInventoryStatus.loading}
+                    className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg text-sm text-white flex items-center gap-2"
+                  >
+                    {packiyoInventoryStatus.loading ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" />Syncing...</>
+                    ) : (
+                      <><RefreshCw className="w-4 h-4" />Sync Now</>
+                    )}
+                  </button>
+                </SettingRow>
+                
+                {/* Show inventory preview if available */}
+                {packiyoInventoryData && (
+                  <div className="bg-slate-800/50 rounded-xl p-4 mt-4">
+                    <h4 className="text-white font-medium mb-3">Packiyo Inventory</h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                      <div className="bg-slate-900/50 rounded-lg p-3">
+                        <p className="text-slate-400 text-xs">Total Units</p>
+                        <p className="text-xl font-bold text-white">{(packiyoInventoryData.summary?.totalUnits || 0).toLocaleString()}</p>
+                      </div>
+                      <div className="bg-slate-900/50 rounded-lg p-3">
+                        <p className="text-slate-400 text-xs">Total Value</p>
+                        <p className="text-xl font-bold text-emerald-400">${(packiyoInventoryData.summary?.totalValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                      </div>
+                      <div className="bg-slate-900/50 rounded-lg p-3">
+                        <p className="text-slate-400 text-xs">SKUs</p>
+                        <p className="text-xl font-bold text-white">{packiyoInventoryData.summary?.skuCount || 0}</p>
+                      </div>
+                      <div className="bg-slate-900/50 rounded-lg p-3">
+                        <p className="text-slate-400 text-xs">Source</p>
+                        <p className="text-sm font-medium text-violet-400">Excel3PL Direct</p>
+                      </div>
+                    </div>
+                    
+                    {/* Top items preview */}
+                    {packiyoInventoryData.items && packiyoInventoryData.items.length > 0 && (
+                      <div>
+                        <p className="text-slate-400 text-sm mb-2">Top Items by Value</p>
+                        <div className="space-y-1 max-h-48 overflow-y-auto">
+                          {packiyoInventoryData.items.slice(0, 10).map(item => (
+                            <div key={item.sku} className="flex items-center justify-between text-sm bg-slate-900/30 rounded px-2 py-1">
+                              <span className="text-slate-300 truncate flex-1">{item.sku}</span>
+                              <span className="text-white font-medium ml-2">{item.quantity_on_hand}</span>
+                              <span className="text-emerald-400 ml-2 w-20 text-right">${(item.value || 0).toFixed(2)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {packiyoInventoryStatus.error && (
+                  <div className="bg-rose-900/30 border border-rose-500/30 rounded-lg p-3">
+                    <p className="text-rose-400 text-sm">{packiyoInventoryStatus.error}</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-slate-900/50 rounded-xl p-4">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-slate-300 text-sm font-medium mb-2">API Token</label>
+                      <input
+                        type="password"
+                        placeholder="Your Packiyo API token"
+                        value={packiyoCredentials.apiKey}
+                        onChange={(e) => setPackiyoCredentials(p => ({ ...p, apiKey: e.target.value }))}
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                      />
+                      <p className="text-slate-500 text-xs mt-1">From Packiyo → Settings → API Keys</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-slate-300 text-sm font-medium mb-2">Customer ID</label>
+                        <input
+                          type="text"
+                          placeholder="134"
+                          value={packiyoCredentials.customerId}
+                          onChange={(e) => setPackiyoCredentials(p => ({ ...p, customerId: e.target.value }))}
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-300 text-sm font-medium mb-2">Base URL</label>
+                        <input
+                          type="text"
+                          placeholder="https://excel3pl.packiyo.com/api/v1"
+                          value={packiyoCredentials.baseUrl}
+                          onChange={(e) => setPackiyoCredentials(p => ({ ...p, baseUrl: e.target.value }))}
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        />
+                      </div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!packiyoCredentials.apiKey || !packiyoCredentials.customerId) {
+                          setToast({ message: 'Please enter API Token and Customer ID', type: 'error' });
+                          return;
+                        }
+                        try {
+                          const res = await fetch('/api/packiyo/sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              apiKey: packiyoCredentials.apiKey,
+                              customerId: packiyoCredentials.customerId,
+                              baseUrl: packiyoCredentials.baseUrl,
+                              test: true,
+                            }),
+                          });
+                          const data = await res.json();
+                          if (data.error) throw new Error(data.error);
+                          if (data.success) {
+                            setPackiyoCredentials(p => ({ ...p, connected: true, customerName: data.customerName || 'Excel3PL' }));
+                            setToast({ message: `Connected to ${data.customerName || 'Packiyo'}!`, type: 'success' });
+                          }
+                        } catch (err) {
+                          setToast({ message: 'Connection failed: ' + err.message, type: 'error' });
+                        }
+                      }}
+                      disabled={!packiyoCredentials.apiKey || !packiyoCredentials.customerId}
+                      className="w-full py-3 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:hover:bg-violet-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
+                    >
+                      <Boxes className="w-5 h-5" />
+                      Test & Connect
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="bg-violet-900/20 border border-violet-500/30 rounded-xl p-4">
+                  <h4 className="text-violet-400 font-medium mb-2 flex items-center gap-2">
+                    <HelpCircle className="w-4 h-4" />
+                    Your Packiyo Connection Info
+                  </h4>
+                  <div className="text-slate-300 text-sm space-y-1">
+                    <p><strong>URL:</strong> https://excel3pl.packiyo.com/api/v1</p>
+                    <p><strong>Tenant:</strong> excel3pl</p>
+                    <p><strong>Customer ID:</strong> 134</p>
+                  </div>
+                  <p className="text-slate-500 text-xs mt-3">This will pull inventory directly from Packiyo, separate from Shopify's inventory sync.</p>
+                </div>
+              </div>
+            )}
+          </SettingSection>
+          
+          {/* Inventory Source Configuration */}
+          <SettingSection title="🏪 Inventory Sources">
+            <p className="text-slate-400 text-sm mb-4">Configure which sources provide inventory for each location</p>
+            
+            <div className="space-y-3">
+              <div className="flex items-center justify-between bg-slate-800/50 rounded-lg p-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-violet-500/20 rounded-lg flex items-center justify-center">
+                    <Truck className="w-4 h-4 text-violet-400" />
+                  </div>
+                  <div>
+                    <p className="text-white font-medium">3PL Inventory (Excel3PL)</p>
+                    <p className="text-slate-400 text-xs">Fulfillment center stock</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {packiyoCredentials.connected ? (
+                    <span className="px-2 py-1 bg-violet-500/20 text-violet-400 text-xs rounded-full">Packiyo Direct</span>
+                  ) : (
+                    <span className="px-2 py-1 bg-slate-600/50 text-slate-400 text-xs rounded-full">Not Connected</span>
+                  )}
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-between bg-slate-800/50 rounded-lg p-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-green-500/20 rounded-lg flex items-center justify-center">
+                    <Store className="w-4 h-4 text-green-400" />
+                  </div>
+                  <div>
+                    <p className="text-white font-medium">Wormans Mill Inventory</p>
+                    <p className="text-slate-400 text-xs">Home/office stock</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {shopifyCredentials.connected ? (
+                    <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs rounded-full">Shopify Sync</span>
+                  ) : (
+                    <span className="px-2 py-1 bg-slate-600/50 text-slate-400 text-xs rounded-full">Not Connected</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            <p className="text-slate-500 text-xs mt-4">
+              ℹ️ When both sources are connected, 3PL inventory comes from Packiyo and home inventory from Shopify. This prevents sync conflicts.
+            </p>
           </SettingSection>
             </>
           )}
