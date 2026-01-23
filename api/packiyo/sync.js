@@ -38,53 +38,70 @@ export default async function handler(req, res) {
   // Your tenant: excel3pl.packiyo.com
   const baseUrl = req.body.baseUrl || 'https://excel3pl.packiyo.com/api/v1';
   
-  const headers = {
-    'Authorization': `Bearer ${apiKey}`,
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  };
+  // Try different header combinations - Packiyo may require specific Accept format
+  const headerVariants = [
+    {
+      'Authorization': `Bearer ${apiKey}`,
+      'Accept': 'application/vnd.api+json',  // JSON:API format
+    },
+    {
+      'Authorization': `Bearer ${apiKey}`,
+      'Accept': '*/*',  // Accept anything
+    },
+    {
+      'Authorization': `Bearer ${apiKey}`,
+      // No Accept header
+    },
+  ];
 
   // Test connection
   if (test) {
     try {
-      // Try multiple endpoints - Packiyo API may have changed
-      const endpoints = [
-        `${baseUrl}/customers/${customerId}`,
+      const testEndpoints = [
         `${baseUrl}/products?customer_id=${customerId}&per_page=1`,
-        `${baseUrl}/inventory?customer_id=${customerId}&per_page=1`,
+        `${baseUrl}/customers/${customerId}`,
       ];
       
       let lastError = null;
       let success = false;
       let customerName = 'Packiyo Connected';
       
-      for (const endpoint of endpoints) {
-        try {
-          console.log('Trying endpoint:', endpoint);
-          const testRes = await fetch(endpoint, {
-            method: 'GET',
-            headers,
-          });
-          
-          if (testRes.ok) {
-            const data = await testRes.json();
-            // Try to extract customer name from response
-            if (data.data?.name) customerName = data.data.name;
-            else if (data.data?.[0]?.customer?.name) customerName = data.data[0].customer.name;
-            success = true;
-            break;
-          } else if (testRes.status === 401) {
-            return res.status(200).json({ error: 'Invalid API key. Please check your API token in Packiyo settings.' });
-          } else if (testRes.status === 403) {
-            return res.status(200).json({ error: 'Access forbidden. Your API key may not have permission for this customer.' });
-          } else {
-            const errorText = await testRes.text();
-            lastError = `${testRes.status}: ${errorText.slice(0, 100)}`;
-            console.log('Endpoint failed:', endpoint, lastError);
+      // Try each header variant with each endpoint
+      for (const headers of headerVariants) {
+        if (success) break;
+        
+        for (const endpoint of testEndpoints) {
+          try {
+            console.log('Trying endpoint with headers:', endpoint, JSON.stringify(headers));
+            const testRes = await fetch(endpoint, {
+              method: 'GET',
+              headers,
+            });
+            
+            console.log('Response status:', testRes.status);
+            
+            if (testRes.ok) {
+              const data = await testRes.json();
+              // Try to extract customer name from response
+              if (data.data?.name) customerName = data.data.name;
+              else if (data.data?.[0]?.customer?.name) customerName = data.data[0].customer.name;
+              else if (Array.isArray(data.data) && data.data.length > 0) customerName = 'Excel 3PL';
+              success = true;
+              console.log('Success with endpoint:', endpoint);
+              break;
+            } else if (testRes.status === 401) {
+              return res.status(200).json({ error: 'Invalid API key. Please check your API token in Packiyo settings.' });
+            } else if (testRes.status === 403) {
+              return res.status(200).json({ error: 'Access forbidden. Your API key may not have permission for this customer.' });
+            } else {
+              const errorText = await testRes.text();
+              lastError = `${testRes.status}: ${errorText.slice(0, 100)}`;
+              console.log('Endpoint failed:', endpoint, lastError);
+            }
+          } catch (endpointErr) {
+            lastError = endpointErr.message;
+            console.log('Endpoint error:', endpoint, lastError);
           }
-        } catch (endpointErr) {
-          lastError = endpointErr.message;
-          console.log('Endpoint error:', endpoint, lastError);
         }
       }
       
@@ -107,6 +124,12 @@ export default async function handler(req, res) {
 
   // ============ INVENTORY SYNC ============
   if (syncType === 'inventory') {
+    // Use JSON:API Accept header for inventory sync
+    const invHeaders = {
+      'Authorization': `Bearer ${apiKey}`,
+      'Accept': 'application/vnd.api+json',
+    };
+    
     try {
       // Fetch all products with inventory
       const products = [];
@@ -116,7 +139,7 @@ export default async function handler(req, res) {
       while (hasMore) {
         const productsRes = await fetch(
           `${baseUrl}/products?customer_id=${customerId}&page=${page}&per_page=100&include=inventory_levels`, 
-          { headers }
+          { headers: invHeaders }
         );
         
         if (!productsRes.ok) {
@@ -250,6 +273,12 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Start and end dates required for shipments sync' });
     }
     
+    // Use JSON:API Accept header for shipments sync
+    const shipHeaders = {
+      'Authorization': `Bearer ${apiKey}`,
+      'Accept': 'application/vnd.api+json',
+    };
+    
     try {
       const shipments = [];
       let page = 1;
@@ -258,7 +287,7 @@ export default async function handler(req, res) {
       while (hasMore) {
         const shipmentsRes = await fetch(
           `${baseUrl}/shipments?customer_id=${customerId}&page=${page}&per_page=100&shipped_after=${startDate}&shipped_before=${endDate}`, 
-          { headers }
+          { headers: shipHeaders }
         );
         
         if (!shipmentsRes.ok) {
