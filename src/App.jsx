@@ -1404,6 +1404,8 @@ const handleLogout = async () => {
   const [editingTransaction, setEditingTransaction] = useState(null); // Transaction being edited
   const [bankingDrilldown, setBankingDrilldown] = useState(null); // { category: string, type: 'expense'|'income' } for drill-down view
   const [editingAccountBalance, setEditingAccountBalance] = useState(null); // { name: string, balance: number } for manual balance edit
+  const [profitTrackerPeriod, setProfitTrackerPeriod] = useState('month'); // Profit tracker period selector
+  const [profitTrackerCustomRange, setProfitTrackerCustomRange] = useState({ start: '', end: '' });
   const [confirmedRecurring, setConfirmedRecurring] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('ecommerce_recurring_v1')) || {};
@@ -5202,6 +5204,35 @@ const savePeriods = async (d) => {
         else { health = 'overstock'; overstock++; }
       }
       
+      // Calculate stockout and reorder dates - simple math, no AI needed
+      const today = new Date();
+      const leadTimeDays = leadTimeSettings.skuLeadTimes?.[sku] || leadTimeSettings.defaultLeadTimeDays || 14;
+      const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
+      const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
+      
+      let stockoutDate = null;
+      let reorderByDate = null;
+      let daysUntilMustOrder = null;
+      let suggestedOrderQty = 0;
+      
+      if (totalVel > 0 && dos < 999) {
+        // Stockout = today + days of supply
+        const stockout = new Date(today);
+        stockout.setDate(stockout.getDate() + dos);
+        stockoutDate = stockout.toISOString().split('T')[0];
+        
+        // Reorder date = when we need to place order so shipment arrives at target buffer
+        // We want shipment to arrive when stock = reorderTriggerDays
+        // So order when: daysOfSupply = reorderTriggerDays + leadTimeDays
+        daysUntilMustOrder = dos - reorderTriggerDays - leadTimeDays;
+        const reorderBy = new Date(today);
+        reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
+        reorderByDate = reorderBy.toISOString().split('T')[0];
+        
+        // Suggested order = minOrderWeeks of supply
+        suggestedOrderQty = Math.ceil(totalVel * minOrderWeeks);
+      }
+      
       items.push({ 
         sku, 
         name: a.name || t.name || h.name || sku, 
@@ -5218,7 +5249,12 @@ const savePeriods = async (d) => {
         amzWeeklyVel: amzVel, 
         shopWeeklyVel: shopVel, 
         daysOfSupply: dos, 
-        health, 
+        health,
+        stockoutDate,
+        reorderByDate,
+        daysUntilMustOrder,
+        suggestedOrderQty,
+        leadTimeDays,
         amazonInbound: a.inbound || 0, 
         threeplInbound: t.inbound || 0 
       });
@@ -16525,24 +16561,31 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           </div>
                         </div>
                         
-                        {/* Missing Ads Data Alert */}
-                        {monthDays.length > 0 && (daysMissingMeta > 0 || daysMissingGoogle > 0) && (
-                          <div className="mb-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs text-amber-400">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span>⚠️ Missing ads data:</span>
-                              {daysMissingMeta > 0 && (
-                                <span className="px-2 py-0.5 bg-blue-500/20 rounded" title={daysMissingMetaList.join(', ')}>
-                                  Meta: {daysMissingMeta} days ({formatMissingDays(daysMissingMetaList)})
-                                </span>
-                              )}
-                              {daysMissingGoogle > 0 && (
-                                <span className="px-2 py-0.5 bg-red-500/20 rounded" title={daysMissingGoogleList.join(', ')}>
-                                  Google: {daysMissingGoogle} days ({formatMissingDays(daysMissingGoogleList)})
-                                </span>
-                              )}
+                        {/* Missing Ads Data Alert - only show for current month */}
+                        {(() => {
+                          const isCurrentMonth = viewMonth === now.getMonth() && viewYear === now.getFullYear();
+                          if (!isCurrentMonth) return null;
+                          if (monthDays.length === 0) return null;
+                          if (daysMissingMeta === 0 && daysMissingGoogle === 0) return null;
+                          
+                          return (
+                            <div className="mb-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs text-amber-400">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span>⚠️ Missing ads data:</span>
+                                {daysMissingMeta > 0 && (
+                                  <span className="px-2 py-0.5 bg-blue-500/20 rounded" title={daysMissingMetaList.join(', ')}>
+                                    Meta: {daysMissingMeta} days ({formatMissingDays(daysMissingMetaList)})
+                                  </span>
+                                )}
+                                {daysMissingGoogle > 0 && (
+                                  <span className="px-2 py-0.5 bg-yellow-500/20 rounded" title={daysMissingGoogleList.join(', ')}>
+                                    Google: {daysMissingGoogle} days ({formatMissingDays(daysMissingGoogleList)})
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          );
+                        })()}
                         
                         {/* Calendar Grid */}
                         <div className="grid grid-cols-7 gap-1 mb-2">
@@ -16566,10 +16609,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             const isToday = dateKey === formatDateKey(now);
                             const revenue = dayData?.total?.revenue || 0;
                             const profit = dayData?.total?.netProfit || 0;
-                            // Check if day has ads data (for indicator)
+                            // Check if day has specific ads data
                             const googleAds = dayData?.shopify?.googleSpend || dayData?.googleSpend || dayData?.googleAds || 0;
                             const metaAds = dayData?.shopify?.metaSpend || dayData?.metaSpend || dayData?.metaAds || 0;
-                            const hasAds = googleAds > 0 || metaAds > 0;
+                            const hasGoogle = googleAds > 0;
+                            const hasMeta = metaAds > 0;
                             
                             return (
                               <div 
@@ -16583,7 +16627,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                     setView('upload');
                                   }
                                 }}
-                                className={`h-12 rounded-lg p-1 text-center relative transition-all ${
+                                className={`h-16 rounded-lg p-1 text-center relative transition-all ${
                                   hasSales 
                                     ? 'bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 cursor-pointer' 
                                     : hasAdsOnly
@@ -16593,15 +16637,29 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               >
                                 <div className={`text-xs font-medium ${hasSales ? 'text-cyan-300' : hasAdsOnly ? 'text-amber-400/60' : 'text-slate-500'}`}>
                                   {dayNum}
-                                  {hasSales && hasAds && <span className="ml-0.5 text-violet-400">●</span>}
                                 </div>
                                 {hasSales && (
-                                  <div className={`text-[10px] font-medium truncate ${profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                    {formatCurrency(revenue).replace('$', '').replace('.00', '')}
-                                  </div>
+                                  <>
+                                    <div className="text-[10px] font-medium text-cyan-400 truncate">
+                                      {formatCurrency(revenue).replace('$', '').replace('.00', '')}
+                                    </div>
+                                    <div className={`text-[9px] font-medium truncate ${profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                      {profit >= 0 ? '+' : ''}{formatCurrency(profit).replace('$', '').replace('.00', '')}
+                                    </div>
+                                    {/* Ad platform indicators */}
+                                    {(hasMeta || hasGoogle) && (
+                                      <div className="flex justify-center gap-0.5 mt-0.5">
+                                        {hasMeta && <span className="text-[7px] text-blue-400 font-medium bg-blue-500/20 px-0.5 rounded">M</span>}
+                                        {hasGoogle && <span className="text-[7px] text-yellow-400 font-medium bg-yellow-500/20 px-0.5 rounded">G</span>}
+                                      </div>
+                                    )}
+                                  </>
                                 )}
                                 {hasAdsOnly && (
-                                  <div className="text-[10px] text-amber-400/50">●</div>
+                                  <div className="flex justify-center gap-0.5 mt-1">
+                                    {hasMeta && <span className="text-[7px] text-blue-400 font-medium bg-blue-500/20 px-0.5 rounded">M</span>}
+                                    {hasGoogle && <span className="text-[7px] text-yellow-400 font-medium bg-yellow-500/20 px-0.5 rounded">G</span>}
+                                  </div>
                                 )}
                               </div>
                             );
@@ -16615,8 +16673,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             <span>Sales data</span>
                           </div>
                           <div className="flex items-center gap-1">
-                            <span className="text-violet-400">●</span>
-                            <span>Has ads data</span>
+                            <span className="text-[8px] text-blue-400 font-medium bg-blue-500/20 px-1 rounded">M</span>
+                            <span>Meta ads</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[8px] text-yellow-400 font-medium bg-yellow-500/20 px-1 rounded">G</span>
+                            <span>Google ads</span>
                           </div>
                           <div className="flex items-center gap-1">
                             <div className="w-3 h-3 rounded bg-amber-500/10 border border-amber-500/20" />
@@ -27458,9 +27520,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     {/* Recommendations */}
                     {aiForecastModule.inventory.recommendations && (
                       <div className="bg-slate-800/50 rounded-xl p-4">
-                        <h4 className="text-white font-medium mb-3">Reorder Recommendations</h4>
-                        <div className="space-y-2 max-h-96 overflow-y-auto">
-                          {aiForecastModule.inventory.recommendations.slice(0, 15).map((rec, i) => (
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-white font-medium">Reorder Recommendations</h4>
+                          <span className="text-slate-400 text-sm">{aiForecastModule.inventory.recommendations.length} products</span>
+                        </div>
+                        <div className="space-y-2 max-h-[600px] overflow-y-auto">
+                          {aiForecastModule.inventory.recommendations.map((rec, i) => (
                             <div key={i} className={`p-3 rounded-lg ${
                               rec.urgency === 'critical' ? 'bg-rose-900/30 border border-rose-500/30' :
                               rec.urgency === 'reorder' ? 'bg-amber-900/30 border border-amber-500/30' :
@@ -31294,6 +31359,146 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                     </div>
                   </div>
                   
+                  {/* Profit Tracker Card */}
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                    <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <TrendingUp className="w-5 h-5 text-violet-400" />
+                      Profit Tracker
+                    </h3>
+                    {(() => {
+                      // Calculate profit based on QBO transactions
+                      const calculateProfit = () => {
+                        if (sortedTxns.length === 0) return { income: 0, expenses: 0, profit: 0, label: '', count: 0 };
+                        
+                        const now = new Date();
+                        let filtered = [];
+                        let label = '';
+                        
+                        switch (profitTrackerPeriod) {
+                          case 'week': {
+                            const weekStart = new Date(now);
+                            weekStart.setDate(now.getDate() - now.getDay());
+                            filtered = sortedTxns.filter(t => new Date(t.date) >= weekStart);
+                            label = 'This Week';
+                            break;
+                          }
+                          case 'month': {
+                            const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                            filtered = sortedTxns.filter(t => t.date.startsWith(monthStr));
+                            label = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+                            break;
+                          }
+                          case 'quarter': {
+                            const qMonth = Math.floor(now.getMonth() / 3) * 3;
+                            const qStart = new Date(now.getFullYear(), qMonth, 1);
+                            filtered = sortedTxns.filter(t => new Date(t.date) >= qStart);
+                            label = `Q${Math.floor(now.getMonth() / 3) + 1} ${now.getFullYear()}`;
+                            break;
+                          }
+                          case 'year': {
+                            const yearStr = String(now.getFullYear());
+                            filtered = sortedTxns.filter(t => t.date.startsWith(yearStr));
+                            label = now.getFullYear().toString();
+                            break;
+                          }
+                          case 'all': {
+                            filtered = sortedTxns;
+                            const years = [...new Set(sortedTxns.map(t => t.date.substring(0, 4)))].sort();
+                            label = years.length > 1 ? `${years[0]} - ${years[years.length - 1]}` : years[0] || 'All Time';
+                            break;
+                          }
+                          case 'custom': {
+                            if (profitTrackerCustomRange.start && profitTrackerCustomRange.end) {
+                              filtered = sortedTxns.filter(t => t.date >= profitTrackerCustomRange.start && t.date <= profitTrackerCustomRange.end);
+                              label = `${profitTrackerCustomRange.start} to ${profitTrackerCustomRange.end}`;
+                            }
+                            break;
+                          }
+                          default:
+                            filtered = sortedTxns;
+                        }
+                        
+                        const income = filtered.filter(t => !t.isExpense).reduce((s, t) => s + Math.abs(t.amount), 0);
+                        const expenses = filtered.filter(t => t.isExpense).reduce((s, t) => s + Math.abs(t.amount), 0);
+                        return { income, expenses, profit: income - expenses, label, count: filtered.length };
+                      };
+                      
+                      const data = calculateProfit();
+                      
+                      return (
+                        <>
+                          {/* Period Selector */}
+                          <div className="flex flex-wrap gap-1 mb-4">
+                            {[
+                              { key: 'week', label: 'Week' },
+                              { key: 'month', label: 'Month' },
+                              { key: 'quarter', label: 'Qtr' },
+                              { key: 'year', label: 'Year' },
+                              { key: 'all', label: 'All' },
+                              { key: 'custom', label: '...' },
+                            ].map(p => (
+                              <button
+                                key={p.key}
+                                onClick={() => setProfitTrackerPeriod(p.key)}
+                                className={`px-2 py-1 text-xs rounded ${profitTrackerPeriod === p.key ? 'bg-violet-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                              >
+                                {p.label}
+                              </button>
+                            ))}
+                          </div>
+                          
+                          {/* Custom Range Inputs */}
+                          {profitTrackerPeriod === 'custom' && (
+                            <div className="flex gap-2 mb-4">
+                              <input
+                                type="date"
+                                value={profitTrackerCustomRange.start}
+                                onChange={(e) => setProfitTrackerCustomRange(r => ({ ...r, start: e.target.value }))}
+                                className="flex-1 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-white"
+                              />
+                              <span className="text-slate-500 text-xs self-center">to</span>
+                              <input
+                                type="date"
+                                value={profitTrackerCustomRange.end}
+                                onChange={(e) => setProfitTrackerCustomRange(r => ({ ...r, end: e.target.value }))}
+                                className="flex-1 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-white"
+                              />
+                            </div>
+                          )}
+                          
+                          {/* Period Label */}
+                          <p className="text-slate-400 text-xs mb-3">{data.label} • {data.count} transactions</p>
+                          
+                          {/* Profit Display */}
+                          <div className={`text-3xl font-bold mb-4 ${data.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {data.profit >= 0 ? '+' : ''}{formatCurrency(data.profit)}
+                          </div>
+                          
+                          {/* Income & Expenses Breakdown */}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="bg-emerald-500/10 rounded-lg p-3">
+                              <p className="text-emerald-400 text-xs mb-1">Income</p>
+                              <p className="text-white font-semibold">{formatCurrency(data.income)}</p>
+                            </div>
+                            <div className="bg-rose-500/10 rounded-lg p-3">
+                              <p className="text-rose-400 text-xs mb-1">Expenses</p>
+                              <p className="text-white font-semibold">{formatCurrency(data.expenses)}</p>
+                            </div>
+                          </div>
+                          
+                          {/* Profit Margin */}
+                          {data.income > 0 && (
+                            <div className="mt-3 text-xs text-slate-400">
+                              Profit Margin: <span className={data.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                {((data.profit / data.income) * 100).toFixed(1)}%
+                              </span>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                  
                   {/* Monthly Cash Flow Chart */}
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 lg:col-span-2">
                     <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
@@ -33453,8 +33658,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                         if (selectedInvDate && invHistory[selectedInvDate] && data.inventoryBySku) {
                           const currentSnapshot = invHistory[selectedInvDate];
                           const packiyoData = data.inventoryBySku;
+                          const today = new Date();
+                          const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
+                          const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
                           
-                          // Update each item's 3PL quantity
+                          // Update each item's 3PL quantity and recalculate stockout dates
                           let newTplTotal = 0;
                           let newTplValue = 0;
                           const updatedItems = currentSnapshot.items.map(item => {
@@ -33464,12 +33672,38 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                             newTplTotal += newTplQty;
                             newTplValue += newTplQty * (item.cost || 0);
                             
+                            const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
+                            const weeklyVel = item.weeklyVel || 0;
+                            const dos = weeklyVel > 0 ? Math.round((newTotalQty / weeklyVel) * 7) : 999;
+                            const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
+                            
+                            // Recalculate stockout and reorder dates
+                            let stockoutDate = null;
+                            let reorderByDate = null;
+                            let daysUntilMustOrder = null;
+                            
+                            if (weeklyVel > 0 && dos < 999) {
+                              const stockout = new Date(today);
+                              stockout.setDate(stockout.getDate() + dos);
+                              stockoutDate = stockout.toISOString().split('T')[0];
+                              
+                              daysUntilMustOrder = dos - reorderTriggerDays - leadTimeDays;
+                              const reorderBy = new Date(today);
+                              reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
+                              reorderByDate = reorderBy.toISOString().split('T')[0];
+                            }
+                            
                             return {
                               ...item,
                               threeplQty: newTplQty,
                               threeplInbound: newTplInbound,
-                              totalQty: (item.amazonQty || 0) + newTplQty + (item.homeQty || 0),
-                              totalValue: ((item.amazonQty || 0) + newTplQty + (item.homeQty || 0)) * (item.cost || 0),
+                              totalQty: newTotalQty,
+                              totalValue: newTotalQty * (item.cost || 0),
+                              daysOfSupply: dos,
+                              stockoutDate,
+                              reorderByDate,
+                              daysUntilMustOrder,
+                              suggestedOrderQty: weeklyVel > 0 ? Math.ceil(weeklyVel * minOrderWeeks) : 0,
                             };
                           });
                           
@@ -33492,6 +33726,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                                 weeklyVel: 0,
                                 daysOfSupply: 999,
                                 health: 'unknown',
+                                stockoutDate: null,
+                                reorderByDate: null,
+                                daysUntilMustOrder: null,
+                                suggestedOrderQty: 0,
                                 amazonInbound: 0,
                                 threeplInbound: pItem.quantity_inbound || 0,
                               });
