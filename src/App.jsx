@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb } from 'lucide-react';
 
 // Dynamically load SheetJS from CDN (avoids npm vulnerability)
 let XLSX = null;
@@ -8594,7 +8594,9 @@ Keep insights brief and actionable. Format as numbered list.`;
       // ==================== CALCULATE WEIGHTED PREDICTION ====================
       // Weight: Daily data (60%), Weekly trend (20%), Amazon forecast (20%)
       const dailyBasedWeekly = avg7Day * 7; // Most recent daily × 7
-      const trendAdjustedWeekly = dailyBasedWeekly * (1 + weeklyTrend / 100 * 0.5); // Damped trend
+      // Cap trend multiplier to max ±10% effect
+      const trendMultiplier = Math.max(0.90, Math.min(1.10, 1 + weeklyTrend / 100 * 0.3));
+      const trendAdjustedWeekly = dailyBasedWeekly * trendMultiplier;
       
       // ==================== PERIOD DATA ANALYSIS (2025 Monthly, 2024 Quarterly) ====================
       const periodsSummary = Object.entries(allPeriodsData).map(([label, data]) => ({
@@ -8631,14 +8633,55 @@ Keep insights brief and actionable. Format as numbered list.`;
       const lastYearSameMonth = `${currentMonth} ${today.getFullYear() - 1}`;
       const yoyBaseline = periodsSummary.find(p => p.period === lastYearSameMonth);
       
-      let weightedPrediction;
+      // ==================== CALCULATE WEIGHTED PREDICTION ====================
+      // CORE PRINCIPLE: Weekly prediction = Daily avg × 7, with small adjustments
+      // This ensures math consistency: $6,212/day × 7 = $43,484/week
+      
+      let weightedPrediction = dailyBasedWeekly; // Start with core calculation
+      
+      // Log all inputs for debugging
+      console.log('[Forecast] Input values:', {
+        avg7Day,
+        dailyBasedWeekly,
+        weeklyTrend,
+        trendAdjustedWeekly,
+        adjustedAmazonForecast,
+        futureAmazonForecasts: futureAmazonForecasts.length,
+      });
+      
+      // Apply SMALL adjustments (max ±15% total deviation from daily-based)
       if (adjustedAmazonForecast && futureAmazonForecasts.length > 0) {
-        // Blend: 60% daily-based, 20% trend-adjusted, 20% Amazon (bias-corrected)
-        weightedPrediction = (dailyBasedWeekly * 0.6) + (trendAdjustedWeekly * 0.2) + (adjustedAmazonForecast * 0.2);
+        // Sanity check: Amazon forecast should be within 2x of daily-based
+        const amazonWithinRange = adjustedAmazonForecast > dailyBasedWeekly * 0.5 && 
+                                   adjustedAmazonForecast < dailyBasedWeekly * 2;
+        
+        if (amazonWithinRange) {
+          // Blend: 75% daily-based, 15% trend, 10% Amazon
+          weightedPrediction = (dailyBasedWeekly * 0.75) + (trendAdjustedWeekly * 0.15) + (adjustedAmazonForecast * 0.10);
+        } else {
+          // Amazon forecast out of range - ignore it
+          console.log('[Forecast] Amazon forecast out of range, ignoring:', adjustedAmazonForecast);
+          weightedPrediction = (dailyBasedWeekly * 0.85) + (trendAdjustedWeekly * 0.15);
+        }
       } else {
-        // No Amazon forecast: 70% daily-based, 30% trend-adjusted
-        weightedPrediction = (dailyBasedWeekly * 0.7) + (trendAdjustedWeekly * 0.3);
+        // No Amazon forecast: 85% daily-based, 15% trend-adjusted
+        weightedPrediction = (dailyBasedWeekly * 0.85) + (trendAdjustedWeekly * 0.15);
       }
+      
+      // STRICT SANITY BOUNDS: Max ±15% deviation from daily-based calculation
+      const maxPrediction = dailyBasedWeekly * 1.15;
+      const minPrediction = dailyBasedWeekly * 0.85;
+      
+      if (weightedPrediction > maxPrediction) {
+        console.log('[Forecast] Capping prediction from', weightedPrediction, 'to', maxPrediction);
+        weightedPrediction = maxPrediction;
+      }
+      if (weightedPrediction < minPrediction) {
+        console.log('[Forecast] Raising prediction from', weightedPrediction, 'to', minPrediction);
+        weightedPrediction = minPrediction;
+      }
+      
+      console.log('[Forecast] Final weightedPrediction:', weightedPrediction, '(daily-based:', dailyBasedWeekly, ')');
       
       // Calculate profit prediction based on historical margin
       // Try daily data first, fall back to weekly data, then use default
