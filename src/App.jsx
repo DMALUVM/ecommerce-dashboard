@@ -3920,8 +3920,16 @@ const handleUnlock = async (e) => {
 
 // Whenever session changes: load cloud if present, else fall back to local.
 const hasInitializedRef = useRef(false);
+const lastSessionIdRef = useRef(null);
+
 useEffect(() => {
-  // Only run once per session change
+  // Reset initialization flag when user changes (new login, logout, etc.)
+  if (session?.user?.id !== lastSessionIdRef.current) {
+    hasInitializedRef.current = false;
+    lastSessionIdRef.current = session?.user?.id || null;
+  }
+  
+  // Only run once per session
   if (hasInitializedRef.current && session?.user?.id) return;
   
   const run = async () => {
@@ -16191,15 +16199,57 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               
               {/* Getting Started Checklist */}
               <div className="max-w-xl mx-auto mb-8 bg-slate-800/50 rounded-2xl border border-slate-700 p-6 text-left">
-                <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                  <CheckCircle className="w-5 h-5 text-emerald-400" />
-                  Getting Started Checklist
-                </h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                    <CheckCircle className="w-5 h-5 text-emerald-400" />
+                    Getting Started Checklist
+                  </h3>
+                  <button 
+                    onClick={() => { setUploadTab('weekly'); setView('upload'); }}
+                    className="text-xs text-slate-400 hover:text-white px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg"
+                  >
+                    Skip for now →
+                  </button>
+                </div>
                 <div className="space-y-3">
                   <div className="flex items-center gap-3">
                     {session ? <Check className="w-5 h-5 text-emerald-400" /> : <div className="w-5 h-5 rounded-full border-2 border-slate-600" />}
-                    <span className={session ? 'text-emerald-400' : 'text-slate-300'}>Sign up for cloud sync</span>
-                    {!session && <button onClick={() => setView('settings')} className="text-xs text-violet-400 hover:text-violet-300 ml-auto">Setup →</button>}
+                    <span className={session ? 'text-emerald-400' : 'text-slate-300'}>
+                      {session ? 'Cloud sync enabled' : 'Enable cloud sync'}
+                    </span>
+                    {!session && supabase && (
+                      <span className="text-xs text-slate-500 ml-1">(You're already signed in!)</span>
+                    )}
+                    {!session && !supabase && (
+                      <span className="text-xs text-amber-400 ml-auto">Local only - data stays on this device</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {storeName && storeName.trim() !== '' && storeName !== 'My Store' ? <Check className="w-5 h-5 text-emerald-400" /> : <div className="w-5 h-5 rounded-full border-2 border-slate-600" />}
+                    <span className={storeName && storeName.trim() !== '' && storeName !== 'My Store' ? 'text-emerald-400' : 'text-slate-300'}>Name your store</span>
+                    {(!storeName || storeName.trim() === '' || storeName === 'My Store') && (
+                      <div className="ml-auto flex items-center gap-2">
+                        <input 
+                          type="text" 
+                          placeholder="Enter store name..."
+                          className="px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs text-white w-32 focus:border-violet-500 focus:outline-none"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && e.target.value.trim()) {
+                              setStoreName(e.target.value.trim());
+                              setToast({ message: `Store named "${e.target.value.trim()}"!`, type: 'success' });
+                              e.target.value = '';
+                            }
+                          }}
+                          onBlur={(e) => {
+                            if (e.target.value.trim()) {
+                              setStoreName(e.target.value.trim());
+                              setToast({ message: `Store named "${e.target.value.trim()}"!`, type: 'success' });
+                              e.target.value = '';
+                            }
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-3">
                     {Object.keys(savedCogs).length > 0 ? <Check className="w-5 h-5 text-emerald-400" /> : <div className="w-5 h-5 rounded-full border-2 border-slate-600" />}
@@ -16549,6 +16599,22 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       <button onClick={exportAll} className="flex-1 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white flex items-center justify-center gap-1">
                         <Download className="w-3 h-3" />Backup
                       </button>
+                      {session && (
+                        <button 
+                          onClick={async () => {
+                            setToast({ message: 'Reloading from cloud...', type: 'info' });
+                            const result = await loadFromCloud();
+                            if (result.ok) {
+                              setToast({ message: 'Data reloaded from cloud!', type: 'success' });
+                            } else {
+                              setToast({ message: 'No cloud data found or error loading', type: 'error' });
+                            }
+                          }} 
+                          className="flex-1 px-2 py-1.5 bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/50 rounded-lg text-xs text-cyan-300 flex items-center justify-center gap-1"
+                        >
+                          <RefreshCw className="w-3 h-3" />Reload
+                        </button>
+                      )}
                       {!session && (
                         <button onClick={() => setView('settings')} className="flex-1 px-2 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-xs text-violet-300 flex items-center justify-center gap-1">
                           <Cloud className="w-3 h-3" />Enable Sync
