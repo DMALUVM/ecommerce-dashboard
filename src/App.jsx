@@ -8508,8 +8508,7 @@ Keep insights brief and actionable. Format as numbered list.`;
       // ==================== COMPREHENSIVE AI FORECAST (Pro Plan - 60s timeout) ====================
       // With Pro plan, we can send detailed data for sophisticated analysis
       
-      const today = new Date();
-      const currentMonth = today.toLocaleDateString('en-US', { month: 'long' });
+      // today and currentMonth already declared above
       const nextSunday = new Date(today);
       nextSunday.setDate(nextSunday.getDate() + (7 - nextSunday.getDay()) % 7 || 7);
       
