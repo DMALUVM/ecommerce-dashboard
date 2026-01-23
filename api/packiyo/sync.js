@@ -1,5 +1,13 @@
 // Vercel Serverless Function - Packiyo 3PL Inventory Sync
 // Path: /api/packiyo/sync.js
+// 
+// This provides DIRECT inventory data from Packiyo, bypassing Shopify
+// More accurate for 3PL inventory tracking
+//
+// Features:
+// - Real-time inventory levels from Packiyo
+// - Separate from Shopify inventory (for home/office stock)
+// - Supports multiple warehouses if you have them
 
 export default async function handler(req, res) {
   // CORS headers
@@ -11,12 +19,11 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
   
-  // Only allow POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { apiKey, customerId, syncType, test, baseUrl: providedBaseUrl } = req.body;
+  const { apiKey, customerId, syncType, test } = req.body;
 
   // Validate required fields
   if (!apiKey) {
@@ -28,41 +35,39 @@ export default async function handler(req, res) {
   }
 
   // Use tenant-specific URL if provided, otherwise default
-  const baseUrl = providedBaseUrl || 'https://excel3pl.packiyo.com/api/v1';
+  // Your tenant: excel3pl.packiyo.com
+  const baseUrl = req.body.baseUrl || 'https://excel3pl.packiyo.com/api/v1';
   
-  // Packiyo API headers - IMPORTANT: Use Accept: */* (not application/json)
   const headers = {
     'Authorization': `Bearer ${apiKey}`,
-    'Accept': '*/*',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
   };
 
   // Test connection
   if (test) {
     try {
-      const testRes = await fetch(`${baseUrl}/products?customer_id=${customerId}&page[number]=1&page[size]=1`, {
-        method: 'GET',
+      const testRes = await fetch(`${baseUrl}/customers/${customerId}`, {
         headers,
       });
       
       if (!testRes.ok) {
         const errorText = await testRes.text();
         console.error('Packiyo API error:', testRes.status, errorText);
-        
         if (testRes.status === 401) {
           return res.status(401).json({ error: 'Invalid API key' });
         }
-        if (testRes.status === 403) {
-          return res.status(403).json({ error: 'Access forbidden. Check API key permissions.' });
+        if (testRes.status === 404) {
+          return res.status(404).json({ error: 'Customer not found. Check your Customer ID.' });
         }
         return res.status(testRes.status).json({ error: `Packiyo API error: ${testRes.status}` });
       }
       
-      const data = await testRes.json();
+      const customerData = await testRes.json();
       return res.status(200).json({ 
         success: true, 
-        customerName: 'Excel3PL',
+        customerName: customerData.data?.name || 'Connected',
         customerId: customerId,
-        productCount: data.meta?.page?.total || data.data?.length || 0,
       });
     } catch (err) {
       console.error('Connection test error:', err);
@@ -73,19 +78,18 @@ export default async function handler(req, res) {
   // ============ INVENTORY SYNC ============
   if (syncType === 'inventory') {
     try {
+      // Fetch all products with inventory
       const products = [];
       let page = 1;
       let hasMore = true;
       
       while (hasMore) {
         const productsRes = await fetch(
-          `${baseUrl}/products?customer_id=${customerId}&page[number]=${page}&page[size]=100`, 
-          { method: 'GET', headers }
+          `${baseUrl}/products?customer_id=${customerId}&page=${page}&per_page=100&include=inventory_levels`, 
+          { headers }
         );
         
         if (!productsRes.ok) {
-          const errorText = await productsRes.text();
-          console.error('Products fetch error:', productsRes.status, errorText);
           return res.status(productsRes.status).json({ 
             error: `Failed to fetch products: ${productsRes.status}` 
           });
@@ -95,9 +99,9 @@ export default async function handler(req, res) {
         const pageProducts = data.data || [];
         products.push(...pageProducts);
         
-        // Check pagination - JSON:API format: meta.page.currentPage / meta.page.lastPage
-        const meta = data.meta?.page;
-        if (meta && meta.currentPage < meta.lastPage) {
+        // Check pagination
+        const meta = data.meta;
+        if (meta && meta.current_page < meta.last_page) {
           page++;
         } else {
           hasMore = false;
@@ -111,57 +115,63 @@ export default async function handler(req, res) {
       }
       
       // Process products into inventory format
-      // JSON:API format: data is in product.attributes
       const inventoryBySku = {};
       let totalUnits = 0;
       let totalValue = 0;
       let skippedNoSku = 0;
       
       products.forEach(product => {
-        // JSON:API format - data is nested in attributes
-        const attrs = product.attributes || {};
-        const sku = attrs.sku?.trim();
+        const sku = product.sku?.trim();
         
+        // SKU is required for cross-platform matching
         if (!sku) {
           skippedNoSku++;
           return;
         }
         
-        // Get quantities from attributes
-        const qty = parseInt(attrs.quantity_on_hand) || 0;
-        const available = parseInt(attrs.quantity_available) || 0;
-        const allocated = parseInt(attrs.quantity_allocated) || 0;
-        const reserved = parseInt(attrs.quantity_reserved) || 0;
-        const backordered = parseInt(attrs.quantity_backordered) || 0;
-        const inbound = parseInt(attrs.quantity_inbound) || 0;
-        // value is the cost, price is the selling price
-        const cost = parseFloat(attrs.value) || 0;
-        const price = parseFloat(attrs.price) || 0;
+        // Get inventory levels from all locations
+        const inventoryLevels = product.inventory_levels || [];
+        let productTotalQty = 0;
+        const byWarehouse = {};
         
-        totalUnits += qty;
-        totalValue += qty * cost;
+        inventoryLevels.forEach(level => {
+          const qty = level.quantity_on_hand || 0;
+          const warehouseName = level.warehouse?.name || 'Default Warehouse';
+          
+          productTotalQty += qty;
+          byWarehouse[warehouseName] = {
+            qty,
+            warehouseId: level.warehouse_id,
+            quantityOnHand: level.quantity_on_hand || 0,
+            quantityCommitted: level.quantity_committed || 0,
+            quantityAvailable: level.quantity_available || 0,
+            quantityInbound: level.quantity_inbound || 0,
+          };
+        });
+        
+        const cost = parseFloat(product.value) || parseFloat(product.cost) || 0;
+        const value = productTotalQty * cost;
+        
+        totalUnits += productTotalQty;
+        totalValue += value;
         
         inventoryBySku[sku] = {
-          sku,
-          name: attrs.name || sku,
-          barcode: attrs.barcode || '',
-          totalQty: qty,
-          quantity_on_hand: qty,
-          quantity_available: available,
-          quantity_allocated: allocated,
-          quantity_reserved: reserved,
-          quantity_backordered: backordered,
-          quantity_inbound: inbound,
+          sku,  // PRIMARY KEY - matches across platforms
+          name: product.name || sku,
+          barcode: product.barcode || '',
+          totalQty: productTotalQty,
+          quantityAvailable: inventoryLevels.reduce((sum, l) => sum + (l.quantity_available || 0), 0),
+          quantityCommitted: inventoryLevels.reduce((sum, l) => sum + (l.quantity_committed || 0), 0),
+          quantityInbound: inventoryLevels.reduce((sum, l) => sum + (l.quantity_inbound || 0), 0),
           cost,
-          price,
-          totalValue: qty * cost,
+          totalValue: value,
+          byWarehouse,
           packiyoProductId: product.id,
         };
       });
       
-      return res.status(200).json({
-        success: true,
-        syncType: 'inventory',
+      // Format response for app integration
+      const inventorySnapshot = {
         date: new Date().toISOString().split('T')[0],
         source: 'packiyo-direct',
         summary: {
@@ -171,20 +181,29 @@ export default async function handler(req, res) {
           skippedNoSku,
           productCount: products.length,
         },
+        // Format items array for easy merging with existing inventory structure
         items: Object.values(inventoryBySku)
           .map(item => ({
             sku: item.sku,
             name: item.name,
-            quantity_on_hand: item.quantity_on_hand,
-            quantity_available: item.quantity_available,
-            quantity_committed: item.quantity_allocated + item.quantity_reserved,
-            quantity_inbound: item.quantity_inbound,
+            quantity_on_hand: item.totalQty,
+            quantity_available: item.quantityAvailable,
+            quantity_committed: item.quantityCommitted,
+            quantity_inbound: item.quantityInbound,
             cost: item.cost,
             value: item.totalValue,
             source: 'packiyo',
+            byWarehouse: item.byWarehouse,
           }))
-          .sort((a, b) => b.quantity_on_hand - a.quantity_on_hand),
+          .sort((a, b) => b.value - a.value),
+        // Also include raw inventory for detailed view
         inventoryBySku,
+      };
+      
+      return res.status(200).json({
+        success: true,
+        syncType: 'inventory',
+        ...inventorySnapshot,
       });
       
     } catch (err) {
@@ -192,6 +211,99 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: `Inventory sync failed: ${err.message}` });
     }
   }
+  
+  // ============ SHIPMENTS SYNC (for 3PL costs) ============
+  if (syncType === 'shipments') {
+    const { startDate, endDate } = req.body;
+    
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Start and end dates required for shipments sync' });
+    }
+    
+    try {
+      const shipments = [];
+      let page = 1;
+      let hasMore = true;
+      
+      while (hasMore) {
+        const shipmentsRes = await fetch(
+          `${baseUrl}/shipments?customer_id=${customerId}&page=${page}&per_page=100&shipped_after=${startDate}&shipped_before=${endDate}`, 
+          { headers }
+        );
+        
+        if (!shipmentsRes.ok) {
+          return res.status(shipmentsRes.status).json({ 
+            error: `Failed to fetch shipments: ${shipmentsRes.status}` 
+          });
+        }
+        
+        const data = await shipmentsRes.json();
+        const pageShipments = data.data || [];
+        shipments.push(...pageShipments);
+        
+        const meta = data.meta;
+        if (meta && meta.current_page < meta.last_page) {
+          page++;
+        } else {
+          hasMore = false;
+        }
+        
+        if (shipments.length > 10000) break;
+        await new Promise(r => setTimeout(r, 100));
+      }
+      
+      // Aggregate shipments by week
+      const byWeek = {};
+      
+      shipments.forEach(shipment => {
+        const shipDate = new Date(shipment.shipped_at || shipment.created_at);
+        const weekKey = getWeekEnding(shipDate);
+        
+        if (!byWeek[weekKey]) {
+          byWeek[weekKey] = {
+            weekEnding: weekKey,
+            shipmentCount: 0,
+            totalUnits: 0,
+            orders: [],
+          };
+        }
+        
+        const units = (shipment.shipment_items || [])
+          .reduce((sum, item) => sum + (item.quantity || 0), 0);
+        
+        byWeek[weekKey].shipmentCount++;
+        byWeek[weekKey].totalUnits += units;
+        byWeek[weekKey].orders.push({
+          orderNumber: shipment.order?.order_number || shipment.order_id,
+          trackingNumber: shipment.tracking_number,
+          shippedAt: shipment.shipped_at,
+          carrier: shipment.shipping_method?.carrier,
+          units,
+        });
+      });
+      
+      return res.status(200).json({
+        success: true,
+        syncType: 'shipments',
+        shipmentCount: shipments.length,
+        dateRange: { startDate, endDate },
+        byWeek,
+      });
+      
+    } catch (err) {
+      console.error('Packiyo shipments sync error:', err);
+      return res.status(500).json({ error: `Shipments sync failed: ${err.message}` });
+    }
+  }
 
-  return res.status(400).json({ error: 'Invalid syncType. Use: inventory' });
+  return res.status(400).json({ error: 'Invalid syncType. Use: inventory, shipments' });
+}
+
+// Helper to get week ending (Sunday)
+function getWeekEnding(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const daysUntilSunday = day === 0 ? 0 : 7 - day;
+  d.setDate(d.getDate() + daysUntilSunday);
+  return d.toISOString().split('T')[0];
 }

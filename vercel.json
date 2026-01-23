@@ -1,11 +1,11 @@
 {
   "functions": {
     "api/chat.js": {
-      "maxDuration": 60,
+      "maxDuration": 120,
       "memory": 1024
     },
     "api/shopify/sync.js": {
-      "maxDuration": 60,
+      "maxDuration": 120,
       "memory": 1024
     },
     "api/packiyo/sync.js": {
