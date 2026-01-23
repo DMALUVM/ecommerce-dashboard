@@ -235,11 +235,23 @@ export default async function handler(req, res) {
       }
       
       const locationsData = await locationsRes.json();
-      const locations = locationsData.locations || [];
+      const allLocations = locationsData.locations || [];
       
       // Create location map for easy lookup
       const locationMap = {};
-      locations.forEach(loc => {
+      allLocations.forEach(loc => {
+        const nameLower = loc.name.toLowerCase();
+        // Identify location type based on name
+        let locType = 'other';
+        if (nameLower.includes('wormans') || nameLower.includes('worman') || 
+            nameLower.includes('home') || nameLower.includes('office')) {
+          locType = 'home';
+        } else if (nameLower.includes('excel') || nameLower.includes('3pl') || 
+                   nameLower.includes('packiyo') || nameLower.includes('warehouse') ||
+                   nameLower.includes('fulfillment')) {
+          locType = '3pl';
+        }
+        
         locationMap[loc.id] = {
           id: loc.id,
           name: loc.name,
@@ -248,18 +260,34 @@ export default async function handler(req, res) {
           province: loc.province,
           country: loc.country,
           isActive: loc.active,
-          // Identify location type based on name
-          type: loc.name.toLowerCase().includes('packiyo') || 
-                loc.name.toLowerCase().includes('3pl') || 
-                loc.name.toLowerCase().includes('warehouse') ||
-                loc.name.toLowerCase().includes('fulfillment')
-                  ? '3pl' 
-                  : loc.name.toLowerCase().includes('home') || 
-                    loc.name.toLowerCase().includes('office')
-                    ? 'home'
-                    : 'other',
+          type: locType,
         };
       });
+      
+      // FILTER: Only sync from home location (Wormans Mill), NOT 3PL
+      // 3PL inventory comes from Packiyo sync instead
+      const homeLocations = allLocations.filter(loc => {
+        const nameLower = loc.name.toLowerCase();
+        return nameLower.includes('wormans') || nameLower.includes('worman') || 
+               nameLower.includes('home') || nameLower.includes('office');
+      });
+      
+      if (homeLocations.length === 0) {
+        // Fallback: exclude known 3PL locations
+        const non3plLocations = allLocations.filter(loc => {
+          const nameLower = loc.name.toLowerCase();
+          return !nameLower.includes('excel') && !nameLower.includes('3pl') && 
+                 !nameLower.includes('packiyo') && !nameLower.includes('warehouse') &&
+                 !nameLower.includes('fulfillment');
+        });
+        homeLocations.push(...non3plLocations);
+      }
+      
+      // Use only home locations for inventory
+      const locations = homeLocations;
+      
+      console.log('Syncing inventory from locations:', locations.map(l => l.name).join(', '));
+      console.log('Excluded 3PL locations:', allLocations.filter(l => !locations.includes(l)).map(l => l.name).join(', ') || 'none');
       
       // Step 2: Get all products with variants (for SKU mapping)
       const products = [];
@@ -408,40 +436,29 @@ export default async function handler(req, res) {
         }
       });
       
-      // Build summary by location type
-      const byLocationType = { '3pl': 0, home: 0, other: 0 };
-      Object.values(inventoryBySku).forEach(item => {
-        Object.entries(item.byLocation).forEach(([locName, locData]) => {
-          byLocationType[locData.type] = (byLocationType[locData.type] || 0) + locData.qty;
-        });
-      });
-      
       // Format for app's inventory structure
       const inventorySnapshot = {
         date: new Date().toISOString().split('T')[0],
-        source: 'shopify-sync',
+        source: 'shopify-home-only', // Only syncing from home location (Wormans Mill)
+        syncedLocations: locations.map(l => l.name), // Which locations were synced
+        excludedLocations: allLocations.filter(l => !locations.find(h => h.id === l.id)).map(l => l.name),
         locations: Object.values(locationMap),
         summary: {
           totalUnits,
           totalValue,
-          threeplUnits: byLocationType['3pl'],
-          homeUnits: byLocationType['home'] || 0,
-          otherUnits: byLocationType['other'] || 0,
+          homeUnits: totalUnits, // All units are from home since we filtered
           skuCount: Object.keys(inventoryBySku).length,
           skippedNoSku, // Items without SKU cannot be matched across systems
           locationCount: locations.length,
+          note: '3PL inventory excluded - use Packiyo sync for 3PL',
         },
         items: Object.values(inventoryBySku)
           .map(item => ({
             sku: item.sku, // PRIMARY KEY - matches across Amazon & Shopify
             name: item.name, // Display only - may differ between platforms
             totalQty: item.totalQty,
-            threeplQty: Object.entries(item.byLocation)
-              .filter(([_, d]) => d.type === '3pl')
-              .reduce((sum, [_, d]) => sum + d.qty, 0),
-            homeQty: Object.entries(item.byLocation)
-              .filter(([_, d]) => d.type === 'home')
-              .reduce((sum, [_, d]) => sum + d.qty, 0),
+            homeQty: item.totalQty, // All qty is home qty since we filtered to home only
+            threeplQty: 0, // 3PL not included in this sync
             cost: item.cost,
             totalValue: item.totalValue,
             locations: item.locations,
