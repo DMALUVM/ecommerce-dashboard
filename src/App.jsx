@@ -878,7 +878,7 @@ const parse3PLExcel = async (file) => {
 
 // Helper to get 3PL data for a specific week from the ledger
 const get3PLForWeek = (ledger, weekKey) => {
-  if (!ledger || !ledger.orders) return null;
+  if (!ledger) return null;
   
   // Convert weekKey to date for fuzzy matching
   const targetDate = new Date(weekKey + 'T00:00:00');
@@ -888,17 +888,25 @@ const get3PLForWeek = (ledger, weekKey) => {
   targetEnd.setDate(targetDate.getDate() + 1); // Include day after for timezone tolerance
   
   // Find orders that match this week (fuzzy match within 2 days of week boundary)
-  const weekOrders = Object.values(ledger.orders).filter(o => {
+  const weekOrders = ledger.orders ? Object.values(ledger.orders).filter(o => {
     // Try exact match first
     if (o.weekKey === weekKey) return true;
     
     // Try fuzzy match - check if order's weekKey is within 2 days of target
-    const orderWeekDate = new Date(o.weekKey + 'T00:00:00');
-    const diffDays = Math.abs((orderWeekDate - targetDate) / (1000 * 60 * 60 * 24));
-    return diffDays <= 2;
-  });
-  
-  if (weekOrders.length === 0) return null;
+    if (o.weekKey) {
+      const orderWeekDate = new Date(o.weekKey + 'T00:00:00');
+      const diffDays = Math.abs((orderWeekDate - targetDate) / (1000 * 60 * 60 * 24));
+      if (diffDays <= 2) return true;
+    }
+    
+    // Also try matching by shipDate
+    if (o.shipDate) {
+      const shipDate = new Date(o.shipDate + 'T00:00:00');
+      return shipDate >= targetStart && shipDate <= targetEnd;
+    }
+    
+    return false;
+  }) : [];
   
   const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
   const metrics = {
@@ -961,6 +969,9 @@ const get3PLForWeek = (ledger, weekKey) => {
   
   metrics.totalUnits = metrics.firstPickCount + metrics.additionalPickCount;
   metrics.totalCost = breakdown.storage + breakdown.shipping + breakdown.pickFees + breakdown.boxCharges + breakdown.receiving + breakdown.other;
+  
+  // Return null if no data found (no orders and no costs)
+  if (metrics.orderCount === 0 && metrics.totalCost === 0) return null;
   
   if (metrics.orderCount > 0) {
     metrics.avgPickCost = breakdown.pickFees / metrics.orderCount;
@@ -2880,6 +2891,58 @@ const loadFromLocal = useCallback(() => {
     if (r) setShopifyCredentials(JSON.parse(r));
   } catch {}
 }, []);
+
+// Sync 3PL ledger costs to weekly data when ledger changes
+// This ensures profit calculations are accurate even if 3PL data was uploaded separately
+useEffect(() => {
+  if (!threeplLedger?.orders || Object.keys(threeplLedger.orders).length === 0) return;
+  if (Object.keys(allWeeksData).length === 0) return;
+  
+  // Get unique week keys from ledger
+  const ledgerWeeks = new Set(Object.values(threeplLedger.orders).map(o => o.weekKey).filter(Boolean));
+  if (ledgerWeeks.size === 0) return;
+  
+  let needsUpdate = false;
+  const updatedWeeks = { ...allWeeksData };
+  
+  ledgerWeeks.forEach(weekKey => {
+    if (!updatedWeeks[weekKey]) return;
+    
+    // Calculate 3PL costs from ledger
+    const ledger3PL = get3PLForWeek(threeplLedger, weekKey);
+    const ledgerCost = ledger3PL?.metrics?.totalCost || 0;
+    const currentCost = updatedWeeks[weekKey].shopify?.threeplCosts || 0;
+    
+    // Only update if ledger has more cost data than current
+    if (ledgerCost > 0 && Math.abs(ledgerCost - currentCost) > 0.01) {
+      const oldCost = currentCost;
+      const shopProfit = (updatedWeeks[weekKey].shopify?.netProfit || 0) + oldCost - ledgerCost;
+      
+      updatedWeeks[weekKey] = {
+        ...updatedWeeks[weekKey],
+        shopify: {
+          ...updatedWeeks[weekKey].shopify,
+          threeplCosts: ledgerCost,
+          threeplBreakdown: ledger3PL?.breakdown || updatedWeeks[weekKey].shopify?.threeplBreakdown,
+          threeplMetrics: ledger3PL?.metrics || updatedWeeks[weekKey].shopify?.threeplMetrics,
+          netProfit: shopProfit,
+          netMargin: updatedWeeks[weekKey].shopify?.revenue > 0 ? (shopProfit / updatedWeeks[weekKey].shopify.revenue) * 100 : 0,
+        },
+        total: {
+          ...updatedWeeks[weekKey].total,
+          netProfit: (updatedWeeks[weekKey].amazon?.netProfit || 0) + shopProfit,
+          netMargin: updatedWeeks[weekKey].total?.revenue > 0 ? (((updatedWeeks[weekKey].amazon?.netProfit || 0) + shopProfit) / updatedWeeks[weekKey].total.revenue) * 100 : 0,
+        }
+      };
+      needsUpdate = true;
+    }
+  });
+  
+  if (needsUpdate) {
+    setAllWeeksData(updatedWeeks);
+    save(updatedWeeks);
+  }
+}, [threeplLedger]); // Only re-run when threeplLedger changes
 
 const saveGoals = useCallback((newGoals) => {
   setGoals(newGoals);
@@ -10879,6 +10942,47 @@ Analyze the data and respond with ONLY this JSON:
         importedFiles: newImportedFiles,
       };
       save3PLLedger(newLedger);
+      
+      // IMPORTANT: Update weekly data with new 3PL costs so profit calculations are accurate
+      if (weeksAffected.size > 0) {
+        const updatedWeeks = { ...allWeeksData };
+        let weeksUpdated = 0;
+        
+        weeksAffected.forEach(weekKey => {
+          if (updatedWeeks[weekKey]) {
+            // Calculate 3PL costs from ledger for this week
+            const ledger3PL = get3PLForWeek(newLedger, weekKey);
+            const newThreeplCost = ledger3PL?.metrics?.totalCost || 0;
+            const oldCost = updatedWeeks[weekKey].shopify?.threeplCosts || 0;
+            
+            if (newThreeplCost > 0 && newThreeplCost !== oldCost) {
+              const shopProfit = (updatedWeeks[weekKey].shopify?.netProfit || 0) + oldCost - newThreeplCost;
+              updatedWeeks[weekKey] = {
+                ...updatedWeeks[weekKey],
+                shopify: {
+                  ...updatedWeeks[weekKey].shopify,
+                  threeplCosts: newThreeplCost,
+                  threeplBreakdown: ledger3PL?.breakdown || updatedWeeks[weekKey].shopify?.threeplBreakdown,
+                  threeplMetrics: ledger3PL?.metrics || updatedWeeks[weekKey].shopify?.threeplMetrics,
+                  netProfit: shopProfit,
+                  netMargin: updatedWeeks[weekKey].shopify?.revenue > 0 ? (shopProfit / updatedWeeks[weekKey].shopify.revenue) * 100 : 0,
+                },
+                total: {
+                  ...updatedWeeks[weekKey].total,
+                  netProfit: (updatedWeeks[weekKey].amazon?.netProfit || 0) + shopProfit,
+                  netMargin: updatedWeeks[weekKey].total?.revenue > 0 ? (((updatedWeeks[weekKey].amazon?.netProfit || 0) + shopProfit) / updatedWeeks[weekKey].total.revenue) * 100 : 0,
+                }
+              };
+              weeksUpdated++;
+            }
+          }
+        });
+        
+        if (weeksUpdated > 0) {
+          setAllWeeksData(updatedWeeks);
+          save(updatedWeeks);
+        }
+      }
       
       setResults({
         files: processResults,
@@ -25626,17 +25730,39 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
     const quarterlyPeriods = sortedPeriods.filter(p => /q[1-4]/i.test(p)).sort();
     const yearlyPeriods = sortedPeriods.filter(p => /^\d{4}$/.test(p)).sort();
     
-    // Get 3PL costs for a date range
+    // Get 3PL costs for a date range - uses ledger data structure
     const get3PLCostsForPeriod = (startDate, endDate) => {
       if (!threeplLedger?.orders) return 0;
       let total = 0;
       Object.entries(threeplLedger.orders).forEach(([orderId, order]) => {
-        const orderDate = order.shipmentDate || order.orderDate;
+        const orderDate = order.shipmentDate || order.orderDate || order.weekKey;
         if (orderDate && orderDate >= startDate && orderDate <= endDate) {
-          total += (order.shipping || 0) + (order.pickFees || 0) + (order.packagingFees || 0) + (order.storageFees || 0) + (order.otherFees || 0);
+          // Charges are stored in order.charges object
+          const charges = order.charges || {};
+          total += (charges.shipping || order.shipping || 0);
+          total += (charges.firstPick || 0) + (charges.additionalPick || 0);
+          total += (charges.box || charges.packaging || order.packagingFees || 0);
+          total += (charges.storage || order.storageFees || 0);
+          total += (charges.reBoxing || 0) + (charges.fbaForwarding || 0);
+          total += (order.otherFees || charges.other || 0);
         }
       });
+      
+      // Also check summaryCharges (storage, receiving, etc.)
+      Object.values(threeplLedger.summaryCharges || {}).forEach(charge => {
+        const chargeDate = charge.weekKey || charge.date;
+        if (chargeDate && chargeDate >= startDate && chargeDate <= endDate) {
+          total += charge.amount || 0;
+        }
+      });
+      
       return total;
+    };
+    
+    // Get 3PL costs for a specific week key using existing function
+    const getWeek3PLCosts = (weekKey) => {
+      const ledger3PL = get3PLForWeek(threeplLedger, weekKey);
+      return ledger3PL?.metrics?.totalCost || 0;
     };
     
     // Helper to get data from either weekly or period source
@@ -25710,16 +25836,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         totals.revenue += data.total?.revenue || 0;
         totals.cogs += data.total?.cogs || 0;
         totals.amazonFees += data.amazon?.fees || 0;
-        totals.threeplCosts += data.shopify?.threeplCosts || 0;
+        // Get 3PL from weekly data OR ledger (whichever has data)
+        const weeklyThreepl = data.shopify?.threeplCosts || 0;
+        const ledgerThreepl = getWeek3PLCosts(w);
+        totals.threeplCosts += Math.max(weeklyThreepl, ledgerThreepl);
         totals.adSpend += data.total?.adSpend || 0;
         totals.profit += data.total?.netProfit || 0;
         totals.units += data.total?.units || 0;
         totals.returns += data.amazon?.returns || 0;
       });
-      // Add 3PL costs for YTD
-      const ytdStart = `${currentYear}-01-01`;
-      const ytdEnd = new Date().toISOString().split('T')[0];
-      totals.threeplCosts += get3PLCostsForPeriod(ytdStart, ytdEnd);
     } else {
       // Single period
       const data = getData(currentPeriodKey);
@@ -25727,21 +25852,43 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         totals.revenue = data.total?.revenue || 0;
         totals.cogs = data.total?.cogs || 0;
         totals.amazonFees = data.amazon?.fees || 0;
+        // Get 3PL from data OR ledger
         totals.threeplCosts = data.shopify?.threeplCosts || 0;
         totals.adSpend = data.total?.adSpend || 0;
         totals.profit = data.total?.netProfit || 0;
         totals.units = data.total?.units || 0;
         totals.returns = data.amazon?.returns || 0;
         
-        // Add 3PL costs for weekly periods
+        // Add 3PL costs from ledger for weekly periods if not in weekly data
         if (profitPeriod === 'weekly' && currentPeriodKey) {
-          const weekEnd = new Date(currentPeriodKey);
-          const weekStart = new Date(weekEnd);
-          weekStart.setDate(weekStart.getDate() - 6);
-          totals.threeplCosts += get3PLCostsForPeriod(
-            weekStart.toISOString().split('T')[0],
-            weekEnd.toISOString().split('T')[0]
-          );
+          const ledgerThreepl = getWeek3PLCosts(currentPeriodKey);
+          // Use ledger data if it's higher (meaning we have ledger data)
+          if (ledgerThreepl > totals.threeplCosts) {
+            totals.threeplCosts = ledgerThreepl;
+          }
+        }
+        
+        // For monthly periods, sum up weekly ledger data
+        if (profitPeriod === 'monthly' && currentPeriodKey) {
+          // Find weeks that fall in this month
+          const monthMatch = currentPeriodKey.toLowerCase().match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/);
+          const yearMatch = currentPeriodKey.match(/(20\d{2})/);
+          if (monthMatch && yearMatch) {
+            const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+            const month = monthNames.indexOf(monthMatch[1]);
+            const year = parseInt(yearMatch[1]);
+            const monthWeeks = sortedWeeks.filter(w => {
+              const wDate = new Date(w + 'T00:00:00');
+              return wDate.getFullYear() === year && wDate.getMonth() === month;
+            });
+            let ledgerTotal = 0;
+            monthWeeks.forEach(w => {
+              ledgerTotal += getWeek3PLCosts(w);
+            });
+            if (ledgerTotal > totals.threeplCosts) {
+              totals.threeplCosts = ledgerTotal;
+            }
+          }
         }
       }
     }
@@ -25762,7 +25909,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         priorTotals.revenue += data.total?.revenue || 0;
         priorTotals.cogs += data.total?.cogs || 0;
         priorTotals.amazonFees += data.amazon?.fees || 0;
-        priorTotals.threeplCosts += data.shopify?.threeplCosts || 0;
+        // Get 3PL from weekly data OR ledger
+        const weeklyThreepl = data.shopify?.threeplCosts || 0;
+        const ledgerThreepl = getWeek3PLCosts(w);
+        priorTotals.threeplCosts += Math.max(weeklyThreepl, ledgerThreepl);
         priorTotals.adSpend += data.total?.adSpend || 0;
         priorTotals.profit += data.total?.netProfit || 0;
       });
@@ -25775,6 +25925,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
         priorTotals.threeplCosts = priorData.shopify?.threeplCosts || 0;
         priorTotals.adSpend = priorData.total?.adSpend || 0;
         priorTotals.profit = priorData.total?.netProfit || 0;
+        
+        // Add ledger data for prior week if needed
+        if (profitPeriod === 'weekly') {
+          const ledgerThreepl = getWeek3PLCosts(priorPeriodKey);
+          if (ledgerThreepl > priorTotals.threeplCosts) {
+            priorTotals.threeplCosts = ledgerThreepl;
+          }
+        }
       }
     }
     
