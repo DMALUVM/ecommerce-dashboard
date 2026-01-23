@@ -525,6 +525,32 @@ const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY)
     })
   : null;
 
+// CRITICAL: When Supabase is configured, DON'T load from localStorage on initial mount
+// This prevents data leakage between users on shared browsers
+// localStorage should ONLY be used when supabase is NOT configured (anonymous mode)
+const shouldUseLocalStorage = !supabase;
+
+// Safe localStorage getter - only reads if we're in anonymous mode
+const safeLocalStorageGet = (key, defaultValue) => {
+  if (!shouldUseLocalStorage) return defaultValue;
+  try {
+    const item = localStorage.getItem(key);
+    return item ? JSON.parse(item) : defaultValue;
+  } catch {
+    return defaultValue;
+  }
+};
+
+// Safe localStorage getter for strings (non-JSON)
+const safeLocalStorageGetString = (key, defaultValue = '') => {
+  if (!shouldUseLocalStorage) return defaultValue;
+  try {
+    return localStorage.getItem(key) || defaultValue;
+  } catch {
+    return defaultValue;
+  }
+};
+
 // ============ LOCALSTORAGE COMPRESSION ============
 // Simple LZW-based compression for localStorage (handles large datasets efficiently)
 const LZCompress = {
@@ -1252,7 +1278,7 @@ export default function Dashboard() {
   
   // Settings tab state
   const [settingsTab, setSettingsTab] = useState(() => {
-    try { return localStorage.getItem('ecommerce_settings_tab') || 'general'; } catch { return 'general'; }
+    try { return safeLocalStorageGetString('ecommerce_settings_tab', 'general'); } catch { return 'general'; }
   }); // 'general' | 'integrations' | 'thresholds' | 'display' | 'data' | 'account'
   
   // Persist settings tab selection
@@ -1280,7 +1306,7 @@ export default function Dashboard() {
   
   // Amazon Campaign Data
   const [amazonCampaigns, setAmazonCampaigns] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('ecommerce_amazon_campaigns_v1')) || { campaigns: [], lastUpdated: null, history: [] }; }
+    try { return safeLocalStorageGet('ecommerce_amazon_campaigns_v1', { campaigns: [], lastUpdated: null, history: [] }); }
     catch { return { campaigns: [], lastUpdated: null, history: [] }; }
   });
   const [amazonCampaignSort, setAmazonCampaignSort] = useState({ field: 'spend', dir: 'desc' });
@@ -1288,24 +1314,22 @@ export default function Dashboard() {
 
   // Weekly Intelligence Reports
   const [weeklyReports, setWeeklyReports] = useState(() => {
-    try { 
-      const stored = JSON.parse(localStorage.getItem(WEEKLY_REPORTS_KEY));
-      return {
-        weekly: stored?.weekly || { reports: [], lastGenerated: null },
-        monthly: stored?.monthly || { reports: [], lastGenerated: null },
-        quarterly: stored?.quarterly || { reports: [], lastGenerated: null },
-        annual: stored?.annual || { reports: [], lastGenerated: null },
-        preferences: stored?.preferences || { autoGenerate: true, emailDelivery: false, emailAddress: '' },
-      }; 
-    } catch { 
-      return { 
-        weekly: { reports: [], lastGenerated: null },
-        monthly: { reports: [], lastGenerated: null },
-        quarterly: { reports: [], lastGenerated: null },
-        annual: { reports: [], lastGenerated: null },
-        preferences: { autoGenerate: true, emailDelivery: false, emailAddress: '' }, 
-      }; 
-    }
+    const defaultReports = { 
+      weekly: { reports: [], lastGenerated: null },
+      monthly: { reports: [], lastGenerated: null },
+      quarterly: { reports: [], lastGenerated: null },
+      annual: { reports: [], lastGenerated: null },
+      preferences: { autoGenerate: true, emailDelivery: false, emailAddress: '' }, 
+    };
+    const stored = safeLocalStorageGet(WEEKLY_REPORTS_KEY, null);
+    if (!stored) return defaultReports;
+    return {
+      weekly: stored?.weekly || defaultReports.weekly,
+      monthly: stored?.monthly || defaultReports.monthly,
+      quarterly: stored?.quarterly || defaultReports.quarterly,
+      annual: stored?.annual || defaultReports.annual,
+      preferences: stored?.preferences || defaultReports.preferences,
+    };
   });
   const [showWeeklyReport, setShowWeeklyReport] = useState(false);
   const [currentReport, setCurrentReport] = useState(null);
@@ -1314,7 +1338,7 @@ export default function Dashboard() {
   const [reportType, setReportType] = useState('weekly');
 
   const [storeName, setStoreName] = useState('');
-  const [storeLogo, setStoreLogo] = useState(() => localStorage.getItem('ecommerce_store_logo') || null);
+  const [storeLogo, setStoreLogo] = useState(() => safeLocalStorageGetString('ecommerce_store_logo', null));
   
   // Shopify Integration
   const [shopifyCredentials, setShopifyCredentials] = useState({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
@@ -1430,17 +1454,8 @@ const handleLogout = async () => {
   
   // SKU Return Rate Tracking - tracks returns at SKU level
   const [returnRates, setReturnRates] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('ecommerce_return_rates_v1')) || {
-        bySku: {},  // { [sku]: { unitsSold: 0, unitsReturned: 0, returnRate: 0, history: [] } }
-        byWeek: {}, // { [weekKey]: { unitsSold: 0, unitsReturned: 0, returnRate: 0 } }
-        byMonth: {}, // { [monthKey]: { unitsSold: 0, unitsReturned: 0, returnRate: 0 } }
-        overall: { unitsSold: 0, unitsReturned: 0, returnRate: 0 },
-        lastUpdated: null,
-      };
-    } catch {
-      return { bySku: {}, byWeek: {}, byMonth: {}, overall: { unitsSold: 0, unitsReturned: 0, returnRate: 0 }, lastUpdated: null };
-    }
+    const defaultRates = { bySku: {}, byWeek: {}, byMonth: {}, overall: { unitsSold: 0, unitsReturned: 0, returnRate: 0 }, lastUpdated: null };
+    return safeLocalStorageGet('ecommerce_return_rates_v1', defaultRates);
   });
   
   // Persist return rates
@@ -1454,7 +1469,7 @@ const handleLogout = async () => {
   const [editAdSpend, setEditAdSpend] = useState({ meta: '', google: '' });
   const [showEdit3PL, setShowEdit3PL] = useState(false);
   const [edit3PLCost, setEdit3PLCost] = useState('');
-  const [lastBackupDate, setLastBackupDate] = useState(() => localStorage.getItem('ecommerce_last_backup') || null);
+  const [lastBackupDate, setLastBackupDate] = useState(() => safeLocalStorageGetString('ecommerce_last_backup', null));
   const [lastSyncDate, setLastSyncDate] = useState(null);
   
   // Bulk Ad Upload state
@@ -1497,28 +1512,16 @@ const handleLogout = async () => {
   
   // Banking Module - QBO Transaction Data
   const [bankingData, setBankingData] = useState(() => {
-    try { 
-      const stored = JSON.parse(localStorage.getItem('ecommerce_banking_v1'));
-      return stored || { 
-        transactions: [], 
-        lastUpload: null, 
-        accounts: {},
-        categories: {},
-        monthlySnapshots: {},
-        categoryOverrides: {},
-        settings: { reminderEnabled: true, reminderTime: '09:00' }
-      }; 
-    } catch { 
-      return { 
-        transactions: [], 
-        lastUpload: null, 
-        accounts: {},
-        categories: {},
-        monthlySnapshots: {},
-        categoryOverrides: {},
-        settings: { reminderEnabled: true, reminderTime: '09:00' }
-      }; 
-    }
+    const defaultBanking = { 
+      transactions: [], 
+      lastUpload: null, 
+      accounts: {},
+      categories: {},
+      monthlySnapshots: {},
+      categoryOverrides: {},
+      settings: { reminderEnabled: true, reminderTime: '09:00' }
+    };
+    return safeLocalStorageGet('ecommerce_banking_v1', defaultBanking);
   });
   const [bankingFile, setBankingFile] = useState(null);
   const [bankingProcessing, setBankingProcessing] = useState(false);
@@ -1532,9 +1535,7 @@ const handleLogout = async () => {
   const [profitTrackerPeriod, setProfitTrackerPeriod] = useState('month'); // Profit tracker period selector
   const [profitTrackerCustomRange, setProfitTrackerCustomRange] = useState({ start: '', end: '' });
   const [confirmedRecurring, setConfirmedRecurring] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('ecommerce_recurring_v1')) || {};
-    } catch { return {}; }
+    return safeLocalStorageGet('ecommerce_recurring_v1', {});
   });
   const [showAddRecurring, setShowAddRecurring] = useState(false);
   const [recurringForm, setRecurringForm] = useState({ vendor: '', category: '', amount: '', notes: '' });
@@ -1591,7 +1592,7 @@ const handleLogout = async () => {
   // AI Chatbot state
   const [showAIChat, setShowAIChat] = useState(false);
   const [aiMessages, setAiMessages] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('ecommerce_ai_chat_history_v1')) || []; } catch { return []; }
+    try { return safeLocalStorageGet('ecommerce_ai_chat_history_v1', []); } catch { return []; }
   });
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
@@ -1608,14 +1609,14 @@ const handleLogout = async () => {
   // NEW FEATURES STATE
   // 1. Dashboard Widget Customization
   const [widgetConfig, setWidgetConfig] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(WIDGET_KEY)) || null; } catch { return null; }
+    try { return safeLocalStorageGet(WIDGET_KEY, null); } catch { return null; }
   });
   const [editingWidgets, setEditingWidgets] = useState(false);
   
   // Production Pipeline
   const PRODUCTION_KEY = 'ecommerce_production_v1';
   const [productionPipeline, setProductionPipeline] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('ecommerce_production_v1')) || []; } catch { return []; }
+    try { return safeLocalStorageGet('ecommerce_production_v1', []); } catch { return []; }
   });
   const [showAddProduction, setShowAddProduction] = useState(false);
   const [editingProduction, setEditingProduction] = useState(null);
@@ -1653,53 +1654,29 @@ const handleLogout = async () => {
   
   // Lead Time Settings
   const [leadTimeSettings, setLeadTimeSettings] = useState(() => {
-    try { 
-      const saved = JSON.parse(localStorage.getItem('ecommerce_lead_times_v1')) || {};
-      return {
-        defaultLeadTimeDays: saved.defaultLeadTimeDays || 14,
-        skuLeadTimes: saved.skuLeadTimes || {}, // { sku: days }
-        reorderBuffer: saved.reorderBuffer || 7, // Extra days buffer for reorder alerts
-        reorderTriggerDays: saved.reorderTriggerDays || 60, // Want shipment to arrive when stock reaches X days
-        minOrderWeeks: saved.minOrderWeeks || 22, // Minimum order size (5 months ≈ 22 weeks)
-        
-        // Channel-specific inventory rules
-        channelRules: saved.channelRules || {
-          amazon: {
-            minDaysOfSupply: 60, // Alert when Amazon inventory falls below X days
-            alertEnabled: true,
-          },
-          threepl: {
-            alertEnabled: true,
-            // Default quantity threshold for all SKUs
-            defaultQtyThreshold: 50,
-            // SKU-specific thresholds (SKU pattern → threshold)
-            skuThresholds: {}, // e.g., { "SOAP-": 50, "LIP-": 100 }
-            // Category thresholds (by keyword match)
-            categoryThresholds: saved.channelRules?.threepl?.categoryThresholds || {
-              'soap': 50,
-              'balm': 100,
-              'lip': 100,
-            },
-          },
-        },
-        
-        // Storage cost allocation: 'shopify' (legacy), 'proportional' (by revenue), 'total' (separate line)
-        storageCostAllocation: saved.storageCostAllocation || 'proportional',
-      }; 
-    } catch { 
-      return { 
-        defaultLeadTimeDays: 14, 
-        skuLeadTimes: {}, 
-        reorderBuffer: 7, 
-        reorderTriggerDays: 60, 
-        minOrderWeeks: 22,
-        channelRules: {
-          amazon: { minDaysOfSupply: 60, alertEnabled: true },
-          threepl: { alertEnabled: true, defaultQtyThreshold: 50, skuThresholds: {}, categoryThresholds: { 'soap': 50, 'balm': 100, 'lip': 100 } },
-        },
-        storageCostAllocation: 'proportional',
-      }; 
-    }
+    const defaultSettings = { 
+      defaultLeadTimeDays: 14, 
+      skuLeadTimes: {}, 
+      reorderBuffer: 7, 
+      reorderTriggerDays: 60, 
+      minOrderWeeks: 22,
+      channelRules: {
+        amazon: { minDaysOfSupply: 60, alertEnabled: true },
+        threepl: { alertEnabled: true, defaultQtyThreshold: 50, skuThresholds: {}, categoryThresholds: { 'soap': 50, 'balm': 100, 'lip': 100 } },
+      },
+      storageCostAllocation: 'proportional',
+    };
+    const saved = safeLocalStorageGet('ecommerce_lead_times_v1', null);
+    if (!saved) return defaultSettings;
+    return {
+      defaultLeadTimeDays: saved.defaultLeadTimeDays || 14,
+      skuLeadTimes: saved.skuLeadTimes || {},
+      reorderBuffer: saved.reorderBuffer || 7,
+      reorderTriggerDays: saved.reorderTriggerDays || 60,
+      minOrderWeeks: saved.minOrderWeeks || 22,
+      channelRules: saved.channelRules || defaultSettings.channelRules,
+      storageCostAllocation: saved.storageCostAllocation || 'proportional',
+    }; 
   });
   
   // Save lead time settings
@@ -1720,74 +1697,15 @@ const handleLogout = async () => {
   
   // AI Learning Data - tracks all predictions vs actuals
   const [aiLearningHistory, setAiLearningHistory] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('ecommerce_ai_learning_v1')) || { predictions: [], accuracy: {} }; } 
+    try { return safeLocalStorageGet('ecommerce_ai_learning_v1', { predictions: [], accuracy: {} }); } 
     catch { return { predictions: [], accuracy: {} }; }
   });
   
   // ============ UNIFIED AI MODEL ============
   // Single source of truth for all AI learning - combines forecasts, patterns, and corrections
   const [unifiedAIModel, setUnifiedAIModel] = useState(() => {
-    try { 
-      return JSON.parse(localStorage.getItem('ecommerce_unified_ai_v1')) || {
-        version: '1.0',
-        lastUpdated: null,
-        
-        // Data availability tracking - knows what data exists for each channel/period
-        dataAvailability: {
-          amazon: { daily: [], weekly: [], periods: [] },  // Dates/periods with data
-          shopify: { daily: [], weekly: [], periods: [] },
-          lastScanned: null,
-        },
-        
-        // Learned correction factors (from forecast vs actual comparisons)
-        corrections: {
-          overall: { revenue: 1, units: 1, profit: 1 },
-          byChannel: { amazon: { revenue: 1, units: 1 }, shopify: { revenue: 1, units: 1 } },
-          bySku: {},      // { [sku]: { units: 1.05, samples: 5 } }
-          byMonth: {},    // { [1-12]: { revenue: 0.95, samples: 3 } } - seasonality
-          byQuarter: {},  // { [1-4]: { revenue: 1.1, samples: 2 } }
-          byDayOfWeek: {}, // { 'Monday': { revenue: 0.85 }, ... }
-        },
-        
-        // Signal weights - learned weights for different forecast inputs
-        signalWeights: {
-          dailyTrend: 0.4,      // Weight for recent daily trends
-          weeklyAverage: 0.25,  // Weight for weekly averages
-          amazonForecast: 0.15, // Weight for Amazon's forecasts (if available)
-          seasonality: 0.1,     // Weight for seasonal patterns
-          momentum: 0.1,        // Weight for momentum (acceleration/deceleration)
-        },
-        
-        // Learned patterns
-        patterns: {
-          bestDays: [],         // ['Friday', 'Saturday'] - highest revenue days
-          worstDays: [],        // ['Tuesday'] - lowest revenue days
-          peakHours: [],        // If we ever get hourly data
-          seasonalPeaks: [],    // ['November', 'December']
-          skuVelocity: {},      // { [sku]: { avgUnitsPerWeek: 10, trend: 'growing' } }
-        },
-        
-        // Prediction history with outcomes
-        predictions: [],  // { id, date, type, predicted, actual, error, context }
-        
-        // Model accuracy metrics
-        accuracy: {
-          overall: null,        // Overall accuracy %
-          last30Days: null,     // Recent accuracy
-          byType: {},           // { 'daily': 85, 'weekly': 78, 'monthly': 82 }
-          trend: 'stable',      // 'improving', 'declining', 'stable'
-        },
-        
-        // Confidence levels based on data quality
-        confidence: {
-          amazon: 0,    // 0-100 based on data completeness
-          shopify: 0,
-          overall: 0,
-        },
-      }; 
-    } catch { 
-      return { version: '1.0', lastUpdated: null, dataAvailability: {}, corrections: {}, signalWeights: {}, patterns: {}, predictions: [], accuracy: {}, confidence: {} }; 
-    }
+    const defaultModel = { version: '1.0', lastUpdated: null, dataAvailability: {}, corrections: {}, signalWeights: {}, patterns: {}, predictions: [], accuracy: {}, confidence: {} };
+    return safeLocalStorageGet('ecommerce_unified_ai_v1', defaultModel);
   });
   
   // Persist unified AI model
@@ -1822,14 +1740,14 @@ const handleLogout = async () => {
   
   // 8. Notes/Journal
   const [weekNotes, setWeekNotes] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(NOTES_KEY)) || {}; } catch { return {}; }
+    try { return safeLocalStorageGet(NOTES_KEY, {}); } catch { return {}; }
   });
   const [editingNote, setEditingNote] = useState(null); // week key being edited
   const [noteText, setNoteText] = useState('');
   
   // 9. Theme Customization
   const [theme, setTheme] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(THEME_KEY)) || { mode: 'dark', accent: 'violet' }; } catch { return { mode: 'dark', accent: 'violet' }; }
+    try { return safeLocalStorageGet(THEME_KEY, { mode: 'dark', accent: 'violet' }); } catch { return { mode: 'dark', accent: 'violet' }; }
   });
   
   // 10. CSV Export modal
@@ -1863,7 +1781,7 @@ const handleLogout = async () => {
   
   // Upcoming Invoices/Bills
   const [invoices, setInvoices] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(INVOICES_KEY)) || []; } catch { return []; }
+    try { return safeLocalStorageGet(INVOICES_KEY, []); } catch { return []; }
   });
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
@@ -1877,23 +1795,13 @@ const handleLogout = async () => {
   
   // Amazon Forecasts (from Amazon's SKU Economics forecast reports)
   const [amazonForecasts, setAmazonForecasts] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(AMAZON_FORECAST_KEY)) || {}; } catch { return {}; }
+    try { return safeLocalStorageGet(AMAZON_FORECAST_KEY, {}); } catch { return {}; }
   });
   
   // Forecast upload tracking - tracks when each type was last uploaded
   const [forecastMeta, setForecastMeta] = useState(() => {
-    try { 
-      return JSON.parse(localStorage.getItem('ecommerce_forecast_meta')) || {
-        lastUploads: {
-          '7day': null,   // Date string of last 7-day forecast upload
-          '30day': null,  // Date string of last 30-day forecast upload
-          '60day': null,  // Date string of last 60-day forecast upload
-        },
-        history: [], // Array of { type, uploadedAt, periodStart, periodEnd, totalSales, totalProceeds, accuracy: null }
-      }; 
-    } catch { 
-      return { lastUploads: { '7day': null, '30day': null, '60day': null }, history: [] }; 
-    }
+    const defaultMeta = { lastUploads: { '7day': null, '30day': null, '60day': null }, history: [] };
+    return safeLocalStorageGet('ecommerce_forecast_meta', defaultMeta);
   });
   
   // Save forecast meta to localStorage
@@ -1904,38 +1812,22 @@ const handleLogout = async () => {
   // ============ SELF-LEARNING FORECAST SYSTEM ============
   // Forecast accuracy history - persists learning over time
   const [forecastAccuracyHistory, setForecastAccuracyHistory] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem(FORECAST_ACCURACY_KEY)) || {
-        records: [],
-        lastUpdated: null,
-        modelVersion: 1
-      };
-    } catch { return { records: [], lastUpdated: null, modelVersion: 1 }; }
+    const defaultHistory = { records: [], lastUpdated: null, modelVersion: 1 };
+    return safeLocalStorageGet(FORECAST_ACCURACY_KEY, defaultHistory);
   });
 
   // Learned correction factors per SKU and overall
   const [forecastCorrections, setForecastCorrections] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem(FORECAST_CORRECTIONS_KEY)) || {
-        overall: { revenue: 1.0, units: 1.0, profit: 1.0 },
-        bySku: {},
-        byMonth: {},
-        byQuarter: {},
-        confidence: 0,
-        samplesUsed: 0,
-        lastUpdated: null
-      };
-    } catch { 
-      return { 
-        overall: { revenue: 1.0, units: 1.0, profit: 1.0 },
-        bySku: {},
-        byMonth: {},
-        byQuarter: {},
-        confidence: 0,
-        samplesUsed: 0,
-        lastUpdated: null
-      }; 
-    }
+    const defaultCorrections = { 
+      overall: { revenue: 1.0, units: 1.0, profit: 1.0 },
+      bySku: {},
+      byMonth: {},
+      byQuarter: {},
+      confidence: 0,
+      samplesUsed: 0,
+      lastUpdated: null
+    };
+    return safeLocalStorageGet(FORECAST_CORRECTIONS_KEY, defaultCorrections);
   });
 
   // AI insights state
@@ -1944,7 +1836,7 @@ const handleLogout = async () => {
 
   // AI-powered forecasting state
   const [aiForecasts, setAiForecasts] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('ecommerce_ai_forecasts_v1')) || null; }
+    try { return safeLocalStorageGet('ecommerce_ai_forecasts_v1', null); }
     catch { return null; }
   });
   const [aiForecastLoading, setAiForecastLoading] = useState(false);
