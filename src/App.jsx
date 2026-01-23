@@ -1306,8 +1306,8 @@ export default function Dashboard() {
   
   // Amazon Campaign Data
   const [amazonCampaigns, setAmazonCampaigns] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_amazon_campaigns_v1', { campaigns: [], lastUpdated: null, history: [] }); }
-    catch { return { campaigns: [], lastUpdated: null, history: [] }; }
+    try { return safeLocalStorageGet('ecommerce_amazon_campaigns_v1', { campaigns: [], lastUpdated: null, history: [], historicalDaily: {} }); }
+    catch { return { campaigns: [], lastUpdated: null, history: [], historicalDaily: {} }; }
   });
   const [amazonCampaignSort, setAmazonCampaignSort] = useState({ field: 'spend', dir: 'desc' });
   const [amazonCampaignFilter, setAmazonCampaignFilter] = useState({ status: 'all', type: 'all', search: '' });
@@ -5605,9 +5605,13 @@ const savePeriods = async (d) => {
             tplValue += qty * cost;
             tplInbound += inb;
             
-            // Index by original SKU only - DO NOT add normalized SKU to avoid double counting
-            // SKU matching is handled in the combining step below
+            // Index by original SKU
             tplInv[sku] = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
+            // Also index by normalized SKU (without "Shop" suffix) for matching with Amazon
+            if (sku.endsWith('Shop')) {
+              const normalizedSku = sku.replace(/Shop$/, '');
+              tplInv[normalizedSku] = { sku: normalizedSku, name: item.name || sku, total: qty, inbound: inb, cost };
+            }
           });
           
           // Update Packiyo last sync time
@@ -5678,14 +5682,7 @@ const savePeriods = async (d) => {
 
     allSkus.forEach(sku => {
       const a = amzInv[sku] || {};
-      // Try to find 3PL inventory: first exact match, then with/without "Shop" suffix
-      let t = tplInv[sku];
-      if (!t && sku.endsWith('Shop')) {
-        t = tplInv[sku.replace(/Shop$/, '')] || {};
-      } else if (!t && !sku.endsWith('Shop')) {
-        t = tplInv[sku + 'Shop'] || {};
-      }
-      t = t || {};
+      const t = tplInv[sku] || {};
       const h = homeInv[sku] || {};
       
       const aQty = a.total || 0;
@@ -6128,7 +6125,11 @@ const savePeriods = async (d) => {
       campaigns,
       summary,
       lastUpdated: now,
-      history: [snapshot, ...existingHistory].slice(0, 52) // Keep up to 52 weeks (1 year)
+      history: [snapshot, ...existingHistory].slice(0, 52), // Keep up to 52 weeks (1 year)
+      // PRESERVE historical daily data for AI analysis
+      historicalDaily: amazonCampaigns.historicalDaily || {},
+      historicalLastUpdated: amazonCampaigns.historicalLastUpdated,
+      historicalDateRange: amazonCampaigns.historicalDateRange,
     };
     
     setAmazonCampaigns(newData);
@@ -12869,11 +12870,25 @@ Analyze the data and respond with ONLY this JSON:
       
       setAllDaysData(updatedDays);
       lsSet('dailySales', JSON.stringify(updatedDays));
-      queueCloudSave({ ...combinedData, dailySales: updatedDays });
+      
+      // ALSO save to amazonCampaigns.historicalDaily for AI analysis
+      const updatedCampaigns = {
+        ...amazonCampaigns,
+        historicalDaily: {
+          ...(amazonCampaigns.historicalDaily || {}),
+          ...amazonAdsResults.dailyData,
+        },
+        historicalLastUpdated: new Date().toISOString(),
+        historicalDateRange: amazonAdsResults.dateRange,
+      };
+      setAmazonCampaigns(updatedCampaigns);
+      lsSet('ecommerce_amazon_campaigns_v1', JSON.stringify(updatedCampaigns));
+      
+      queueCloudSave({ ...combinedData, dailySales: updatedDays, amazonCampaigns: updatedCampaigns });
       
       setAmazonAdsResults({ status: 'success', daysImported: daysUpdated, dateRange: amazonAdsResults.dateRange });
       setAmazonAdsProcessing(false);
-      setToast({ message: `Imported ${daysUpdated} days of Amazon Ads data!`, type: 'success' });
+      setToast({ message: `Imported ${daysUpdated} days of Amazon Ads history for AI analysis!`, type: 'success' });
     };
     
     return (
@@ -15499,53 +15514,163 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
     setAdsAiLoading(true);
     
     try {
-      // Prepare minimal ads context to avoid timeout
-      const sortedWeeks = Object.keys(allWeeksData || {}).sort();
-      const sortedDays = Object.keys(allDaysData || {}).filter(d => hasDailySalesData(allDaysData[d])).sort();
-      
-      // Only last 4 weeks of ad spend
-      const recentWeeks = sortedWeeks.slice(-4).map(w => {
-        const week = allWeeksData[w];
-        return {
-          w: w,
-          amz: Math.round(week?.amazon?.adSpend || 0),
-          ggl: Math.round(week?.shopify?.googleAds || week?.shopify?.googleSpend || 0),
-          meta: Math.round(week?.shopify?.metaAds || week?.shopify?.metaSpend || 0),
-          rev: Math.round(week?.total?.revenue || 0),
-        };
-      });
-      
-      // Calculate totals
-      const totals = recentWeeks.reduce((acc, w) => ({
-        amz: acc.amz + w.amz, ggl: acc.ggl + w.ggl, meta: acc.meta + w.meta, rev: acc.rev + w.rev
-      }), { amz: 0, ggl: 0, meta: 0, rev: 0 });
-      const totalAds = totals.amz + totals.ggl + totals.meta;
-      const tacos = totals.rev > 0 ? (totalAds / totals.rev * 100).toFixed(1) : 0;
-      
-      // Amazon campaign summary only (no individual campaigns to reduce size)
-      const campSummary = amazonCampaigns?.summary || {};
-      const hasCampaigns = (amazonCampaigns?.campaigns?.length || 0) > 0;
-      
-      // Top 3 and bottom 3 campaigns (names truncated)
+      // Prepare comprehensive ads context
       const campaigns = amazonCampaigns?.campaigns || [];
-      const top3 = [...campaigns].filter(c => c.state === 'ENABLED' && c.roas > 0).sort((a, b) => b.roas - a.roas).slice(0, 3);
-      const bottom3 = [...campaigns].filter(c => c.state === 'ENABLED' && c.spend > 50).sort((a, b) => a.roas - b.roas).slice(0, 3);
+      const historicalDaily = amazonCampaigns?.historicalDaily || {};
+      const summary = amazonCampaigns?.summary || {};
       
-      const systemPrompt = `You are an e-commerce advertising analyst. Only answer ad-related questions.
+      // === CAMPAIGN ANALYSIS ===
+      let campaignContext = 'NO CAMPAIGN DATA - Upload campaign performance report.\n';
+      
+      if (campaigns.length > 0) {
+        // Group by campaign type
+        const byType = { SP: [], SB: [], SB2: [], SD: [] };
+        campaigns.forEach(c => {
+          const type = c.type || 'SP';
+          if (!byType[type]) byType[type] = [];
+          byType[type].push(c);
+        });
+        
+        // Calculate type summaries
+        const typeSummaries = Object.entries(byType)
+          .filter(([_, arr]) => arr.length > 0)
+          .map(([type, arr]) => {
+            const spend = arr.reduce((s, c) => s + (c.spend || 0), 0);
+            const sales = arr.reduce((s, c) => s + (c.sales || 0), 0);
+            const orders = arr.reduce((s, c) => s + (c.orders || 0), 0);
+            const roas = spend > 0 ? sales / spend : 0;
+            const acos = sales > 0 ? (spend / sales) * 100 : 0;
+            return `${type}: ${arr.length} campaigns | Spend $${Math.round(spend)} | Sales $${Math.round(sales)} | ROAS ${roas.toFixed(2)} | ACOS ${acos.toFixed(1)}%`;
+          }).join('\n');
+        
+        // Top performers (ROAS > 3)
+        const topPerformers = campaigns
+          .filter(c => c.state === 'ENABLED' && c.roas >= 3 && c.spend > 100)
+          .sort((a, b) => b.roas - a.roas)
+          .slice(0, 10)
+          .map(c => `  - ${c.name.substring(0, 60)} | ROAS: ${c.roas.toFixed(2)} | Spend: $${Math.round(c.spend)} | ACOS: ${c.acos?.toFixed(1) || 0}%`);
+        
+        // Underperformers (ROAS < 2, spend > $100)
+        const underperformers = campaigns
+          .filter(c => c.state === 'ENABLED' && c.roas < 2 && c.spend > 100)
+          .sort((a, b) => a.roas - b.roas)
+          .slice(0, 10)
+          .map(c => `  - ${c.name.substring(0, 60)} | ROAS: ${c.roas.toFixed(2)} | Spend: $${Math.round(c.spend)} | ACOS: ${c.acos?.toFixed(1) || 0}%`);
+        
+        // High spend, low conversion
+        const wasteful = campaigns
+          .filter(c => c.state === 'ENABLED' && c.spend > 200 && (c.orders === 0 || c.convRate < 2))
+          .sort((a, b) => b.spend - a.spend)
+          .slice(0, 5)
+          .map(c => `  - ${c.name.substring(0, 60)} | Spend: $${Math.round(c.spend)} | Orders: ${c.orders} | Conv: ${c.convRate?.toFixed(1) || 0}%`);
+        
+        // Opportunities (high CTR but low spend - could scale)
+        const opportunities = campaigns
+          .filter(c => c.state === 'ENABLED' && c.ctr > 0.5 && c.roas > 3 && c.spend < 500)
+          .sort((a, b) => b.roas - a.roas)
+          .slice(0, 5)
+          .map(c => `  - ${c.name.substring(0, 60)} | ROAS: ${c.roas.toFixed(2)} | Spend: $${Math.round(c.spend)} | CTR: ${(c.ctr * 100).toFixed(2)}%`);
+        
+        campaignContext = `=== AMAZON CAMPAIGN PERFORMANCE (${campaigns.length} total) ===
+OVERALL: Spend $${Math.round(summary.totalSpend || 0)} | Sales $${Math.round(summary.totalSales || 0)} | ROAS ${(summary.roas || 0).toFixed(2)} | ACOS ${(summary.acos || 0).toFixed(1)}%
 
-AD SPEND (Last 4 weeks):
-Total: $${totalAds} | Amazon: $${totals.amz} | Google: $${totals.ggl} | Meta: $${totals.meta}
-Revenue: $${totals.rev} | TACOS: ${tacos}%
-Weekly: ${JSON.stringify(recentWeeks)}
+BY TYPE:
+${typeSummaries}
 
-${hasCampaigns ? `AMAZON CAMPAIGNS (${campSummary.totalCampaigns}):
-ROAS: ${(campSummary.roas||0).toFixed(2)}x | ACOS: ${(campSummary.acos||0).toFixed(1)}%
-Spend: $${Math.round(campSummary.totalSpend||0)} | Sales: $${Math.round(campSummary.totalSales||0)} | Orders: ${campSummary.totalOrders||0}
-Top 3: ${top3.map(c => c.name.substring(0,30) + ' ROAS:' + c.roas.toFixed(1)).join(', ')}
-Worst 3: ${bottom3.map(c => c.name.substring(0,30) + ' ROAS:' + c.roas.toFixed(1)).join(', ')}` : 'No Amazon campaign data uploaded yet.'}
+TOP PERFORMERS (ROAS ≥ 3):
+${topPerformers.length > 0 ? topPerformers.join('\n') : '  None found'}
 
-Data available: ${sortedWeeks.length} weeks, ${sortedDays.length} days
-Be specific with numbers and suggest actionable improvements.`;
+UNDERPERFORMERS (ROAS < 2, Spend > $100):
+${underperformers.length > 0 ? underperformers.join('\n') : '  None found'}
+
+WASTEFUL SPEND (High spend, low/no conversions):
+${wasteful.length > 0 ? wasteful.join('\n') : '  None found'}
+
+SCALING OPPORTUNITIES (High ROAS, low spend):
+${opportunities.length > 0 ? opportunities.join('\n') : '  None found'}
+`;
+      }
+      
+      // === HISTORICAL TRENDS ===
+      let historicalContext = 'NO HISTORICAL DATA - Upload daily performance export.\n';
+      
+      const histDates = Object.keys(historicalDaily).sort();
+      if (histDates.length > 0) {
+        // Monthly aggregation
+        const monthly = {};
+        histDates.forEach(date => {
+          const d = historicalDaily[date];
+          const monthKey = date.substring(0, 7); // YYYY-MM
+          if (!monthly[monthKey]) monthly[monthKey] = { spend: 0, revenue: 0, orders: 0, clicks: 0, impressions: 0, totalRevenue: 0 };
+          monthly[monthKey].spend += d.spend || 0;
+          monthly[monthKey].revenue += d.adRevenue || d.revenue || 0;
+          monthly[monthKey].orders += d.orders || 0;
+          monthly[monthKey].clicks += d.clicks || 0;
+          monthly[monthKey].impressions += d.impressions || 0;
+          monthly[monthKey].totalRevenue += d.totalRevenue || 0;
+        });
+        
+        const monthlyTrend = Object.entries(monthly)
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .slice(-6) // Last 6 months
+          .map(([month, d]) => {
+            const roas = d.spend > 0 ? d.revenue / d.spend : 0;
+            const acos = d.revenue > 0 ? (d.spend / d.revenue) * 100 : 0;
+            const tacos = d.totalRevenue > 0 ? (d.spend / d.totalRevenue) * 100 : 0;
+            return `${month}: Spend $${Math.round(d.spend)} | AdRev $${Math.round(d.revenue)} | ROAS ${roas.toFixed(2)} | ACOS ${acos.toFixed(1)}% | TACOS ${tacos.toFixed(1)}%`;
+          });
+        
+        // Calculate trend direction
+        const recentMonths = Object.entries(monthly).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 3);
+        let trendDirection = 'stable';
+        if (recentMonths.length >= 2) {
+          const recent = recentMonths[0][1];
+          const prior = recentMonths[1][1];
+          const recentROAS = recent.spend > 0 ? recent.revenue / recent.spend : 0;
+          const priorROAS = prior.spend > 0 ? prior.revenue / prior.spend : 0;
+          if (recentROAS > priorROAS * 1.1) trendDirection = 'improving';
+          else if (recentROAS < priorROAS * 0.9) trendDirection = 'declining';
+        }
+        
+        // Overall totals
+        const totals = histDates.reduce((acc, d) => {
+          const data = historicalDaily[d];
+          return {
+            spend: acc.spend + (data.spend || 0),
+            revenue: acc.revenue + (data.adRevenue || data.revenue || 0),
+            totalRevenue: acc.totalRevenue + (data.totalRevenue || 0),
+            orders: acc.orders + (data.orders || 0),
+          };
+        }, { spend: 0, revenue: 0, totalRevenue: 0, orders: 0 });
+        
+        historicalContext = `=== HISTORICAL PERFORMANCE (${histDates.length} days: ${histDates[0]} to ${histDates[histDates.length - 1]}) ===
+TOTALS: Ad Spend $${Math.round(totals.spend)} | Ad Revenue $${Math.round(totals.revenue)} | Total Revenue $${Math.round(totals.totalRevenue)}
+OVERALL ROAS: ${totals.spend > 0 ? (totals.revenue / totals.spend).toFixed(2) : 'N/A'}
+OVERALL ACOS: ${totals.revenue > 0 ? ((totals.spend / totals.revenue) * 100).toFixed(1) : 'N/A'}%
+OVERALL TACOS: ${totals.totalRevenue > 0 ? ((totals.spend / totals.totalRevenue) * 100).toFixed(1) : 'N/A'}%
+TREND: ${trendDirection.toUpperCase()}
+
+MONTHLY PERFORMANCE (Last 6 months):
+${monthlyTrend.join('\n')}
+`;
+      }
+      
+      const systemPrompt = `You are an expert Amazon PPC advertising analyst. Analyze the data provided and give specific, actionable recommendations.
+
+${campaignContext}
+
+${historicalContext}
+
+ANALYSIS GUIDELINES:
+1. Identify specific campaigns that need action (pause, reduce budget, increase budget, optimize)
+2. Calculate potential savings from pausing underperformers
+3. Identify scaling opportunities with estimated impact
+4. Compare current metrics to industry benchmarks (good ACOS: <25%, great ROAS: >4x)
+5. Flag any concerning trends
+6. Suggest keyword or targeting optimizations based on campaign names
+7. Always provide specific numbers and campaign names
+
+Be direct and actionable. Start with the most impactful recommendations.`;
 
       const aiResponse = await callAI({
         system: systemPrompt,
@@ -20998,24 +21123,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     const shopify = dayData.shopify || {};
     const total = dayData.total || {};
     
-    // Calculate amazonShare and shopifyShare if they're missing
-    const amzRev = amazon.revenue || 0;
-    const shopRev = shopify.revenue || 0;
-    const totalRev = total.revenue || (amzRev + shopRev);
-    if (totalRev > 0 && (!total.amazonShare && !total.shopifyShare)) {
-      total.amazonShare = amzRev > 0 ? (amzRev / totalRev) * 100 : 0;
-      total.shopifyShare = shopRev > 0 ? (shopRev / totalRev) * 100 : 0;
-    }
-    
-    // Fix COGS if missing
-    if (!total.cogs || total.cogs === 0) {
-      const amzCogs = amazon.cogs || 0;
-      const shopCogs = shopify.cogs || 0;
-      if (amzCogs > 0 || shopCogs > 0) {
-        total.cogs = amzCogs + shopCogs;
-      }
-    }
-    
     // Get ads metrics from either shopify object or top-level dayData (bulk uploads store at top level)
     const googleSpend = shopify.googleSpend || dayData.googleSpend || 0;
     const metaSpend = shopify.metaSpend || dayData.metaSpend || 0;
@@ -21318,30 +21425,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       }
     };
     data.total.netMargin = data.total.revenue > 0 ? (data.total.netProfit / data.total.revenue) * 100 : 0;
-    
-    // Recalculate channel shares and COGS if they're missing or zero
-    const amzRev = data.amazon?.revenue || 0;
-    const shopRev = data.shopify?.revenue || 0;
-    const totalRev = data.total?.revenue || (amzRev + shopRev);
-    
-    // Fix amazonShare/shopifyShare if they're 0 but we have channel revenue
-    if (totalRev > 0 && (!data.total.amazonShare && !data.total.shopifyShare)) {
-      data.total.amazonShare = amzRev > 0 ? (amzRev / totalRev) * 100 : 0;
-      data.total.shopifyShare = shopRev > 0 ? (shopRev / totalRev) * 100 : 0;
-    }
-    
-    // Fix COGS if it's 0 but we have SKU data with COGS
-    if ((!data.total.cogs || data.total.cogs === 0)) {
-      const amzCogs = data.amazon?.cogs || (data.amazon?.skuData || []).reduce((s, sku) => s + (sku.cogs || 0), 0);
-      const shopCogs = data.shopify?.cogs || (data.shopify?.skuData || []).reduce((s, sku) => s + (sku.cogs || 0), 0);
-      if (amzCogs > 0 || shopCogs > 0) {
-        data.total.cogs = amzCogs + shopCogs;
-        if (!data.amazon) data.amazon = {};
-        if (!data.shopify) data.shopify = {};
-        data.amazon.cogs = amzCogs;
-        data.shopify.cogs = shopCogs;
-      }
-    }
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
@@ -30397,17 +30480,18 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 {/* Simple bar chart visualization */}
                 <div className="space-y-3 mb-4">
                   {weeklyChartData.slice(-8).map((w, i) => {
-                    const maxValue = Math.max(...weeklyChartData.slice(-8).map(x => Math.max(x.revenue, x.spend)));
+                    const maxRev = Math.max(...weeklyChartData.slice(-8).map(x => x.revenue));
+                    const maxSpend = Math.max(...weeklyChartData.slice(-8).map(x => x.spend));
                     return (
                       <div key={i} className="flex items-center gap-3">
                         <span className="text-slate-400 text-xs w-16">{w.week}</span>
                         <div className="flex-1 flex flex-col gap-1">
                           <div className="flex items-center gap-2">
-                            <div className="h-3 bg-emerald-500/80 rounded" style={{ width: `${(w.revenue / maxValue) * 100}%`, minWidth: '4px' }} />
+                            <div className="h-3 bg-emerald-500/80 rounded" style={{ width: `${(w.revenue / maxRev) * 100}%`, minWidth: '4px' }} />
                             <span className="text-emerald-400 text-xs">{formatCurrency(w.revenue)}</span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <div className="h-3 bg-orange-500/80 rounded" style={{ width: `${(w.spend / maxValue) * 100}%`, minWidth: '4px' }} />
+                            <div className="h-3 bg-orange-500/80 rounded" style={{ width: `${(w.spend / maxSpend) * 60}%`, minWidth: '4px' }} />
                             <span className="text-orange-400 text-xs">{formatCurrency(w.spend)}</span>
                           </div>
                         </div>
@@ -35640,9 +35724,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           let newTplTotal = 0;
                           let newTplValue = 0;
                           let matchedCount = 0;
-                          // Track which Packiyo SKUs have been counted to avoid double-counting
-                          const countedPackiyoSkus = new Set();
-                          
                           const updatedItems = currentSnapshot.items.map(item => {
                             // Try exact match first, then variations
                             const packiyoItem = packiyoLookup[item.sku];
@@ -35650,18 +35731,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             const newTplQty = packiyoItem?.quantityOnHand || packiyoItem?.quantity_on_hand || packiyoItem?.totalQty || 0;
                             const newTplInbound = packiyoItem?.quantityInbound || packiyoItem?.quantity_inbound || 0;
                             
-                            // Get the original Packiyo SKU to track what's been counted
-                            const packiyoSku = packiyoItem?.sku || item.sku;
-                            const normalizedPackiyoSku = packiyoSku.replace(/Shop$/, '');
-                            
                             if (packiyoItem) matchedCount++;
                             
-                            // Only add to totals if we haven't counted this Packiyo SKU yet
-                            if (packiyoItem && !countedPackiyoSkus.has(normalizedPackiyoSku)) {
-                              newTplTotal += newTplQty;
-                              newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
-                              countedPackiyoSkus.add(normalizedPackiyoSku);
-                            }
+                            newTplTotal += newTplQty;
+                            newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
                             
                             const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
                             const weeklyVel = item.weeklyVel || 0;
@@ -35757,8 +35830,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             
                             let newTplTotal = 0;
                             let newTplValue = 0;
-                            // Track which Packiyo SKUs have been counted to avoid double-counting
-                            const countedPackiyoSkus = new Set();
                             
                             // Update existing items with Packiyo quantities
                             const updatedItems = existingTodaySnapshot.items.map(item => {
@@ -35766,16 +35837,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               const newTplQty = packiyoItem?.quantityOnHand || packiyoItem?.quantity_on_hand || packiyoItem?.totalQty || 0;
                               const newTplInbound = packiyoItem?.quantityInbound || packiyoItem?.quantity_inbound || 0;
                               
-                              // Get the original Packiyo SKU to track what's been counted
-                              const packiyoSku = packiyoItem?.sku || item.sku;
-                              const normalizedPackiyoSku = packiyoSku.replace(/Shop$/, '');
-                              
-                              // Only add to totals if we haven't counted this Packiyo SKU yet
-                              if (packiyoItem && !countedPackiyoSkus.has(normalizedPackiyoSku)) {
-                                newTplTotal += newTplQty;
-                                newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
-                                countedPackiyoSkus.add(normalizedPackiyoSku);
-                              }
+                              newTplTotal += newTplQty;
+                              newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
                               
                               const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
                               
