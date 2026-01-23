@@ -20078,10 +20078,16 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             return;
                           }
                           setShopifySyncStatus({ loading: true, error: null, progress: 'Fetching preview...' });
+                          
+                          // Add timeout to prevent hanging
+                          const controller = new AbortController();
+                          const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
+                          
                           try {
                             const res = await fetch('/api/shopify/sync', {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
+                              signal: controller.signal,
                               body: JSON.stringify({
                                 storeUrl: shopifyCredentials.storeUrl,
                                 clientId: shopifyCredentials.clientId, clientSecret: shopifyCredentials.clientSecret,
@@ -20090,12 +20096,23 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                 preview: true,
                               }),
                             });
+                            clearTimeout(timeoutId);
+                            
+                            if (!res.ok) {
+                              const errorText = await res.text();
+                              throw new Error(`API error ${res.status}: ${errorText.slice(0, 100)}`);
+                            }
+                            
                             const data = await res.json();
                             if (data.error) throw new Error(data.error);
                             setShopifySyncPreview(data);
                             setShopifySyncStatus({ loading: false, error: null, progress: '' });
                           } catch (err) {
-                            setShopifySyncStatus({ loading: false, error: err.message, progress: '' });
+                            clearTimeout(timeoutId);
+                            const errorMsg = err.name === 'AbortError' 
+                              ? 'Request timed out - check if API is deployed'
+                              : err.message;
+                            setShopifySyncStatus({ loading: false, error: errorMsg, progress: '' });
                           }
                         }}
                         disabled={shopifySyncStatus.loading || !shopifySyncRange.start || !shopifySyncRange.end}
@@ -35374,11 +35391,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           setToast({ message: 'Please enter store URL, Client ID, and Client Secret', type: 'error' });
                           return;
                         }
+                        
+                        setToast({ message: 'Connecting to Shopify...', type: 'info' });
+                        
+                        // Add timeout to prevent hanging
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+                        
                         // Test connection
                         try {
                           const res = await fetch('/api/shopify/sync', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
+                            signal: controller.signal,
                             body: JSON.stringify({
                               storeUrl: shopifyCredentials.storeUrl,
                               clientId: shopifyCredentials.clientId,
@@ -35386,6 +35411,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               test: true,
                             }),
                           });
+                          clearTimeout(timeoutId);
+                          
+                          if (!res.ok) {
+                            const errorText = await res.text();
+                            throw new Error(`API error ${res.status}: ${errorText.slice(0, 100)}`);
+                          }
+                          
                           const data = await res.json();
                           if (data.error) throw new Error(data.error);
                           if (data.success) {
@@ -35398,7 +35430,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             setToast({ message: `Connected to ${data.shopName || 'Shopify'}!`, type: 'success' });
                           }
                         } catch (err) {
-                          setToast({ message: 'Connection failed: ' + err.message, type: 'error' });
+                          clearTimeout(timeoutId);
+                          const errorMsg = err.name === 'AbortError' 
+                            ? 'Request timed out. Make sure api/shopify/sync.js is deployed to Vercel.'
+                            : err.message;
+                          setToast({ message: 'Connection failed: ' + errorMsg, type: 'error' });
                         }
                       }}
                       disabled={!shopifyCredentials.storeUrl || !shopifyCredentials.clientId || !shopifyCredentials.clientSecret}
@@ -35482,9 +35518,35 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         const data = await res.json();
                         if (data.error) throw new Error(data.error);
                         
+                        // Merge with COGS data for proper valuation
+                        if (data.items) {
+                          data.items = data.items.map(item => ({
+                            ...item,
+                            cost: item.cost || savedCogs[item.sku] || 0,
+                            value: (item.quantity_on_hand || 0) * (item.cost || savedCogs[item.sku] || 0),
+                          }));
+                          // Recalculate totals
+                          data.summary.totalValue = data.items.reduce((sum, i) => sum + (i.value || 0), 0);
+                        }
+                        if (data.inventoryBySku) {
+                          Object.keys(data.inventoryBySku).forEach(sku => {
+                            const item = data.inventoryBySku[sku];
+                            item.cost = item.cost || savedCogs[sku] || 0;
+                            item.totalValue = (item.totalQty || item.quantity_on_hand || 0) * item.cost;
+                          });
+                        }
+                        
                         setPackiyoInventoryData(data);
                         setPackiyoInventoryStatus({ loading: false, error: null, lastSync: new Date().toISOString() });
                         setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+                        
+                        // Show toast with summary
+                        const skuCount = data.summary?.skuCount || data.summary?.productsWithSku || 0;
+                        const totalValue = data.summary?.totalValue || 0;
+                        setToast({ 
+                          message: `Synced ${skuCount} SKUs from Packiyo (${formatCurrency(totalValue)} value)`, 
+                          type: 'success' 
+                        });
                         
                         // Update current inventory snapshot with fresh Packiyo 3PL data
                         if (selectedInvDate && invHistory[selectedInvDate] && data.inventoryBySku) {

@@ -173,43 +173,73 @@ export default async function handler(req, res) {
         
         console.log(`Page ${page}: fetched ${pageProducts.length} products, total: ${products.length}`);
         
-        // Check pagination - handle both JSON:API and standard formats
-        // JSON:API might use: meta.page.current_page/last_page OR links.next
-        const meta = data.meta;
-        const links = data.links;
+        // Log full pagination structure to debug
+        if (page === 1) {
+          console.log('Full response structure keys:', Object.keys(data));
+          if (data.meta) console.log('Meta structure:', JSON.stringify(data.meta));
+          if (data.links) console.log('Links structure:', JSON.stringify(data.links));
+        }
         
-        if (links && links.next) {
-          // JSON:API style - has next link
+        // Determine if there are more pages
+        let foundNextPage = false;
+        
+        // Method 1: Check links.next (most reliable for JSON:API)
+        if (data.links?.next) {
+          foundNextPage = true;
+          console.log('Found next via links.next');
+        }
+        
+        // Method 2: Check meta for pagination info (various formats)
+        if (!foundNextPage && data.meta) {
+          const m = data.meta;
+          
+          // Packiyo might use: meta.current_page/last_page directly
+          // OR meta.page.current_page/last_page
+          // OR meta.pagination.current_page/last_page
+          
+          const currentPage = m.current_page || m.currentPage || m.page?.current_page || m.page?.currentPage || m.pagination?.current_page || page;
+          const lastPage = m.last_page || m.lastPage || m.page?.last_page || m.page?.lastPage || m.pagination?.last_page || m.pagination?.total_pages || m.total_pages;
+          const total = m.total || m.page?.total || m.pagination?.total;
+          const perPage = m.per_page || m.perPage || m.page?.per_page || m.pagination?.per_page || 100;
+          
+          console.log(`Pagination check: current=${currentPage}, last=${lastPage}, total=${total}, perPage=${perPage}`);
+          
+          if (lastPage && currentPage < lastPage) {
+            foundNextPage = true;
+            console.log('Found next via meta (page comparison)');
+          } else if (total && (products.length < total)) {
+            foundNextPage = true;
+            console.log(`Found next via meta.total (${products.length} < ${total})`);
+          }
+        }
+        
+        // Method 3: If we got a full page worth of products, assume there might be more
+        if (!foundNextPage && pageProducts.length >= 100) {
+          foundNextPage = true;
+          console.log('Assuming next page exists (got full page of 100)');
+        }
+        
+        if (foundNextPage) {
           page++;
-        } else if (meta?.page?.current_page && meta?.page?.last_page) {
-          // JSON:API nested page format
-          if (meta.page.current_page < meta.page.last_page) {
-            page++;
-          } else {
-            hasMore = false;
-          }
-        } else if (meta && meta.current_page !== undefined && meta.last_page !== undefined) {
-          // Standard format
-          if (meta.current_page < meta.last_page) {
-            page++;
-          } else {
-            hasMore = false;
-          }
         } else {
-          // No pagination info - assume single page
+          console.log('No more pages detected, stopping');
           hasMore = false;
         }
         
         // Safety: if we got 0 products this page, stop
         if (pageProducts.length === 0) {
+          console.log('Empty page, stopping');
           hasMore = false;
         }
         
-        // Safety limit
-        if (products.length > 10000) break;
+        // Safety limit - increase to handle 15k+ products
+        if (products.length > 20000) {
+          console.log('Safety limit (20k) reached');
+          break;
+        }
         
-        // Rate limit protection
-        await new Promise(r => setTimeout(r, 100));
+        // Rate limit protection - slightly longer delay
+        await new Promise(r => setTimeout(r, 150));
       }
       
       // If we didn't get inventory_levels included, try to fetch them separately
@@ -254,10 +284,12 @@ export default async function handler(req, res) {
       
       // Process products into inventory format
       // Handle both JSON:API format (attributes nested) and regular format
+      // Also handle direct quantity fields as shown in CSV export
       const inventoryBySku = {};
       let totalUnits = 0;
       let totalValue = 0;
       let skippedNoSku = 0;
+      let skippedZeroQty = 0;
       
       products.forEach(product => {
         // JSON:API format has data in attributes, regular format has it directly
@@ -270,61 +302,62 @@ export default async function handler(req, res) {
           return;
         }
         
-        // Get inventory levels from all locations
-        // Could be in product.inventory_levels, product.relationships.inventory_levels, or attrs.inventory_levels
-        let inventoryLevels = product.inventory_levels || attrs.inventory_levels || [];
+        // Get quantity - check multiple possible locations
+        // Priority 1: Direct fields on attributes (matches CSV export format)
+        let quantityOnHand = parseInt(attrs.quantity_on_hand) || 0;
+        let quantityAvailable = parseInt(attrs.quantity_available) || 0;
+        let quantityInbound = parseInt(attrs.quantity_inbound) || 0;
+        let quantityAllocated = parseInt(attrs.quantity_allocated) || 0;
+        let quantityReserved = parseInt(attrs.quantity_reserved) || 0;
         
-        // If inventory_levels is in relationships (JSON:API format)
-        if (product.relationships?.inventory_levels?.data) {
-          inventoryLevels = product.relationships.inventory_levels.data;
-        }
-        
-        // If it's still empty, try included data
-        if (inventoryLevels.length === 0 && product.included) {
-          inventoryLevels = product.included.filter(i => i.type === 'inventory_levels');
-        }
-        
-        let productTotalQty = 0;
-        const byWarehouse = {};
-        
-        inventoryLevels.forEach(level => {
-          const levelAttrs = level.attributes || level;
-          const qty = levelAttrs.quantity_on_hand || 0;
-          const warehouseName = levelAttrs.warehouse?.name || level.warehouse?.name || 'Default Warehouse';
+        // Priority 2: Check inventory_levels array if direct fields are 0
+        if (quantityOnHand === 0) {
+          let inventoryLevels = product.inventory_levels || attrs.inventory_levels || [];
           
-          productTotalQty += qty;
-          byWarehouse[warehouseName] = {
-            qty,
-            warehouseId: levelAttrs.warehouse_id || level.warehouse_id,
-            quantityOnHand: levelAttrs.quantity_on_hand || level.quantity_on_hand || 0,
-            quantityCommitted: levelAttrs.quantity_committed || level.quantity_committed || 0,
-            quantityAvailable: levelAttrs.quantity_available || level.quantity_available || 0,
-            quantityInbound: levelAttrs.quantity_inbound || level.quantity_inbound || 0,
-          };
-        });
+          // If inventory_levels is in relationships (JSON:API format)
+          if (product.relationships?.inventory_levels?.data) {
+            inventoryLevels = product.relationships.inventory_levels.data;
+          }
+          
+          inventoryLevels.forEach(level => {
+            const levelAttrs = level.attributes || level;
+            quantityOnHand += parseInt(levelAttrs.quantity_on_hand) || 0;
+            quantityAvailable += parseInt(levelAttrs.quantity_available) || 0;
+            quantityInbound += parseInt(levelAttrs.quantity_inbound) || 0;
+          });
+        }
         
-        const cost = parseFloat(attrs.value) || parseFloat(attrs.cost) || parseFloat(product.value) || parseFloat(product.cost) || 0;
-        const value = productTotalQty * cost;
+        // Skip products with no inventory at all (bundles, inactive, etc)
+        if (quantityOnHand === 0 && quantityInbound === 0) {
+          skippedZeroQty++;
+          return;
+        }
         
-        totalUnits += productTotalQty;
+        const cost = parseFloat(attrs.cost) || parseFloat(attrs.value) || parseFloat(product.cost) || parseFloat(product.value) || 0;
+        const value = quantityOnHand * cost;
+        
+        totalUnits += quantityOnHand;
         totalValue += value;
         
         inventoryBySku[sku] = {
           sku,  // PRIMARY KEY - matches across platforms
           name: attrs.name || product.name || sku,
           barcode: attrs.barcode || product.barcode || '',
-          totalQty: productTotalQty,
-          quantityAvailable: inventoryLevels.reduce((sum, l) => sum + ((l.attributes || l).quantity_available || 0), 0),
-          quantityCommitted: inventoryLevels.reduce((sum, l) => sum + ((l.attributes || l).quantity_committed || 0), 0),
-          quantityInbound: inventoryLevels.reduce((sum, l) => sum + ((l.attributes || l).quantity_inbound || 0), 0),
+          totalQty: quantityOnHand,
+          quantityOnHand,
+          quantityAvailable,
+          quantityInbound,
+          quantityAllocated,
+          quantityReserved,
           cost,
           totalValue: value,
-          byWarehouse,
-          packiyoProductId: product.id,
+          packiyoProductId: product.id || attrs.id,
         };
       });
       
       // Format response for app integration
+      console.log(`Processing complete: ${products.length} products fetched, ${skippedNoSku} without SKU, ${skippedZeroQty} with zero qty, ${Object.keys(inventoryBySku).length} with inventory`);
+      
       const inventorySnapshot = {
         date: new Date().toISOString().split('T')[0],
         source: 'packiyo-direct',
@@ -333,23 +366,26 @@ export default async function handler(req, res) {
           totalValue,
           skuCount: Object.keys(inventoryBySku).length,
           skippedNoSku,
-          productCount: products.length,
+          skippedZeroQty,
+          productsFetched: products.length,  // Total products from API
+          productsWithInventory: Object.keys(inventoryBySku).length, // Products with qty > 0
         },
         // Format items array for easy merging with existing inventory structure
         items: Object.values(inventoryBySku)
           .map(item => ({
             sku: item.sku,
             name: item.name,
-            quantity_on_hand: item.totalQty,
+            barcode: item.barcode,
+            quantity_on_hand: item.quantityOnHand,
             quantity_available: item.quantityAvailable,
-            quantity_committed: item.quantityCommitted,
             quantity_inbound: item.quantityInbound,
+            quantity_allocated: item.quantityAllocated,
+            quantity_reserved: item.quantityReserved,
             cost: item.cost,
             value: item.totalValue,
             source: 'packiyo',
-            byWarehouse: item.byWarehouse,
           }))
-          .sort((a, b) => b.value - a.value),
+          .sort((a, b) => b.quantity_on_hand - a.quantity_on_hand),  // Sort by qty
         // Also include raw inventory for detailed view
         inventoryBySku,
       };
