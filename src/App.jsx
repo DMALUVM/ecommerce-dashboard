@@ -8055,9 +8055,30 @@ Keep insights brief and actionable. Format as numbered list.`;
       }
       
       // Calculate profit prediction based on historical margin
-      const avgProfitMargin = last30Days.length > 0
-        ? last30Days.reduce((s, d) => s + d.profit, 0) / last30Days.reduce((s, d) => s + d.revenue, 0)
-        : 0.35;
+      // Try daily data first, fall back to weekly data, then use default
+      const dailyTotalRevenue = last30Days.reduce((s, d) => s + d.revenue, 0);
+      const dailyTotalProfit = last30Days.reduce((s, d) => s + d.profit, 0);
+      
+      let avgProfitMargin;
+      if (dailyTotalRevenue > 0 && dailyTotalProfit !== 0) {
+        avgProfitMargin = dailyTotalProfit / dailyTotalRevenue;
+      } else {
+        // Fall back to weekly data
+        const recentWeeks = sortedWeeks.slice(-8);
+        const weeklyTotalRevenue = recentWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.revenue || 0), 0);
+        const weeklyTotalProfit = recentWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.netProfit || 0), 0);
+        
+        if (weeklyTotalRevenue > 0 && weeklyTotalProfit !== 0) {
+          avgProfitMargin = weeklyTotalProfit / weeklyTotalRevenue;
+        } else {
+          avgProfitMargin = 0.25; // Default 25% margin if no profit data
+        }
+      }
+      
+      // Sanity check - margin should be between -50% and 60%
+      if (isNaN(avgProfitMargin) || avgProfitMargin > 0.6) avgProfitMargin = 0.25;
+      if (avgProfitMargin < -0.5) avgProfitMargin = -0.1; // Cap losses at -10% for forecasting
+      
       const profitPrediction = weightedPrediction * avgProfitMargin;
       
       // ==================== INVENTORY ANALYSIS ====================
@@ -8280,12 +8301,22 @@ Respond with ONLY this JSON:
           forecast.salesForecast.next4Weeks = forecast.salesForecast.next4Weeks.map((week, i) => {
             let { predictedRevenue, predictedProfit } = week;
             
-            // Only adjust if way off (> 50% deviation)
+            // Only adjust revenue if way off (> 50% deviation)
             if (predictedRevenue > maxReasonable || predictedRevenue < minReasonable) {
               predictedRevenue = weightedPrediction * (1 + (i * 0.02)); // Slight growth per week
-              predictedProfit = predictedRevenue * avgProfitMargin;
               week.confidence = 'medium';
               week.reasoning = `Adjusted to align with weighted signal calculation. ${week.reasoning || ''}`;
+            }
+            
+            // ALWAYS ensure profit is calculated based on actual margin data
+            // AI often returns 0 or misses this field
+            if (!predictedProfit || predictedProfit === 0) {
+              predictedProfit = predictedRevenue * avgProfitMargin;
+            }
+            
+            // Sanity check: profit shouldn't exceed revenue or be wildly negative
+            if (predictedProfit > predictedRevenue) {
+              predictedProfit = predictedRevenue * avgProfitMargin;
             }
             
             return { ...week, predictedRevenue: Math.round(predictedRevenue * 100) / 100, predictedProfit: Math.round(predictedProfit * 100) / 100 };
