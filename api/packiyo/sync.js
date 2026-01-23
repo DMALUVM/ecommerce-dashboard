@@ -30,36 +30,39 @@ export default async function handler(req, res) {
   // Use tenant-specific URL if provided, otherwise default
   const baseUrl = providedBaseUrl || 'https://excel3pl.packiyo.com/api/v1';
   
+  // Packiyo API headers - IMPORTANT: Use Accept: */* (not application/json)
   const headers = {
     'Authorization': `Bearer ${apiKey}`,
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
+    'Accept': '*/*',
   };
 
   // Test connection
   if (test) {
     try {
-      const testRes = await fetch(`${baseUrl}/customers/${customerId}`, {
+      const testRes = await fetch(`${baseUrl}/products?customer_id=${customerId}&per_page=1`, {
+        method: 'GET',
         headers,
       });
       
       if (!testRes.ok) {
         const errorText = await testRes.text();
         console.error('Packiyo API error:', testRes.status, errorText);
+        
         if (testRes.status === 401) {
           return res.status(401).json({ error: 'Invalid API key' });
         }
-        if (testRes.status === 404) {
-          return res.status(404).json({ error: 'Customer not found. Check your Customer ID.' });
+        if (testRes.status === 403) {
+          return res.status(403).json({ error: 'Access forbidden. Check API key permissions.' });
         }
         return res.status(testRes.status).json({ error: `Packiyo API error: ${testRes.status}` });
       }
       
-      const customerData = await testRes.json();
+      const data = await testRes.json();
       return res.status(200).json({ 
         success: true, 
-        customerName: customerData.data?.name || 'Connected',
+        customerName: 'Excel3PL',
         customerId: customerId,
+        productCount: data.data?.length || 0,
       });
     } catch (err) {
       console.error('Connection test error:', err);
@@ -70,7 +73,6 @@ export default async function handler(req, res) {
   // ============ INVENTORY SYNC ============
   if (syncType === 'inventory') {
     try {
-      // Fetch all products with inventory
       const products = [];
       let page = 1;
       let hasMore = true;
@@ -78,7 +80,7 @@ export default async function handler(req, res) {
       while (hasMore) {
         const productsRes = await fetch(
           `${baseUrl}/products?customer_id=${customerId}&page=${page}&per_page=100`, 
-          { headers }
+          { method: 'GET', headers }
         );
         
         if (!productsRes.ok) {
@@ -117,14 +119,15 @@ export default async function handler(req, res) {
       products.forEach(product => {
         const sku = product.sku?.trim();
         
-        // SKU is required for cross-platform matching
         if (!sku) {
           skippedNoSku++;
           return;
         }
         
-        // Get quantity from product
-        const qty = parseInt(product.quantity_on_hand) || parseInt(product.quantity) || 0;
+        // Get quantity - try multiple field names
+        const qty = parseInt(product.quantity_on_hand) || 
+                    parseInt(product.quantity_available) || 
+                    parseInt(product.quantity) || 0;
         const inbound = parseInt(product.quantity_inbound) || 0;
         const cost = parseFloat(product.value) || parseFloat(product.cost) || parseFloat(product.price) || 0;
         
@@ -146,8 +149,9 @@ export default async function handler(req, res) {
         };
       });
       
-      // Format response for app integration
-      const inventorySnapshot = {
+      return res.status(200).json({
+        success: true,
+        syncType: 'inventory',
         date: new Date().toISOString().split('T')[0],
         source: 'packiyo-direct',
         summary: {
@@ -171,12 +175,6 @@ export default async function handler(req, res) {
           }))
           .sort((a, b) => b.value - a.value),
         inventoryBySku,
-      };
-      
-      return res.status(200).json({
-        success: true,
-        syncType: 'inventory',
-        ...inventorySnapshot,
       });
       
     } catch (err) {
