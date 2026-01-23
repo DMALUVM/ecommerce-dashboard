@@ -12645,7 +12645,7 @@ Analyze the data and respond with ONLY this JSON:
       
       setAllDaysData(updatedDays);
       lsSet('dailySales', JSON.stringify(updatedDays));
-      queueCloudSave(buildExportData({ dailySales: updatedDays }));
+      queueCloudSave({ ...combinedData, dailySales: updatedDays });
       
       setAmazonAdsResults({ status: 'success', daysImported: daysUpdated, dateRange: amazonAdsResults.dateRange });
       setAmazonAdsProcessing(false);
