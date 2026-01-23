@@ -4996,25 +4996,51 @@ const savePeriods = async (d) => {
       if (s) cogsLookup[s] = parseFloat(r['Cost Per Unit'] || 0); 
     });
 
-    // Build Shopify velocity from actual SKU sales data
+    // Build velocity from ACTUAL weekly sales data (more accurate than FBA t30)
     const sortedWeeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
     const weeksCount = sortedWeeks.length;
     const shopifySkuVelocity = {};
+    const amazonSkuVelocity = {};
     
     if (weeksCount > 0) {
       sortedWeeks.forEach(w => {
         const weekData = allWeeksData[w];
+        
+        // Shopify SKU velocity
         if (weekData.shopify?.skuData) {
-          weekData.shopify.skuData.forEach(item => {
+          const skuData = Array.isArray(weekData.shopify.skuData) 
+            ? weekData.shopify.skuData 
+            : Object.values(weekData.shopify.skuData);
+          skuData.forEach(item => {
+            if (!item.sku) return;
             if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
-            shopifySkuVelocity[item.sku] += item.unitsSold || 0;
+            shopifySkuVelocity[item.sku] += item.unitsSold || item.units || 0;
+          });
+        }
+        
+        // Amazon SKU velocity from weekly data (better than t30 from inventory file)
+        if (weekData.amazon?.skuData) {
+          const skuData = Array.isArray(weekData.amazon.skuData)
+            ? weekData.amazon.skuData
+            : Object.values(weekData.amazon.skuData);
+          skuData.forEach(item => {
+            if (!item.sku) return;
+            if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
+            amazonSkuVelocity[item.sku] += item.unitsSold || item.units || 0;
           });
         }
       });
+      
+      // Convert totals to weekly averages
       Object.keys(shopifySkuVelocity).forEach(sku => {
         shopifySkuVelocity[sku] = shopifySkuVelocity[sku] / weeksCount;
       });
+      Object.keys(amazonSkuVelocity).forEach(sku => {
+        amazonSkuVelocity[sku] = amazonSkuVelocity[sku] / weeksCount;
+      });
     }
+    
+    const hasWeeklyVelocityData = Object.keys(amazonSkuVelocity).length > 0 || Object.keys(shopifySkuVelocity).length > 0;
 
     // Process Amazon FBA inventory
     const amzInv = {};
@@ -5026,7 +5052,13 @@ const savePeriods = async (d) => {
       const name = r['product-name'] || '', asin = r['asin'] || '';
       const cost = cogsLookup[sku] || 0, total = avail + res;
       amzTotal += total; amzValue += total * cost; amzInbound += inb;
-      if (sku) amzInv[sku] = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel: t30 / 4.3 };
+      
+      // Use weekly data velocity if available, otherwise fall back to t30 from file
+      const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
+      const amzVelFromFile = t30 / 4.3;
+      const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : amzVelFromFile;
+      
+      if (sku) amzInv[sku] = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel };
     });
 
     // ===== 3PL INVENTORY - Use Packiyo if connected, otherwise fall back to file upload =====
@@ -5132,7 +5164,6 @@ const savePeriods = async (d) => {
     const allSkus = new Set([...Object.keys(amzInv), ...Object.keys(tplInv), ...Object.keys(homeInv)]);
     const items = [];
     let critical = 0, low = 0, healthy = 0, overstock = 0;
-    let hasShopifySkuData = Object.keys(shopifySkuVelocity).length > 0;
 
     allSkus.forEach(sku => {
       const a = amzInv[sku] || {};
@@ -5195,11 +5226,19 @@ const savePeriods = async (d) => {
     
     items.sort((a, b) => b.totalValue - a.totalValue);
 
-    const velNote = hasShopifySkuData 
-      ? `Amazon + Shopify SKU data (${weeksCount}wk avg)` 
-      : weeksCount > 0 
-        ? `Amazon only (no Shopify SKU data)` 
-        : 'Amazon only';
+    const hasAmazonWeeklyData = Object.keys(amazonSkuVelocity).length > 0;
+    const hasShopifyWeeklyData = Object.keys(shopifySkuVelocity).length > 0;
+    
+    let velNote = '';
+    if (hasAmazonWeeklyData && hasShopifyWeeklyData) {
+      velNote = `Amazon + Shopify weekly sales (${weeksCount}wk avg)`;
+    } else if (hasAmazonWeeklyData) {
+      velNote = `Amazon weekly sales (${weeksCount}wk avg)`;
+    } else if (hasShopifyWeeklyData) {
+      velNote = `Shopify weekly sales (${weeksCount}wk avg), Amazon from FBA file`;
+    } else {
+      velNote = 'Amazon from FBA file (t30), no weekly data';
+    }
     
     const learningNote = forecastCorrections.confidence >= 30 
       ? ` + AI-corrected (${forecastCorrections.confidence.toFixed(0)}% confidence)`
@@ -9053,7 +9092,77 @@ Respond with ONLY this JSON:
           loading: null,
           lastUpdated: new Date().toISOString(),
         }));
-        setToast({ message: 'Inventory analysis complete', type: 'success' });
+        
+        // Sync AI forecast results back to inventory snapshot
+        const latestInvKey = Object.keys(invHistory).sort().reverse()[0];
+        if (latestInvKey && invHistory[latestInvKey] && inventory.recommendations) {
+          const aiDataBySku = {};
+          
+          // Also include the pre-calculated data we sent to the AI
+          currentInventory.forEach(item => {
+            aiDataBySku[item.sku] = {
+              stockoutDate: item.stockoutDate,
+              reorderByDate: item.reorderByDate,
+              daysUntilMustOrder: item.daysUntilMustOrder,
+              suggestedOrderQty: item.suggestedOrderQty,
+              calculatedUrgency: item.calculatedUrgency,
+              weeklyVelocity: item.weeklyVelocity,
+              dailyVelocity: item.dailyVelocity,
+            };
+          });
+          
+          // Overlay AI recommendations (in case AI adjusted anything)
+          inventory.recommendations.forEach(rec => {
+            if (rec.sku) {
+              aiDataBySku[rec.sku] = {
+                ...aiDataBySku[rec.sku],
+                urgency: rec.urgency,
+                action: rec.action,
+                aiStockoutDate: rec.stockoutDate,
+                aiReorderDate: rec.reorderDate,
+                aiSuggestedQty: rec.suggestedOrderQty,
+                reasoning: rec.reasoning,
+              };
+            }
+          });
+          
+          // Update inventory items with AI data
+          const updatedItems = invHistory[latestInvKey].items.map(item => {
+            const aiData = aiDataBySku[item.sku];
+            if (aiData) {
+              return {
+                ...item,
+                stockoutDate: aiData.stockoutDate || aiData.aiStockoutDate,
+                reorderByDate: aiData.reorderByDate || aiData.aiReorderDate,
+                daysUntilMustOrder: aiData.daysUntilMustOrder,
+                suggestedOrderQty: aiData.suggestedOrderQty || aiData.aiSuggestedQty,
+                aiUrgency: aiData.urgency || aiData.calculatedUrgency,
+                aiAction: aiData.action,
+                aiReasoning: aiData.reasoning,
+                // Update weeklyVel if we calculated it
+                weeklyVel: aiData.weeklyVelocity || item.weeklyVel,
+              };
+            }
+            return item;
+          });
+          
+          const updatedSnapshot = {
+            ...invHistory[latestInvKey],
+            items: updatedItems,
+            aiForecast: {
+              generatedAt: new Date().toISOString(),
+              summary: inventory.summary,
+              alerts: inventory.alerts,
+              insights: inventory.insights,
+            },
+          };
+          
+          const updatedHistory = { ...invHistory, [latestInvKey]: updatedSnapshot };
+          setInvHistory(updatedHistory);
+          saveInv(updatedHistory);
+        }
+        
+        setToast({ message: 'Inventory analysis complete & synced', type: 'success' });
       } else {
         console.error('No JSON found in response:', responseText);
         throw new Error('Invalid response from AI');
@@ -9735,7 +9844,15 @@ Analyze the data and respond with ONLY this JSON:
   };
 
   const HealthBadge = ({ health }) => {
-    const s = { critical: 'bg-rose-500/20 text-rose-400', low: 'bg-amber-500/20 text-amber-400', healthy: 'bg-emerald-500/20 text-emerald-400', overstock: 'bg-violet-500/20 text-violet-400', unknown: 'bg-slate-500/20 text-slate-400' };
+    const s = { 
+      critical: 'bg-rose-500/20 text-rose-400', 
+      low: 'bg-amber-500/20 text-amber-400', 
+      reorder: 'bg-amber-500/20 text-amber-400',  // AI urgency
+      monitor: 'bg-cyan-500/20 text-cyan-400',    // AI urgency
+      healthy: 'bg-emerald-500/20 text-emerald-400', 
+      overstock: 'bg-violet-500/20 text-violet-400', 
+      unknown: 'bg-slate-500/20 text-slate-400' 
+    };
     return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s[health] || s.unknown}`}>{health || '—'}</span>;
   };
 
@@ -20623,6 +20740,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Shop Vel</th>
                   <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Total Vel</th>
                   <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Days</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Stockout</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Order By</th>
                   <th className="text-center text-xs font-medium text-slate-400 uppercase px-4 py-3">Status</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-700/50">
@@ -20635,9 +20754,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       <td className="text-right px-4 py-3 text-white text-sm">{formatCurrency(item.totalValue)}</td>
                       <td className="text-right px-4 py-3 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>
                       <td className="text-right px-4 py-3 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
-                      <td className="text-right px-4 py-3 text-white text-sm font-medium">{item.weeklyVel.toFixed(1)}</td>
+                      <td className="text-right px-4 py-3 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
                       <td className="text-right px-4 py-3 text-white text-sm">{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</td>
-                      <td className="text-center px-4 py-3"><HealthBadge health={item.health} /></td>
+                      <td className="text-right px-4 py-3 text-slate-400 text-xs">{item.stockoutDate ? new Date(item.stockoutDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
+                      <td className={`text-right px-4 py-3 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? new Date(item.reorderByDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
+                      <td className="text-center px-4 py-3"><HealthBadge health={item.aiUrgency || item.health} /></td>
                     </tr>
                   ))}
                 </tbody>
