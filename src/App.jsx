@@ -6138,6 +6138,13 @@ const savePeriods = async (d) => {
             const grossProfit = (existingShopify.revenue || 0) - (existingShopify.cogs || 0) - (existingShopify.threeplCosts || 0);
             const newNetProfit = grossProfit - totalAds;
             
+            // Also update total object
+            const existingAmazon = existingDay.amazon || {};
+            const existingTotal = existingDay.total || {};
+            const amzProfit = existingAmazon.netProfit || 0;
+            const totalProfit = amzProfit + (existingShopify.revenue > 0 ? newNetProfit : (existingShopify.netProfit || 0));
+            const totalRevenue = (existingAmazon.revenue || 0) + (existingShopify.revenue || 0);
+            
             updatedDays[dayKey] = {
               ...existingDay,
               // Top level ad data
@@ -6158,6 +6165,14 @@ const savePeriods = async (d) => {
                 netMargin: existingShopify.revenue > 0 ? (newNetProfit / existingShopify.revenue) * 100 : 0,
                 roas: totalAds > 0 ? existingShopify.revenue / totalAds : 0,
               },
+              // Update total with new profit calculation
+              total: {
+                ...existingTotal,
+                revenue: totalRevenue,
+                adSpend: (existingAmazon.adSpend || 0) + totalAds,
+                netProfit: totalProfit,
+                netMargin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
+              },
             };
           } else {
             const newMetaSpend = d.spend;
@@ -6167,6 +6182,13 @@ const savePeriods = async (d) => {
             // Recalculate profit with updated ad spend
             const grossProfit = (existingShopify.revenue || 0) - (existingShopify.cogs || 0) - (existingShopify.threeplCosts || 0);
             const newNetProfit = grossProfit - totalAds;
+            
+            // Also update total object
+            const existingAmazon = existingDay.amazon || {};
+            const existingTotal = existingDay.total || {};
+            const amzProfit = existingAmazon.netProfit || 0;
+            const totalProfit = amzProfit + (existingShopify.revenue > 0 ? newNetProfit : (existingShopify.netProfit || 0));
+            const totalRevenue = (existingAmazon.revenue || 0) + (existingShopify.revenue || 0);
             
             updatedDays[dayKey] = {
               ...existingDay,
@@ -6187,6 +6209,14 @@ const savePeriods = async (d) => {
                 netProfit: existingShopify.revenue > 0 ? newNetProfit : existingShopify.netProfit,
                 netMargin: existingShopify.revenue > 0 ? (newNetProfit / existingShopify.revenue) * 100 : 0,
                 roas: totalAds > 0 ? existingShopify.revenue / totalAds : 0,
+              },
+              // Update total with new profit calculation
+              total: {
+                ...existingTotal,
+                revenue: totalRevenue,
+                adSpend: (existingAmazon.adSpend || 0) + totalAds,
+                netProfit: totalProfit,
+                netMargin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
               },
             };
           }
@@ -8211,6 +8241,7 @@ Keep insights brief and actionable. Format as numbered list.`;
       const sortedWeeks = Object.keys(allWeeksData).sort();
       const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
       const today = new Date();
+      const amazonStartDate = new Date('2024-06-01'); // When Amazon sales started
       
       if (sortedWeeks.length < 2 && sortedDays.length < 7) {
         setAiForecasts({ error: 'Need at least 2 weeks or 7 days of data', generatedAt: new Date().toISOString() });
@@ -8218,9 +8249,19 @@ Keep insights brief and actionable. Format as numbered list.`;
       }
       
       // ==================== DAILY DATA ANALYSIS (MOST IMPORTANT) ====================
+      // Filter out incomplete days: Recent days with Shopify but no Amazon are incomplete
       const dailyData = sortedDays.slice(-60).map(d => {
         const data = allDaysData[d];
         const date = new Date(d + 'T12:00:00');
+        const amazonRevenue = data?.amazon?.revenue || 0;
+        const shopifyRevenue = data?.shopify?.revenue || 0;
+        
+        // A day is "complete" if:
+        // 1. It has Amazon revenue > 0, OR
+        // 2. It's before Amazon started (early data), OR
+        // 3. It's before 2024 (pre-ecommerce era)
+        const isComplete = amazonRevenue > 0 || date < amazonStartDate || date < new Date('2024-01-01');
+        
         return {
           date: d,
           dayOfWeek: date.toLocaleDateString('en-US', { weekday: 'long' }),
@@ -8228,12 +8269,13 @@ Keep insights brief and actionable. Format as numbered list.`;
           revenue: data?.total?.revenue || 0,
           profit: data?.total?.netProfit || 0,
           units: data?.total?.units || 0,
-          amazonRevenue: data?.amazon?.revenue || 0,
-          shopifyRevenue: data?.shopify?.revenue || 0,
+          amazonRevenue,
+          shopifyRevenue,
+          isComplete, // Flag for filtering
         };
-      }).filter(d => d.revenue > 0); // Only days with actual sales
+      }).filter(d => d.revenue > 0 && d.isComplete); // Only complete days with actual sales
       
-      // Last 7 days, 14 days, 30 days analysis
+      // Last 7 days, 14 days, 30 days analysis (using COMPLETE days only)
       const last7Days = dailyData.slice(-7);
       const last14Days = dailyData.slice(-14);
       const last30Days = dailyData.slice(-30);
@@ -10288,6 +10330,11 @@ Analyze the data and respond with ONLY this JSON:
         ...dayData,
         shopify: updatedShopify,
         total: updatedTotal,
+        // Also save at root level for backwards compatibility
+        metaSpend: metaSpend,
+        metaAds: metaSpend,
+        googleSpend: googleSpend,
+        googleAds: googleSpend,
         lastEdited: new Date().toISOString(),
       };
       
@@ -12705,20 +12752,32 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
     const daysCount = sortedDays.length;
     const periodsCount = Object.keys(allPeriodsData).length;
     
-    // Daily data summary
-    const dailySummary = sortedDays.slice(-14).map(day => {
+    // Daily data summary - for forecasting, only include days with COMPLETE data
+    // Amazon has a reporting delay, so days with Shopify but no Amazon are incomplete
+    // Exception: Include Shopify-only days from early 2024/2025 before Amazon was active
+    const amazonStartDate = '2024-06-01'; // Approximate date Amazon sales started
+    
+    const dailySummary = sortedDays.slice(-30).map(day => {
       const data = allDaysData[day];
+      const amazonRevenue = data.amazon?.revenue || 0;
+      const shopifyRevenue = data.shopify?.revenue || 0;
+      const isEarlyData = day < amazonStartDate;
+      
+      // For recent days, only include if Amazon has data (or it's early data before Amazon)
+      const hasCompleteData = amazonRevenue > 0 || isEarlyData || day < '2024-01-01';
+      
       return {
         date: day,
         totalRevenue: data.total?.revenue || 0,
         totalProfit: data.total?.netProfit || 0,
         totalUnits: data.total?.units || 0,
-        amazonRevenue: data.amazon?.revenue || 0,
+        amazonRevenue,
         amazonProfit: data.amazon?.netProfit || 0,
-        shopifyRevenue: data.shopify?.revenue || 0,
+        shopifyRevenue,
         shopifyProfit: data.shopify?.netProfit || 0,
+        hasCompleteData, // Flag for filtering in trend calculations
       };
-    });
+    }).filter(d => d.totalRevenue > 0); // Still need some revenue
     
     const weeksSummary = sortedWeeks.map(week => {
       const data = allWeeksData[week];
@@ -13080,18 +13139,29 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
     const recentProfit = recentWeeksData.reduce((s, w) => s + w.totalProfit, 0);
     const priorProfit = priorWeeksData.reduce((s, w) => s + w.totalProfit, 0);
     
-    // Calculate daily trends for AI learning
-    const recentDailyData = dailySummary.slice(-7);
-    const priorDailyData = dailySummary.slice(-14, -7);
+    // Calculate daily trends for AI learning - ONLY use days with complete data
+    const completeDailySummary = dailySummary.filter(d => d.hasCompleteData);
+    const recentDailyData = completeDailySummary.slice(-7);
+    const priorDailyData = completeDailySummary.slice(-14, -7);
     const recentDailyRevenue = recentDailyData.reduce((s, d) => s + d.totalRevenue, 0);
     const priorDailyRevenue = priorDailyData.reduce((s, d) => s + d.totalRevenue, 0);
     const dailyTrend = priorDailyRevenue > 0 ? ((recentDailyRevenue - priorDailyRevenue) / priorDailyRevenue * 100) : 0;
     
-    // Calculate day-of-week patterns for AI learning
+    // Calculate day-of-week patterns for AI learning - only use complete data days
     const dayOfWeekPatterns = {};
+    const amazonStartDateObj = new Date('2024-06-01');
     sortedDays.forEach(day => {
       const data = allDaysData[day];
-      const dayName = new Date(day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' });
+      const dayDate = new Date(day + 'T12:00:00');
+      const dayName = dayDate.toLocaleDateString('en-US', { weekday: 'long' });
+      
+      // Only include days with complete data (Amazon revenue > 0, or pre-Amazon era)
+      const hasAmazonData = (data.amazon?.revenue || 0) > 0;
+      const isPreAmazon = dayDate < amazonStartDateObj;
+      if (!hasAmazonData && !isPreAmazon && dayDate >= new Date('2024-01-01')) {
+        return; // Skip incomplete days
+      }
+      
       if (!dayOfWeekPatterns[dayName]) {
         dayOfWeekPatterns[dayName] = { count: 0, totalRevenue: 0, totalProfit: 0 };
       }
@@ -15548,8 +15618,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysIntoWeek + 1);
       
       let currentWeekRevenue = 0;
-      let daysWithData = 0;
+      let daysWithCompleteData = 0; // Days with Amazon data (our limiting factor)
+      let daysWithAnyData = 0;
       const dailyRevenues = [];
+      const missingDays = [];
       
       // Sum up daily revenue for this week (check each day of current week)
       for (let i = 0; i < daysIntoWeek; i++) {
@@ -15557,28 +15629,54 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         d.setDate(weekStart.getDate() + i);
         const dateKey = formatDateKey(d);
         const dayData = allDaysData[dateKey];
-        // Only count days with real sales data (not just Google Ads)
-        if (dayData?.total?.revenue || (hasDailySalesData(dayData) && dayData.total)) {
-          currentWeekRevenue += dayData.total?.revenue || 0;
-          dailyRevenues.push(dayData.total?.revenue || 0);
-          daysWithData++;
+        
+        // Check if day has REAL Amazon data (not zero which means not yet reported)
+        const hasAmazonData = dayData?.amazon?.revenue > 0;
+        const hasShopifyData = dayData?.shopify?.revenue > 0;
+        const dayRevenue = dayData?.total?.revenue || 0;
+        
+        if (hasAmazonData) {
+          // Full data day - Amazon + Shopify
+          currentWeekRevenue += dayRevenue;
+          dailyRevenues.push(dayRevenue);
+          daysWithCompleteData++;
+          daysWithAnyData++;
+        } else if (hasShopifyData) {
+          // Shopify only - Amazon not yet reported
+          // Add Shopify revenue but don't count as complete day for projection
+          currentWeekRevenue += dayRevenue;
+          daysWithAnyData++;
+          missingDays.push(d.toLocaleDateString('en-US', { weekday: 'short' }));
         }
       }
       
-      // Calculate projection
+      // Calculate projection based on COMPLETE days only
       let projectedTotal = currentWeekRevenue;
       let projectionMethod = 'none';
+      let avgDailyRevenue = 0;
+      let neededPerDay = 0;
       
-      if (daysWithData > 0 && daysRemaining > 0) {
-        // Use average daily revenue to project remaining days
-        const avgDailyRevenue = currentWeekRevenue / daysWithData;
-        projectedTotal = currentWeekRevenue + (avgDailyRevenue * daysRemaining);
+      if (daysWithCompleteData > 0) {
+        // Use average from complete days (with Amazon data) to project
+        avgDailyRevenue = dailyRevenues.reduce((s, r) => s + r, 0) / daysWithCompleteData;
+        
+        // Project remaining days + days with only Shopify data
+        const daysToProject = daysRemaining + (daysWithAnyData - daysWithCompleteData);
+        projectedTotal = currentWeekRevenue + (avgDailyRevenue * daysToProject);
         projectionMethod = 'daily-avg';
-      } else if (daysWithData === 0 && sortedWeeks.length > 0) {
-        // No daily data for current week - use last week's total as projection
+        
+        // Calculate what we need per remaining day to hit goal
+        if (daysRemaining > 0) {
+          const remaining = goals.weeklyRevenue - currentWeekRevenue;
+          neededPerDay = remaining > 0 ? remaining / daysRemaining : 0;
+        }
+      } else if (sortedWeeks.length > 0) {
+        // No complete daily data for current week - use last week's total as projection
         const lastWeekData = allWeeksData[sortedWeeks[sortedWeeks.length - 1]];
         projectedTotal = lastWeekData?.total?.revenue || 0;
         projectionMethod = 'last-week';
+        avgDailyRevenue = projectedTotal / 7;
+        neededPerDay = goals.weeklyRevenue / 7;
       }
       
       const progressPct = (currentWeekRevenue / goals.weeklyRevenue) * 100;
@@ -15595,8 +15693,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         onTrack,
         shortfall,
         daysRemaining,
-        daysWithData,
+        daysWithData: daysWithCompleteData,
+        daysWithAnyData,
         projectionMethod,
+        avgDailyRevenue,
+        neededPerDay,
+        missingDays,
       };
     };
     
@@ -15910,17 +16012,39 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       {weeklyProgress.daysRemaining > 0 && (
                         <span className="text-slate-500">{weeklyProgress.daysRemaining} days left</span>
                       )}
+                      {weeklyProgress.daysWithData > 0 && (
+                        <span className="text-slate-500 text-xs">({weeklyProgress.daysWithData} days data)</span>
+                      )}
                     </div>
-                    <div className={`font-medium ${weeklyProgress.onTrack ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    <div className={`font-medium ${weeklyProgress.onTrack ? 'text-emerald-400' : 'text-rose-400'}`}>
                       {weeklyProgress.projectionMethod !== 'none' ? (
                         weeklyProgress.onTrack 
                           ? `✓ On track (${formatCurrency(weeklyProgress.projectedTotal)} projected)`
-                          : `${formatCurrency(Math.abs(weeklyProgress.shortfall))} ${weeklyProgress.shortfall > 0 ? 'short' : 'over'} projected`
+                          : `${formatCurrency(Math.abs(weeklyProgress.shortfall))} short projected`
                       ) : (
                         weeklyProgress.daysWithData === 0 ? 'Upload daily data for projection' : ''
                       )}
                     </div>
                   </div>
+                  
+                  {/* Additional insights */}
+                  {weeklyProgress.projectionMethod !== 'none' && weeklyProgress.daysRemaining > 0 && (
+                    <div className="mt-2 pt-2 border-t border-slate-700/50 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                      <span className="text-slate-400">
+                        Avg: <span className="text-cyan-400">{formatCurrency(weeklyProgress.avgDailyRevenue)}/day</span>
+                      </span>
+                      {!weeklyProgress.onTrack && weeklyProgress.neededPerDay > 0 && (
+                        <span className="text-slate-400">
+                          Need: <span className="text-amber-400">{formatCurrency(weeklyProgress.neededPerDay)}/day</span> to hit goal
+                        </span>
+                      )}
+                      {weeklyProgress.missingDays?.length > 0 && (
+                        <span className="text-slate-500">
+                          ⏳ Awaiting Amazon: {weeklyProgress.missingDays.join(', ')}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
               
@@ -16608,10 +16732,32 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             const hasAdsOnly = dayData && !hasSales;
                             const isToday = dateKey === formatDateKey(now);
                             const revenue = dayData?.total?.revenue || 0;
-                            const profit = dayData?.total?.netProfit || 0;
-                            // Check if day has specific ads data
-                            const googleAds = dayData?.shopify?.googleSpend || dayData?.googleSpend || dayData?.googleAds || 0;
-                            const metaAds = dayData?.shopify?.metaSpend || dayData?.metaSpend || dayData?.metaAds || 0;
+                            
+                            // Calculate profit - use stored value or calculate from components
+                            let profit = dayData?.total?.netProfit || 0;
+                            if (profit === 0 && revenue > 0) {
+                              // Fallback: calculate from amazon + shopify profits
+                              const amzProfit = dayData?.amazon?.netProfit || 0;
+                              const shopProfit = dayData?.shopify?.netProfit || 0;
+                              profit = amzProfit + shopProfit;
+                              // If still 0, try to calculate from revenue - cogs - ads
+                              if (profit === 0) {
+                                const amzRev = dayData?.amazon?.revenue || 0;
+                                const amzCogs = dayData?.amazon?.cogs || 0;
+                                const amzFees = dayData?.amazon?.fees || 0;
+                                const amzAds = dayData?.amazon?.adSpend || 0;
+                                const shopRev = dayData?.shopify?.revenue || 0;
+                                const shopCogs = dayData?.shopify?.cogs || 0;
+                                const shopAds = dayData?.shopify?.adSpend || dayData?.shopify?.metaSpend || 0;
+                                const metaAds = dayData?.metaSpend || dayData?.metaAds || 0;
+                                const googleAds = dayData?.googleSpend || dayData?.googleAds || 0;
+                                profit = (amzRev - amzCogs - amzFees - amzAds) + (shopRev - shopCogs - shopAds - metaAds - googleAds);
+                              }
+                            }
+                            
+                            // Check if day has specific ads data - check ALL possible locations
+                            const googleAds = dayData?.googleSpend || dayData?.googleAds || dayData?.shopify?.googleSpend || dayData?.shopify?.googleAds || 0;
+                            const metaAds = dayData?.metaSpend || dayData?.metaAds || dayData?.shopify?.metaSpend || dayData?.shopify?.metaAds || 0;
                             const hasGoogle = googleAds > 0;
                             const hasMeta = metaAds > 0;
                             
@@ -33785,40 +33931,69 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 {packiyoInventoryData && (
                   <div className="bg-slate-800/50 rounded-xl p-4 mt-4">
                     <h4 className="text-white font-medium mb-3">Packiyo Inventory</h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
-                      <div className="bg-slate-900/50 rounded-lg p-3">
-                        <p className="text-slate-400 text-xs">Total Units</p>
-                        <p className="text-xl font-bold text-white">{(packiyoInventoryData.summary?.totalUnits || 0).toLocaleString()}</p>
-                      </div>
-                      <div className="bg-slate-900/50 rounded-lg p-3">
-                        <p className="text-slate-400 text-xs">Total Value</p>
-                        <p className="text-xl font-bold text-emerald-400">${(packiyoInventoryData.summary?.totalValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                      </div>
-                      <div className="bg-slate-900/50 rounded-lg p-3">
-                        <p className="text-slate-400 text-xs">SKUs</p>
-                        <p className="text-xl font-bold text-white">{packiyoInventoryData.summary?.skuCount || 0}</p>
-                      </div>
-                      <div className="bg-slate-900/50 rounded-lg p-3">
-                        <p className="text-slate-400 text-xs">Source</p>
-                        <p className="text-sm font-medium text-violet-400">Excel3PL Direct</p>
-                      </div>
-                    </div>
-                    
-                    {/* Top items preview */}
-                    {packiyoInventoryData.items && packiyoInventoryData.items.length > 0 && (
-                      <div>
-                        <p className="text-slate-400 text-sm mb-2">Top Items by Value</p>
-                        <div className="space-y-1 max-h-48 overflow-y-auto">
-                          {packiyoInventoryData.items.slice(0, 10).map(item => (
-                            <div key={item.sku} className="flex items-center justify-between text-sm bg-slate-900/30 rounded px-2 py-1">
-                              <span className="text-slate-300 truncate flex-1">{item.sku}</span>
-                              <span className="text-white font-medium ml-2">{item.quantity_on_hand}</span>
-                              <span className="text-emerald-400 ml-2 w-20 text-right">${(item.value || 0).toFixed(2)}</span>
+                    {(() => {
+                      // Calculate total value using COGS lookup
+                      const items = packiyoInventoryData.items || [];
+                      const cogsLookup = getCogsLookup();
+                      
+                      // Add COGS-based value to each item
+                      const itemsWithValue = items.map(item => {
+                        const cogs = cogsLookup[item.sku] || 0;
+                        return {
+                          ...item,
+                          cogs,
+                          value: item.quantity_on_hand * cogs,
+                        };
+                      }).sort((a, b) => b.value - a.value); // Sort by value
+                      
+                      const totalValue = itemsWithValue.reduce((s, i) => s + i.value, 0);
+                      const totalUnits = items.reduce((s, i) => s + (i.quantity_on_hand || 0), 0);
+                      const skusWithCogs = itemsWithValue.filter(i => i.cogs > 0).length;
+                      
+                      return (
+                        <>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                            <div className="bg-slate-900/50 rounded-lg p-3">
+                              <p className="text-slate-400 text-xs">Total Units</p>
+                              <p className="text-xl font-bold text-white">{totalUnits.toLocaleString()}</p>
                             </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                            <div className="bg-slate-900/50 rounded-lg p-3">
+                              <p className="text-slate-400 text-xs">Total Value</p>
+                              <p className="text-xl font-bold text-emerald-400">{formatCurrency(totalValue)}</p>
+                              {skusWithCogs < items.length && (
+                                <p className="text-amber-400 text-[10px]">{skusWithCogs}/{items.length} have COGS</p>
+                              )}
+                            </div>
+                            <div className="bg-slate-900/50 rounded-lg p-3">
+                              <p className="text-slate-400 text-xs">SKUs</p>
+                              <p className="text-xl font-bold text-white">{items.length}</p>
+                            </div>
+                            <div className="bg-slate-900/50 rounded-lg p-3">
+                              <p className="text-slate-400 text-xs">Source</p>
+                              <p className="text-sm font-medium text-violet-400">Excel3PL Direct</p>
+                            </div>
+                          </div>
+                          
+                          {/* Top items preview - sorted by value */}
+                          {itemsWithValue.length > 0 && (
+                            <div>
+                              <p className="text-slate-400 text-sm mb-2">Top Items by Value</p>
+                              <div className="space-y-1 max-h-48 overflow-y-auto">
+                                {itemsWithValue.slice(0, 10).map(item => (
+                                  <div key={item.sku} className="flex items-center justify-between text-sm bg-slate-900/30 rounded px-2 py-1">
+                                    <span className="text-slate-300 truncate flex-1">{item.sku}</span>
+                                    <span className="text-white font-medium ml-2">{item.quantity_on_hand}</span>
+                                    <span className={`ml-2 w-20 text-right ${item.cogs > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+                                      {item.cogs > 0 ? formatCurrency(item.value) : 'No COGS'}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 )}
                 

@@ -633,9 +633,6 @@ export default async function handler(req, res) {
       return isShopPay;
     };
     
-    // Log first few orders with tax to help debug Shop Pay detection
-    let debugOrdersLogged = 0;
-    
     // Helper to get state code from order
     const getStateCode = (order) => {
       // Try billing address first, then shipping
@@ -648,39 +645,21 @@ export default async function handler(req, res) {
 
     // Process each order
     for (const order of orders) {
-      // Skip cancelled/refunded orders in most calculations
-      const isCancelled = order.cancelled_at || order.financial_status === 'refunded';
-      if (isCancelled) continue;
-      
-      const orderDate = order.created_at.split('T')[0];
-      const weekEnding = getWeekEnding(orderDate);
-      const isShopPay = isShopPayOrder(order);
-      const stateCode = getStateCode(order);
-      
-      // Debug: Log sample orders to help identify Shop Pay indicators
-      const orderTax = parseFloat(order.total_tax) || 0;
-      if (debugOrdersLogged < 3 && orderTax > 0) {
-        console.log(`DEBUG Order #${order.order_number || order.id}:`, {
-          payment_gateway_names: order.payment_gateway_names,
-          source_name: order.source_name,
-          tags: order.tags,
-          processing_method: order.processing_method,
-          payment_details: order.payment_details,
-          checkout_token: order.checkout_token ? 'present' : 'none',
-          transactions: order.transactions?.map(t => ({
-            gateway: t.gateway,
-            kind: t.kind,
-            receipt_wallet: t.receipt?.wallet_type,
-            payment_details: t.payment_details
-          })),
-          browser_ip: order.browser_ip ? 'present' : 'none',
-          landing_site: order.landing_site,
-          referring_site: order.referring_site,
-          total_tax: orderTax,
-          isDetectedAsShopPay: isShopPay
-        });
-        debugOrdersLogged++;
-      }
+      try {
+        // Skip cancelled/refunded orders in most calculations
+        const isCancelled = order.cancelled_at || order.financial_status === 'refunded';
+        if (isCancelled) continue;
+        
+        // Defensive check for created_at
+        if (!order.created_at) {
+          console.warn('Order missing created_at:', order.id);
+          continue;
+        }
+        
+        const orderDate = order.created_at.split('T')[0];
+        const weekEnding = getWeekEnding(orderDate);
+        const isShopPay = isShopPayOrder(order);
+        const stateCode = getStateCode(order);
       
       if (isShopPay) shopPayOrderCount++;
       
@@ -936,6 +915,11 @@ export default async function handler(req, res) {
             });
           }
         }
+      }
+      } catch (orderErr) {
+        // Log and skip problematic orders instead of crashing
+        console.error('Error processing order:', order?.id || 'unknown', orderErr.message);
+        continue;
       }
     }
 
