@@ -39,7 +39,6 @@ export default async function handler(req, res) {
   // Test connection
   if (test) {
     try {
-      // Use JSON:API pagination format: page[number]=1&page[size]=1
       const testRes = await fetch(`${baseUrl}/products?customer_id=${customerId}&page[number]=1&page[size]=1`, {
         method: 'GET',
         headers,
@@ -63,7 +62,7 @@ export default async function handler(req, res) {
         success: true, 
         customerName: 'Excel3PL',
         customerId: customerId,
-        productCount: data.data?.length || 0,
+        productCount: data.meta?.page?.total || data.data?.length || 0,
       });
     } catch (err) {
       console.error('Connection test error:', err);
@@ -79,7 +78,6 @@ export default async function handler(req, res) {
       let hasMore = true;
       
       while (hasMore) {
-        // Use JSON:API pagination format: page[number]=X&page[size]=100
         const productsRes = await fetch(
           `${baseUrl}/products?customer_id=${customerId}&page[number]=${page}&page[size]=100`, 
           { method: 'GET', headers }
@@ -97,11 +95,9 @@ export default async function handler(req, res) {
         const pageProducts = data.data || [];
         products.push(...pageProducts);
         
-        // Check pagination - JSON:API format uses meta.last_page or links.next
-        const meta = data.meta;
-        if (meta && meta.current_page < meta.last_page) {
-          page++;
-        } else if (data.links?.next) {
+        // Check pagination - JSON:API format: meta.page.currentPage / meta.page.lastPage
+        const meta = data.meta?.page;
+        if (meta && meta.currentPage < meta.lastPage) {
           page++;
         } else {
           hasMore = false;
@@ -115,39 +111,49 @@ export default async function handler(req, res) {
       }
       
       // Process products into inventory format
+      // JSON:API format: data is in product.attributes
       const inventoryBySku = {};
       let totalUnits = 0;
       let totalValue = 0;
       let skippedNoSku = 0;
       
       products.forEach(product => {
-        const sku = product.sku?.trim();
+        // JSON:API format - data is nested in attributes
+        const attrs = product.attributes || {};
+        const sku = attrs.sku?.trim();
         
         if (!sku) {
           skippedNoSku++;
           return;
         }
         
-        // Get quantity - try multiple field names
-        const qty = parseInt(product.quantity_on_hand) || 
-                    parseInt(product.quantity_available) || 
-                    parseInt(product.quantity) || 0;
-        const inbound = parseInt(product.quantity_inbound) || 0;
-        const cost = parseFloat(product.value) || parseFloat(product.cost) || parseFloat(product.price) || 0;
+        // Get quantities from attributes
+        const qty = parseInt(attrs.quantity_on_hand) || 0;
+        const available = parseInt(attrs.quantity_available) || 0;
+        const allocated = parseInt(attrs.quantity_allocated) || 0;
+        const reserved = parseInt(attrs.quantity_reserved) || 0;
+        const backordered = parseInt(attrs.quantity_backordered) || 0;
+        const inbound = parseInt(attrs.quantity_inbound) || 0;
+        // value is the cost, price is the selling price
+        const cost = parseFloat(attrs.value) || 0;
+        const price = parseFloat(attrs.price) || 0;
         
         totalUnits += qty;
         totalValue += qty * cost;
         
         inventoryBySku[sku] = {
           sku,
-          name: product.name || sku,
-          barcode: product.barcode || '',
+          name: attrs.name || sku,
+          barcode: attrs.barcode || '',
           totalQty: qty,
           quantity_on_hand: qty,
-          quantity_available: parseInt(product.quantity_available) || qty,
-          quantity_committed: parseInt(product.quantity_committed) || 0,
+          quantity_available: available,
+          quantity_allocated: allocated,
+          quantity_reserved: reserved,
+          quantity_backordered: backordered,
           quantity_inbound: inbound,
           cost,
+          price,
           totalValue: qty * cost,
           packiyoProductId: product.id,
         };
@@ -171,13 +177,13 @@ export default async function handler(req, res) {
             name: item.name,
             quantity_on_hand: item.quantity_on_hand,
             quantity_available: item.quantity_available,
-            quantity_committed: item.quantity_committed,
+            quantity_committed: item.quantity_allocated + item.quantity_reserved,
             quantity_inbound: item.quantity_inbound,
             cost: item.cost,
             value: item.totalValue,
             source: 'packiyo',
           }))
-          .sort((a, b) => b.value - a.value),
+          .sort((a, b) => b.quantity_on_hand - a.quantity_on_hand),
         inventoryBySku,
       });
       
