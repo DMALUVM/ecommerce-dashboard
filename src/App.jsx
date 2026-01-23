@@ -16485,10 +16485,17 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     {/* Cloud Sync Status */}
                     <div className="flex items-center justify-between">
                       <span className="text-slate-400 text-sm">Cloud Sync</span>
-                      {session ? (
+                      {!supabase ? (
+                        <span className="text-slate-500 text-xs flex items-center gap-1">Not configured</span>
+                      ) : session ? (
                         <div className="flex items-center gap-2">
-                          {cloudStatus && <span className="text-blue-400 text-xs">{cloudStatus}</span>}
-                          {!cloudStatus && <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />Connected</span>}
+                          {cloudStatus && cloudStatus.includes('failed') ? (
+                            <span className="text-amber-400 text-xs">{cloudStatus}</span>
+                          ) : cloudStatus ? (
+                            <span className="text-blue-400 text-xs">{cloudStatus}</span>
+                          ) : (
+                            <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />Connected</span>
+                          )}
                         </div>
                       ) : (
                         <span className="text-amber-400 text-xs flex items-center gap-1"><AlertCircle className="w-3 h-3" />Local only</span>
@@ -16509,7 +16516,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           {new Date(lastBackupDate).toLocaleDateString()}
                         </span>
                       ) : (
-                        <span className="text-rose-400 text-xs">Never</span>
+                        <span className="text-slate-500 text-xs">Never</span>
                       )}
                     </div>
                     {/* Quick Actions */}
@@ -16517,7 +16524,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       <button onClick={exportAll} className="flex-1 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white flex items-center justify-center gap-1">
                         <Download className="w-3 h-3" />Backup
                       </button>
-                      {session && (
+                      {session && supabase && (
                         <button 
                           onClick={async () => {
                             setToast({ message: 'Reloading from cloud...', type: 'info' });
@@ -16533,7 +16540,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           <RefreshCw className="w-3 h-3" />Reload
                         </button>
                       )}
-                      {!session && (
+                      {!session && supabase && (
                         <button onClick={() => setView('settings')} className="flex-1 px-2 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-xs text-violet-300 flex items-center justify-center gap-1">
                           <Cloud className="w-3 h-3" />Enable Sync
                         </button>
