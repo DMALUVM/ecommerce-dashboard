@@ -5605,13 +5605,9 @@ const savePeriods = async (d) => {
             tplValue += qty * cost;
             tplInbound += inb;
             
-            // Index by original SKU
+            // Index by original SKU only - DO NOT add normalized SKU to avoid double counting
+            // SKU matching is handled in the combining step below
             tplInv[sku] = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
-            // Also index by normalized SKU (without "Shop" suffix) for matching with Amazon
-            if (sku.endsWith('Shop')) {
-              const normalizedSku = sku.replace(/Shop$/, '');
-              tplInv[normalizedSku] = { sku: normalizedSku, name: item.name || sku, total: qty, inbound: inb, cost };
-            }
           });
           
           // Update Packiyo last sync time
@@ -5682,7 +5678,14 @@ const savePeriods = async (d) => {
 
     allSkus.forEach(sku => {
       const a = amzInv[sku] || {};
-      const t = tplInv[sku] || {};
+      // Try to find 3PL inventory: first exact match, then with/without "Shop" suffix
+      let t = tplInv[sku];
+      if (!t && sku.endsWith('Shop')) {
+        t = tplInv[sku.replace(/Shop$/, '')] || {};
+      } else if (!t && !sku.endsWith('Shop')) {
+        t = tplInv[sku + 'Shop'] || {};
+      }
+      t = t || {};
       const h = homeInv[sku] || {};
       
       const aQty = a.total || 0;
@@ -21298,6 +21301,30 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     };
     data.total.netMargin = data.total.revenue > 0 ? (data.total.netProfit / data.total.revenue) * 100 : 0;
     
+    // Recalculate channel shares and COGS if they're missing or zero
+    const amzRev = data.amazon?.revenue || 0;
+    const shopRev = data.shopify?.revenue || 0;
+    const totalRev = data.total?.revenue || (amzRev + shopRev);
+    
+    // Fix amazonShare/shopifyShare if they're 0 but we have channel revenue
+    if (totalRev > 0 && (!data.total.amazonShare && !data.total.shopifyShare)) {
+      data.total.amazonShare = amzRev > 0 ? (amzRev / totalRev) * 100 : 0;
+      data.total.shopifyShare = shopRev > 0 ? (shopRev / totalRev) * 100 : 0;
+    }
+    
+    // Fix COGS if it's 0 but we have SKU data with COGS
+    if ((!data.total.cogs || data.total.cogs === 0)) {
+      const amzCogs = data.amazon?.cogs || (data.amazon?.skuData || []).reduce((s, sku) => s + (sku.cogs || 0), 0);
+      const shopCogs = data.shopify?.cogs || (data.shopify?.skuData || []).reduce((s, sku) => s + (sku.cogs || 0), 0);
+      if (amzCogs > 0 || shopCogs > 0) {
+        data.total.cogs = amzCogs + shopCogs;
+        if (!data.amazon) data.amazon = {};
+        if (!data.shopify) data.shopify = {};
+        data.amazon.cogs = amzCogs;
+        data.shopify.cogs = shopCogs;
+      }
+    }
+    
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
@@ -30352,18 +30379,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 {/* Simple bar chart visualization */}
                 <div className="space-y-3 mb-4">
                   {weeklyChartData.slice(-8).map((w, i) => {
-                    const maxRev = Math.max(...weeklyChartData.slice(-8).map(x => x.revenue));
-                    const maxSpend = Math.max(...weeklyChartData.slice(-8).map(x => x.spend));
+                    const maxValue = Math.max(...weeklyChartData.slice(-8).map(x => Math.max(x.revenue, x.spend)));
                     return (
                       <div key={i} className="flex items-center gap-3">
                         <span className="text-slate-400 text-xs w-16">{w.week}</span>
                         <div className="flex-1 flex flex-col gap-1">
                           <div className="flex items-center gap-2">
-                            <div className="h-3 bg-emerald-500/80 rounded" style={{ width: `${(w.revenue / maxRev) * 100}%`, minWidth: '4px' }} />
+                            <div className="h-3 bg-emerald-500/80 rounded" style={{ width: `${(w.revenue / maxValue) * 100}%`, minWidth: '4px' }} />
                             <span className="text-emerald-400 text-xs">{formatCurrency(w.revenue)}</span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <div className="h-3 bg-orange-500/80 rounded" style={{ width: `${(w.spend / maxSpend) * 60}%`, minWidth: '4px' }} />
+                            <div className="h-3 bg-orange-500/80 rounded" style={{ width: `${(w.spend / maxValue) * 100}%`, minWidth: '4px' }} />
                             <span className="text-orange-400 text-xs">{formatCurrency(w.spend)}</span>
                           </div>
                         </div>
