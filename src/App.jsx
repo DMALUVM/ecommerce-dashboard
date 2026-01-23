@@ -30788,21 +30788,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   <span className="text-slate-400 text-sm">{startDate} - {endDate}</span>
                 </div>
                 
-                {/* Simple bar chart visualization */}
+                {/* Simple bar chart visualization - USING SAME SCALE FOR BOTH */}
                 <div className="space-y-3 mb-4">
                   {weeklyChartData.slice(-8).map((w, i) => {
-                    const maxRev = Math.max(...weeklyChartData.slice(-8).map(x => x.revenue));
-                    const maxSpend = Math.max(...weeklyChartData.slice(-8).map(x => x.spend));
+                    // Use revenue as the max scale for BOTH bars so they're comparable
+                    const maxValue = Math.max(...weeklyChartData.slice(-8).map(x => x.revenue));
+                    const revWidth = maxValue > 0 ? (w.revenue / maxValue) * 100 : 0;
+                    const spendWidth = maxValue > 0 ? (w.spend / maxValue) * 100 : 0;
                     return (
                       <div key={i} className="flex items-center gap-3">
                         <span className="text-slate-400 text-xs w-16">{w.week}</span>
                         <div className="flex-1 flex flex-col gap-1">
                           <div className="flex items-center gap-2">
-                            <div className="h-3 bg-emerald-500/80 rounded" style={{ width: `${(w.revenue / maxRev) * 100}%`, minWidth: '4px' }} />
+                            <div className="h-3 bg-emerald-500/80 rounded" style={{ width: `${revWidth}%`, minWidth: '4px' }} />
                             <span className="text-emerald-400 text-xs">{formatCurrency(w.revenue)}</span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <div className="h-3 bg-orange-500/80 rounded" style={{ width: `${(w.spend / maxSpend) * 60}%`, minWidth: '4px' }} />
+                            <div className="h-3 bg-orange-500/80 rounded" style={{ width: `${spendWidth}%`, minWidth: '4px' }} />
                             <span className="text-orange-400 text-xs">{formatCurrency(w.spend)}</span>
                           </div>
                         </div>
@@ -30841,10 +30843,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       const firstAvg = firstHalf.reduce((s, w) => s + w.tacos, 0) / firstHalf.length;
                       const secondAvg = secondHalf.reduce((s, w) => s + w.tacos, 0) / secondHalf.length;
                       const diff = secondAvg - firstAvg;
+                      // Lower TACOS is better, so negative diff = improving
                       return diff < -1 
-                        ? <p className="text-emerald-400 font-bold flex items-center justify-center gap-1"><ArrowDownRight className="w-4 h-4" />Improving</p>
+                        ? <p className="text-emerald-400 font-bold flex items-center justify-center gap-1"><CheckCircle className="w-4 h-4" />Improving</p>
                         : diff > 1 
-                          ? <p className="text-rose-400 font-bold flex items-center justify-center gap-1"><ArrowUpRight className="w-4 h-4" />Rising</p>
+                          ? <p className="text-rose-400 font-bold flex items-center justify-center gap-1"><AlertTriangle className="w-4 h-4" />Rising</p>
                           : <p className="text-slate-400 font-bold">Stable</p>;
                     })()}
                   </div>
