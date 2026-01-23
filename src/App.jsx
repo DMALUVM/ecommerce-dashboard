@@ -8505,156 +8505,239 @@ Keep insights brief and actionable. Format as numbered list.`;
       const overallCTR = adsAnalysis.totalImpressions > 0 ? (adsAnalysis.totalClicks / adsAnalysis.totalImpressions * 100) : 0;
       const avgCPC = adsAnalysis.totalClicks > 0 ? totalAdSpend / adsAnalysis.totalClicks : 0;
       
-      // ==================== BUILD COMPREHENSIVE PROMPT ====================
-      const prompt = `You are an elite e-commerce forecasting AI. I've pre-calculated key signals - your job is to synthesize them into accurate predictions.
+      // ==================== COMPREHENSIVE AI FORECAST (Pro Plan - 60s timeout) ====================
+      // With Pro plan, we can send detailed data for sophisticated analysis
+      
+      const today = new Date();
+      const currentMonth = today.toLocaleDateString('en-US', { month: 'long' });
+      const nextSunday = new Date(today);
+      nextSunday.setDate(nextSunday.getDate() + (7 - nextSunday.getDay()) % 7 || 7);
+      
+      // Prepare detailed daily data (last 14 days for pattern detection)
+      const recentDailyDetails = last14Days.map(d => ({
+        date: d.date,
+        day: d.dayOfWeek,
+        revenue: Math.round(d.revenue),
+        profit: Math.round(d.profit),
+        units: d.units,
+        amazon: Math.round(d.amazonRevenue),
+        shopify: Math.round(d.shopifyRevenue),
+      }));
+      
+      // Prepare weekly summary (last 8 weeks)
+      const weeklyDetails = completeWeeks.slice(-8).map(w => ({
+        week: w.weekEnding,
+        revenue: Math.round(w.revenue),
+        profit: Math.round(w.profit),
+        units: w.units,
+        margin: ((w.profit / w.revenue) * 100).toFixed(1) + '%',
+      }));
+      
+      // Inventory alerts (top 10 most critical)
+      const inventoryAlerts = criticalInventory.slice(0, 10).map(i => ({
+        sku: i.sku,
+        name: i.name?.substring(0, 30),
+        stock: i.currentStock,
+        daysLeft: i.daysOfSupply,
+        velocity: i.weeklyVelocity?.toFixed(1),
+      }));
+      
+      // Build comprehensive prompt
+      const prompt = `You are an elite e-commerce forecasting AI with access to detailed business data. Analyze thoroughly and provide sophisticated predictions.
 
-## 📊 PRE-CALCULATED FORECAST SIGNALS
+## BUSINESS OVERVIEW
+- Company: Natural skincare/personal care e-commerce (Amazon + Shopify)
+- Current Date: ${today.toISOString().split('T')[0]}
+- Analysis Period: ${dailyData.length} days daily data, ${completeWeeks.length} complete weeks
 
-### DAILY DATA ANALYSIS (Primary Signal - 60% weight)
-- Last 7 Days Average: $${avg7Day.toFixed(2)}/day
-- Last 14 Days Average: $${avg14Day.toFixed(2)}/day  
-- Last 30 Days Average: $${avg30Day.toFixed(2)}/day
-- 7-Day Momentum: ${momentum > 0 ? '+' : ''}${momentum.toFixed(1)}% (vs prior 7 days)
+## PRE-CALCULATED SIGNALS (Weighted Algorithm)
+
+### Daily Performance Analysis (Primary Signal - 60% weight)
+- Last 7 Days Avg: $${avg7Day.toFixed(2)}/day (${last7Days.length} days)
+- Last 14 Days Avg: $${avg14Day.toFixed(2)}/day
+- Last 30 Days Avg: $${avg30Day.toFixed(2)}/day
+- 7-Day Momentum: ${momentum > 0 ? '+' : ''}${momentum.toFixed(1)}% vs prior 7 days
 - Daily → Weekly Projection: $${dailyBasedWeekly.toFixed(2)}/week
 
-### WEEKLY TREND ANALYSIS (Secondary Signal - 20% weight)
-- Recent 4-Week Average: $${recentWeekAvg.toFixed(2)}/week
-- Prior 4-Week Average: $${olderWeekAvg.toFixed(2)}/week
-- Weekly Trend: ${weeklyTrend > 0 ? '+' : ''}${weeklyTrend.toFixed(1)}%
+### Weekly Trend Analysis (Secondary Signal - 20% weight)
+- Recent 4-Week Avg: $${recentWeekAvg.toFixed(2)}/week
+- Prior 4-Week Avg: $${olderWeekAvg.toFixed(2)}/week
+- Weekly Growth Trend: ${weeklyTrend > 0 ? '+' : ''}${weeklyTrend.toFixed(1)}%
 - Trend-Adjusted Projection: $${trendAdjustedWeekly.toFixed(2)}/week
 
-### AMAZON FORECAST ANALYSIS (Forward Signal - 20% weight)
+### Amazon Forecast Signal (Forward Signal - 20% weight)
 ${futureAmazonForecasts.length > 0 ? `
 - Next Week Amazon Forecast: $${futureAmazonForecasts[0].forecastRevenue.toFixed(2)} (${futureAmazonForecasts[0].forecastUnits} units)
-- Amazon Forecast Accuracy: ${amazonAccuracy.samples} samples, ${amazonAccuracy.avgError.toFixed(1)}% avg error
-- Amazon Bias: ${amazonAccuracy.bias > 0 ? 'Over-predicts' : 'Under-predicts'} by ${Math.abs(amazonAccuracy.bias).toFixed(1)}%
-- Bias-Corrected Amazon Forecast: $${adjustedAmazonForecast?.toFixed(2) || 'N/A'}
-` : 'No Amazon forecast data available - rely on historical patterns'}
+- Amazon Forecast Accuracy: ${amazonAccuracy.samples} historical samples
+- Average Error: ${amazonAccuracy.avgError.toFixed(1)}%
+- Bias: ${amazonAccuracy.bias > 0 ? 'Over-predicts' : 'Under-predicts'} by ${Math.abs(amazonAccuracy.bias).toFixed(1)}%
+- Bias-Corrected Forecast: $${adjustedAmazonForecast?.toFixed(2) || 'N/A'}
+` : '- No Amazon forecast data available - using historical patterns only'}
 
-### 🎯 WEIGHTED PREDICTION (My calculation)
+### 🎯 WEIGHTED PREDICTION (My Algorithm)
 **NEXT WEEK REVENUE: $${weightedPrediction.toFixed(2)}**
 **NEXT WEEK PROFIT: $${profitPrediction.toFixed(2)}** (at ${(avgProfitMargin * 100).toFixed(1)}% margin)
 
-### DAY-OF-WEEK PATTERNS
-Best Days: ${bestDays.join(', ')} 
-Worst Days: ${worstDays.join(', ')}
-${JSON.stringify(dayPatterns, null, 2)}
+## DETAILED DATA
 
-### RAW DAILY DATA (Last 14 days)
-${JSON.stringify(last14Days, null, 2)}
+### Day-of-Week Patterns
+${Object.entries(dayPatterns).map(([day, p]) => `- ${day}: $${p.avgRevenue.toFixed(0)} avg (${p.sampleSize} samples)`).join('\n')}
+- Best Days: ${bestDays.join(', ')}
+- Worst Days: ${worstDays.join(', ')}
 
-### RAW WEEKLY DATA (Complete weeks)
-${JSON.stringify(completeWeeks.slice(-8), null, 2)}
+### Recent Daily Performance (Last 14 Days)
+${JSON.stringify(recentDailyDetails, null, 1)}
 
-### AMAZON FORECASTS (Next 4 weeks)
-${JSON.stringify(futureAmazonForecasts, null, 2)}
+### Weekly Performance History
+${JSON.stringify(weeklyDetails, null, 1)}
 
-### HISTORICAL PERIOD DATA (2025 Monthly, 2024 Quarterly)
-${months2025.length > 0 ? `2025 Monthly Performance:
-${months2025.map(m => `- ${m.period}: $${m.totalRevenue.toFixed(0)} revenue, $${m.totalProfit.toFixed(0)} profit, ${m.margin.toFixed(1)}% margin`).join('\n')}` : 'No 2025 monthly data uploaded'}
+### Seasonality
+- Current Month: ${currentMonth}
+- Seasonal Index: ${seasonalIndex.toFixed(2)} (1.0 = average, >1 = above average)
+${yoyBaseline ? `- Same Month Last Year: $${yoyBaseline.totalRevenue.toFixed(0)} revenue, $${yoyBaseline.totalProfit.toFixed(0)} profit` : ''}
 
-${quarters2024.length > 0 ? `2024 Quarterly Performance:
-${quarters2024.map(q => `- ${q.period}: $${q.totalRevenue.toFixed(0)} revenue, $${q.totalProfit.toFixed(0)} profit`).join('\n')}` : 'No 2024 quarterly data'}
+### Historical Period Data
+${months2025.length > 0 ? `2025 Monthly: ${months2025.map(m => `${m.period}: $${m.totalRevenue.toFixed(0)}`).join(', ')}` : 'No 2025 monthly data'}
+${quarters2024.length > 0 ? `2024 Quarterly: ${quarters2024.map(q => `${q.period}: $${q.totalRevenue.toFixed(0)}`).join(', ')}` : ''}
 
-${yoyBaseline ? `YoY Baseline (${lastYearSameMonth}): $${yoyBaseline.totalRevenue.toFixed(0)} revenue, $${yoyBaseline.totalProfit.toFixed(0)} profit` : ''}
-Seasonal Index for ${currentMonth}: ${seasonalIndex.toFixed(2)} (1.0 = average, >1 = above average month)
+## OPERATIONAL DATA
 
-### INVENTORY ALERTS
-Critical (< 14 days): ${criticalInventory.length} items
-Low Stock (< 30 days): ${lowInventory.length} items
-${criticalInventory.length > 0 ? JSON.stringify(criticalInventory.slice(0, 5), null, 2) : ''}
+### Inventory Status
+- Total SKUs Tracked: ${inventoryItems.length}
+- Critical (<14 days): ${criticalInventory.length} SKUs
+- Low Stock (<30 days): ${lowInventory.length} SKUs
+${inventoryAlerts.length > 0 ? `\nCritical Items:\n${JSON.stringify(inventoryAlerts, null, 1)}` : ''}
 
-### ADS SPEND ANALYSIS (Last 30 days)
+### Advertising Performance (Last 30 Days)
 ${adsAnalysis.daysWithAds > 0 ? `
-- Total Google Ads Spend: $${adsAnalysis.totalGoogleSpend.toFixed(2)}
-- Total Meta Ads Spend: $${adsAnalysis.totalMetaSpend.toFixed(2)}
-- Combined Ad Spend: $${totalAdSpend.toFixed(2)}
-- Avg Daily Ad Spend: $${avgDailyAdSpend.toFixed(2)}/day
-- Days with Ad Data: ${adsAnalysis.daysWithAds}
-- Total Impressions: ${adsAnalysis.totalImpressions.toLocaleString()}
-- Total Clicks: ${adsAnalysis.totalClicks.toLocaleString()}
-- Overall CTR: ${overallCTR.toFixed(2)}%
+- Total Ad Spend: $${totalAdSpend.toFixed(2)} (Google: $${adsAnalysis.totalGoogleSpend.toFixed(2)}, Meta: $${adsAnalysis.totalMetaSpend.toFixed(2)})
+- Avg Daily Spend: $${avgDailyAdSpend.toFixed(2)}/day
+- Impressions: ${adsAnalysis.totalImpressions.toLocaleString()}
+- Clicks: ${adsAnalysis.totalClicks.toLocaleString()}
+- CTR: ${overallCTR.toFixed(2)}%
 - Avg CPC: $${avgCPC.toFixed(2)}
 - Conversions: ${adsAnalysis.totalConversions}
 - Meta Purchase Value: $${adsAnalysis.metaPurchaseValue.toFixed(2)}
-` : 'No ads data available for the last 30 days'}
+- ROAS: ${totalAdSpend > 0 ? ((adsAnalysis.metaPurchaseValue + (adsAnalysis.totalConversions * 25)) / totalAdSpend).toFixed(2) : 'N/A'}x
+` : 'No ads data available for analysis'}
 
-### LEARNING CORRECTIONS (from past predictions)
-- Confidence: ${forecastCorrections.confidence?.toFixed(1) || 0}%
+### Learning from Past Predictions
+- Forecast Confidence: ${forecastCorrections.confidence?.toFixed(1) || 0}%
 - Revenue Multiplier: ${forecastCorrections.overall?.revenue?.toFixed(3) || 1}x
-- Samples Used: ${forecastCorrections.samplesUsed || 0}
+- Historical Accuracy Samples: ${forecastCorrections.samplesUsed || 0}
 
 ---
 
-## YOUR TASK
+## YOUR ANALYSIS TASK
 
-1. **Validate or adjust** my weighted prediction of $${weightedPrediction.toFixed(2)}/week
-2. **Generate next 4 weeks** forecast with confidence levels
-3. **Identify patterns** I may have missed
-4. **Provide actionable insights**
+1. **Validate or refine** my weighted prediction of $${weightedPrediction.toFixed(2)}/week
+2. **Analyze patterns** - day-of-week effects, trends, anomalies, seasonality
+3. **Generate 4-week forecast** starting ${nextSunday.toISOString().split('T')[0]} with confidence levels
+4. **Provide actionable insights** specific to this business
+5. **Assess risks** and recommend mitigations
+6. **Evaluate ad performance** and recommend budget adjustments
 
-Respond with ONLY this JSON:
+Respond with ONLY this JSON structure (no markdown, no explanation):
 
 {
   "salesForecast": {
     "next4Weeks": [
       {
         "weekEnding": "YYYY-MM-DD",
-        "predictedRevenue": ${Math.round(weightedPrediction)},
-        "predictedProfit": ${Math.round(profitPrediction)},
+        "predictedRevenue": number,
+        "predictedProfit": number,
         "predictedUnits": number,
         "confidence": "high|medium|low",
-        "reasoning": "why this prediction"
+        "reasoning": "specific reasoning for this week"
       }
     ],
     "monthlyOutlook": {
-      "expectedRevenue": ${Math.round(weightedPrediction * 4)},
-      "expectedProfit": ${Math.round(profitPrediction * 4)},
+      "expectedRevenue": number,
+      "expectedProfit": number,
       "growthTrend": "up|stable|down",
-      "keyFactors": ["factor1", "factor2"]
+      "keyFactors": ["factor1", "factor2", "factor3"]
     }
   },
   "signalAnalysis": {
     "dailySignalStrength": "strong|moderate|weak",
-    "amazonForecastReliability": "${amazonAccuracy.samples >= 3 ? 'reliable' : amazonAccuracy.samples >= 1 ? 'moderate' : 'no data'}",
-    "trendDirection": "${weeklyTrend > 5 ? 'up' : weeklyTrend < -5 ? 'down' : 'stable'}",
-    "confidenceFactors": ["what increases confidence", "what decreases it"]
+    "weeklySignalStrength": "strong|moderate|weak",
+    "amazonForecastReliability": "reliable|moderate|unreliable|no data",
+    "trendDirection": "accelerating|growing|stable|declining|decelerating",
+    "dataQuality": "excellent|good|limited",
+    "confidenceFactors": ["what increases confidence"],
+    "concernFactors": ["what decreases confidence"]
   },
   "patterns": {
-    "bestDays": ${JSON.stringify(bestDays)},
-    "worstDays": ${JSON.stringify(worstDays)},
-    "seasonalTrend": "any seasonal pattern detected",
-    "anomalies": ["unusual patterns"]
+    "bestDays": ["day1", "day2"],
+    "worstDays": ["day1", "day2"],
+    "seasonalTrend": "description of seasonal pattern",
+    "weeklyPattern": "description of weekly rhythm",
+    "anomalies": ["any unusual patterns detected"],
+    "growthDrivers": ["what's driving growth or decline"]
   },
   "inventoryRecommendations": [
-    { "sku": "SKU", "action": "reorder|monitor", "urgency": "critical|high|medium", "reasoning": "why" }
+    {
+      "sku": "SKU",
+      "action": "reorder|expedite|monitor|reduce",
+      "urgency": "critical|high|medium|low",
+      "reasoning": "why this action",
+      "suggestedQuantity": number
+    }
   ],
   "adsRecommendations": {
-    "overallPerformance": "good|average|poor",
+    "overallPerformance": "excellent|good|average|poor",
+    "roasAssessment": "above target|on target|below target",
     "recommendations": [
-      { "platform": "google|meta|amazon", "action": "increase|maintain|decrease|pause", "reasoning": "why" }
+      {
+        "platform": "google|meta|amazon",
+        "action": "increase|maintain|decrease|pause|test",
+        "budgetChange": "percentage or amount",
+        "reasoning": "why"
+      }
     ],
-    "suggestedBudget": {
-      "daily": number,
-      "weekly": number,
-      "rationale": "why this budget"
+    "suggestedWeeklyBudget": {
+      "google": number,
+      "meta": number,
+      "total": number,
+      "rationale": "why this budget allocation"
     }
   },
   "actionableInsights": [
-    { "category": "sales|inventory|marketing|ads", "priority": "high|medium", "insight": "specific action", "expectedImpact": "expected result" }
+    {
+      "category": "sales|inventory|marketing|operations|pricing",
+      "priority": "critical|high|medium|low",
+      "insight": "specific actionable insight",
+      "expectedImpact": "quantified expected result",
+      "timeframe": "immediate|this week|this month"
+    }
   ],
   "risks": [
-    { "risk": "description", "likelihood": "high|medium|low", "mitigation": "how to address" }
-  ]
+    {
+      "risk": "specific risk description",
+      "likelihood": "high|medium|low",
+      "impact": "high|medium|low",
+      "mitigation": "specific action to mitigate"
+    }
+  ],
+  "executiveSummary": "2-3 sentence summary of the forecast and key recommendations"
 }`;
 
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          system: 'You are an elite e-commerce forecasting AI. You receive pre-calculated signals and synthesize them into accurate predictions. Trust the weighted calculation provided but adjust based on patterns you identify. Always respond with valid JSON only.',
+          system: `You are an elite e-commerce forecasting AI. You analyze sales data, inventory levels, advertising performance, and market patterns to generate accurate predictions and actionable insights.
+
+Key principles:
+1. Trust the weighted prediction as a strong baseline - only adjust if you see clear patterns
+2. Be specific and quantitative in your recommendations
+3. Consider day-of-week patterns, seasonality, and momentum
+4. Flag inventory risks that could impact sales
+5. Evaluate advertising efficiency and ROI
+6. Respond with valid JSON only - no markdown formatting`,
           messages: [{ role: 'user', content: prompt }],
           model: 'claude-sonnet-4-20250514',
+          max_tokens: 4000, // Allow comprehensive response
         }),
       });
       
@@ -8667,39 +8750,46 @@ Respond with ONLY this JSON:
       if (jsonMatch) {
         const forecast = JSON.parse(jsonMatch[0]);
         
-        // Light validation - predictions should be within 50% of our weighted calculation
+        // Validate and fix predictions
         const maxReasonable = weightedPrediction * 1.5;
         const minReasonable = weightedPrediction * 0.5;
         
         if (forecast.salesForecast?.next4Weeks) {
           forecast.salesForecast.next4Weeks = forecast.salesForecast.next4Weeks.map((week, i) => {
-            let { predictedRevenue, predictedProfit } = week;
+            let { predictedRevenue, predictedProfit, predictedUnits } = week;
             
-            // Only adjust revenue if way off (> 50% deviation)
+            // Adjust if way off
             if (predictedRevenue > maxReasonable || predictedRevenue < minReasonable) {
-              predictedRevenue = weightedPrediction * (1 + (i * 0.02)); // Slight growth per week
-              week.confidence = 'medium';
-              week.reasoning = `Adjusted to align with weighted signal calculation. ${week.reasoning || ''}`;
+              predictedRevenue = weightedPrediction * (1 + (weeklyTrend / 100 * 0.25 * (i + 1)));
+              predictedRevenue = Math.max(minReasonable, Math.min(maxReasonable, predictedRevenue));
             }
             
-            // ALWAYS ensure profit is calculated based on actual margin data
-            // AI often returns 0 or misses this field
-            if (!predictedProfit || predictedProfit === 0) {
+            // Ensure profit is based on actual margin
+            if (!predictedProfit || predictedProfit === 0 || predictedProfit > predictedRevenue) {
               predictedProfit = predictedRevenue * avgProfitMargin;
             }
             
-            // Sanity check: profit shouldn't exceed revenue or be wildly negative
-            if (predictedProfit > predictedRevenue) {
-              predictedProfit = predictedRevenue * avgProfitMargin;
+            // Estimate units if missing
+            if (!predictedUnits || predictedUnits === 0) {
+              const avgUnitValue = recentWeekAvg > 0 && completeWeeks.length > 0 
+                ? completeWeeks.reduce((s, w) => s + w.revenue, 0) / completeWeeks.reduce((s, w) => s + w.units, 0)
+                : 15;
+              predictedUnits = Math.round(predictedRevenue / avgUnitValue);
             }
             
-            return { ...week, predictedRevenue: Math.round(predictedRevenue * 100) / 100, predictedProfit: Math.round(predictedProfit * 100) / 100 };
+            return {
+              ...week,
+              predictedRevenue: Math.round(predictedRevenue * 100) / 100,
+              predictedProfit: Math.round(predictedProfit * 100) / 100,
+              predictedUnits,
+            };
           });
         }
         
         setAiForecasts({
           ...forecast,
           generatedAt: new Date().toISOString(),
+          source: 'claude-ai',
           calculatedSignals: {
             dailyAvg7: avg7Day,
             dailyAvg14: avg14Day,
@@ -8743,12 +8833,12 @@ Respond with ONLY this JSON:
           },
         });
       } else {
-        throw new Error('Invalid response format');
+        throw new Error('Invalid AI response format');
       }
       
     } catch (error) {
-      console.error('AI Forecast error:', error);
-      setAiForecasts({ error: error.message || 'Failed to generate AI forecast', generatedAt: new Date().toISOString() });
+      console.error('Forecast error:', error);
+      setAiForecasts({ error: error.message || 'Failed to generate forecast', generatedAt: new Date().toISOString() });
     } finally {
       setAiForecastLoading(false);
     }
@@ -27374,9 +27464,127 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       </div>
                     </div>
                     
-                    <p className="text-slate-500 text-xs text-right">
-                      Last updated: {aiForecasts.generatedAt ? new Date(aiForecasts.generatedAt).toLocaleString() : '—'}
-                    </p>
+                    {/* AI Insights Section */}
+                    {(aiForecasts.actionableInsights?.length > 0 || aiForecasts.risks?.length > 0 || aiForecasts.opportunities?.length > 0) && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Actionable Insights */}
+                        {aiForecasts.actionableInsights?.length > 0 && (
+                          <div className="bg-gradient-to-br from-emerald-900/20 to-slate-800 rounded-xl p-4 border border-emerald-500/20">
+                            <p className="text-emerald-400 text-sm font-medium mb-3 flex items-center gap-2">
+                              <Lightbulb className="w-4 h-4" /> AI Recommendations
+                            </p>
+                            <div className="space-y-2">
+                              {aiForecasts.actionableInsights.slice(0, 3).map((insight, i) => (
+                                <div key={i} className="flex items-start gap-2">
+                                  <span className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded text-xs font-medium ${
+                                    insight.priority === 'critical' ? 'bg-rose-500/30 text-rose-300' :
+                                    insight.priority === 'high' ? 'bg-amber-500/30 text-amber-300' :
+                                    'bg-slate-600 text-slate-300'
+                                  }`}>
+                                    {insight.priority}
+                                  </span>
+                                  <div>
+                                    <p className="text-slate-200 text-sm">{insight.insight}</p>
+                                    {insight.expectedImpact && (
+                                      <p className="text-slate-500 text-xs mt-0.5">→ {insight.expectedImpact}</p>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Risks & Opportunities */}
+                        <div className="space-y-4">
+                          {aiForecasts.risks?.length > 0 && (
+                            <div className="bg-gradient-to-br from-rose-900/20 to-slate-800 rounded-xl p-4 border border-rose-500/20">
+                              <p className="text-rose-400 text-sm font-medium mb-2 flex items-center gap-2">
+                                <AlertTriangle className="w-4 h-4" /> Risks to Watch
+                              </p>
+                              <div className="space-y-1.5">
+                                {aiForecasts.risks.slice(0, 2).map((risk, i) => (
+                                  <div key={i} className="text-sm">
+                                    <span className="text-slate-300">{risk.risk}</span>
+                                    {risk.mitigation && (
+                                      <span className="text-slate-500 text-xs ml-1">• {risk.mitigation}</span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {aiForecasts.opportunities?.length > 0 && (
+                            <div className="bg-gradient-to-br from-blue-900/20 to-slate-800 rounded-xl p-4 border border-blue-500/20">
+                              <p className="text-blue-400 text-sm font-medium mb-2 flex items-center gap-2">
+                                <TrendingUp className="w-4 h-4" /> Opportunities
+                              </p>
+                              <div className="space-y-1.5">
+                                {aiForecasts.opportunities.slice(0, 2).map((opp, i) => (
+                                  <div key={i} className="text-sm">
+                                    <span className="text-slate-300">{opp.opportunity}</span>
+                                    {opp.action && (
+                                      <span className="text-slate-500 text-xs ml-1">• {opp.action}</span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Ads Recommendations */}
+                    {aiForecasts.adsRecommendations && aiForecasts.adsRecommendations.overallPerformance !== 'no-data' && (
+                      <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+                        <p className="text-slate-400 text-sm font-medium mb-3 flex items-center gap-2">
+                          <Megaphone className="w-4 h-4" /> Advertising Insights
+                        </p>
+                        <div className="flex flex-wrap gap-3 items-center">
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                            aiForecasts.adsRecommendations.overallPerformance === 'excellent' ? 'bg-emerald-500/20 text-emerald-400' :
+                            aiForecasts.adsRecommendations.overallPerformance === 'good' ? 'bg-blue-500/20 text-blue-400' :
+                            aiForecasts.adsRecommendations.overallPerformance === 'average' ? 'bg-amber-500/20 text-amber-400' :
+                            'bg-rose-500/20 text-rose-400'
+                          }`}>
+                            {aiForecasts.adsRecommendations.overallPerformance} performance
+                          </span>
+                          {aiForecasts.adsRecommendations.googleAdsAction && (
+                            <span className="px-2 py-1 bg-slate-700 text-slate-300 rounded text-xs">
+                              Google: {aiForecasts.adsRecommendations.googleAdsAction}
+                            </span>
+                          )}
+                          {aiForecasts.adsRecommendations.metaAdsAction && (
+                            <span className="px-2 py-1 bg-slate-700 text-slate-300 rounded text-xs">
+                              Meta: {aiForecasts.adsRecommendations.metaAdsAction}
+                            </span>
+                          )}
+                          {aiForecasts.adsRecommendations.suggestedWeeklyBudget?.total > 0 && (
+                            <span className="px-2 py-1 bg-purple-500/20 text-purple-300 rounded text-xs">
+                              Suggested: {formatCurrency(aiForecasts.adsRecommendations.suggestedWeeklyBudget.total)}/week
+                            </span>
+                          )}
+                        </div>
+                        {aiForecasts.adsRecommendations.recommendations?.length > 0 && (
+                          <p className="text-slate-400 text-xs mt-2">
+                            💡 {aiForecasts.adsRecommendations.recommendations[0].action}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    
+                    <div className="flex items-center justify-between">
+                      <span className={`px-2 py-1 rounded text-xs ${
+                        aiForecasts.source === 'claude-ai-premium' ? 'bg-purple-500/20 text-purple-300' : 'bg-slate-700 text-slate-400'
+                      }`}>
+                        {aiForecasts.source === 'claude-ai-premium' ? '🧠 Claude AI Premium' : '🤖 AI Generated'}
+                      </span>
+                      <p className="text-slate-500 text-xs">
+                        Last updated: {aiForecasts.generatedAt ? new Date(aiForecasts.generatedAt).toLocaleString() : '—'}
+                      </p>
+                    </div>
                   </div>
                 )}
                 
