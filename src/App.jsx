@@ -3943,27 +3943,54 @@ useEffect(() => {
       if (session?.user?.id && supabase) {
         const result = await loadFromCloud();
         if (!result.ok) {
-          // No cloud data yet: load local and push it up once.
-          loadFromLocal();
-          // Create default store if none exists
+          // NEW USER: No cloud data yet - start with clean slate
+          // DO NOT load from localStorage - that belongs to whoever used this browser before!
+          console.log('New user detected - starting with fresh data');
+          
+          // Clear any existing state to ensure clean start
+          setAllWeeksData({});
+          setAllDaysData({});
+          setInvHistory({});
+          setSavedCogs({});
+          setCogsLastUpdated(null);
+          setAllPeriodsData({});
+          setStoreName('');
+          setStoreLogo('');
+          setSalesTaxConfig({ nexusStates: {}, filingHistory: {}, hiddenStates: [] });
+          setInvoices([]);
+          setAmazonForecasts({});
+          setForecastMeta({});
+          setWeekNotes({});
+          setGoals({ weeklyRevenue: 0, monthlyRevenue: 0, weeklyProfit: 0, monthlyProfit: 0 });
+          setSavedProductNames({});
+          setProductionPipeline([]);
+          setThreeplLedger({ orders: {}, weeklyTotals: {} });
+          setAmazonCampaigns({ campaigns: [], lastUpdated: null, history: [] });
+          setReturnRates({ overall: {}, bySku: {}, byMonth: {}, byWeek: {} });
+          setLeadTimeSettings({ defaultLeadTimeDays: 14, skuLeadTimes: {}, reorderBuffer: 7 });
+          setBankingData({ transactions: [], accounts: {}, categories: {}, monthlySnapshots: {} });
+          setConfirmedRecurring([]);
+          
+          // Create default store for new user
           const defaultStore = {
             id: `store_${Date.now()}`,
-            name: storeName || 'My Store',
+            name: 'My Store',
             createdAt: new Date().toISOString(),
           };
           setStores([defaultStore]);
           setActiveStoreId(defaultStore.id);
           
-          const localCombined = {
-            sales: (() => { try { return JSON.parse(lsGet(STORAGE_KEY) || '{}'); } catch { return {}; } })(),
-            dailySales: (() => { try { return JSON.parse(lsGet('ecommerce_daily_sales_v1') || '{}'); } catch { return {}; } })(),
-            inventory: (() => { try { return JSON.parse(lsGet(INVENTORY_KEY) || '{}'); } catch { return {}; } })(),
-            cogs: (() => { try { return JSON.parse(lsGet(COGS_KEY) || '{"lookup":{},"updatedAt":null}'); } catch { return { lookup: {}, updatedAt: null }; } })(),
-            periods: (() => { try { return JSON.parse(lsGet(PERIODS_KEY) || '{}'); } catch { return {}; } })(),
-            storeName: (() => { try { return (lsGet(STORE_KEY) || ''); } catch { return ''; } })(),
-          };
-          await pushToCloudNow(localCombined);
+          // Push empty state to cloud so they have a record
+          await pushToCloudNow({
+            sales: {},
+            dailySales: {},
+            inventory: {},
+            cogs: { lookup: {}, updatedAt: null },
+            periods: {},
+            storeName: '',
+          });
         } else {
+          // Existing user with cloud data - loaded successfully
           // Create default store if loaded data has no stores
           if (result.stores.length === 0) {
             const defaultStore = {
@@ -3976,6 +4003,7 @@ useEffect(() => {
           }
         }
       } else {
+        // No session (anonymous user) - use localStorage
         loadFromLocal();
       }
     } finally {
