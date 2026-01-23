@@ -8874,7 +8874,13 @@ Respond with ONLY this JSON:
     
     try {
       const latestInvKey = Object.keys(invHistory).sort().reverse()[0];
-      const currentInventory = latestInvKey ? (invHistory[latestInvKey]?.items || []).map(item => ({
+      if (!latestInvKey || !invHistory[latestInvKey]?.items?.length) {
+        setToast({ message: 'No inventory data found. Upload an inventory snapshot first.', type: 'error' });
+        setAiForecastModule(prev => ({ ...prev, loading: null }));
+        return;
+      }
+      
+      const currentInventory = (invHistory[latestInvKey]?.items || []).map(item => ({
         sku: item.sku,
         name: savedProductNames[item.sku] || item.name || item.sku,
         currentStock: item.totalQty || 0,
@@ -8885,7 +8891,7 @@ Respond with ONLY this JSON:
         health: item.health,
         leadTimeDays: getLeadTime(item.sku),
         cost: savedCogs[item.sku] || item.cost || 0,
-      })) : [];
+      }));
       
       // Get production pipeline
       const pendingProduction = productionPipeline.map(p => ({
@@ -8946,6 +8952,10 @@ Respond with ONLY this JSON:
   "insights": "overall inventory health assessment"
 }`;
 
+      // Add timeout for the fetch
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 55000); // 55 second timeout
+      
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -8954,9 +8964,17 @@ Respond with ONLY this JSON:
           messages: [{ role: 'user', content: prompt }],
           model: 'claude-sonnet-4-20250514',
         }),
+        signal: controller.signal,
       });
       
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API response error:', response.status, errorText);
+        throw new Error(`API error: ${response.status}`);
+      }
+      
       const data = await response.json();
       const responseText = data.content?.[0]?.text || data.content || '';
       
@@ -8969,10 +8987,19 @@ Respond with ONLY this JSON:
           loading: null,
           lastUpdated: new Date().toISOString(),
         }));
+        setToast({ message: 'Inventory analysis complete', type: 'success' });
+      } else {
+        console.error('No JSON found in response:', responseText);
+        throw new Error('Invalid response from AI');
       }
     } catch (error) {
       console.error('Inventory AI error:', error);
       setAiForecastModule(prev => ({ ...prev, loading: null }));
+      if (error.name === 'AbortError') {
+        setToast({ message: 'Analysis timed out. Try again.', type: 'error' });
+      } else {
+        setToast({ message: `Analysis failed: ${error.message}`, type: 'error' });
+      }
     }
   }, [invHistory, savedProductNames, savedCogs, productionPipeline, leadTimeSettings, getLeadTime]);
   
