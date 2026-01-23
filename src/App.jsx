@@ -1432,6 +1432,15 @@ const handleAuth = async (e) => {
 
 const handleLogout = async () => {
   if (!supabase) return;
+  
+  // CRITICAL: Cancel any pending cloud saves BEFORE signing out
+  // This prevents empty credentials from being saved to cloud
+  if (saveTimerRef.current) {
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+  }
+  isLoadingDataRef.current = true; // Prevent sync effects from running
+  
   await supabase.auth.signOut();
   setSession(null);
   // Clear any locked state
@@ -1520,6 +1529,9 @@ const handleLogout = async () => {
   setShowConflictModal(false);
   setConflictData(null);
   conflictCheckRef.current = false;
+  
+  // Re-enable data loading for next login (after all state is reset)
+  isLoadingDataRef.current = false;
 };
 
   
@@ -35377,7 +35389,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           const data = await res.json();
                           if (data.error) throw new Error(data.error);
                           if (data.success) {
-                            setShopifyCredentials(p => ({ ...p, connected: true }));
+                            const updatedCreds = { ...shopifyCredentials, connected: true };
+                            setShopifyCredentials(updatedCreds);
+                            // IMMEDIATELY save to cloud to persist across sessions
+                            if (session?.user?.id && supabase) {
+                              pushToCloudNow({ ...combinedData, shopifyCredentials: updatedCreds }, true);
+                            }
                             setToast({ message: `Connected to ${data.shopName || 'Shopify'}!`, type: 'success' });
                           }
                         } catch (err) {
@@ -35729,7 +35746,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           const data = await res.json();
                           if (data.error) throw new Error(data.error);
                           if (data.success) {
-                            setPackiyoCredentials(p => ({ ...p, connected: true, customerName: data.customerName || 'Excel3PL' }));
+                            const updatedCreds = { ...packiyoCredentials, connected: true, customerName: data.customerName || 'Excel3PL' };
+                            setPackiyoCredentials(updatedCreds);
+                            // IMMEDIATELY save to cloud to persist across sessions
+                            if (session?.user?.id && supabase) {
+                              pushToCloudNow({ ...combinedData, packiyoCredentials: updatedCreds }, true);
+                            }
                             setToast({ message: `Connected to ${data.customerName || 'Packiyo'}!`, type: 'success' });
                           }
                         } catch (err) {
