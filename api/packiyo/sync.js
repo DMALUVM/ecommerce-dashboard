@@ -47,31 +47,61 @@ export default async function handler(req, res) {
   // Test connection
   if (test) {
     try {
-      const testRes = await fetch(`${baseUrl}/customers/${customerId}`, {
-        headers,
-      });
+      // Try multiple endpoints - Packiyo API may have changed
+      const endpoints = [
+        `${baseUrl}/customers/${customerId}`,
+        `${baseUrl}/products?customer_id=${customerId}&per_page=1`,
+        `${baseUrl}/inventory?customer_id=${customerId}&per_page=1`,
+      ];
       
-      if (!testRes.ok) {
-        const errorText = await testRes.text();
-        console.error('Packiyo API error:', testRes.status, errorText);
-        if (testRes.status === 401) {
-          return res.status(401).json({ error: 'Invalid API key' });
+      let lastError = null;
+      let success = false;
+      let customerName = 'Packiyo Connected';
+      
+      for (const endpoint of endpoints) {
+        try {
+          console.log('Trying endpoint:', endpoint);
+          const testRes = await fetch(endpoint, {
+            method: 'GET',
+            headers,
+          });
+          
+          if (testRes.ok) {
+            const data = await testRes.json();
+            // Try to extract customer name from response
+            if (data.data?.name) customerName = data.data.name;
+            else if (data.data?.[0]?.customer?.name) customerName = data.data[0].customer.name;
+            success = true;
+            break;
+          } else if (testRes.status === 401) {
+            return res.status(200).json({ error: 'Invalid API key. Please check your API token in Packiyo settings.' });
+          } else if (testRes.status === 403) {
+            return res.status(200).json({ error: 'Access forbidden. Your API key may not have permission for this customer.' });
+          } else {
+            const errorText = await testRes.text();
+            lastError = `${testRes.status}: ${errorText.slice(0, 100)}`;
+            console.log('Endpoint failed:', endpoint, lastError);
+          }
+        } catch (endpointErr) {
+          lastError = endpointErr.message;
+          console.log('Endpoint error:', endpoint, lastError);
         }
-        if (testRes.status === 404) {
-          return res.status(404).json({ error: 'Customer not found. Check your Customer ID.' });
-        }
-        return res.status(testRes.status).json({ error: `Packiyo API error: ${testRes.status}` });
       }
       
-      const customerData = await testRes.json();
-      return res.status(200).json({ 
-        success: true, 
-        customerName: customerData.data?.name || 'Connected',
-        customerId: customerId,
-      });
+      if (success) {
+        return res.status(200).json({ 
+          success: true, 
+          customerName: customerName,
+          customerId: customerId,
+        });
+      } else {
+        return res.status(200).json({ 
+          error: `Could not connect to Packiyo. Last error: ${lastError}. Please verify your API key and Customer ID are correct.` 
+        });
+      }
     } catch (err) {
       console.error('Connection test error:', err);
-      return res.status(500).json({ error: err.message || 'Connection failed' });
+      return res.status(200).json({ error: err.message || 'Connection failed' });
     }
   }
 
