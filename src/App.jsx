@@ -35735,80 +35735,157 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           saveInv(updatedHistory);
                           setToast({ message: `Updated inventory with ${newTplTotal.toLocaleString()} 3PL units (${formatCurrency(newTplValue)})`, type: 'success' });
                         } else if (data.inventoryBySku && Object.keys(data.inventoryBySku).length > 0) {
-                          // No existing snapshot - create new one from Packiyo data alone
-                          console.log('=== NO EXISTING SNAPSHOT - CREATING NEW ===');
+                          // Check if there's ANY snapshot we can merge with for today's date
                           const todayDate = new Date().toISOString().split('T')[0];
-                          const packiyoData = data.inventoryBySku;
+                          const existingTodaySnapshot = invHistory[todayDate];
                           
-                          console.log('Creating snapshot for date:', todayDate);
-                          console.log('Packiyo items count:', Object.keys(packiyoData).length);
-                          
-                          let totalUnits = 0;
-                          let totalValue = 0;
-                          const items = Object.values(packiyoData).map(pItem => {
-                            const qty = pItem.quantityOnHand || pItem.quantity_on_hand || pItem.totalQty || 0;
-                            const inbound = pItem.quantityInbound || pItem.quantity_inbound || 0;
-                            const cost = savedCogs[pItem.sku] || pItem.cost || 0;
-                            totalUnits += qty;
-                            totalValue += qty * cost;
+                          if (existingTodaySnapshot) {
+                            // MERGE with existing today snapshot - don't overwrite!
+                            console.log('=== MERGING WITH EXISTING SNAPSHOT FOR TODAY ===');
+                            const packiyoData = data.inventoryBySku;
                             
-                            return {
-                              sku: pItem.sku,
-                              name: pItem.name,
-                              asin: '',
-                              amazonQty: 0,
-                              threeplQty: qty,
-                              homeQty: 0,
-                              totalQty: qty,
-                              cost,
-                              totalValue: qty * cost,
-                              weeklyVel: 0,
-                              daysOfSupply: 999,
-                              health: 'unknown',
-                              stockoutDate: null,
-                              reorderByDate: null,
-                              daysUntilMustOrder: null,
-                              suggestedOrderQty: 0,
-                              amazonInbound: 0,
-                              threeplInbound: inbound,
+                            // Create Packiyo lookup
+                            const packiyoLookup = {};
+                            Object.entries(packiyoData).forEach(([sku, item]) => {
+                              packiyoLookup[sku] = item;
+                              if (sku.endsWith('Shop')) packiyoLookup[sku.replace(/Shop$/, '')] = item;
+                              if (!sku.endsWith('Shop')) packiyoLookup[sku + 'Shop'] = item;
+                            });
+                            
+                            let newTplTotal = 0;
+                            let newTplValue = 0;
+                            
+                            // Update existing items with Packiyo quantities
+                            const updatedItems = existingTodaySnapshot.items.map(item => {
+                              const packiyoItem = packiyoLookup[item.sku];
+                              const newTplQty = packiyoItem?.quantityOnHand || packiyoItem?.quantity_on_hand || packiyoItem?.totalQty || 0;
+                              const newTplInbound = packiyoItem?.quantityInbound || packiyoItem?.quantity_inbound || 0;
+                              
+                              newTplTotal += newTplQty;
+                              newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
+                              
+                              const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
+                              
+                              return {
+                                ...item, // PRESERVE Amazon data!
+                                threeplQty: newTplQty,
+                                threeplInbound: newTplInbound,
+                                totalQty: newTotalQty,
+                                totalValue: newTotalQty * (item.cost || 0),
+                              };
+                            });
+                            
+                            // Add Packiyo-only SKUs
+                            Object.values(packiyoData).forEach(pItem => {
+                              if (!updatedItems.find(i => i.sku === pItem.sku || i.sku === pItem.sku.replace(/Shop$/, '') || i.sku + 'Shop' === pItem.sku)) {
+                                const qty = pItem.quantityOnHand || pItem.quantity_on_hand || pItem.totalQty || 0;
+                                const cost = savedCogs[pItem.sku] || pItem.cost || 0;
+                                newTplTotal += qty;
+                                newTplValue += qty * cost;
+                                updatedItems.push({
+                                  sku: pItem.sku,
+                                  name: pItem.name,
+                                  asin: '',
+                                  amazonQty: 0,
+                                  threeplQty: qty,
+                                  homeQty: 0,
+                                  totalQty: qty,
+                                  cost,
+                                  totalValue: qty * cost,
+                                  weeklyVel: 0,
+                                  daysOfSupply: 999,
+                                  health: 'unknown',
+                                });
+                              }
+                            });
+                            
+                            updatedItems.sort((a, b) => b.totalValue - a.totalValue);
+                            
+                            const mergedSnapshot = {
+                              ...existingTodaySnapshot,
+                              items: updatedItems,
+                              summary: {
+                                ...existingTodaySnapshot.summary,
+                                threeplUnits: newTplTotal,
+                                threeplValue: newTplValue,
+                                totalUnits: (existingTodaySnapshot.summary?.amazonUnits || 0) + newTplTotal + (existingTodaySnapshot.summary?.homeUnits || 0),
+                                totalValue: (existingTodaySnapshot.summary?.amazonValue || 0) + newTplValue + (existingTodaySnapshot.summary?.homeValue || 0),
+                                skuCount: updatedItems.length,
+                              },
+                              sources: {
+                                ...existingTodaySnapshot.sources,
+                                threepl: 'packiyo-direct',
+                                packiyoConnected: true,
+                                lastPackiyoSync: new Date().toISOString(),
+                              },
                             };
-                          }).sort((a, b) => b.totalValue - a.totalValue);
-                          
-                          const newSnapshot = {
-                            date: todayDate,
-                            items,
-                            summary: {
-                              totalUnits,
-                              totalValue,
-                              amazonUnits: 0,
-                              amazonValue: 0,
-                              threeplUnits: totalUnits,
-                              threeplValue: totalValue,
-                              homeUnits: 0,
-                              homeValue: 0,
-                              skuCount: items.length,
-                            },
-                            sources: {
-                              amazon: 'none',
-                              threepl: 'packiyo-direct',
-                              home: 'none',
-                              packiyoConnected: true,
-                              lastPackiyoSync: new Date().toISOString(),
-                            },
-                          };
-                          
-                          const newHistory = { ...invHistory, [todayDate]: newSnapshot };
-                          console.log('NEW SNAPSHOT created:', {
-                            date: todayDate,
-                            totalUnits,
-                            totalValue,
-                            itemCount: items.length,
-                            threeplUnits: newSnapshot.summary.threeplUnits
-                          });
-                          setInvHistory(newHistory);
-                          setSelectedInvDate(todayDate);
-                          saveInv(newHistory);
-                          setToast({ message: `Created inventory snapshot with ${totalUnits.toLocaleString()} 3PL units (${formatCurrency(totalValue)})`, type: 'success' });
+                            
+                            const newHistory = { ...invHistory, [todayDate]: mergedSnapshot };
+                            setInvHistory(newHistory);
+                            setSelectedInvDate(todayDate);
+                            saveInv(newHistory);
+                            setToast({ message: `Merged ${newTplTotal.toLocaleString()} 3PL units with existing inventory`, type: 'success' });
+                          } else {
+                            // Truly no snapshot exists - create new one (3PL only)
+                            console.log('=== CREATING NEW 3PL-ONLY SNAPSHOT ===');
+                            const packiyoData = data.inventoryBySku;
+                            
+                            let totalUnits = 0;
+                            let totalValue = 0;
+                            const items = Object.values(packiyoData).map(pItem => {
+                              const qty = pItem.quantityOnHand || pItem.quantity_on_hand || pItem.totalQty || 0;
+                              const inbound = pItem.quantityInbound || pItem.quantity_inbound || 0;
+                              const cost = savedCogs[pItem.sku] || pItem.cost || 0;
+                              totalUnits += qty;
+                              totalValue += qty * cost;
+                              
+                              return {
+                                sku: pItem.sku,
+                                name: pItem.name,
+                                asin: '',
+                                amazonQty: 0,
+                                threeplQty: qty,
+                                homeQty: 0,
+                                totalQty: qty,
+                                cost,
+                                totalValue: qty * cost,
+                                weeklyVel: 0,
+                                daysOfSupply: 999,
+                                health: 'unknown',
+                                amazonInbound: 0,
+                                threeplInbound: inbound,
+                              };
+                            }).sort((a, b) => b.totalValue - a.totalValue);
+                            
+                            const newSnapshot = {
+                              date: todayDate,
+                              items,
+                              summary: {
+                                totalUnits,
+                                totalValue,
+                                amazonUnits: 0,
+                                amazonValue: 0,
+                                threeplUnits: totalUnits,
+                                threeplValue: totalValue,
+                                homeUnits: 0,
+                                homeValue: 0,
+                                skuCount: items.length,
+                              },
+                              sources: {
+                                amazon: 'none',
+                                threepl: 'packiyo-direct',
+                                home: 'none',
+                                packiyoConnected: true,
+                                lastPackiyoSync: new Date().toISOString(),
+                              },
+                            };
+                            
+                            const newHistory = { ...invHistory, [todayDate]: newSnapshot };
+                            setInvHistory(newHistory);
+                            setSelectedInvDate(todayDate);
+                            saveInv(newHistory);
+                            setToast({ message: `Created 3PL inventory snapshot with ${totalUnits.toLocaleString()} units`, type: 'success' });
+                          }
                         }
                       } catch (err) {
                         setPackiyoInventoryStatus({ loading: false, error: err.message, lastSync: null });
