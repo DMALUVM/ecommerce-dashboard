@@ -58,7 +58,7 @@ export default async function handler(req, res) {
   if (test) {
     try {
       const testEndpoints = [
-        `${baseUrl}/products?customer_id=${customerId}&per_page=1`,
+        `${baseUrl}/products?filter[customer_id]=${customerId}&page[size]=1`,
         `${baseUrl}/customers/${customerId}`,
       ];
       
@@ -141,9 +141,10 @@ export default async function handler(req, res) {
       let retryWithoutInclude = false;
       
       while (hasMore) {
+        // JSON:API pagination uses page[number] and page[size]
         const url = useInclude 
-          ? `${baseUrl}/products?customer_id=${customerId}&page=${page}&per_page=100&include=inventory_levels`
-          : `${baseUrl}/products?customer_id=${customerId}&page=${page}&per_page=100`;
+          ? `${baseUrl}/products?filter[customer_id]=${customerId}&page[number]=${page}&page[size]=100&include=inventory_levels`
+          : `${baseUrl}/products?filter[customer_id]=${customerId}&page[number]=${page}&page[size]=100`;
         
         console.log('Fetching:', url);
         
@@ -172,11 +173,35 @@ export default async function handler(req, res) {
         
         console.log(`Page ${page}: fetched ${pageProducts.length} products, total: ${products.length}`);
         
-        // Check pagination
+        // Check pagination - handle both JSON:API and standard formats
+        // JSON:API might use: meta.page.current_page/last_page OR links.next
         const meta = data.meta;
-        if (meta && meta.current_page < meta.last_page) {
+        const links = data.links;
+        
+        if (links && links.next) {
+          // JSON:API style - has next link
           page++;
+        } else if (meta?.page?.current_page && meta?.page?.last_page) {
+          // JSON:API nested page format
+          if (meta.page.current_page < meta.page.last_page) {
+            page++;
+          } else {
+            hasMore = false;
+          }
+        } else if (meta && meta.current_page !== undefined && meta.last_page !== undefined) {
+          // Standard format
+          if (meta.current_page < meta.last_page) {
+            page++;
+          } else {
+            hasMore = false;
+          }
         } else {
+          // No pagination info - assume single page
+          hasMore = false;
+        }
+        
+        // Safety: if we got 0 products this page, stop
+        if (pageProducts.length === 0) {
           hasMore = false;
         }
         
@@ -194,7 +219,7 @@ export default async function handler(req, res) {
         // Try the inventory endpoint
         try {
           const invRes = await fetch(
-            `${baseUrl}/inventory?customer_id=${customerId}&per_page=500`,
+            `${baseUrl}/inventory?filter[customer_id]=${customerId}&page[size]=500`,
             { headers: invHeaders }
           );
           
@@ -362,7 +387,7 @@ export default async function handler(req, res) {
       
       while (hasMore) {
         const shipmentsRes = await fetch(
-          `${baseUrl}/shipments?customer_id=${customerId}&page=${page}&per_page=100&shipped_after=${startDate}&shipped_before=${endDate}`, 
+          `${baseUrl}/shipments?filter[customer_id]=${customerId}&page[number]=${page}&page[size]=100&filter[shipped_after]=${startDate}&filter[shipped_before]=${endDate}`, 
           { headers: shipHeaders }
         );
         
@@ -376,13 +401,29 @@ export default async function handler(req, res) {
         const pageShipments = data.data || [];
         shipments.push(...pageShipments);
         
+        // Check pagination - handle both JSON:API and standard formats
         const meta = data.meta;
-        if (meta && meta.current_page < meta.last_page) {
+        const links = data.links;
+        
+        if (links && links.next) {
           page++;
+        } else if (meta?.page?.current_page && meta?.page?.last_page) {
+          if (meta.page.current_page < meta.page.last_page) {
+            page++;
+          } else {
+            hasMore = false;
+          }
+        } else if (meta && meta.current_page !== undefined && meta.last_page !== undefined) {
+          if (meta.current_page < meta.last_page) {
+            page++;
+          } else {
+            hasMore = false;
+          }
         } else {
           hasMore = false;
         }
         
+        if (pageShipments.length === 0) hasMore = false;
         if (shipments.length > 10000) break;
         await new Promise(r => setTimeout(r, 100));
       }
