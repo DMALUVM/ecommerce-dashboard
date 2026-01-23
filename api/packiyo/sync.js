@@ -39,7 +39,8 @@ export default async function handler(req, res) {
   // Test connection
   if (test) {
     try {
-      const testRes = await fetch(`${baseUrl}/products?customer_id=${customerId}&per_page=1`, {
+      // Use JSON:API pagination format: page[number]=1&page[size]=1
+      const testRes = await fetch(`${baseUrl}/products?customer_id=${customerId}&page[number]=1&page[size]=1`, {
         method: 'GET',
         headers,
       });
@@ -78,8 +79,9 @@ export default async function handler(req, res) {
       let hasMore = true;
       
       while (hasMore) {
+        // Use JSON:API pagination format: page[number]=X&page[size]=100
         const productsRes = await fetch(
-          `${baseUrl}/products?customer_id=${customerId}&page=${page}&per_page=100`, 
+          `${baseUrl}/products?customer_id=${customerId}&page[number]=${page}&page[size]=100`, 
           { method: 'GET', headers }
         );
         
@@ -95,9 +97,11 @@ export default async function handler(req, res) {
         const pageProducts = data.data || [];
         products.push(...pageProducts);
         
-        // Check pagination
+        // Check pagination - JSON:API format uses meta.last_page or links.next
         const meta = data.meta;
         if (meta && meta.current_page < meta.last_page) {
+          page++;
+        } else if (data.links?.next) {
           page++;
         } else {
           hasMore = false;
