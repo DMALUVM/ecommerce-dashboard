@@ -437,16 +437,34 @@ const AI_CONFIG = {
 };
 
 // Helper to call AI with unified config (streaming)
-const callAI = async (prompt, systemPrompt = '') => {
+// Can be called as:
+//   callAI(prompt, systemPrompt) - for simple prompts
+//   callAI({ messages: [...], system: '...' }) - for chat with history
+const callAI = async (promptOrOptions, systemPrompt = '') => {
+  let requestBody;
+  
+  if (typeof promptOrOptions === 'string') {
+    // Simple prompt string
+    requestBody = {
+      system: systemPrompt || 'You are a helpful e-commerce analytics AI. Respond with JSON when requested.',
+      messages: [{ role: 'user', content: promptOrOptions }],
+      model: AI_CONFIG.model,
+      max_tokens: AI_CONFIG.maxTokens,
+    };
+  } else {
+    // Options object with messages array
+    requestBody = {
+      system: promptOrOptions.system || 'You are a helpful e-commerce analytics AI.',
+      messages: promptOrOptions.messages || [],
+      model: AI_CONFIG.model,
+      max_tokens: AI_CONFIG.maxTokens,
+    };
+  }
+  
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      system: systemPrompt || 'You are a helpful e-commerce analytics AI. Respond with JSON when requested.',
-      messages: [{ role: 'user', content: prompt }],
-      model: AI_CONFIG.model,
-      max_tokens: AI_CONFIG.maxTokens,
-    }),
+    body: JSON.stringify(requestBody),
   });
   
   if (!response.ok) {
@@ -8406,30 +8424,12 @@ Focus on:
 
 Keep insights brief and actionable. Format as numbered list.`;
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [{ role: 'user', content: prompt }],
-          model: 'claude-sonnet-4-20250514',
-        }),
+      const insights = await callAI(prompt);
+      setAiInsights({
+        content: insights || 'Unable to generate insights',
+        generatedAt: new Date().toISOString(),
+        dataPoints: weekData.length + accuracyData.length,
       });
-      
-      if (response.ok) {
-        const data = await response.json();
-        const insights = data.content || data.message || data.response || 'Unable to generate insights';
-        setAiInsights({
-          content: insights,
-          generatedAt: new Date().toISOString(),
-          dataPoints: weekData.length + accuracyData.length,
-        });
-      } else {
-        setAiInsights({
-          content: 'AI analysis unavailable. Check API connection.',
-          generatedAt: new Date().toISOString(),
-          error: true,
-        });
-      }
     } catch (err) {
       console.error('AI insights error:', err);
       setAiInsights({
@@ -9202,19 +9202,7 @@ Respond with ONLY this JSON:
   "trend": "up" | "stable" | "down"
 }`;
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system: 'You are an expert e-commerce sales forecaster. Provide accurate, data-driven predictions. Always respond with valid JSON only.',
-          messages: [{ role: 'user', content: prompt }],
-          model: 'claude-sonnet-4-20250514',
-        }),
-      });
-      
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-      const data = await response.json();
-      const responseText = data.content?.[0]?.text || data.content || '';
+      const responseText = await callAI(prompt, 'You are an expert e-commerce sales forecaster. Provide accurate, data-driven predictions. Always respond with valid JSON only.');
       
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -9427,31 +9415,8 @@ Respond with ONLY this JSON:
   "insights": "overall inventory health assessment"
 }`;
 
-      // Add timeout for the fetch
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 55000); // 55 second timeout
-      
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system: 'You are an expert inventory planner for e-commerce. Provide specific, actionable reorder recommendations. Always respond with valid JSON only.',
-          messages: [{ role: 'user', content: prompt }],
-          model: 'claude-sonnet-4-20250514',
-        }),
-        signal: controller.signal,
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('API response error:', response.status, errorText);
-        throw new Error(`API error: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      const responseText = data.content?.[0]?.text || data.content || '';
+      // Use unified AI helper that handles streaming
+      const responseText = await callAI(prompt, 'You are an expert inventory planner for e-commerce. Provide specific, actionable reorder recommendations. Always respond with valid JSON only.');
       
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -9629,19 +9594,7 @@ Respond with ONLY this JSON:
   "reasoning": "explanation of forecast"
 }`;
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system: `You are an expert ${channel === 'amazon' ? 'Amazon marketplace' : 'Shopify/DTC'} analyst. Provide accurate channel-specific forecasts. Always respond with valid JSON only.`,
-          messages: [{ role: 'user', content: prompt }],
-          model: 'claude-sonnet-4-20250514',
-        }),
-      });
-      
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-      const data = await response.json();
-      const responseText = data.content?.[0]?.text || data.content || '';
+      const responseText = await callAI(prompt, `You are an expert ${channel === 'amazon' ? 'Amazon marketplace' : 'Shopify/DTC'} analyst. Provide accurate channel-specific forecasts. Always respond with valid JSON only.`);
       
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -9729,19 +9682,7 @@ Analyze the data and respond with ONLY this JSON:
   "recommendations": ["how to improve forecasting"]
 }`;
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system: 'You are an expert forecast accuracy analyst. Compare prediction models and identify improvement opportunities. Always respond with valid JSON only.',
-          messages: [{ role: 'user', content: prompt }],
-          model: 'claude-sonnet-4-20250514',
-        }),
-      });
-      
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-      const data = await response.json();
-      const responseText = data.content?.[0]?.text || data.content || '';
+      const responseText = await callAI(prompt, 'You are an expert forecast accuracy analyst. Compare prediction models and identify improvement opportunities. Always respond with valid JSON only.');
       
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -14849,19 +14790,12 @@ You have access to the MULTI-SIGNAL AI FORECAST which is the most accurate forec
 
 The goal is for you to learn from the forecast vs actual comparisons over time and become increasingly accurate.`;
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          system: systemPrompt, 
-          messages: [...aiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
-          model: 'claude-sonnet-4-20250514',
-        }),
+      const aiResponse = await callAI({
+        system: systemPrompt,
+        messages: [...aiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
       });
       
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-      const data = await response.json();
-      setAiMessages(prev => [...prev, { role: 'assistant', content: data.content?.[0]?.text || data.content || 'Sorry, I could not process that.' }]);
+      setAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
     } catch (error) {
       console.error('AI Chat error:', error);
       setAiMessages(prev => [...prev, { role: 'assistant', content: 'Error processing request. Check /api/chat endpoint.' }]);
@@ -14927,19 +14861,12 @@ Worst 3: ${bottom3.map(c => c.name.substring(0,30) + ' ROAS:' + c.roas.toFixed(1
 Data available: ${sortedWeeks.length} weeks, ${sortedDays.length} days
 Be specific with numbers and suggest actionable improvements.`;
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          system: systemPrompt, 
-          messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
-          model: 'claude-sonnet-4-20250514',
-        }),
+      const aiResponse = await callAI({
+        system: systemPrompt,
+        messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
       });
       
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-      const data = await response.json();
-      setAdsAiMessages(prev => [...prev, { role: 'assistant', content: data.content?.[0]?.text || data.content || 'Sorry, I could not process that.' }]);
+      setAdsAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
     } catch (error) {
       console.error('Ads AI Chat error:', error);
       setAdsAiMessages(prev => [...prev, { role: 'assistant', content: `Error: ${error.message}. Try a simpler question.` }]);
