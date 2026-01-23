@@ -406,6 +406,90 @@ const WEEKLY_REPORTS_KEY = 'ecommerce_weekly_reports_v1';
 const FORECAST_ACCURACY_KEY = 'ecommerce_forecast_accuracy_v1';
 const FORECAST_CORRECTIONS_KEY = 'ecommerce_forecast_corrections_v1';
 
+// ============ UNIFIED AI CONFIGURATION (Pro Plan) ============
+// All AI features use these consistent settings for best results
+const AI_CONFIG = {
+  model: 'claude-sonnet-4-20250514',
+  maxTokens: 4000,  // Pro plan allows comprehensive responses
+  maxDuration: 60,  // Pro plan 60-second timeout
+  streaming: true,  // Use streaming to avoid 25s first-byte timeout
+  
+  // Forecast calculation weights (data-driven, not AI-generated)
+  forecastWeights: {
+    daily: 0.60,    // 60% weight on recent daily average
+    weekly: 0.20,   // 20% weight on weekly trend
+    amazon: 0.20,   // 20% weight on Amazon forecast (if available)
+  },
+  
+  // Sanity bounds for AI adjustments
+  bounds: {
+    maxAdjustment: 0.05,  // Max ±5% adjustment per future week
+    maxTotalDeviation: 0.25, // Max ±25% from calculated baseline
+  },
+  
+  // Learning configuration
+  learning: {
+    minSamplesForCorrection: 3,  // Need 3+ samples before applying learned corrections
+    correctionDecay: 0.95,       // Older corrections weighted less
+    maxCorrectionFactor: 1.5,    // Max correction multiplier
+    minCorrectionFactor: 0.5,    // Min correction multiplier
+  },
+};
+
+// Helper to call AI with unified config (streaming)
+const callAI = async (prompt, systemPrompt = '') => {
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system: systemPrompt || 'You are a helpful e-commerce analytics AI. Respond with JSON when requested.',
+      messages: [{ role: 'user', content: prompt }],
+      model: AI_CONFIG.model,
+      max_tokens: AI_CONFIG.maxTokens,
+    }),
+  });
+  
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`AI API error: ${response.status} - ${error}`);
+  }
+  
+  // Handle streaming response
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('text/event-stream')) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let buffer = '';
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      
+      for (const line of lines) {
+        if (line.startsWith(':')) continue; // Skip comments
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'delta' && data.text) fullText += data.text;
+            else if (data.type === 'complete' && data.content?.[0]?.text) fullText = data.content[0].text;
+            else if (data.type === 'error') throw new Error(data.error);
+          } catch (e) { /* Skip parse errors */ }
+        }
+      }
+    }
+    return fullText;
+  }
+  
+  // Fallback to JSON response
+  const data = await response.json();
+  return data.content?.[0]?.text || '';
+};
+
 // Supabase (cloud auth + storage)
 // Create a .env.local file in your Vite project with:
 //   VITE_SUPABASE_URL=...
@@ -1325,6 +1409,28 @@ const handleLogout = async () => {
   const [selectedInvDate, setSelectedInvDate] = useState(null);
   const [invSnapshotDate, setInvSnapshotDate] = useState('');
   
+  // SKU Return Rate Tracking - tracks returns at SKU level
+  const [returnRates, setReturnRates] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('ecommerce_return_rates_v1')) || {
+        bySku: {},  // { [sku]: { unitsSold: 0, unitsReturned: 0, returnRate: 0, history: [] } }
+        byWeek: {}, // { [weekKey]: { unitsSold: 0, unitsReturned: 0, returnRate: 0 } }
+        byMonth: {}, // { [monthKey]: { unitsSold: 0, unitsReturned: 0, returnRate: 0 } }
+        overall: { unitsSold: 0, unitsReturned: 0, returnRate: 0 },
+        lastUpdated: null,
+      };
+    } catch {
+      return { bySku: {}, byWeek: {}, byMonth: {}, overall: { unitsSold: 0, unitsReturned: 0, returnRate: 0 }, lastUpdated: null };
+    }
+  });
+  
+  // Persist return rates
+  useEffect(() => {
+    if (returnRates.lastUpdated) {
+      localStorage.setItem('ecommerce_return_rates_v1', JSON.stringify(returnRates));
+    }
+  }, [returnRates]);
+  
   const [showEditAdSpend, setShowEditAdSpend] = useState(false);
   const [editAdSpend, setEditAdSpend] = useState({ meta: '', google: '' });
   const [showEdit3PL, setShowEdit3PL] = useState(false);
@@ -2138,6 +2244,108 @@ const handleLogout = async () => {
   }, [forecastMeta, amazonForecasts, allDaysData, allWeeksData, forecastCorrections]);
   // ============ END DATA STATUS DASHBOARD ============
   
+  // ============ SKU RETURN RATE CALCULATION ============
+  // Calculate return rates from weekly/daily data whenever it changes
+  const calculateReturnRates = useCallback(() => {
+    const bySku = {};
+    const byWeek = {};
+    const byMonth = {};
+    let totalSold = 0;
+    let totalReturned = 0;
+    
+    // Process weekly data for return rates
+    Object.entries(allWeeksData).forEach(([weekKey, weekData]) => {
+      const amzData = weekData?.amazon;
+      if (!amzData) return;
+      
+      const weekSold = amzData.units || 0;
+      const weekReturned = Math.abs(amzData.returns || 0);
+      
+      if (weekSold > 0 || weekReturned > 0) {
+        byWeek[weekKey] = {
+          unitsSold: weekSold,
+          unitsReturned: weekReturned,
+          returnRate: weekSold > 0 ? (weekReturned / weekSold) * 100 : 0,
+        };
+        
+        // Extract month from week ending date
+        const monthKey = weekKey.slice(0, 7); // YYYY-MM
+        if (!byMonth[monthKey]) {
+          byMonth[monthKey] = { unitsSold: 0, unitsReturned: 0, returnRate: 0 };
+        }
+        byMonth[monthKey].unitsSold += weekSold;
+        byMonth[monthKey].unitsReturned += weekReturned;
+        
+        totalSold += weekSold;
+        totalReturned += weekReturned;
+      }
+      
+      // Process SKU-level data from weekly skuData
+      const skuData = amzData.skuData || {};
+      Object.entries(skuData).forEach(([sku, data]) => {
+        if (!sku || sku === 'undefined') return;
+        
+        const skuSold = data.units || 0;
+        const skuReturned = Math.abs(data.returns || 0);
+        
+        if (!bySku[sku]) {
+          bySku[sku] = { unitsSold: 0, unitsReturned: 0, returnRate: 0, history: [] };
+        }
+        bySku[sku].unitsSold += skuSold;
+        bySku[sku].unitsReturned += skuReturned;
+        
+        // Track weekly history for this SKU
+        if (skuSold > 0 || skuReturned > 0) {
+          bySku[sku].history.push({
+            week: weekKey,
+            sold: skuSold,
+            returned: skuReturned,
+            rate: skuSold > 0 ? (skuReturned / skuSold) * 100 : 0,
+          });
+        }
+      });
+    });
+    
+    // Calculate final rates for each SKU
+    Object.keys(bySku).forEach(sku => {
+      const s = bySku[sku];
+      s.returnRate = s.unitsSold > 0 ? (s.unitsReturned / s.unitsSold) * 100 : 0;
+      // Keep only last 52 weeks of history
+      s.history = s.history.slice(-52);
+    });
+    
+    // Calculate final rates for each month
+    Object.keys(byMonth).forEach(month => {
+      const m = byMonth[month];
+      m.returnRate = m.unitsSold > 0 ? (m.unitsReturned / m.unitsSold) * 100 : 0;
+    });
+    
+    return {
+      bySku,
+      byWeek,
+      byMonth,
+      overall: {
+        unitsSold: totalSold,
+        unitsReturned: totalReturned,
+        returnRate: totalSold > 0 ? (totalReturned / totalSold) * 100 : 0,
+      },
+      lastUpdated: new Date().toISOString(),
+    };
+  }, [allWeeksData]);
+  
+  // Auto-update return rates when weekly data changes
+  useEffect(() => {
+    const sortedWeeks = Object.keys(allWeeksData);
+    if (sortedWeeks.length > 0) {
+      const calculated = calculateReturnRates();
+      // Only update if there's actual data
+      if (calculated.overall.unitsSold > 0) {
+        setReturnRates(calculated);
+      }
+    }
+  }, [allWeeksData, calculateReturnRates]);
+  // ============ END SKU RETURN RATE CALCULATION ============
+  
   // Save Amazon forecasts to localStorage and cloud
   useEffect(() => {
     localStorage.setItem(AMAZON_FORECAST_KEY, JSON.stringify(amazonForecasts));
@@ -2816,6 +3024,8 @@ const combinedData = useMemo(() => ({
   // Self-learning forecast data
   forecastAccuracyHistory,
   forecastCorrections,
+  // SKU Return Rates
+  returnRates,
   // AI-powered forecasts
   aiForecasts,
   // Modular AI system
@@ -2835,7 +3045,7 @@ const combinedData = useMemo(() => ({
   shopifyCredentials,
   // Packiyo 3PL Integration credentials
   packiyoCredentials,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials]);
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -3169,6 +3379,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     // Load self-learning forecast data
     if (cloud.forecastAccuracyHistory) setForecastAccuracyHistory(cloud.forecastAccuracyHistory);
     if (cloud.forecastCorrections) setForecastCorrections(cloud.forecastCorrections);
+    if (cloud.returnRates) setReturnRates(cloud.returnRates);
     if (cloud.aiForecasts) setAiForecasts(cloud.aiForecasts);
     if (cloud.leadTimeSettings) setLeadTimeSettings(cloud.leadTimeSettings);
     if (cloud.aiForecastModule) setAiForecastModule(cloud.aiForecastModule);
@@ -3206,6 +3417,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     // Sync self-learning forecast data to localStorage
     if (cloud.forecastAccuracyHistory) writeToLocal(FORECAST_ACCURACY_KEY, JSON.stringify(cloud.forecastAccuracyHistory));
     if (cloud.forecastCorrections) writeToLocal(FORECAST_CORRECTIONS_KEY, JSON.stringify(cloud.forecastCorrections));
+    if (cloud.returnRates) writeToLocal('ecommerce_return_rates_v1', JSON.stringify(cloud.returnRates));
     if (cloud.aiForecasts) writeToLocal('ecommerce_ai_forecasts_v1', JSON.stringify(cloud.aiForecasts));
     if (cloud.leadTimeSettings) writeToLocal('ecommerce_lead_times_v1', JSON.stringify(cloud.leadTimeSettings));
     if (cloud.aiLearningHistory) writeToLocal('ecommerce_ai_learning_v1', JSON.stringify(cloud.aiLearningHistory));
@@ -8582,68 +8794,49 @@ Keep insights brief and actionable. Format as numbered list.`;
       };
       
       // Build comprehensive AI prompt
-      const prompt = `You are an elite e-commerce forecasting AI. Analyze this data and generate accurate predictions.
+      console.log('[Forecast] Calculated values:', {
+        dailyAvg7: avg7Day.toFixed(2),
+        dailyBasedWeekly: (avg7Day * 7).toFixed(2),
+        weeklyTrend: weeklyTrend.toFixed(1) + '%',
+        weightedPrediction: weightedPrediction.toFixed(2),
+        amazonForecast: adjustedAmazonForecast?.toFixed(2) || 'none',
+      });
+      
+      const prompt = `You are an e-commerce forecasting AI. Analyze patterns and provide insights.
 
-## BUSINESS DATA
-- Type: Natural skincare/beauty (Amazon + Shopify)
-- Date: ${today.toISOString().split('T')[0]}
-- Data: ${dailyData.length} days, ${completeWeeks.length} weeks
+## CRITICAL: USE THESE EXACT NUMBERS
+My algorithm calculated: **$${weightedPrediction.toFixed(0)}/week** revenue, **$${profitPrediction.toFixed(0)}/week** profit
+DO NOT generate different revenue numbers. Use $${weightedPrediction.toFixed(0)} as Week 1 prediction.
 
-## CALCULATED SIGNALS
+## CALCULATION BASIS
+- Daily avg (last 7 days): $${avg7Day.toFixed(2)}/day
+- Weekly projection: $${avg7Day.toFixed(2)} × 7 = $${(avg7Day * 7).toFixed(0)}/week
+- Momentum: ${momentum > 0 ? '+' : ''}${momentum.toFixed(1)}%
+- Profit margin: ${(avgProfitMargin * 100).toFixed(1)}%
+${futureAmazonForecasts.length > 0 ? `- Amazon forecast (bias-corrected): $${adjustedAmazonForecast?.toFixed(0) || 'N/A'}/week` : ''}
 
-### Daily Performance (60% weight)
-- 7-Day Avg: $${avg7Day.toFixed(2)}/day
-- 14-Day Avg: $${avg14Day.toFixed(2)}/day
-- 30-Day Avg: $${avg30Day.toFixed(2)}/day
-- Momentum: ${momentum > 0 ? '+' : ''}${momentum.toFixed(1)}% (vs prior 7 days)
-
-### Weekly Trends (20% weight)
-- Recent 4-Week Avg: $${recentWeekAvg.toFixed(2)}/week
-- Prior 4-Week Avg: $${olderWeekAvg.toFixed(2)}/week
-- Trend: ${weeklyTrend > 0 ? '+' : ''}${weeklyTrend.toFixed(1)}%
-
-### Amazon Forecast (20% weight)
-${futureAmazonForecasts.length > 0 ? `- Next Week: $${futureAmazonForecasts[0].forecastRevenue.toFixed(2)} (${futureAmazonForecasts[0].forecastUnits} units)
-- Accuracy: ${amazonAccuracy.samples} samples, ${amazonAccuracy.avgError.toFixed(1)}% avg error
-- Bias-Corrected: $${adjustedAmazonForecast?.toFixed(2) || 'N/A'}` : '- No Amazon forecast available'}
-
-### My Weighted Prediction
-**Revenue: $${weightedPrediction.toFixed(2)}/week**
-**Profit: $${profitPrediction.toFixed(2)}/week** (${(avgProfitMargin * 100).toFixed(1)}% margin)
-
-## PATTERNS
-- Best Days: ${bestDays.join(', ')}
-- Worst Days: ${worstDays.join(', ')}
-- Day Patterns: ${Object.entries(dayPatterns).map(([d, p]) => `${d.slice(0,3)}=$${p.avgRevenue.toFixed(0)}`).join(', ')}
-
-## CONTEXT
-- Season: ${currentMonth}, Index: ${seasonalIndex.toFixed(2)}
+## DATA SUMMARY
+- ${dailyData.length} days of data, ${completeWeeks.length} complete weeks
+- Best days: ${bestDays.join(', ')}
+- Worst days: ${worstDays.join(', ')}
+- Critical inventory: ${criticalInventory.length} SKUs
+${totalAdSpend > 0 ? `- Ads (30d): $${totalAdSpend.toFixed(0)}, ${overallCTR.toFixed(1)}% CTR` : ''}
 ${yoyBaseline ? `- YoY: Last ${currentMonth}: $${yoyBaseline.totalRevenue.toFixed(0)}` : ''}
 - Inventory: ${criticalInventory.length} critical, ${lowInventory.length} low stock
 ${totalAdSpend > 0 ? `- Ads (30d): $${totalAdSpend.toFixed(0)} spend, ${overallCTR.toFixed(1)}% CTR, ${adsAnalysis.totalConversions} conv` : ''}
 
-## GENERATE FORECAST
+## YOUR TASK
+Provide insights and analysis. I will use my calculated $${weightedPrediction.toFixed(0)}/week for the actual predictions.
 
 Week 1 starts: ${nextSunday.toISOString().split('T')[0]}
 
 Respond with ONLY this JSON (no markdown):
 {
-  "salesForecast": {
-    "next4Weeks": [
-      {"weekEnding": "YYYY-MM-DD", "predictedRevenue": number, "predictedProfit": number, "predictedUnits": number, "confidence": "high|medium|low", "reasoning": "brief explanation"}
-    ],
-    "monthlyOutlook": {
-      "expectedRevenue": number,
-      "expectedProfit": number,
-      "growthTrend": "up|stable|down",
-      "keyFactors": ["factor1", "factor2"]
-    }
-  },
-  "signalAnalysis": {
-    "dailySignalStrength": "strong|moderate|weak",
+  "analysis": {
+    "confidence": "high|medium|low",
+    "reasoning": "why this confidence level",
     "trendDirection": "up|stable|down",
-    "dataQuality": "excellent|good|limited",
-    "confidenceScore": 0-100
+    "dataQuality": "excellent|good|limited"
   },
   "actionableInsights": [
     {"category": "sales|inventory|marketing", "priority": "high|medium", "insight": "specific action", "expectedImpact": "result"}
@@ -8656,7 +8849,7 @@ Respond with ONLY this JSON (no markdown):
   ]
 }`;
 
-      const systemPrompt = `You are an elite e-commerce forecasting AI. Analyze the data thoroughly and provide accurate, actionable predictions. Trust the weighted prediction as your baseline. Respond with valid JSON only.`;
+      const systemPrompt = `You are an e-commerce forecasting AI. Provide analysis and insights only. The revenue predictions have already been calculated - DO NOT generate revenue numbers. Focus on patterns, risks, and actionable recommendations. Respond with valid JSON only.`;
 
       console.log('Calling streaming AI forecast...');
       
@@ -8666,69 +8859,86 @@ Respond with ONLY this JSON (no markdown):
         
         // Parse JSON response
         const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-          throw new Error('Could not parse AI response as JSON');
+        let aiAnalysis = {};
+        
+        if (jsonMatch) {
+          try {
+            aiAnalysis = JSON.parse(jsonMatch[0]);
+          } catch (e) {
+            console.log('Could not parse AI JSON, using defaults');
+          }
         }
         
-        const forecast = JSON.parse(jsonMatch[0]);
-        
-        // Validate and enhance predictions
+        // GENERATE FORECAST LOCALLY using our calculated values
         const weekDates = [];
+        const next4Weeks = [];
+        
         for (let i = 0; i < 4; i++) {
           const weekDate = new Date(nextSunday);
           weekDate.setDate(weekDate.getDate() + (i * 7));
           weekDates.push(weekDate.toISOString().split('T')[0]);
+          
+          // Start with our calculated prediction
+          let weekRevenue = weightedPrediction;
+          
+          // Apply small trend adjustment for future weeks (max ±5% per week)
+          const trendMultiplier = 1 + (weeklyTrend / 100 * 0.05 * i);
+          weekRevenue = weekRevenue * Math.max(0.95, Math.min(1.05, trendMultiplier));
+          
+          // Blend with Amazon forecast if available and reasonable
+          const amazonWeek = futureAmazonForecasts[i];
+          if (amazonWeek && amazonAccuracy.samples >= 2) {
+            const amazonRevenue = amazonWeek.forecastRevenue * (1 - amazonAccuracy.bias / 100);
+            // Only blend if Amazon is within 50% of our prediction
+            if (amazonRevenue > weightedPrediction * 0.5 && amazonRevenue < weightedPrediction * 1.5) {
+              weekRevenue = weekRevenue * 0.85 + amazonRevenue * 0.15;
+            }
+          }
+          
+          // Calculate profit and units
+          const weekProfit = weekRevenue * avgProfitMargin;
+          const avgUnitValue = completeWeeks.length > 0 
+            ? completeWeeks.reduce((s, w) => s + w.revenue, 0) / Math.max(1, completeWeeks.reduce((s, w) => s + (w.units || 0), 0))
+            : 15;
+          const weekUnits = Math.round(weekRevenue / (avgUnitValue || 15));
+          
+          next4Weeks.push({
+            weekEnding: weekDates[i],
+            predictedRevenue: Math.round(weekRevenue * 100) / 100,
+            predictedProfit: Math.round(weekProfit * 100) / 100,
+            predictedUnits: weekUnits,
+            confidence: aiAnalysis.analysis?.confidence || (i === 0 ? 'high' : 'medium'),
+            reasoning: i === 0 
+              ? `Based on $${avg7Day.toFixed(0)}/day × 7 days = $${(avg7Day * 7).toFixed(0)}/week`
+              : `Week ${i + 1} with ${weeklyTrend > 0 ? '+' : ''}${weeklyTrend.toFixed(1)}% trend`,
+          });
         }
         
-        if (forecast.salesForecast?.next4Weeks) {
-          forecast.salesForecast.next4Weeks = forecast.salesForecast.next4Weeks.map((week, i) => {
-            let { predictedRevenue, predictedProfit, predictedUnits } = week;
-            
-            // Blend with Amazon if available
-            const amazonWeek = futureAmazonForecasts[i];
-            if (amazonWeek && amazonAccuracy.samples >= 2) {
-              const amazonRevenue = amazonWeek.forecastRevenue * (1 - amazonAccuracy.bias / 100);
-              predictedRevenue = predictedRevenue * 0.7 + amazonRevenue * 0.3;
-            }
-            
-            // Sanity bounds
-            const maxReasonable = weightedPrediction * 1.5;
-            const minReasonable = weightedPrediction * 0.5;
-            if (predictedRevenue > maxReasonable) predictedRevenue = maxReasonable;
-            if (predictedRevenue < minReasonable) predictedRevenue = minReasonable;
-            
-            // Ensure profit uses actual margin
-            if (!predictedProfit || predictedProfit <= 0 || predictedProfit > predictedRevenue * 0.6) {
-              predictedProfit = predictedRevenue * avgProfitMargin;
-            }
-            
-            // Estimate units if missing
-            if (!predictedUnits || predictedUnits === 0) {
-              const avgUnitValue = completeWeeks.length > 0 
-                ? completeWeeks.reduce((s, w) => s + w.revenue, 0) / Math.max(1, completeWeeks.reduce((s, w) => s + (w.units || 0), 0))
-                : 15;
-              predictedUnits = Math.round(predictedRevenue / (avgUnitValue || 15));
-            }
-            
-            return {
-              ...week,
-              weekEnding: weekDates[i],
-              predictedRevenue: Math.round(predictedRevenue * 100) / 100,
-              predictedProfit: Math.round(predictedProfit * 100) / 100,
-              predictedUnits: Math.round(predictedUnits),
-            };
-          });
-          
-          // Update monthly outlook
-          if (forecast.salesForecast.monthlyOutlook) {
-            forecast.salesForecast.monthlyOutlook.expectedRevenue = Math.round(
-              forecast.salesForecast.next4Weeks.reduce((s, w) => s + w.predictedRevenue, 0)
-            );
-            forecast.salesForecast.monthlyOutlook.expectedProfit = Math.round(
-              forecast.salesForecast.next4Weeks.reduce((s, w) => s + w.predictedProfit, 0)
-            );
-          }
-        }
+        // Build complete forecast object
+        const forecast = {
+          salesForecast: {
+            next4Weeks,
+            monthlyOutlook: {
+              expectedRevenue: Math.round(next4Weeks.reduce((s, w) => s + w.predictedRevenue, 0)),
+              expectedProfit: Math.round(next4Weeks.reduce((s, w) => s + w.predictedProfit, 0)),
+              growthTrend: aiAnalysis.analysis?.trendDirection || (weeklyTrend > 5 ? 'up' : weeklyTrend < -5 ? 'down' : 'stable'),
+              keyFactors: [
+                `Daily avg: $${avg7Day.toFixed(0)}/day`,
+                `Momentum: ${momentum > 0 ? '+' : ''}${momentum.toFixed(1)}%`,
+                futureAmazonForecasts.length > 0 ? 'Amazon forecast integrated' : 'Historical patterns only',
+              ],
+            },
+          },
+          signalAnalysis: {
+            dailySignalStrength: dailyData.length >= 14 ? 'strong' : dailyData.length >= 7 ? 'moderate' : 'weak',
+            trendDirection: aiAnalysis.analysis?.trendDirection || (weeklyTrend > 5 ? 'up' : weeklyTrend < -5 ? 'down' : 'stable'),
+            dataQuality: aiAnalysis.analysis?.dataQuality || (dailyData.length >= 14 ? 'excellent' : 'good'),
+            confidence: aiAnalysis.analysis?.confidence || 'medium',
+          },
+          actionableInsights: aiAnalysis.actionableInsights || [],
+          risks: aiAnalysis.risks || [],
+          opportunities: aiAnalysis.opportunities || [],
+        };
         
         setAiForecasts({
           ...forecast,
