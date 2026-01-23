@@ -29386,6 +29386,66 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
+    // Get campaign and historical data
+    const campaigns = amazonCampaigns?.campaigns || [];
+    const hasCampaignData = campaigns.length > 0;
+    const campaignSummary = amazonCampaigns?.summary || {};
+    const historicalDaily = amazonCampaigns?.historicalDaily || {};
+    const hasHistoricalData = Object.keys(historicalDaily).length > 0;
+    
+    // Calculate quick insights for executive summary
+    const getQuickInsights = () => {
+      const insights = [];
+      
+      if (hasCampaignData) {
+        const enabledCampaigns = campaigns.filter(c => c.state === 'ENABLED');
+        const wastefulCampaigns = enabledCampaigns.filter(c => c.spend > 100 && c.roas < 1.5);
+        const scalingOpps = enabledCampaigns.filter(c => c.roas > 4 && c.spend < 500);
+        const avgROAS = campaignSummary.roas || 0;
+        
+        if (wastefulCampaigns.length > 0) {
+          const wastedSpend = wastefulCampaigns.reduce((s, c) => s + c.spend, 0);
+          insights.push({ type: 'warning', icon: '⚠️', text: `${wastefulCampaigns.length} campaigns with ROAS < 1.5x wasting ${formatCurrency(wastedSpend)}`, action: 'Review underperformers' });
+        }
+        
+        if (scalingOpps.length > 0) {
+          insights.push({ type: 'opportunity', icon: '🚀', text: `${scalingOpps.length} high-ROAS campaigns (>4x) could scale with more budget`, action: 'Increase budgets' });
+        }
+        
+        if (avgROAS >= 4) {
+          insights.push({ type: 'success', icon: '✅', text: `Excellent overall ROAS of ${avgROAS.toFixed(2)}x - campaigns performing well`, action: null });
+        } else if (avgROAS < 2.5) {
+          insights.push({ type: 'warning', icon: '📉', text: `Overall ROAS of ${avgROAS.toFixed(2)}x below target (3.0x) - optimization needed`, action: 'Optimize campaigns' });
+        }
+      }
+      
+      if (hasHistoricalData) {
+        const histDates = Object.keys(historicalDaily).sort();
+        const recentDates = histDates.slice(-30);
+        const olderDates = histDates.slice(-60, -30);
+        
+        if (recentDates.length > 0 && olderDates.length > 0) {
+          const recentSpend = recentDates.reduce((s, d) => s + (historicalDaily[d]?.spend || 0), 0);
+          const recentRev = recentDates.reduce((s, d) => s + (historicalDaily[d]?.adRevenue || historicalDaily[d]?.revenue || 0), 0);
+          const olderSpend = olderDates.reduce((s, d) => s + (historicalDaily[d]?.spend || 0), 0);
+          const olderRev = olderDates.reduce((s, d) => s + (historicalDaily[d]?.adRevenue || historicalDaily[d]?.revenue || 0), 0);
+          
+          const recentROAS = recentSpend > 0 ? recentRev / recentSpend : 0;
+          const olderROAS = olderSpend > 0 ? olderRev / olderSpend : 0;
+          
+          if (recentROAS > olderROAS * 1.15) {
+            insights.push({ type: 'success', icon: '📈', text: `ROAS improved ${((recentROAS - olderROAS) / olderROAS * 100).toFixed(0)}% in last 30 days`, action: null });
+          } else if (recentROAS < olderROAS * 0.85) {
+            insights.push({ type: 'warning', icon: '📉', text: `ROAS declined ${((olderROAS - recentROAS) / olderROAS * 100).toFixed(0)}% in last 30 days`, action: 'Investigate decline' });
+          }
+        }
+      }
+      
+      return insights;
+    };
+    
+    const quickInsights = getQuickInsights();
+    
     // Get available years from data
     const allDates = [...sortedWeeks, ...sortedDays];
     const availableYears = [...new Set(allDates.map(d => parseInt(d.substring(0, 4))))].sort((a, b) => b - a);
@@ -29821,13 +29881,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     // Months with data
     const monthsWithData = [...new Set([...sortedWeeks, ...sortedDays].filter(d => d.startsWith(String(adsYear))).map(d => new Date(d + 'T00:00:00').getMonth()))].sort((a, b) => a - b);
     
-    // Amazon Campaign data processing
-    const campaignData = amazonCampaigns.campaigns || [];
-    const campaignSummary = amazonCampaigns.summary || {};
-    const hasCampaignData = campaignData.length > 0;
-    
-    // Filter and sort campaigns
-    const filteredCampaigns = campaignData.filter(c => {
+    // Filter and sort campaigns (use campaigns defined earlier)
+    const filteredCampaigns = campaigns.filter(c => {
       if (amazonCampaignFilter.status !== 'all' && c.state !== amazonCampaignFilter.status) return false;
       if (amazonCampaignFilter.type !== 'all' && c.type !== amazonCampaignFilter.type && !(amazonCampaignFilter.type === 'SB' && c.type === 'SB2')) return false;
       if (amazonCampaignFilter.search && !c.name.toLowerCase().includes(amazonCampaignFilter.search.toLowerCase())) return false;
@@ -29856,8 +29911,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     };
     
     // Get top/bottom performers
-    const topPerformers = [...campaignData].filter(c => c.state === 'ENABLED' && c.roas > 0).sort((a, b) => b.roas - a.roas).slice(0, 5);
-    const bottomPerformers = [...campaignData].filter(c => c.state === 'ENABLED' && c.spend > 100).sort((a, b) => a.roas - b.roas).slice(0, 5);
+    const topPerformers = [...campaigns].filter(c => c.state === 'ENABLED' && c.roas > 0).sort((a, b) => b.roas - a.roas).slice(0, 5);
+    const bottomPerformers = [...campaigns].filter(c => c.state === 'ENABLED' && c.spend > 100).sort((a, b) => a.roas - b.roas).slice(0, 5);
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
@@ -29868,26 +29923,87 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           <div className="mb-6">
             <div className="flex items-center justify-between flex-wrap gap-4">
               <div>
-                <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">⚡ Ad Performance Analytics</h1>
-                <p className="text-slate-400">Track TACOS, ad spend efficiency, and channel performance • {sortedDays.length} days, {sortedWeeks.length} weeks of data</p>
+                <h1 className="text-2xl lg:text-3xl font-bold text-white mb-1">📊 Advertising Command Center</h1>
+                <p className="text-slate-400">
+                  {hasCampaignData ? `${campaigns.length} campaigns` : 'No campaigns'} 
+                  {hasHistoricalData ? ` • ${Object.keys(historicalDaily).length} days history` : ''} 
+                  {sortedWeeks.length > 0 ? ` • ${sortedWeeks.length} weeks data` : ''}
+                </p>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => setShowAdsAIChat(true)} className="px-4 py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-lg text-white flex items-center gap-2">
-                  <Zap className="w-4 h-4" />AI Insights
+                <button onClick={() => setShowAdsAIChat(true)} className="px-4 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white flex items-center gap-2 font-medium shadow-lg shadow-orange-500/20">
+                  <Zap className="w-4 h-4" />Ask AI
                 </button>
-                <button onClick={() => setShowAmazonAdsBulkUpload(true)} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-white flex items-center gap-2">
-                  <Upload className="w-4 h-4" />Amazon Ads
+                <button onClick={() => setShowAmazonAdsBulkUpload(true)} className="px-3 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-white flex items-center gap-2 text-sm">
+                  <Upload className="w-4 h-4" />History
                 </button>
-                <button onClick={() => setShowAdsBulkUpload(true)} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white flex items-center gap-2">
+                <button onClick={() => setShowAdsBulkUpload(true)} className="px-3 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-white flex items-center gap-2 text-sm">
                   <Upload className="w-4 h-4" />Meta/Google
                 </button>
               </div>
             </div>
           </div>
           
+          {/* Executive Summary - Quick Insights */}
+          {quickInsights.length > 0 && (
+            <div className="bg-gradient-to-r from-slate-800/80 to-slate-800/40 rounded-2xl border border-slate-700 p-4 mb-6">
+              <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">⚡ Quick Insights</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {quickInsights.map((insight, i) => (
+                  <div key={i} className={`flex items-start gap-3 p-3 rounded-xl ${
+                    insight.type === 'warning' ? 'bg-amber-900/20 border border-amber-500/30' :
+                    insight.type === 'opportunity' ? 'bg-emerald-900/20 border border-emerald-500/30' :
+                    'bg-blue-900/20 border border-blue-500/30'
+                  }`}>
+                    <span className="text-xl">{insight.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white text-sm">{insight.text}</p>
+                      {insight.action && (
+                        <button onClick={() => { setAdsAiInput(insight.action); setShowAdsAIChat(true); }} className="text-xs text-orange-400 hover:text-orange-300 mt-1">
+                          → {insight.action}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* Data Upload Prompts */}
+          {(!hasCampaignData || !hasHistoricalData) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              {!hasCampaignData && (
+                <div className="bg-slate-800/50 rounded-xl border border-dashed border-orange-500/50 p-6 text-center">
+                  <div className="w-12 h-12 bg-orange-500/20 rounded-xl flex items-center justify-center mx-auto mb-3">
+                    <Target className="w-6 h-6 text-orange-400" />
+                  </div>
+                  <h4 className="text-white font-medium mb-1">Campaign Performance</h4>
+                  <p className="text-slate-400 text-sm mb-3">Upload Amazon Ads campaign report for detailed analysis</p>
+                  <label className="inline-flex items-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-white text-sm cursor-pointer">
+                    <Upload className="w-4 h-4" />Upload Campaigns
+                    <input type="file" accept=".csv" className="hidden" onChange={(e) => handleAmazonCampaignUpload(e.target.files[0])} />
+                  </label>
+                </div>
+              )}
+              {!hasHistoricalData && (
+                <div className="bg-slate-800/50 rounded-xl border border-dashed border-violet-500/50 p-6 text-center">
+                  <div className="w-12 h-12 bg-violet-500/20 rounded-xl flex items-center justify-center mx-auto mb-3">
+                    <TrendingUp className="w-6 h-6 text-violet-400" />
+                  </div>
+                  <h4 className="text-white font-medium mb-1">Historical Trends</h4>
+                  <p className="text-slate-400 text-sm mb-3">Upload daily performance data for trend analysis</p>
+                  <button onClick={() => setShowAmazonAdsBulkUpload(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white text-sm">
+                    <Upload className="w-4 h-4" />Import History
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          
           {/* AI Ads Insights Chat Panel */}
           {showAdsAIChat && (
-            <div className="fixed bottom-4 right-4 z-50 w-96 max-w-[calc(100vw-2rem)]">
+            <div className="fixed bottom-4 right-4 z-50 w-[450px] max-w-[calc(100vw-2rem)]">
               <div className="bg-slate-800 rounded-2xl border border-orange-500/50 shadow-2xl overflow-hidden">
                 <div className="bg-gradient-to-r from-orange-600 to-amber-600 p-4 flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -29896,31 +30012,50 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     </div>
                     <div>
                       <h3 className="text-white font-semibold">AI Ads Analyst</h3>
-                      <p className="text-white/70 text-xs">Ask about your ad performance</p>
+                      <p className="text-white/70 text-xs">
+                        {hasCampaignData ? `${campaigns.length} campaigns` : 'No campaigns'} 
+                        {hasHistoricalData ? ` • ${Object.keys(historicalDaily).length}d history` : ''}
+                      </p>
                     </div>
                   </div>
-                  <button onClick={() => setShowAdsAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
-                    <X className="w-5 h-5" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setAdsAiMessages([])} className="p-2 hover:bg-white/20 rounded-lg text-white/70 hover:text-white" title="Clear chat">
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => setShowAdsAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
                 
-                <div className="h-80 overflow-y-auto p-4 space-y-4">
+                <div className="h-96 overflow-y-auto p-4 space-y-4">
                   {adsAiMessages.length === 0 && (
-                    <div className="text-center text-slate-400 py-4">
-                      <Zap className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                      <p className="text-sm mb-4">Ask me about your advertising performance!</p>
+                    <div className="text-center text-slate-400 py-2">
+                      <Zap className="w-10 h-10 mx-auto mb-3 opacity-50" />
+                      <p className="text-sm mb-4">I can analyze your campaigns and trends. Try asking:</p>
                       <div className="space-y-2 text-left">
-                        <button onClick={() => setAdsAiInput("Which ad channel is most efficient?")} className="block w-full px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which ad channel is most efficient?"</button>
-                        <button onClick={() => setAdsAiInput("What campaigns should I pause?")} className="block w-full px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "What campaigns should I pause?"</button>
-                        <button onClick={() => setAdsAiInput("How is my Google Ads CPC trending?")} className="block w-full px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "How is my Google Ads CPC trending?"</button>
-                        <button onClick={() => setAdsAiInput("Give me a full ads performance summary")} className="block w-full px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Give me a full ads performance summary"</button>
+                        <button onClick={() => { setAdsAiInput("Give me your top 5 recommendations to improve my ads"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-gradient-to-r from-orange-900/30 to-slate-800 hover:from-orange-900/50 rounded-lg text-sm text-white border border-orange-500/30">
+                          🎯 Top 5 recommendations to improve my ads
+                        </button>
+                        <button onClick={() => { setAdsAiInput("Which campaigns should I pause to save money?"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                          ⚠️ Which campaigns should I pause?
+                        </button>
+                        <button onClick={() => { setAdsAiInput("What are my best scaling opportunities?"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                          🚀 What are my best scaling opportunities?
+                        </button>
+                        <button onClick={() => { setAdsAiInput("How has my ROAS trended over the last 6 months?"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                          📈 How has my ROAS trended over time?
+                        </button>
+                        <button onClick={() => { setAdsAiInput("Compare my SP vs SB vs SD campaign performance"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                          📊 Compare SP vs SB vs SD performance
+                        </button>
                       </div>
                     </div>
                   )}
                   {adsAiMessages.map((msg, i) => (
                     <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[85%] rounded-2xl px-4 py-2 ${msg.role === 'user' ? 'bg-orange-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
-                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      <div className={`max-w-[90%] rounded-2xl px-4 py-3 ${msg.role === 'user' ? 'bg-orange-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
+                        <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                       </div>
                     </div>
                   ))}
@@ -29944,7 +30079,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       value={adsAiInput}
                       onChange={(e) => setAdsAiInput(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendAdsAIMessage(); } }}
-                      placeholder="Ask about your ads..."
+                      placeholder="Ask about campaigns, ROAS, trends..."
                       className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-orange-500"
                       autoComplete="off"
                     />
@@ -29958,14 +30093,190 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           )}
           
           {/* View Mode Toggle */}
-          <div className="flex gap-2 mb-4">
-            <button onClick={() => setAdsViewMode('performance')} className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${adsViewMode === 'performance' ? 'bg-gradient-to-r from-blue-600 to-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
-              📊 Spend Performance
+          <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl">
+            <button onClick={() => setAdsViewMode('campaigns')} className={`flex-1 px-4 py-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 ${adsViewMode === 'campaigns' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Target className="w-4 h-4" />
+              <span>Campaigns</span>
+              {hasCampaignData && <span className="px-1.5 py-0.5 bg-white/20 rounded text-xs">{campaigns.length}</span>}
             </button>
-            <button onClick={() => setAdsViewMode('campaigns')} className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${adsViewMode === 'campaigns' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
-              🎯 Amazon Campaigns {hasCampaignData && <span className="ml-1 px-1.5 py-0.5 bg-white/20 rounded text-xs">{campaignData.length}</span>}
+            <button onClick={() => setAdsViewMode('trends')} className={`flex-1 px-4 py-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 ${adsViewMode === 'trends' ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <TrendingUp className="w-4 h-4" />
+              <span>Trends</span>
+              {hasHistoricalData && <span className="px-1.5 py-0.5 bg-white/20 rounded text-xs">{Object.keys(historicalDaily).length}d</span>}
+            </button>
+            <button onClick={() => setAdsViewMode('performance')} className={`flex-1 px-4 py-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 ${adsViewMode === 'performance' ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <BarChart3 className="w-4 h-4" />
+              <span>All Channels</span>
             </button>
           </div>
+          
+          {/* Historical Trends View */}
+          {adsViewMode === 'trends' && (
+            <div>
+              {!hasHistoricalData ? (
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-8 text-center">
+                  <div className="w-16 h-16 bg-violet-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <TrendingUp className="w-8 h-8 text-violet-400" />
+                  </div>
+                  <h3 className="text-xl font-semibold text-white mb-2">Import Historical Data</h3>
+                  <p className="text-slate-400 mb-4 max-w-md mx-auto">Upload your daily Amazon Ads performance data to see trends over time</p>
+                  <button onClick={() => setShowAmazonAdsBulkUpload(true)} className="inline-flex items-center gap-2 px-6 py-3 bg-violet-600 hover:bg-violet-500 rounded-xl text-white font-medium">
+                    <Upload className="w-5 h-5" />Import Daily Data
+                  </button>
+                </div>
+              ) : (() => {
+                // Calculate historical metrics
+                const histDates = Object.keys(historicalDaily).sort();
+                const dateRange = { start: histDates[0], end: histDates[histDates.length - 1] };
+                
+                // Monthly aggregation
+                const monthly = {};
+                histDates.forEach(date => {
+                  const d = historicalDaily[date];
+                  const monthKey = date.substring(0, 7);
+                  if (!monthly[monthKey]) monthly[monthKey] = { spend: 0, revenue: 0, orders: 0, clicks: 0, impressions: 0, totalRevenue: 0, days: 0 };
+                  monthly[monthKey].spend += d.spend || 0;
+                  monthly[monthKey].revenue += d.adRevenue || d.revenue || 0;
+                  monthly[monthKey].orders += d.orders || 0;
+                  monthly[monthKey].clicks += d.clicks || 0;
+                  monthly[monthKey].impressions += d.impressions || 0;
+                  monthly[monthKey].totalRevenue += d.totalRevenue || 0;
+                  monthly[monthKey].days++;
+                });
+                
+                const monthlyArr = Object.entries(monthly).sort((a, b) => a[0].localeCompare(b[0]));
+                const totals = monthlyArr.reduce((acc, [_, m]) => ({
+                  spend: acc.spend + m.spend,
+                  revenue: acc.revenue + m.revenue,
+                  totalRevenue: acc.totalRevenue + m.totalRevenue,
+                  orders: acc.orders + m.orders,
+                }), { spend: 0, revenue: 0, totalRevenue: 0, orders: 0 });
+                
+                const overallROAS = totals.spend > 0 ? totals.revenue / totals.spend : 0;
+                const overallACOS = totals.revenue > 0 ? (totals.spend / totals.revenue) * 100 : 0;
+                const overallTACOS = totals.totalRevenue > 0 ? (totals.spend / totals.totalRevenue) * 100 : 0;
+                
+                return (
+                  <>
+                    {/* Summary Cards */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
+                      <div className="bg-gradient-to-br from-violet-900/30 to-slate-800/50 rounded-xl border border-violet-500/30 p-4">
+                        <p className="text-slate-400 text-xs uppercase">Total Ad Spend</p>
+                        <p className="text-2xl font-bold text-white">{formatCurrency(totals.spend)}</p>
+                        <p className="text-violet-400 text-xs mt-1">{histDates.length} days</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                        <p className="text-slate-400 text-xs uppercase">Ad Revenue</p>
+                        <p className="text-2xl font-bold text-emerald-400">{formatCurrency(totals.revenue)}</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                        <p className="text-slate-400 text-xs uppercase">Total Revenue</p>
+                        <p className="text-2xl font-bold text-white">{formatCurrency(totals.totalRevenue)}</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                        <p className="text-slate-400 text-xs uppercase">ROAS</p>
+                        <p className={`text-2xl font-bold ${overallROAS >= 3 ? 'text-emerald-400' : overallROAS >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{overallROAS.toFixed(2)}x</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                        <p className="text-slate-400 text-xs uppercase">ACOS</p>
+                        <p className={`text-2xl font-bold ${overallACOS <= 25 ? 'text-emerald-400' : overallACOS <= 35 ? 'text-amber-400' : 'text-rose-400'}`}>{overallACOS.toFixed(1)}%</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                        <p className="text-slate-400 text-xs uppercase">TACOS</p>
+                        <p className={`text-2xl font-bold ${overallTACOS <= 15 ? 'text-emerald-400' : overallTACOS <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>{overallTACOS.toFixed(1)}%</p>
+                      </div>
+                    </div>
+                    
+                    {/* Monthly Performance Table */}
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-white">Monthly Performance</h3>
+                        <span className="text-slate-400 text-sm">{dateRange.start} to {dateRange.end}</span>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-700">
+                              <th className="text-left text-slate-400 py-2 px-2">Month</th>
+                              <th className="text-right text-slate-400 py-2 px-2">Spend</th>
+                              <th className="text-right text-slate-400 py-2 px-2">Ad Revenue</th>
+                              <th className="text-right text-slate-400 py-2 px-2">Total Revenue</th>
+                              <th className="text-right text-slate-400 py-2 px-2">Orders</th>
+                              <th className="text-right text-slate-400 py-2 px-2">ROAS</th>
+                              <th className="text-right text-slate-400 py-2 px-2">ACOS</th>
+                              <th className="text-right text-slate-400 py-2 px-2">TACOS</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {monthlyArr.slice(-12).reverse().map(([month, m]) => {
+                              const roas = m.spend > 0 ? m.revenue / m.spend : 0;
+                              const acos = m.revenue > 0 ? (m.spend / m.revenue) * 100 : 0;
+                              const tacos = m.totalRevenue > 0 ? (m.spend / m.totalRevenue) * 100 : 0;
+                              return (
+                                <tr key={month} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                  <td className="py-2 px-2 text-white font-medium">{month}</td>
+                                  <td className="py-2 px-2 text-right text-white">{formatCurrency(m.spend)}</td>
+                                  <td className="py-2 px-2 text-right text-emerald-400">{formatCurrency(m.revenue)}</td>
+                                  <td className="py-2 px-2 text-right text-white">{formatCurrency(m.totalRevenue)}</td>
+                                  <td className="py-2 px-2 text-right text-white">{m.orders.toLocaleString()}</td>
+                                  <td className={`py-2 px-2 text-right font-medium ${roas >= 3 ? 'text-emerald-400' : roas >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{roas.toFixed(2)}x</td>
+                                  <td className={`py-2 px-2 text-right ${acos <= 25 ? 'text-emerald-400' : acos <= 35 ? 'text-amber-400' : 'text-rose-400'}`}>{acos.toFixed(1)}%</td>
+                                  <td className={`py-2 px-2 text-right ${tacos <= 15 ? 'text-emerald-400' : tacos <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>{tacos.toFixed(1)}%</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                    
+                    {/* Trend Analysis */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Best Months */}
+                      <div className="bg-slate-800/50 rounded-xl border border-emerald-500/30 p-5">
+                        <h3 className="text-lg font-semibold text-emerald-400 mb-3 flex items-center gap-2">
+                          <Trophy className="w-5 h-5" />Best Performing Months
+                        </h3>
+                        <div className="space-y-2">
+                          {monthlyArr
+                            .map(([month, m]) => ({ month, roas: m.spend > 0 ? m.revenue / m.spend : 0, spend: m.spend }))
+                            .filter(m => m.spend > 500)
+                            .sort((a, b) => b.roas - a.roas)
+                            .slice(0, 5)
+                            .map((m, i) => (
+                              <div key={m.month} className="flex items-center justify-between p-2 bg-slate-900/50 rounded-lg">
+                                <span className="text-white">{m.month}</span>
+                                <span className="text-emerald-400 font-bold">{m.roas.toFixed(2)}x ROAS</span>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                      
+                      {/* Worst Months */}
+                      <div className="bg-slate-800/50 rounded-xl border border-amber-500/30 p-5">
+                        <h3 className="text-lg font-semibold text-amber-400 mb-3 flex items-center gap-2">
+                          <AlertTriangle className="w-5 h-5" />Lowest Performing Months
+                        </h3>
+                        <div className="space-y-2">
+                          {monthlyArr
+                            .map(([month, m]) => ({ month, roas: m.spend > 0 ? m.revenue / m.spend : 0, spend: m.spend }))
+                            .filter(m => m.spend > 500)
+                            .sort((a, b) => a.roas - b.roas)
+                            .slice(0, 5)
+                            .map((m, i) => (
+                              <div key={m.month} className="flex items-center justify-between p-2 bg-slate-900/50 rounded-lg">
+                                <span className="text-white">{m.month}</span>
+                                <span className="text-amber-400 font-bold">{m.roas.toFixed(2)}x ROAS</span>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
           
           {/* Amazon Campaigns View */}
           {adsViewMode === 'campaigns' && (
