@@ -439,7 +439,7 @@ const AI_CONFIG = {
 // Helper to call AI with unified config (streaming)
 // Can be called as:
 //   callAI(prompt, systemPrompt) - for simple prompts
-//   callAI({ messages: [...], system: '...' }) - for chat with history
+//   callAI({ messages: [...], system: '...' }) - for chat with history or complex content
 const callAI = async (promptOrOptions, systemPrompt = '') => {
   let requestBody;
   
@@ -452,7 +452,7 @@ const callAI = async (promptOrOptions, systemPrompt = '') => {
       max_tokens: AI_CONFIG.maxTokens,
     };
   } else {
-    // Options object with messages array
+    // Options object with messages array (supports complex content like PDFs)
     requestBody = {
       system: promptOrOptions.system || 'You are a helpful e-commerce analytics AI.',
       messages: promptOrOptions.messages || [],
@@ -489,21 +489,22 @@ const callAI = async (promptOrOptions, systemPrompt = '') => {
       buffer = lines.pop() || '';
       
       for (const line of lines) {
-        if (line.startsWith(':')) continue; // Skip comments
+        if (line.startsWith(':')) continue; // Skip SSE comments like ": connected"
         if (line.startsWith('data: ')) {
           try {
             const data = JSON.parse(line.slice(6));
             if (data.type === 'delta' && data.text) fullText += data.text;
             else if (data.type === 'complete' && data.content?.[0]?.text) fullText = data.content[0].text;
+            else if (data.type === 'done' && data.fullText) fullText = data.fullText;
             else if (data.type === 'error') throw new Error(data.error);
-          } catch (e) { /* Skip parse errors */ }
+          } catch (e) { /* Skip parse errors for incomplete JSON */ }
         }
       }
     }
     return fullText;
   }
   
-  // Fallback to JSON response
+  // Fallback to JSON response (shouldn't happen with streaming enabled)
   const data = await response.json();
   return data.content?.[0]?.text || '';
 };
@@ -12499,11 +12500,7 @@ Analyze the data and respond with ONLY this JSON:
         
         if (isCsv || isExcel) {
           // Parse CSV/Excel content with AI
-          const response = await fetch('/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              system: `You are an invoice data extractor. Extract the following from this invoice/bill data and respond ONLY with valid JSON, no other text:
+          const systemPrompt = `You are an invoice data extractor. Extract the following from this invoice/bill data and respond ONLY with valid JSON, no other text:
 {
   "vendor": "company name",
   "description": "brief description of what this invoice is for",
@@ -12511,18 +12508,9 @@ Analyze the data and respond with ONLY this JSON:
   "dueDate": "YYYY-MM-DD format",
   "category": one of: "operations", "inventory", "marketing", "software", "shipping", "taxes", "other"
 }
-If you cannot find a field, use null. For dueDate, if only month/year given, use the 1st of that month. Look for amounts, totals, due dates, vendor names in the data.`,
-              messages: [{ 
-                role: 'user', 
-                content: `Extract invoice details from this data:\n\n${textContent.slice(0, 5000)}`
-              }],
-              model: 'claude-sonnet-4-20250514',
-            }),
-          });
+If you cannot find a field, use null. For dueDate, if only month/year given, use the 1st of that month. Look for amounts, totals, due dates, vendor names in the data.`;
           
-          if (!response.ok) throw new Error('API error');
-          const data = await response.json();
-          const text = data.content?.[0]?.text || data.content || '';
+          const text = await callAI(`Extract invoice details from this data:\n\n${textContent.slice(0, 5000)}`, systemPrompt);
           
           const jsonMatch = text.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
@@ -12546,11 +12534,7 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
           });
           
           // Send to AI to extract invoice details
-          const response = await fetch('/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              system: `You are an invoice data extractor. Extract the following from the invoice and respond ONLY with valid JSON, no other text:
+          const systemPrompt = `You are an invoice data extractor. Extract the following from the invoice and respond ONLY with valid JSON, no other text:
 {
   "vendor": "company name",
   "description": "brief description of what this invoice is for",
@@ -12558,21 +12542,18 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
   "dueDate": "YYYY-MM-DD format",
   "category": one of: "operations", "inventory", "marketing", "software", "shipping", "taxes", "other"
 }
-If you cannot find a field, use null. For dueDate, if only month/year given, use the 1st of that month.`,
-              messages: [{ 
-                role: 'user', 
-                content: [
-                  { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 }},
-                  { type: 'text', text: 'Extract the invoice details from this PDF.' }
-                ]
-              }],
-              model: 'claude-sonnet-4-20250514',
-            }),
-          });
+If you cannot find a field, use null. For dueDate, if only month/year given, use the 1st of that month.`;
           
-          if (!response.ok) throw new Error('API error');
-          const data = await response.json();
-          const text = data.content?.[0]?.text || data.content || '';
+          const text = await callAI({
+            system: systemPrompt,
+            messages: [{ 
+              role: 'user', 
+              content: [
+                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 }},
+                { type: 'text', text: 'Extract the invoice details from this PDF.' }
+              ]
+            }]
+          });
           
           // Parse the JSON response
           const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -15143,19 +15124,7 @@ ${topAlerts.length > 0 ? `Alerts:${topAlerts.join(';')}` : ''}
 
 Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Concerns(3), Channels, ${inventoryAlerts.length > 0 ? 'Inventory Actions,' : ''}Recommendations(5)`;
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system: `E-commerce analyst for ${storeName || 'Store'}. Write detailed reports from compact data. Be specific with numbers.`,
-          messages: [{ role: 'user', content: p }],
-          model: 'claude-sonnet-4-20250514',
-        }),
-      });
-
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-      const data = await response.json();
-      const reportContent = data.content?.[0]?.text || data.content || '';
+      const reportContent = await callAI(p, `E-commerce analyst for ${storeName || 'Store'}. Write detailed reports from compact data. Be specific with numbers.`);
       if (!reportContent) throw new Error('No report content generated');
 
       const newReport = {
@@ -21272,13 +21241,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   
                   // Trigger AI analysis
                   try {
-                    const response = await fetch('/api/chat', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        messages: [{
-                          role: 'user',
-                          content: `You are an inventory planning expert. Analyze this e-commerce inventory data and provide actionable recommendations.
+                    const prompt = `You are an inventory planning expert. Analyze this e-commerce inventory data and provide actionable recommendations.
 
 DATA:
 ${JSON.stringify(analysisContext, null, 2)}
@@ -21290,15 +21253,12 @@ Provide a concise analysis covering:
 4. **Reorder Priority** - Ranked list of what to reorder first
 5. **Specific Actions** - What should I do this week?
 
-Be specific with SKU names and numbers. Use bullet points for clarity.`
-                        }],
-                        model: 'claude-sonnet-4-20250514',
-                      })
-                    });
-                    const result = await response.json();
+Be specific with SKU names and numbers. Use bullet points for clarity.`;
+                    
+                    const result = await callAI(prompt);
                     setAiMessages(prev => [...prev, { 
                       role: 'assistant', 
-                      content: result.content?.[0]?.text || result.content || result.choices?.[0]?.message?.content || 'Unable to generate forecast analysis.'
+                      content: result || 'Unable to generate forecast analysis.'
                     }]);
                   } catch (err) {
                     console.error('AI Forecast Analysis error:', err);
@@ -21519,20 +21479,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       if (!productionFile) return;
                       setExtractingProduction(true);
                       try {
-                        const response = await fetch('/api/chat', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            messages: [{
-                              role: 'user',
-                              content: `Extract production/manufacturing order data from this document. Return ONLY a JSON array with objects containing: sku, productName, quantity (number), expectedDate (YYYY-MM-DD format), notes (optional). If you can't find a date, use empty string. If you can't find SKU, use the product name. Here's the document:\n\n${productionFile}`
-                            }],
-                            model: 'claude-sonnet-4-20250514',
-                          })
-                        });
-                        const data = await response.json();
+                        const text = await callAI(`Extract production/manufacturing order data from this document. Return ONLY a JSON array with objects containing: sku, productName, quantity (number), expectedDate (YYYY-MM-DD format), notes (optional). If you can't find a date, use empty string. If you can't find SKU, use the product name. Here's the document:\n\n${productionFile}`);
+                        
                         // Try to parse JSON from the response
-                        const text = data.choices?.[0]?.message?.content || data.content || '';
                         const jsonMatch = text.match(/\[[\s\S]*\]/);
                         if (jsonMatch) {
                           const extracted = JSON.parse(jsonMatch[0]);
