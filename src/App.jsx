@@ -1527,13 +1527,16 @@ const handleLogout = async () => {
   // Lead Time Settings
   const [leadTimeSettings, setLeadTimeSettings] = useState(() => {
     try { 
-      return JSON.parse(localStorage.getItem('ecommerce_lead_times_v1')) || {
-        defaultLeadTimeDays: 14,
-        skuLeadTimes: {}, // { sku: days }
-        reorderBuffer: 7, // Extra days buffer for reorder alerts
+      const saved = JSON.parse(localStorage.getItem('ecommerce_lead_times_v1')) || {};
+      return {
+        defaultLeadTimeDays: saved.defaultLeadTimeDays || 14,
+        skuLeadTimes: saved.skuLeadTimes || {}, // { sku: days }
+        reorderBuffer: saved.reorderBuffer || 7, // Extra days buffer for reorder alerts
+        reorderTriggerDays: saved.reorderTriggerDays || 60, // Want shipment to arrive when stock reaches X days
+        minOrderWeeks: saved.minOrderWeeks || 22, // Minimum order size (5 months ≈ 22 weeks)
       }; 
     } catch { 
-      return { defaultLeadTimeDays: 14, skuLeadTimes: {}, reorderBuffer: 7 }; 
+      return { defaultLeadTimeDays: 14, skuLeadTimes: {}, reorderBuffer: 7, reorderTriggerDays: 60, minOrderWeeks: 22 }; 
     }
   });
   
@@ -8880,7 +8883,11 @@ Respond with ONLY this JSON:
         return;
       }
       
-      // Pre-calculate stockout dates - don't rely on AI for date math
+      // Get reorder settings
+      const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60; // Want shipment to arrive when stock = this
+      const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22; // Minimum order size (5 months ≈ 22 weeks)
+      
+      // Pre-calculate stockout dates and reorder points - don't rely on AI for date math
       const today = new Date();
       const currentInventory = (invHistory[latestInvKey]?.items || []).map(item => {
         const currentStock = item.totalQty || 0;
@@ -8897,22 +8904,27 @@ Respond with ONLY this JSON:
           stockoutDate = stockout.toISOString().split('T')[0];
         }
         
-        // Calculate reorder date: stockout date - lead time
+        // NEW LOGIC: Calculate when to place order so shipment arrives when stock = reorderTriggerDays
+        // Order when: daysOfSupply = reorderTriggerDays + leadTimeDays
+        // So: reorderByDate = today + (daysOfSupply - reorderTriggerDays - leadTimeDays)
+        const daysUntilMustOrder = daysOfSupply - reorderTriggerDays - leadTimeDays;
         let reorderByDate = null;
-        if (stockoutDate && leadTimeDays > 0) {
-          const reorderBy = new Date(stockoutDate);
-          reorderBy.setDate(reorderBy.getDate() - leadTimeDays - (leadTimeSettings.reorderBuffer || 7));
+        if (dailyVelocity > 0) {
+          const reorderBy = new Date(today);
+          reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
           reorderByDate = reorderBy.toISOString().split('T')[0];
         }
         
-        // Determine urgency based on days until reorder needed
+        // Calculate suggested order quantity (minimum X weeks of supply)
+        const suggestedOrderQty = Math.ceil(weeklyVelocity * minOrderWeeks);
+        
+        // Determine urgency based on days until order must be placed
         let calculatedUrgency = 'healthy';
-        if (reorderByDate) {
-          const daysUntilReorder = Math.ceil((new Date(reorderByDate) - today) / (1000 * 60 * 60 * 24));
-          if (daysUntilReorder < 0) calculatedUrgency = 'critical'; // Already past reorder date
-          else if (daysUntilReorder < 7) calculatedUrgency = 'critical';
-          else if (daysUntilReorder < 14) calculatedUrgency = 'reorder';
-          else if (daysUntilReorder < 30) calculatedUrgency = 'monitor';
+        if (dailyVelocity > 0) {
+          if (daysUntilMustOrder < 0) calculatedUrgency = 'critical'; // Already past order date!
+          else if (daysUntilMustOrder < 7) calculatedUrgency = 'critical';
+          else if (daysUntilMustOrder < 14) calculatedUrgency = 'reorder';
+          else if (daysUntilMustOrder < 30) calculatedUrgency = 'monitor';
         }
         
         return {
@@ -8926,6 +8938,8 @@ Respond with ONLY this JSON:
           daysOfSupply,
           stockoutDate,
           reorderByDate,
+          daysUntilMustOrder,
+          suggestedOrderQty,
           calculatedUrgency,
           health: item.health,
           leadTimeDays,
@@ -8945,23 +8959,34 @@ Respond with ONLY this JSON:
 
 ## TODAY'S DATE: ${today.toISOString().split('T')[0]}
 
-## LEAD TIME SETTINGS
-Default Lead Time: ${leadTimeSettings.defaultLeadTimeDays} days
-Reorder Buffer: ${leadTimeSettings.reorderBuffer} days (extra safety margin)
+## REORDER SETTINGS
+- Lead Time: ${leadTimeSettings.defaultLeadTimeDays} days (time from placing order to arrival)
+- Target Buffer: ${reorderTriggerDays} days (want shipment to arrive when stock reaches this level)
+- Minimum Order: ${minOrderWeeks} weeks of supply (${Math.round(minOrderWeeks / 4.3)} months)
 
-## CURRENT INVENTORY (${currentInventory.length} SKUs) - STOCKOUT DATES PRE-CALCULATED
+## HOW REORDER DATES ARE CALCULATED:
+- stockoutDate = Today + daysOfSupply (when stock hits 0)
+- reorderByDate = Today + daysUntilMustOrder (when to place the order)
+- daysUntilMustOrder = daysOfSupply - ${reorderTriggerDays} (target buffer) - leadTimeDays
+- This ensures the shipment arrives when you still have ${reorderTriggerDays} days of inventory left
+
+## URGENCY LEVELS (based on daysUntilMustOrder):
+- CRITICAL: daysUntilMustOrder < 0 (overdue!) or < 7 days
+- REORDER: daysUntilMustOrder < 14 days  
+- MONITOR: daysUntilMustOrder < 30 days
+- HEALTHY: daysUntilMustOrder >= 30 days
+
+## CURRENT INVENTORY (${currentInventory.length} SKUs) - ALL VALUES PRE-CALCULATED
 ${JSON.stringify(currentInventory.slice(0, 30), null, 2)}
 
 ## PENDING PRODUCTION ORDERS (${pendingProduction.length} orders)
 ${pendingProduction.length > 0 ? JSON.stringify(pendingProduction, null, 2) : 'No pending production orders'}
 
-## IMPORTANT: Use the pre-calculated stockoutDate and reorderByDate values - do NOT recalculate them.
-- stockoutDate = Today + (currentStock / dailyVelocity)
-- reorderByDate = stockoutDate - leadTimeDays - buffer
-- If reorderByDate is in the past or within 7 days → CRITICAL
-- If reorderByDate is within 14 days → REORDER
-- If reorderByDate is within 30 days → MONITOR
-- Factor in pending production arrivals - if production arrives before stockout, adjust urgency accordingly
+## IMPORTANT INSTRUCTIONS:
+- Use the pre-calculated values (stockoutDate, reorderByDate, daysUntilMustOrder, suggestedOrderQty) - do NOT recalculate
+- suggestedOrderQty is already set to ${minOrderWeeks} weeks of supply - use this value
+- Factor in pending production: if production arrives before reorderByDate, it may change urgency
+- For items with 0 velocity, mark as "monitor" or "healthy" based on stock levels
 
 Respond with ONLY this JSON:
 {
@@ -8981,9 +9006,9 @@ Respond with ONLY this JSON:
       "daysOfSupply": number,
       "leadTimeDays": number,
       "weeklyVelocity": number,
-      "suggestedOrderQty": number (typically 4-8 weeks of supply),
-      "reorderDate": "use the reorderByDate from input",
-      "stockoutDate": "use the stockoutDate from input",
+      "suggestedOrderQty": number (use the pre-calculated value),
+      "reorderDate": "use reorderByDate from input",
+      "stockoutDate": "use stockoutDate from input", 
       "pendingProduction": number or null,
       "pendingArrivalDate": "date or null",
       "reasoning": "why this recommendation"
@@ -27263,8 +27288,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                 {/* Lead Time Settings Reminder */}
                 <div className="bg-slate-800/50 rounded-lg p-3 mb-4 flex items-center justify-between">
                   <div>
-                    <p className="text-slate-300 text-sm">Default Lead Time: <span className="text-amber-400 font-medium">{leadTimeSettings.defaultLeadTimeDays} days</span></p>
-                    <p className="text-slate-500 text-xs">Buffer: {leadTimeSettings.reorderBuffer} days • {Object.keys(leadTimeSettings.skuLeadTimes || {}).length} SKU-specific settings</p>
+                    <p className="text-slate-300 text-sm">
+                      Lead Time: <span className="text-amber-400 font-medium">{leadTimeSettings.defaultLeadTimeDays} days</span>
+                      <span className="text-slate-500 mx-2">•</span>
+                      Target Buffer: <span className="text-amber-400 font-medium">{leadTimeSettings.reorderTriggerDays || 60} days</span>
+                      <span className="text-slate-500 mx-2">•</span>
+                      Min Order: <span className="text-amber-400 font-medium">{leadTimeSettings.minOrderWeeks || 22} weeks</span>
+                    </p>
+                    <p className="text-slate-500 text-xs">Order when stock = {(leadTimeSettings.reorderTriggerDays || 60) + (leadTimeSettings.defaultLeadTimeDays || 14)} days supply, so shipment arrives at {leadTimeSettings.reorderTriggerDays || 60} days</p>
                   </div>
                   <button onClick={() => setForecastTab('settings')} className="text-xs text-amber-400 hover:text-amber-300">Edit Settings →</button>
                 </div>
@@ -27513,6 +27544,47 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`
                       min="0"
                     />
                     <p className="text-slate-500 text-xs mt-1">Extra safety margin added to lead time for reorder alerts</p>
+                  </div>
+                </div>
+                
+                {/* Reorder Strategy Settings */}
+                <div className="border-t border-slate-700 pt-6 mb-6">
+                  <h4 className="text-white font-medium mb-2">Reorder Strategy</h4>
+                  <p className="text-slate-400 text-sm mb-4">Configure when to reorder and how much to order</p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-300 mb-2">Target Inventory Buffer (days)</label>
+                      <input 
+                        type="number"
+                        value={leadTimeSettings.reorderTriggerDays || 60}
+                        onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, reorderTriggerDays: parseInt(e.target.value) || 60 }))}
+                        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white"
+                        min="14"
+                      />
+                      <p className="text-slate-500 text-xs mt-1">New shipment should arrive when stock reaches this many days of supply</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-300 mb-2">Minimum Order Size (weeks of supply)</label>
+                      <input 
+                        type="number"
+                        value={leadTimeSettings.minOrderWeeks || 22}
+                        onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, minOrderWeeks: parseInt(e.target.value) || 22 }))}
+                        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white"
+                        min="4"
+                      />
+                      <p className="text-slate-500 text-xs mt-1">Order at least this many weeks of supply ({Math.round((leadTimeSettings.minOrderWeeks || 22) / 4.3)} months)</p>
+                    </div>
+                  </div>
+                  
+                  {/* Visual explanation */}
+                  <div className="mt-4 bg-slate-900/50 rounded-lg p-4">
+                    <p className="text-slate-300 text-sm">
+                      <span className="text-amber-400 font-medium">How it works:</span> Place order when Days of Supply = {(leadTimeSettings.reorderTriggerDays || 60) + (leadTimeSettings.defaultLeadTimeDays || 14)} days (Target Buffer {leadTimeSettings.reorderTriggerDays || 60} + Lead Time {leadTimeSettings.defaultLeadTimeDays || 14})
+                    </p>
+                    <p className="text-slate-400 text-xs mt-1">
+                      This ensures your new shipment arrives when you still have {leadTimeSettings.reorderTriggerDays || 60} days of inventory left.
+                    </p>
                   </div>
                 </div>
                 
