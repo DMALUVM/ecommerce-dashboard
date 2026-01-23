@@ -35643,59 +35643,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             };
                           });
                           
-                          // Add any new SKUs from Packiyo that aren't in the snapshot
-                          // Use normalized matching (handle Shop suffix)
-                          let addedCount = 0;
-                          Object.values(packiyoData).forEach(pItem => {
-                            // Check if this Packiyo SKU or its normalized version already exists
-                            const skuVariations = [pItem.sku];
-                            if (pItem.sku.endsWith('Shop')) {
-                              skuVariations.push(pItem.sku.replace(/Shop$/, ''));
-                            } else {
-                              skuVariations.push(pItem.sku + 'Shop');
-                            }
-                            
-                            const alreadyExists = currentSnapshot.items.find(i => 
-                              skuVariations.includes(i.sku) || 
-                              i.sku === pItem.sku.replace(/Shop$/, '') ||
-                              i.sku + 'Shop' === pItem.sku
-                            );
-                            
-                            if (!alreadyExists) {
-                              const cost = savedCogs[pItem.sku] || savedCogs[pItem.sku.replace(/Shop$/, '')] || pItem.cost || 0;
-                              const qty = pItem.quantityOnHand || pItem.quantity_on_hand || pItem.totalQty || 0;
-                              const inbound = pItem.quantityInbound || pItem.quantity_inbound || 0;
-                              
-                              if (qty > 0) {  // Only add if has inventory
-                                newTplTotal += qty;
-                                newTplValue += qty * cost;
-                                addedCount++;
-                                updatedItems.push({
-                                  sku: pItem.sku,
-                                  name: pItem.name,
-                                  asin: '',
-                                  amazonQty: 0,
-                                  threeplQty: qty,
-                                  homeQty: 0,
-                                  totalQty: qty,
-                                  cost,
-                                  totalValue: qty * cost,
-                                  weeklyVel: 0,
-                                  daysOfSupply: 999,
-                                  health: 'unknown',
-                                  stockoutDate: null,
-                                  reorderByDate: null,
-                                  daysUntilMustOrder: null,
-                                  suggestedOrderQty: 0,
-                                  amazonInbound: 0,
-                                  threeplInbound: inbound,
-                                });
-                              }
-                            }
-                          });
-                          
                           console.log('Matched existing items:', matchedCount);
-                          console.log('Added new items:', addedCount);
                           console.log('FINAL newTplTotal:', newTplTotal);
                           console.log('FINAL newTplValue:', newTplValue);
                           
@@ -35775,30 +35723,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               };
                             });
                             
-                            // Add Packiyo-only SKUs
-                            Object.values(packiyoData).forEach(pItem => {
-                              if (!updatedItems.find(i => i.sku === pItem.sku || i.sku === pItem.sku.replace(/Shop$/, '') || i.sku + 'Shop' === pItem.sku)) {
-                                const qty = pItem.quantityOnHand || pItem.quantity_on_hand || pItem.totalQty || 0;
-                                const cost = savedCogs[pItem.sku] || pItem.cost || 0;
-                                newTplTotal += qty;
-                                newTplValue += qty * cost;
-                                updatedItems.push({
-                                  sku: pItem.sku,
-                                  name: pItem.name,
-                                  asin: '',
-                                  amazonQty: 0,
-                                  threeplQty: qty,
-                                  homeQty: 0,
-                                  totalQty: qty,
-                                  cost,
-                                  totalValue: qty * cost,
-                                  weeklyVel: 0,
-                                  daysOfSupply: 999,
-                                  health: 'unknown',
-                                });
-                              }
-                            });
-                            
                             updatedItems.sort((a, b) => b.totalValue - a.totalValue);
                             
                             const mergedSnapshot = {
@@ -35826,65 +35750,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             saveInv(newHistory);
                             setToast({ message: `Merged ${newTplTotal.toLocaleString()} 3PL units with existing inventory`, type: 'success' });
                           } else {
-                            // Truly no snapshot exists - create new one (3PL only)
-                            console.log('=== CREATING NEW 3PL-ONLY SNAPSHOT ===');
-                            const packiyoData = data.inventoryBySku;
-                            
-                            let totalUnits = 0;
-                            let totalValue = 0;
-                            const items = Object.values(packiyoData).map(pItem => {
-                              const qty = pItem.quantityOnHand || pItem.quantity_on_hand || pItem.totalQty || 0;
-                              const inbound = pItem.quantityInbound || pItem.quantity_inbound || 0;
-                              const cost = savedCogs[pItem.sku] || pItem.cost || 0;
-                              totalUnits += qty;
-                              totalValue += qty * cost;
-                              
-                              return {
-                                sku: pItem.sku,
-                                name: pItem.name,
-                                asin: '',
-                                amazonQty: 0,
-                                threeplQty: qty,
-                                homeQty: 0,
-                                totalQty: qty,
-                                cost,
-                                totalValue: qty * cost,
-                                weeklyVel: 0,
-                                daysOfSupply: 999,
-                                health: 'unknown',
-                                amazonInbound: 0,
-                                threeplInbound: inbound,
-                              };
-                            }).sort((a, b) => b.totalValue - a.totalValue);
-                            
-                            const newSnapshot = {
-                              date: todayDate,
-                              items,
-                              summary: {
-                                totalUnits,
-                                totalValue,
-                                amazonUnits: 0,
-                                amazonValue: 0,
-                                threeplUnits: totalUnits,
-                                threeplValue: totalValue,
-                                homeUnits: 0,
-                                homeValue: 0,
-                                skuCount: items.length,
-                              },
-                              sources: {
-                                amazon: 'none',
-                                threepl: 'packiyo-direct',
-                                home: 'none',
-                                packiyoConnected: true,
-                                lastPackiyoSync: new Date().toISOString(),
-                              },
-                            };
-                            
-                            const newHistory = { ...invHistory, [todayDate]: newSnapshot };
-                            setInvHistory(newHistory);
-                            setSelectedInvDate(todayDate);
-                            saveInv(newHistory);
-                            setToast({ message: `Created 3PL inventory snapshot with ${totalUnits.toLocaleString()} units`, type: 'success' });
+                            // No snapshot exists for today - don't create 3PL-only snapshot that would lose Amazon data
+                            // Instead, tell user to create inventory snapshot first
+                            console.log('No snapshot exists for today - user should create one with Amazon data first');
+                            setToast({ 
+                              message: 'Packiyo synced but no inventory snapshot exists for today. Go to Inventory tab and create a new snapshot to include Amazon + 3PL data.', 
+                              type: 'warning' 
+                            });
                           }
                         }
                       } catch (err) {
