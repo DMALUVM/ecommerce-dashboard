@@ -15823,8 +15823,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               className="w-full rounded-xl border border-slate-700 hover:border-slate-500 text-slate-200 py-2">
               {authMode === 'sign_up' ? 'Have an account? Sign in' : 'New here? Create an account'}
             </button>
-
-            <p className="text-xs text-slate-500">If you haven't added your Supabase keys yet, the app will run without login but data will stay on this device only.</p>
           </form>
         </div>
       </div>
