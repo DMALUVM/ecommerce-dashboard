@@ -5596,14 +5596,22 @@ const savePeriods = async (d) => {
             
             const qty = item.quantity_on_hand || 0;
             const inb = item.quantity_inbound || 0;
-            const cost = item.cost || cogsLookup[sku] || 0;
+            // Try COGS with and without "Shop" suffix
+            const cost = item.cost || cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/, '')] || 0;
             
             if (qty === 0 && inb === 0) return;
             
             tplTotal += qty;
             tplValue += qty * cost;
             tplInbound += inb;
+            
+            // Index by original SKU
             tplInv[sku] = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
+            // Also index by normalized SKU (without "Shop" suffix) for matching with Amazon
+            if (sku.endsWith('Shop')) {
+              const normalizedSku = sku.replace(/Shop$/, '');
+              tplInv[normalizedSku] = { sku: normalizedSku, name: item.name || sku, total: qty, inbound: inb, cost };
+            }
           });
           
           // Update Packiyo last sync time
@@ -35549,33 +35557,42 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         });
                         
                         // Update current inventory snapshot with fresh Packiyo 3PL data
-                        console.log('=== PACKIYO SYNC UPDATE ===');
+                        console.log('=== PACKIYO SYNC - UPDATING INVENTORY ===');
                         console.log('selectedInvDate:', selectedInvDate);
-                        console.log('invHistory has date?', !!invHistory[selectedInvDate]);
+                        console.log('invHistory keys:', Object.keys(invHistory));
                         console.log('data.inventoryBySku count:', Object.keys(data.inventoryBySku || {}).length);
                         
                         if (selectedInvDate && invHistory[selectedInvDate] && data.inventoryBySku) {
+                          console.log('=== UPDATING EXISTING SNAPSHOT ===');
                           const currentSnapshot = invHistory[selectedInvDate];
+                          console.log('Current snapshot items:', currentSnapshot.items?.length);
                           const packiyoData = data.inventoryBySku;
                           const today = new Date();
                           const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
                           const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
                           
-                          console.log('Current snapshot items count:', currentSnapshot.items?.length);
-                          console.log('Packiyo SKUs:', Object.keys(packiyoData).slice(0, 5));
-                          
-                          // Log first Packiyo item to see structure
-                          const firstKey = Object.keys(packiyoData)[0];
-                          if (firstKey) {
-                            console.log('First Packiyo item:', JSON.stringify(packiyoData[firstKey]));
-                          }
+                          // Create lookup that handles "Shop" suffix variations
+                          // e.g., DDPE0022Shop should match DDPE0022
+                          const packiyoLookup = {};
+                          Object.entries(packiyoData).forEach(([sku, item]) => {
+                            packiyoLookup[sku] = item;
+                            // Also index without "Shop" suffix
+                            if (sku.endsWith('Shop')) {
+                              packiyoLookup[sku.replace(/Shop$/, '')] = item;
+                            }
+                            // And with "Shop" suffix if it doesn't have one
+                            if (!sku.endsWith('Shop')) {
+                              packiyoLookup[sku + 'Shop'] = item;
+                            }
+                          });
                           
                           // Update each item's 3PL quantity and recalculate stockout dates
                           let newTplTotal = 0;
                           let newTplValue = 0;
                           let matchedCount = 0;
                           const updatedItems = currentSnapshot.items.map(item => {
-                            const packiyoItem = packiyoData[item.sku];
+                            // Try exact match first, then variations
+                            const packiyoItem = packiyoLookup[item.sku];
                             // Handle both snake_case and camelCase field names
                             const newTplQty = packiyoItem?.quantityOnHand || packiyoItem?.quantity_on_hand || packiyoItem?.totalQty || 0;
                             const newTplInbound = packiyoItem?.quantityInbound || packiyoItem?.quantity_inbound || 0;
@@ -35621,35 +35638,53 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           });
                           
                           // Add any new SKUs from Packiyo that aren't in the snapshot
+                          // Use normalized matching (handle Shop suffix)
                           let addedCount = 0;
                           Object.values(packiyoData).forEach(pItem => {
-                            if (!currentSnapshot.items.find(i => i.sku === pItem.sku)) {
-                              const cost = savedCogs[pItem.sku] || pItem.cost || 0;
+                            // Check if this Packiyo SKU or its normalized version already exists
+                            const skuVariations = [pItem.sku];
+                            if (pItem.sku.endsWith('Shop')) {
+                              skuVariations.push(pItem.sku.replace(/Shop$/, ''));
+                            } else {
+                              skuVariations.push(pItem.sku + 'Shop');
+                            }
+                            
+                            const alreadyExists = currentSnapshot.items.find(i => 
+                              skuVariations.includes(i.sku) || 
+                              i.sku === pItem.sku.replace(/Shop$/, '') ||
+                              i.sku + 'Shop' === pItem.sku
+                            );
+                            
+                            if (!alreadyExists) {
+                              const cost = savedCogs[pItem.sku] || savedCogs[pItem.sku.replace(/Shop$/, '')] || pItem.cost || 0;
                               const qty = pItem.quantityOnHand || pItem.quantity_on_hand || pItem.totalQty || 0;
                               const inbound = pItem.quantityInbound || pItem.quantity_inbound || 0;
-                              newTplTotal += qty;
-                              newTplValue += qty * cost;
-                              addedCount++;
-                              updatedItems.push({
-                                sku: pItem.sku,
-                                name: pItem.name,
-                                asin: '',
-                                amazonQty: 0,
-                                threeplQty: qty,
-                                homeQty: 0,
-                                totalQty: qty,
-                                cost,
-                                totalValue: qty * cost,
-                                weeklyVel: 0,
-                                daysOfSupply: 999,
-                                health: 'unknown',
-                                stockoutDate: null,
-                                reorderByDate: null,
-                                daysUntilMustOrder: null,
-                                suggestedOrderQty: 0,
-                                amazonInbound: 0,
-                                threeplInbound: inbound,
-                              });
+                              
+                              if (qty > 0) {  // Only add if has inventory
+                                newTplTotal += qty;
+                                newTplValue += qty * cost;
+                                addedCount++;
+                                updatedItems.push({
+                                  sku: pItem.sku,
+                                  name: pItem.name,
+                                  asin: '',
+                                  amazonQty: 0,
+                                  threeplQty: qty,
+                                  homeQty: 0,
+                                  totalQty: qty,
+                                  cost,
+                                  totalValue: qty * cost,
+                                  weeklyVel: 0,
+                                  daysOfSupply: 999,
+                                  health: 'unknown',
+                                  stockoutDate: null,
+                                  reorderByDate: null,
+                                  daysUntilMustOrder: null,
+                                  suggestedOrderQty: 0,
+                                  amazonInbound: 0,
+                                  threeplInbound: inbound,
+                                });
+                              }
                             }
                           });
                           
@@ -35694,7 +35729,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           setToast({ message: `Updated inventory with ${newTplTotal.toLocaleString()} 3PL units (${formatCurrency(newTplValue)})`, type: 'success' });
                         } else if (data.inventoryBySku && Object.keys(data.inventoryBySku).length > 0) {
                           // No existing snapshot - create new one from Packiyo data alone
-                          console.log('=== CREATING NEW SNAPSHOT (no existing) ===');
+                          console.log('=== NO EXISTING SNAPSHOT - CREATING NEW ===');
+                          console.log('Reason: selectedInvDate=', selectedInvDate, 'hasSnapshot=', !!invHistory[selectedInvDate]);
                           const today = new Date().toISOString().split('T')[0];
                           const packiyoData = data.inventoryBySku;
                           
