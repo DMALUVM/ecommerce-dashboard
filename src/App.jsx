@@ -1430,6 +1430,84 @@ const handleLogout = async () => {
   setSession(null);
   // Clear any locked state
   setIsLocked(false);
+  
+  // CRITICAL: Clear localStorage to prevent data leakage between users
+  const keysToKeep = ['ecommerce_theme']; // Only keep theme preference
+  const allKeys = Object.keys(localStorage).filter(k => k.startsWith('ecommerce_'));
+  allKeys.forEach(k => {
+    if (!keysToKeep.includes(k)) {
+      localStorage.removeItem(k);
+    }
+  });
+  
+  // Reset ALL data state to prevent showing previous user's data
+  // === Core Data ===
+  setAllWeeksData({});
+  setAllDaysData({});
+  setAllPeriodsData({});
+  setInvHistory({});
+  setSavedCogs({});
+  setCogsLastUpdated(null);
+  setSavedProductNames({});
+  setStoreName('');
+  setStoreLogo('');
+  
+  // === Tax & Finance ===
+  setSalesTaxConfig({ nexusStates: {}, filingHistory: {}, hiddenStates: [] });
+  setInvoices([]);
+  setBankingData({ transactions: [], accounts: {}, categories: {}, monthlySnapshots: {} });
+  setConfirmedRecurring([]);
+  
+  // === Forecasts & AI ===
+  setAmazonForecasts({});
+  setForecastMeta({ lastUploads: { '7day': null, '30day': null, '60day': null }, history: [] });
+  setAiForecasts(null);
+  setAiForecastModule({ salesForecast: null, inventoryPlan: null, lastUpdated: null, loading: null, error: null });
+  setAiLearningHistory({ predictions: [], outcomes: [], modelUpdates: [] });
+  setUnifiedAIModel(null);
+  setForecastAccuracyHistory({ records: [], lastUpdated: null, modelVersion: 1 });
+  setForecastCorrections({ overall: { revenue: 1.0, units: 1.0, profit: 1.0 }, bySku: {}, byMonth: {}, byQuarter: {}, confidence: 0, samplesUsed: 0, lastUpdated: null });
+  
+  // === Goals & Notes ===
+  setWeekNotes({});
+  setGoals({ weeklyRevenue: 0, monthlyRevenue: 0, weeklyProfit: 0, monthlyProfit: 0 });
+  setWeeklyReports({});
+  
+  // === Production & 3PL ===
+  setProductionPipeline([]);
+  setThreeplLedger({ orders: {}, weeklyTotals: {} });
+  setReturnRates({ overall: {}, bySku: {}, byMonth: {}, byWeek: {} });
+  setLeadTimeSettings({ defaultLeadTimeDays: 14, skuLeadTimes: {}, reorderBuffer: 7 });
+  
+  // === Ads & Campaigns ===
+  setAmazonCampaigns({ campaigns: [], lastUpdated: null, history: [] });
+  
+  // === Widget & UI Config ===
+  setWidgetConfig({});
+  setAppSettings({
+    inventoryDaysOptimal: 60, inventoryDaysLow: 30, inventoryDaysCritical: 14,
+    tacosOptimal: 15, tacosWarning: 25, tacosMax: 35, roasTarget: 3.0,
+    marginTarget: 25, marginWarning: 15,
+    modulesEnabled: { weeklyTracking: true, periodTracking: true, inventory: true, trends: true, yoy: true, skus: true, profitability: true, ads: true, threepl: true, salesTax: true },
+    dashboardDefaultRange: 'month', showWeeklyGoals: true, showMonthlyGoals: true,
+    alertSalesTaxDays: 7, alertInventoryEnabled: true,
+  });
+  
+  // === AI Chat History ===
+  setAiMessages([]);
+  setAdsAiMessages([]);
+  
+  // === Integrations ===
+  setShopifyCredentials(null);
+  setPackiyoCredentials(null);
+  
+  // === Stores ===
+  setStores([]);
+  setActiveStoreId(null);
+  
+  // === Sync Status ===
+  setLastBackupDate(null);
+  setLastSyncDate(null);
 };
 
   
@@ -3751,9 +3829,48 @@ useEffect(() => {
     }
 
     const { data } = await supabase.auth.getSession();
-    setSession(data?.session || null);
+    const initialSession = data?.session || null;
+    
+    // Track initial user ID
+    if (initialSession?.user?.id) {
+      const lastUserId = localStorage.getItem('ecommerce_last_user_id');
+      if (lastUserId && lastUserId !== initialSession.user.id) {
+        // Different user - clear localStorage
+        console.log('Different user detected on init - clearing previous user data');
+        const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id'];
+        Object.keys(localStorage).filter(k => k.startsWith('ecommerce_')).forEach(k => {
+          if (!keysToKeep.includes(k)) localStorage.removeItem(k);
+        });
+      }
+      localStorage.setItem('ecommerce_last_user_id', initialSession.user.id);
+    }
+    
+    setSession(initialSession);
 
     unsub = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      // Check if user changed - clear localStorage if different user logs in
+      const lastUserId = localStorage.getItem('ecommerce_last_user_id');
+      const newUserId = nextSession?.user?.id;
+      
+      if (newUserId && lastUserId && newUserId !== lastUserId) {
+        // Different user logging in - clear previous user's localStorage
+        console.log('Different user detected - clearing previous user data from localStorage');
+        const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id'];
+        const allKeys = Object.keys(localStorage).filter(k => k.startsWith('ecommerce_'));
+        allKeys.forEach(k => {
+          if (!keysToKeep.includes(k)) {
+            localStorage.removeItem(k);
+          }
+        });
+      }
+      
+      // Track current user
+      if (newUserId) {
+        localStorage.setItem('ecommerce_last_user_id', newUserId);
+      } else {
+        localStorage.removeItem('ecommerce_last_user_id');
+      }
+      
       setSession(nextSession);
     }).data?.subscription;
 
@@ -3857,7 +3974,7 @@ useEffect(() => {
           setSalesTaxConfig({ nexusStates: {}, filingHistory: {}, hiddenStates: [] });
           setInvoices([]);
           setAmazonForecasts({});
-          setForecastMeta({});
+          setForecastMeta({ lastUploads: { '7day': null, '30day': null, '60day': null }, history: [] });
           setWeekNotes({});
           setGoals({ weeklyRevenue: 0, monthlyRevenue: 0, weeklyProfit: 0, monthlyProfit: 0 });
           setSavedProductNames({});
@@ -3868,6 +3985,29 @@ useEffect(() => {
           setLeadTimeSettings({ defaultLeadTimeDays: 14, skuLeadTimes: {}, reorderBuffer: 7 });
           setBankingData({ transactions: [], accounts: {}, categories: {}, monthlySnapshots: {} });
           setConfirmedRecurring([]);
+          // Also reset AI forecast states
+          setAiForecasts(null);
+          setAiForecastModule({ salesForecast: null, inventoryPlan: null, lastUpdated: null, loading: null, error: null });
+          setAiLearningHistory({ predictions: [], outcomes: [], modelUpdates: [] });
+          setUnifiedAIModel(null);
+          setForecastAccuracyHistory({ records: [], lastUpdated: null, modelVersion: 1 });
+          setForecastCorrections({ overall: { revenue: 1.0, units: 1.0, profit: 1.0 }, bySku: {}, byMonth: {}, byQuarter: {}, confidence: 0, samplesUsed: 0, lastUpdated: null });
+          setWidgetConfig({});
+          setWeeklyReports({});
+          setAiMessages([]);
+          setAdsAiMessages([]);
+          setShopifyCredentials(null);
+          setPackiyoCredentials(null);
+          setAppSettings({
+            inventoryDaysOptimal: 60, inventoryDaysLow: 30, inventoryDaysCritical: 14,
+            tacosOptimal: 15, tacosWarning: 25, tacosMax: 35, roasTarget: 3.0,
+            marginTarget: 25, marginWarning: 15,
+            modulesEnabled: { weeklyTracking: true, periodTracking: true, inventory: true, trends: true, yoy: true, skus: true, profitability: true, ads: true, threepl: true, salesTax: true },
+            dashboardDefaultRange: 'month', showWeeklyGoals: true, showMonthlyGoals: true,
+            alertSalesTaxDays: 7, alertInventoryEnabled: true,
+          });
+          setLastBackupDate(null);
+          setLastSyncDate(null);
           
           // Create default store for new user
           const defaultStore = {
@@ -28888,8 +29028,27 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         if (!week) return acc;
         const amzAds = week.amazon?.adSpend || 0;
         const amzRev = week.amazon?.revenue || 0;
-        const metaAds = week.shopify?.metaAds || week.shopify?.metaSpend || 0;
-        const googleAds = week.shopify?.googleAds || week.shopify?.googleSpend || 0;
+        
+        // Check weekly data first for Meta/Google
+        let metaAds = week.shopify?.metaAds || week.shopify?.metaSpend || 0;
+        let googleAds = week.shopify?.googleAds || week.shopify?.googleSpend || 0;
+        
+        // If weekly doesn't have Meta/Google, aggregate from daily data
+        if (metaAds === 0 && googleAds === 0) {
+          const weekEnd = new Date(w + 'T00:00:00');
+          const weekStart = new Date(weekEnd);
+          weekStart.setDate(weekStart.getDate() - 6);
+          
+          sortedDays.filter(d => {
+            const date = new Date(d + 'T00:00:00');
+            return date >= weekStart && date <= weekEnd;
+          }).forEach(d => {
+            const day = allDaysData[d];
+            metaAds += day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
+            googleAds += day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
+          });
+        }
+        
         const shopifyAdSpend = week.shopify?.adSpend || 0;
         const shopAds = (metaAds + googleAds) > 0 ? (metaAds + googleAds) : shopifyAdSpend;
         const shopRev = week.shopify?.revenue || 0;
@@ -29089,8 +29248,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const compWeeks = getComparisonWeeks();
     const compTotals = aggregateWeeklyData(compWeeks);
     
-    // Use daily totals for daily/weekly tabs (since they use day-level data), weekly for others
+    // Always use daily data for Meta/Google (that's where bulk imports go)
+    // Use weekly data for Amazon (from SKU Economics) when available
     const useDailyData = adsTimeTab === 'daily' || adsTimeTab === 'weekly';
+    
+    // For monthly/quarterly/yearly: prefer daily totals if we have Meta/Google there
+    const hasDailyMetaGoogle = dailyTotals.metaAds > 0 || dailyTotals.googleAds > 0;
+    const hasWeeklyMetaGoogle = weeklyTotals.metaAds > 0 || weeklyTotals.googleAds > 0;
+    
     const totals = useDailyData ? {
       ...dailyTotals, 
       amzAds: dailyTotals.amazonAds || 0, 
@@ -29098,7 +29263,18 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       shopAds: dailyTotals.googleAds + dailyTotals.metaAds, 
       shopRev: dailyTotals.shopifyRev || 0,
       totalRev: dailyTotals.totalRev || 0
-    } : weeklyTotals;
+    } : {
+      ...weeklyTotals,
+      // If daily has Meta/Google but weekly doesn't, use daily values
+      metaAds: hasDailyMetaGoogle && !hasWeeklyMetaGoogle ? dailyTotals.metaAds : weeklyTotals.metaAds,
+      googleAds: hasDailyMetaGoogle && !hasWeeklyMetaGoogle ? dailyTotals.googleAds : weeklyTotals.googleAds,
+      shopAds: hasDailyMetaGoogle && !hasWeeklyMetaGoogle 
+        ? (dailyTotals.metaAds + dailyTotals.googleAds) 
+        : weeklyTotals.shopAds,
+      totalAds: hasDailyMetaGoogle && !hasWeeklyMetaGoogle
+        ? (weeklyTotals.amzAds + dailyTotals.metaAds + dailyTotals.googleAds)
+        : weeklyTotals.totalAds,
+    };
     
     // Calculate metrics
     const shopifyAds = totals.metaAds + totals.googleAds;
@@ -29120,8 +29296,32 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const weeklyTableData = periodWeeks.map(w => {
       const week = allWeeksData[w];
       const amzAds = week?.amazon?.adSpend || 0;
-      const metaAds = week?.shopify?.metaAds || week?.shopify?.metaSpend || 0;
-      const googleAds = week?.shopify?.googleAds || week?.shopify?.googleSpend || 0;
+      
+      // Meta/Google might be in weekly data OR in daily data (from bulk imports)
+      // Check weekly first, then aggregate from daily if not present
+      let metaAds = week?.shopify?.metaAds || week?.shopify?.metaSpend || 0;
+      let googleAds = week?.shopify?.googleAds || week?.shopify?.googleSpend || 0;
+      
+      // If weekly doesn't have Meta/Google, aggregate from daily data for that week
+      if (metaAds === 0 && googleAds === 0) {
+        const weekEnd = new Date(w + 'T00:00:00');
+        const weekStart = new Date(weekEnd);
+        weekStart.setDate(weekStart.getDate() - 6);
+        
+        // Find all days in this week
+        const daysInWeek = sortedDays.filter(d => {
+          const date = new Date(d + 'T00:00:00');
+          return date >= weekStart && date <= weekEnd;
+        });
+        
+        // Sum up Meta/Google from daily data
+        daysInWeek.forEach(d => {
+          const day = allDaysData[d];
+          metaAds += day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
+          googleAds += day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
+        });
+      }
+      
       const totalAds = amzAds + metaAds + googleAds;
       const totalRev = week?.total?.revenue || 0;
       return { week: w, amzAds, metaAds, googleAds, totalAds, totalRev, tacos: totalRev > 0 ? (totalAds / totalRev) * 100 : 0 };
@@ -29847,8 +30047,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             const daysWithAmazonAdsMetrics = sortedDays.filter(d => allDaysData[d]?.amazonAdsMetrics?.totalRevenue > 0);
             if (daysWithAmazonAdsMetrics.length < 7) return null;
             
-            const chartDays = daysWithAmazonAdsMetrics.filter(d => d.startsWith(String(adsYear))).slice(-90);
+            // Show all historical data (up to last 90 days)
+            const chartDays = daysWithAmazonAdsMetrics.slice(-90);
             if (chartDays.length < 7) return null;
+            
+            // Get date range for display
+            const startDate = new Date(chartDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            const endDate = new Date(chartDays[chartDays.length - 1] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
             
             // Aggregate to weekly for cleaner visualization
             const weeklyChartData = [];
@@ -29885,7 +30090,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   <h3 className="text-lg font-semibold text-white flex items-center gap-2">
                     <TrendingUp className="w-5 h-5 text-orange-400" />Amazon Ads: Spend vs Revenue Trend
                   </h3>
-                  <span className="text-slate-400 text-sm">{weeklyChartData.length} weeks of data</span>
+                  <span className="text-slate-400 text-sm">{startDate} - {endDate}</span>
                 </div>
                 
                 {/* Simple bar chart visualization */}
