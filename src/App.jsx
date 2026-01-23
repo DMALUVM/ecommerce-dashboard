@@ -35622,6 +35622,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           let newTplTotal = 0;
                           let newTplValue = 0;
                           let matchedCount = 0;
+                          // Track which Packiyo SKUs have been counted to avoid double-counting
+                          const countedPackiyoSkus = new Set();
+                          
                           const updatedItems = currentSnapshot.items.map(item => {
                             // Try exact match first, then variations
                             const packiyoItem = packiyoLookup[item.sku];
@@ -35629,10 +35632,18 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             const newTplQty = packiyoItem?.quantityOnHand || packiyoItem?.quantity_on_hand || packiyoItem?.totalQty || 0;
                             const newTplInbound = packiyoItem?.quantityInbound || packiyoItem?.quantity_inbound || 0;
                             
+                            // Get the original Packiyo SKU to track what's been counted
+                            const packiyoSku = packiyoItem?.sku || item.sku;
+                            const normalizedPackiyoSku = packiyoSku.replace(/Shop$/, '');
+                            
                             if (packiyoItem) matchedCount++;
                             
-                            newTplTotal += newTplQty;
-                            newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
+                            // Only add to totals if we haven't counted this Packiyo SKU yet
+                            if (packiyoItem && !countedPackiyoSkus.has(normalizedPackiyoSku)) {
+                              newTplTotal += newTplQty;
+                              newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
+                              countedPackiyoSkus.add(normalizedPackiyoSku);
+                            }
                             
                             const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
                             const weeklyVel = item.weeklyVel || 0;
@@ -35728,6 +35739,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             
                             let newTplTotal = 0;
                             let newTplValue = 0;
+                            // Track which Packiyo SKUs have been counted to avoid double-counting
+                            const countedPackiyoSkus = new Set();
                             
                             // Update existing items with Packiyo quantities
                             const updatedItems = existingTodaySnapshot.items.map(item => {
@@ -35735,8 +35748,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               const newTplQty = packiyoItem?.quantityOnHand || packiyoItem?.quantity_on_hand || packiyoItem?.totalQty || 0;
                               const newTplInbound = packiyoItem?.quantityInbound || packiyoItem?.quantity_inbound || 0;
                               
-                              newTplTotal += newTplQty;
-                              newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
+                              // Get the original Packiyo SKU to track what's been counted
+                              const packiyoSku = packiyoItem?.sku || item.sku;
+                              const normalizedPackiyoSku = packiyoSku.replace(/Shop$/, '');
+                              
+                              // Only add to totals if we haven't counted this Packiyo SKU yet
+                              if (packiyoItem && !countedPackiyoSkus.has(normalizedPackiyoSku)) {
+                                newTplTotal += newTplQty;
+                                newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
+                                countedPackiyoSkus.add(normalizedPackiyoSku);
+                              }
                               
                               const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
                               
