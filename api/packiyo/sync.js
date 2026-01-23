@@ -136,21 +136,41 @@ export default async function handler(req, res) {
       let page = 1;
       let hasMore = true;
       
+      // Try with include parameter first, then without if it fails
+      let useInclude = true;
+      let retryWithoutInclude = false;
+      
       while (hasMore) {
-        const productsRes = await fetch(
-          `${baseUrl}/products?customer_id=${customerId}&page=${page}&per_page=100&include=inventory_levels`, 
-          { headers: invHeaders }
-        );
+        const url = useInclude 
+          ? `${baseUrl}/products?customer_id=${customerId}&page=${page}&per_page=100&include=inventory_levels`
+          : `${baseUrl}/products?customer_id=${customerId}&page=${page}&per_page=100`;
+        
+        console.log('Fetching:', url);
+        
+        const productsRes = await fetch(url, { headers: invHeaders });
         
         if (!productsRes.ok) {
-          return res.status(productsRes.status).json({ 
-            error: `Failed to fetch products: ${productsRes.status}` 
+          const errorText = await productsRes.text();
+          console.log('Products fetch error:', productsRes.status, errorText);
+          
+          // If 400 error and we're using include, retry without it
+          if (productsRes.status === 400 && useInclude && !retryWithoutInclude) {
+            console.log('Retrying without include parameter...');
+            useInclude = false;
+            retryWithoutInclude = true;
+            continue;
+          }
+          
+          return res.status(200).json({ 
+            error: `Failed to fetch products: ${productsRes.status} - ${errorText.slice(0, 200)}` 
           });
         }
         
         const data = await productsRes.json();
         const pageProducts = data.data || [];
         products.push(...pageProducts);
+        
+        console.log(`Page ${page}: fetched ${pageProducts.length} products, total: ${products.length}`);
         
         // Check pagination
         const meta = data.meta;
@@ -167,14 +187,57 @@ export default async function handler(req, res) {
         await new Promise(r => setTimeout(r, 100));
       }
       
+      // If we didn't get inventory_levels included, try to fetch them separately
+      if (!useInclude && products.length > 0) {
+        console.log('Fetching inventory levels separately...');
+        
+        // Try the inventory endpoint
+        try {
+          const invRes = await fetch(
+            `${baseUrl}/inventory?customer_id=${customerId}&per_page=500`,
+            { headers: invHeaders }
+          );
+          
+          if (invRes.ok) {
+            const invData = await invRes.json();
+            const inventoryLevels = invData.data || [];
+            
+            // Map inventory levels to products by product_id
+            const invByProductId = {};
+            inventoryLevels.forEach(inv => {
+              const productId = inv.product_id || inv.attributes?.product_id;
+              if (productId) {
+                if (!invByProductId[productId]) invByProductId[productId] = [];
+                invByProductId[productId].push(inv);
+              }
+            });
+            
+            // Attach to products
+            products.forEach(p => {
+              const pid = p.id || p.attributes?.id;
+              if (pid && invByProductId[pid]) {
+                p.inventory_levels = invByProductId[pid];
+              }
+            });
+            
+            console.log('Attached inventory to', Object.keys(invByProductId).length, 'products');
+          }
+        } catch (invErr) {
+          console.log('Could not fetch separate inventory:', invErr.message);
+        }
+      }
+      
       // Process products into inventory format
+      // Handle both JSON:API format (attributes nested) and regular format
       const inventoryBySku = {};
       let totalUnits = 0;
       let totalValue = 0;
       let skippedNoSku = 0;
       
       products.forEach(product => {
-        const sku = product.sku?.trim();
+        // JSON:API format has data in attributes, regular format has it directly
+        const attrs = product.attributes || product;
+        const sku = (attrs.sku || product.sku)?.trim();
         
         // SKU is required for cross-platform matching
         if (!sku) {
@@ -183,26 +246,39 @@ export default async function handler(req, res) {
         }
         
         // Get inventory levels from all locations
-        const inventoryLevels = product.inventory_levels || [];
+        // Could be in product.inventory_levels, product.relationships.inventory_levels, or attrs.inventory_levels
+        let inventoryLevels = product.inventory_levels || attrs.inventory_levels || [];
+        
+        // If inventory_levels is in relationships (JSON:API format)
+        if (product.relationships?.inventory_levels?.data) {
+          inventoryLevels = product.relationships.inventory_levels.data;
+        }
+        
+        // If it's still empty, try included data
+        if (inventoryLevels.length === 0 && product.included) {
+          inventoryLevels = product.included.filter(i => i.type === 'inventory_levels');
+        }
+        
         let productTotalQty = 0;
         const byWarehouse = {};
         
         inventoryLevels.forEach(level => {
-          const qty = level.quantity_on_hand || 0;
-          const warehouseName = level.warehouse?.name || 'Default Warehouse';
+          const levelAttrs = level.attributes || level;
+          const qty = levelAttrs.quantity_on_hand || 0;
+          const warehouseName = levelAttrs.warehouse?.name || level.warehouse?.name || 'Default Warehouse';
           
           productTotalQty += qty;
           byWarehouse[warehouseName] = {
             qty,
-            warehouseId: level.warehouse_id,
-            quantityOnHand: level.quantity_on_hand || 0,
-            quantityCommitted: level.quantity_committed || 0,
-            quantityAvailable: level.quantity_available || 0,
-            quantityInbound: level.quantity_inbound || 0,
+            warehouseId: levelAttrs.warehouse_id || level.warehouse_id,
+            quantityOnHand: levelAttrs.quantity_on_hand || level.quantity_on_hand || 0,
+            quantityCommitted: levelAttrs.quantity_committed || level.quantity_committed || 0,
+            quantityAvailable: levelAttrs.quantity_available || level.quantity_available || 0,
+            quantityInbound: levelAttrs.quantity_inbound || level.quantity_inbound || 0,
           };
         });
         
-        const cost = parseFloat(product.value) || parseFloat(product.cost) || 0;
+        const cost = parseFloat(attrs.value) || parseFloat(attrs.cost) || parseFloat(product.value) || parseFloat(product.cost) || 0;
         const value = productTotalQty * cost;
         
         totalUnits += productTotalQty;
@@ -210,12 +286,12 @@ export default async function handler(req, res) {
         
         inventoryBySku[sku] = {
           sku,  // PRIMARY KEY - matches across platforms
-          name: product.name || sku,
-          barcode: product.barcode || '',
+          name: attrs.name || product.name || sku,
+          barcode: attrs.barcode || product.barcode || '',
           totalQty: productTotalQty,
-          quantityAvailable: inventoryLevels.reduce((sum, l) => sum + (l.quantity_available || 0), 0),
-          quantityCommitted: inventoryLevels.reduce((sum, l) => sum + (l.quantity_committed || 0), 0),
-          quantityInbound: inventoryLevels.reduce((sum, l) => sum + (l.quantity_inbound || 0), 0),
+          quantityAvailable: inventoryLevels.reduce((sum, l) => sum + ((l.attributes || l).quantity_available || 0), 0),
+          quantityCommitted: inventoryLevels.reduce((sum, l) => sum + ((l.attributes || l).quantity_committed || 0), 0),
+          quantityInbound: inventoryLevels.reduce((sum, l) => sum + ((l.attributes || l).quantity_inbound || 0), 0),
           cost,
           totalValue: value,
           byWarehouse,
