@@ -5,6 +5,9 @@
     },
     "api/shopify/sync.js": {
       "maxDuration": 60
+    },
+    "api/packiyo/sync.js": {
+      "maxDuration": 60
     }
   }
 }
