@@ -8505,290 +8505,236 @@ Keep insights brief and actionable. Format as numbered list.`;
       const overallCTR = adsAnalysis.totalImpressions > 0 ? (adsAnalysis.totalClicks / adsAnalysis.totalImpressions * 100) : 0;
       const avgCPC = adsAnalysis.totalClicks > 0 ? totalAdSpend / adsAnalysis.totalClicks : 0;
       
-      // ==================== COMPREHENSIVE AI FORECAST (Pro Plan - 60s timeout) ====================
-      // With Pro plan, we can send detailed data for sophisticated analysis
-      
-      // today and currentMonth already declared above
+      // ==================== FULL AI FORECAST (Streaming - Uses Pro 60s) ====================
       const nextSunday = new Date(today);
       nextSunday.setDate(nextSunday.getDate() + (7 - nextSunday.getDay()) % 7 || 7);
       
-      // Prepare detailed daily data (last 14 days for pattern detection)
-      const recentDailyDetails = last14Days.map(d => ({
-        date: d.date,
-        day: d.dayOfWeek,
-        revenue: Math.round(d.revenue),
-        profit: Math.round(d.profit),
-        units: d.units,
-        amazon: Math.round(d.amazonRevenue),
-        shopify: Math.round(d.shopifyRevenue),
-      }));
+      // Helper to read SSE stream from chat API (utilizes Pro 60s timeout)
+      const fetchStreamingAI = async (prompt, systemPrompt) => {
+        console.log('Starting streaming AI request...');
+        
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system: systemPrompt,
+            messages: [{ role: 'user', content: prompt }],
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 4000,
+          }),
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('API error:', response.status, errorText);
+          throw new Error(`API error: ${response.status}`);
+        }
+        
+        // Check if it's a streaming response
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('text/event-stream')) {
+          // Read SSE stream
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let fullText = '';
+          let buffer = '';
+          
+          console.log('Reading streaming response...');
+          
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line
+            
+            for (const line of lines) {
+              // Skip comments (: ping, : keepalive, etc.)
+              if (line.startsWith(':')) continue;
+              
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  if (data.type === 'delta' && data.text) {
+                    fullText += data.text;
+                  } else if (data.type === 'done' && data.fullText) {
+                    fullText = data.fullText;
+                  } else if (data.type === 'complete' && data.content?.[0]?.text) {
+                    fullText = data.content[0].text;
+                  } else if (data.type === 'error') {
+                    throw new Error(data.error);
+                  }
+                } catch (e) {
+                  // Ignore parse errors for incomplete JSON
+                }
+              }
+            }
+          }
+          
+          console.log('Streaming complete, response length:', fullText.length);
+          return fullText;
+        } else {
+          // Fallback to JSON response (non-streaming)
+          const data = await response.json();
+          return data.content?.[0]?.text || '';
+        }
+      };
       
-      // Prepare weekly summary (last 8 weeks)
-      const weeklyDetails = completeWeeks.slice(-8).map(w => ({
-        week: w.weekEnding,
-        revenue: Math.round(w.revenue),
-        profit: Math.round(w.profit),
-        units: w.units,
-        margin: ((w.profit / w.revenue) * 100).toFixed(1) + '%',
-      }));
-      
-      // Inventory alerts (top 10 most critical)
-      const inventoryAlerts = criticalInventory.slice(0, 10).map(i => ({
-        sku: i.sku,
-        name: i.name?.substring(0, 30),
-        stock: i.currentStock,
-        daysLeft: i.daysOfSupply,
-        velocity: i.weeklyVelocity?.toFixed(1),
-      }));
-      
-      // Build comprehensive prompt
-      const prompt = `You are an elite e-commerce forecasting AI with access to detailed business data. Analyze thoroughly and provide sophisticated predictions.
+      // Build comprehensive AI prompt
+      const prompt = `You are an elite e-commerce forecasting AI. Analyze this data and generate accurate predictions.
 
-## BUSINESS OVERVIEW
-- Company: Natural skincare/personal care e-commerce (Amazon + Shopify)
-- Current Date: ${today.toISOString().split('T')[0]}
-- Analysis Period: ${dailyData.length} days daily data, ${completeWeeks.length} complete weeks
+## BUSINESS DATA
+- Type: Natural skincare/beauty (Amazon + Shopify)
+- Date: ${today.toISOString().split('T')[0]}
+- Data: ${dailyData.length} days, ${completeWeeks.length} weeks
 
-## PRE-CALCULATED SIGNALS (Weighted Algorithm)
+## CALCULATED SIGNALS
 
-### Daily Performance Analysis (Primary Signal - 60% weight)
-- Last 7 Days Avg: $${avg7Day.toFixed(2)}/day (${last7Days.length} days)
-- Last 14 Days Avg: $${avg14Day.toFixed(2)}/day
-- Last 30 Days Avg: $${avg30Day.toFixed(2)}/day
-- 7-Day Momentum: ${momentum > 0 ? '+' : ''}${momentum.toFixed(1)}% vs prior 7 days
-- Daily → Weekly Projection: $${dailyBasedWeekly.toFixed(2)}/week
+### Daily Performance (60% weight)
+- 7-Day Avg: $${avg7Day.toFixed(2)}/day
+- 14-Day Avg: $${avg14Day.toFixed(2)}/day
+- 30-Day Avg: $${avg30Day.toFixed(2)}/day
+- Momentum: ${momentum > 0 ? '+' : ''}${momentum.toFixed(1)}% (vs prior 7 days)
 
-### Weekly Trend Analysis (Secondary Signal - 20% weight)
+### Weekly Trends (20% weight)
 - Recent 4-Week Avg: $${recentWeekAvg.toFixed(2)}/week
 - Prior 4-Week Avg: $${olderWeekAvg.toFixed(2)}/week
-- Weekly Growth Trend: ${weeklyTrend > 0 ? '+' : ''}${weeklyTrend.toFixed(1)}%
-- Trend-Adjusted Projection: $${trendAdjustedWeekly.toFixed(2)}/week
+- Trend: ${weeklyTrend > 0 ? '+' : ''}${weeklyTrend.toFixed(1)}%
 
-### Amazon Forecast Signal (Forward Signal - 20% weight)
-${futureAmazonForecasts.length > 0 ? `
-- Next Week Amazon Forecast: $${futureAmazonForecasts[0].forecastRevenue.toFixed(2)} (${futureAmazonForecasts[0].forecastUnits} units)
-- Amazon Forecast Accuracy: ${amazonAccuracy.samples} historical samples
-- Average Error: ${amazonAccuracy.avgError.toFixed(1)}%
-- Bias: ${amazonAccuracy.bias > 0 ? 'Over-predicts' : 'Under-predicts'} by ${Math.abs(amazonAccuracy.bias).toFixed(1)}%
-- Bias-Corrected Forecast: $${adjustedAmazonForecast?.toFixed(2) || 'N/A'}
-` : '- No Amazon forecast data available - using historical patterns only'}
+### Amazon Forecast (20% weight)
+${futureAmazonForecasts.length > 0 ? `- Next Week: $${futureAmazonForecasts[0].forecastRevenue.toFixed(2)} (${futureAmazonForecasts[0].forecastUnits} units)
+- Accuracy: ${amazonAccuracy.samples} samples, ${amazonAccuracy.avgError.toFixed(1)}% avg error
+- Bias-Corrected: $${adjustedAmazonForecast?.toFixed(2) || 'N/A'}` : '- No Amazon forecast available'}
 
-### 🎯 WEIGHTED PREDICTION (My Algorithm)
-**NEXT WEEK REVENUE: $${weightedPrediction.toFixed(2)}**
-**NEXT WEEK PROFIT: $${profitPrediction.toFixed(2)}** (at ${(avgProfitMargin * 100).toFixed(1)}% margin)
+### My Weighted Prediction
+**Revenue: $${weightedPrediction.toFixed(2)}/week**
+**Profit: $${profitPrediction.toFixed(2)}/week** (${(avgProfitMargin * 100).toFixed(1)}% margin)
 
-## DETAILED DATA
-
-### Day-of-Week Patterns
-${Object.entries(dayPatterns).map(([day, p]) => `- ${day}: $${p.avgRevenue.toFixed(0)} avg (${p.sampleSize} samples)`).join('\n')}
+## PATTERNS
 - Best Days: ${bestDays.join(', ')}
 - Worst Days: ${worstDays.join(', ')}
+- Day Patterns: ${Object.entries(dayPatterns).map(([d, p]) => `${d.slice(0,3)}=$${p.avgRevenue.toFixed(0)}`).join(', ')}
 
-### Recent Daily Performance (Last 14 Days)
-${JSON.stringify(recentDailyDetails, null, 1)}
+## CONTEXT
+- Season: ${currentMonth}, Index: ${seasonalIndex.toFixed(2)}
+${yoyBaseline ? `- YoY: Last ${currentMonth}: $${yoyBaseline.totalRevenue.toFixed(0)}` : ''}
+- Inventory: ${criticalInventory.length} critical, ${lowInventory.length} low stock
+${totalAdSpend > 0 ? `- Ads (30d): $${totalAdSpend.toFixed(0)} spend, ${overallCTR.toFixed(1)}% CTR, ${adsAnalysis.totalConversions} conv` : ''}
 
-### Weekly Performance History
-${JSON.stringify(weeklyDetails, null, 1)}
+## GENERATE FORECAST
 
-### Seasonality
-- Current Month: ${currentMonth}
-- Seasonal Index: ${seasonalIndex.toFixed(2)} (1.0 = average, >1 = above average)
-${yoyBaseline ? `- Same Month Last Year: $${yoyBaseline.totalRevenue.toFixed(0)} revenue, $${yoyBaseline.totalProfit.toFixed(0)} profit` : ''}
+Week 1 starts: ${nextSunday.toISOString().split('T')[0]}
 
-### Historical Period Data
-${months2025.length > 0 ? `2025 Monthly: ${months2025.map(m => `${m.period}: $${m.totalRevenue.toFixed(0)}`).join(', ')}` : 'No 2025 monthly data'}
-${quarters2024.length > 0 ? `2024 Quarterly: ${quarters2024.map(q => `${q.period}: $${q.totalRevenue.toFixed(0)}`).join(', ')}` : ''}
-
-## OPERATIONAL DATA
-
-### Inventory Status
-- Total SKUs Tracked: ${inventoryItems.length}
-- Critical (<14 days): ${criticalInventory.length} SKUs
-- Low Stock (<30 days): ${lowInventory.length} SKUs
-${inventoryAlerts.length > 0 ? `\nCritical Items:\n${JSON.stringify(inventoryAlerts, null, 1)}` : ''}
-
-### Advertising Performance (Last 30 Days)
-${adsAnalysis.daysWithAds > 0 ? `
-- Total Ad Spend: $${totalAdSpend.toFixed(2)} (Google: $${adsAnalysis.totalGoogleSpend.toFixed(2)}, Meta: $${adsAnalysis.totalMetaSpend.toFixed(2)})
-- Avg Daily Spend: $${avgDailyAdSpend.toFixed(2)}/day
-- Impressions: ${adsAnalysis.totalImpressions.toLocaleString()}
-- Clicks: ${adsAnalysis.totalClicks.toLocaleString()}
-- CTR: ${overallCTR.toFixed(2)}%
-- Avg CPC: $${avgCPC.toFixed(2)}
-- Conversions: ${adsAnalysis.totalConversions}
-- Meta Purchase Value: $${adsAnalysis.metaPurchaseValue.toFixed(2)}
-- ROAS: ${totalAdSpend > 0 ? ((adsAnalysis.metaPurchaseValue + (adsAnalysis.totalConversions * 25)) / totalAdSpend).toFixed(2) : 'N/A'}x
-` : 'No ads data available for analysis'}
-
-### Learning from Past Predictions
-- Forecast Confidence: ${forecastCorrections.confidence?.toFixed(1) || 0}%
-- Revenue Multiplier: ${forecastCorrections.overall?.revenue?.toFixed(3) || 1}x
-- Historical Accuracy Samples: ${forecastCorrections.samplesUsed || 0}
-
----
-
-## YOUR ANALYSIS TASK
-
-1. **Validate or refine** my weighted prediction of $${weightedPrediction.toFixed(2)}/week
-2. **Analyze patterns** - day-of-week effects, trends, anomalies, seasonality
-3. **Generate 4-week forecast** starting ${nextSunday.toISOString().split('T')[0]} with confidence levels
-4. **Provide actionable insights** specific to this business
-5. **Assess risks** and recommend mitigations
-6. **Evaluate ad performance** and recommend budget adjustments
-
-Respond with ONLY this JSON structure (no markdown, no explanation):
-
+Respond with ONLY this JSON (no markdown):
 {
   "salesForecast": {
     "next4Weeks": [
-      {
-        "weekEnding": "YYYY-MM-DD",
-        "predictedRevenue": number,
-        "predictedProfit": number,
-        "predictedUnits": number,
-        "confidence": "high|medium|low",
-        "reasoning": "specific reasoning for this week"
-      }
+      {"weekEnding": "YYYY-MM-DD", "predictedRevenue": number, "predictedProfit": number, "predictedUnits": number, "confidence": "high|medium|low", "reasoning": "brief explanation"}
     ],
     "monthlyOutlook": {
       "expectedRevenue": number,
       "expectedProfit": number,
       "growthTrend": "up|stable|down",
-      "keyFactors": ["factor1", "factor2", "factor3"]
+      "keyFactors": ["factor1", "factor2"]
     }
   },
   "signalAnalysis": {
     "dailySignalStrength": "strong|moderate|weak",
-    "weeklySignalStrength": "strong|moderate|weak",
-    "amazonForecastReliability": "reliable|moderate|unreliable|no data",
-    "trendDirection": "accelerating|growing|stable|declining|decelerating",
+    "trendDirection": "up|stable|down",
     "dataQuality": "excellent|good|limited",
-    "confidenceFactors": ["what increases confidence"],
-    "concernFactors": ["what decreases confidence"]
-  },
-  "patterns": {
-    "bestDays": ["day1", "day2"],
-    "worstDays": ["day1", "day2"],
-    "seasonalTrend": "description of seasonal pattern",
-    "weeklyPattern": "description of weekly rhythm",
-    "anomalies": ["any unusual patterns detected"],
-    "growthDrivers": ["what's driving growth or decline"]
-  },
-  "inventoryRecommendations": [
-    {
-      "sku": "SKU",
-      "action": "reorder|expedite|monitor|reduce",
-      "urgency": "critical|high|medium|low",
-      "reasoning": "why this action",
-      "suggestedQuantity": number
-    }
-  ],
-  "adsRecommendations": {
-    "overallPerformance": "excellent|good|average|poor",
-    "roasAssessment": "above target|on target|below target",
-    "recommendations": [
-      {
-        "platform": "google|meta|amazon",
-        "action": "increase|maintain|decrease|pause|test",
-        "budgetChange": "percentage or amount",
-        "reasoning": "why"
-      }
-    ],
-    "suggestedWeeklyBudget": {
-      "google": number,
-      "meta": number,
-      "total": number,
-      "rationale": "why this budget allocation"
-    }
+    "confidenceScore": 0-100
   },
   "actionableInsights": [
-    {
-      "category": "sales|inventory|marketing|operations|pricing",
-      "priority": "critical|high|medium|low",
-      "insight": "specific actionable insight",
-      "expectedImpact": "quantified expected result",
-      "timeframe": "immediate|this week|this month"
-    }
+    {"category": "sales|inventory|marketing", "priority": "high|medium", "insight": "specific action", "expectedImpact": "result"}
   ],
   "risks": [
-    {
-      "risk": "specific risk description",
-      "likelihood": "high|medium|low",
-      "impact": "high|medium|low",
-      "mitigation": "specific action to mitigate"
-    }
+    {"risk": "description", "likelihood": "high|medium|low", "mitigation": "action"}
   ],
-  "executiveSummary": "2-3 sentence summary of the forecast and key recommendations"
+  "opportunities": [
+    {"opportunity": "description", "action": "how to capitalize"}
+  ]
 }`;
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system: `You are an elite e-commerce forecasting AI. You analyze sales data, inventory levels, advertising performance, and market patterns to generate accurate predictions and actionable insights.
+      const systemPrompt = `You are an elite e-commerce forecasting AI. Analyze the data thoroughly and provide accurate, actionable predictions. Trust the weighted prediction as your baseline. Respond with valid JSON only.`;
 
-Key principles:
-1. Trust the weighted prediction as a strong baseline - only adjust if you see clear patterns
-2. Be specific and quantitative in your recommendations
-3. Consider day-of-week patterns, seasonality, and momentum
-4. Flag inventory risks that could impact sales
-5. Evaluate advertising efficiency and ROI
-6. Respond with valid JSON only - no markdown formatting`,
-          messages: [{ role: 'user', content: prompt }],
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 4000, // Allow comprehensive response
-        }),
-      });
+      console.log('Calling streaming AI forecast...');
       
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-      const data = await response.json();
-      const responseText = data.content?.[0]?.text || data.content || '';
-      
-      // Parse JSON response
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
+      try {
+        const responseText = await fetchStreamingAI(prompt, systemPrompt);
+        console.log('AI response received, parsing...');
+        
+        // Parse JSON response
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          throw new Error('Could not parse AI response as JSON');
+        }
+        
         const forecast = JSON.parse(jsonMatch[0]);
         
-        // Validate and fix predictions
-        const maxReasonable = weightedPrediction * 1.5;
-        const minReasonable = weightedPrediction * 0.5;
+        // Validate and enhance predictions
+        const weekDates = [];
+        for (let i = 0; i < 4; i++) {
+          const weekDate = new Date(nextSunday);
+          weekDate.setDate(weekDate.getDate() + (i * 7));
+          weekDates.push(weekDate.toISOString().split('T')[0]);
+        }
         
         if (forecast.salesForecast?.next4Weeks) {
           forecast.salesForecast.next4Weeks = forecast.salesForecast.next4Weeks.map((week, i) => {
             let { predictedRevenue, predictedProfit, predictedUnits } = week;
             
-            // Adjust if way off
-            if (predictedRevenue > maxReasonable || predictedRevenue < minReasonable) {
-              predictedRevenue = weightedPrediction * (1 + (weeklyTrend / 100 * 0.25 * (i + 1)));
-              predictedRevenue = Math.max(minReasonable, Math.min(maxReasonable, predictedRevenue));
+            // Blend with Amazon if available
+            const amazonWeek = futureAmazonForecasts[i];
+            if (amazonWeek && amazonAccuracy.samples >= 2) {
+              const amazonRevenue = amazonWeek.forecastRevenue * (1 - amazonAccuracy.bias / 100);
+              predictedRevenue = predictedRevenue * 0.7 + amazonRevenue * 0.3;
             }
             
-            // Ensure profit is based on actual margin
-            if (!predictedProfit || predictedProfit === 0 || predictedProfit > predictedRevenue) {
+            // Sanity bounds
+            const maxReasonable = weightedPrediction * 1.5;
+            const minReasonable = weightedPrediction * 0.5;
+            if (predictedRevenue > maxReasonable) predictedRevenue = maxReasonable;
+            if (predictedRevenue < minReasonable) predictedRevenue = minReasonable;
+            
+            // Ensure profit uses actual margin
+            if (!predictedProfit || predictedProfit <= 0 || predictedProfit > predictedRevenue * 0.6) {
               predictedProfit = predictedRevenue * avgProfitMargin;
             }
             
             // Estimate units if missing
             if (!predictedUnits || predictedUnits === 0) {
-              const avgUnitValue = recentWeekAvg > 0 && completeWeeks.length > 0 
-                ? completeWeeks.reduce((s, w) => s + w.revenue, 0) / completeWeeks.reduce((s, w) => s + w.units, 0)
+              const avgUnitValue = completeWeeks.length > 0 
+                ? completeWeeks.reduce((s, w) => s + w.revenue, 0) / Math.max(1, completeWeeks.reduce((s, w) => s + (w.units || 0), 0))
                 : 15;
-              predictedUnits = Math.round(predictedRevenue / avgUnitValue);
+              predictedUnits = Math.round(predictedRevenue / (avgUnitValue || 15));
             }
             
             return {
               ...week,
+              weekEnding: weekDates[i],
               predictedRevenue: Math.round(predictedRevenue * 100) / 100,
               predictedProfit: Math.round(predictedProfit * 100) / 100,
-              predictedUnits,
+              predictedUnits: Math.round(predictedUnits),
             };
           });
+          
+          // Update monthly outlook
+          if (forecast.salesForecast.monthlyOutlook) {
+            forecast.salesForecast.monthlyOutlook.expectedRevenue = Math.round(
+              forecast.salesForecast.next4Weeks.reduce((s, w) => s + w.predictedRevenue, 0)
+            );
+            forecast.salesForecast.monthlyOutlook.expectedProfit = Math.round(
+              forecast.salesForecast.next4Weeks.reduce((s, w) => s + w.predictedProfit, 0)
+            );
+          }
         }
         
         setAiForecasts({
           ...forecast,
           generatedAt: new Date().toISOString(),
-          source: 'claude-ai',
+          source: 'claude-ai-pro',
+          model: 'claude-sonnet-4-20250514',
           calculatedSignals: {
             dailyAvg7: avg7Day,
             dailyAvg14: avg14Day,
@@ -8831,8 +8777,12 @@ Key principles:
             periodQuarters2024: quarters2024.length,
           },
         });
-      } else {
-        throw new Error('Invalid AI response format');
+        
+        console.log('AI forecast saved successfully');
+        
+      } catch (aiError) {
+        console.error('AI forecast error:', aiError);
+        throw aiError; // Re-throw to be caught by outer catch
       }
       
     } catch (error) {
