@@ -22539,21 +22539,36 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               </div>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full">
+              <table className="w-full" style={{tableLayout: 'fixed', minWidth: '1100px'}}>
+                <colgroup>
+                  <col style={{width: '200px'}} />
+                  <col style={{width: '70px'}} />
+                  <col style={{width: '70px'}} />
+                  <col style={{width: '70px'}} />
+                  <col style={{width: '90px'}} />
+                  <col style={{width: '65px'}} />
+                  <col style={{width: '65px'}} />
+                  <col style={{width: '65px'}} />
+                  <col style={{width: '50px'}} />
+                  <col style={{width: '70px'}} />
+                  <col style={{width: '70px'}} />
+                  <col style={{width: '80px'}} />
+                  <col style={{width: '40px'}} />
+                </colgroup>
                 <thead className="bg-slate-900/50"><tr>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase px-4 py-3">Product</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Amazon</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">3PL</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Total</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Value</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Amz Vel</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Shop Vel</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Total Vel</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Days</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Stockout</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Order By</th>
-                  <th className="text-center text-xs font-medium text-slate-400 uppercase px-4 py-3">Status</th>
-                  <th className="text-center text-xs font-medium text-slate-400 uppercase px-4 py-3">⚙️</th>
+                  <th className="text-left text-xs font-medium text-slate-400 uppercase px-3 py-3">Product</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Amazon</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">3PL</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Total</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Value</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">AMZ Vel</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Shop Vel</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Tot Vel</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Days</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Stockout</th>
+                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Order By</th>
+                  <th className="text-center text-xs font-medium text-slate-400 uppercase px-2 py-3">Status</th>
+                  <th className="text-center text-xs font-medium text-slate-400 uppercase px-2 py-3">⚙️</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-700/50">
                   {items.map((item) => {
@@ -22563,33 +22578,33 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     
                     return (
                       <tr key={item.sku} className={`hover:bg-slate-700/30 ${isAlerted ? 'bg-rose-950/30' : item.health === 'critical' ? 'bg-rose-950/20' : item.health === 'low' ? 'bg-amber-950/20' : ''}`}>
-                        <td className="px-4 py-3">
-                          <div className="max-w-xs flex items-start gap-2">
-                            {isAlerted && <Bell className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />}
-                            <div>
-                              <p className="text-white text-sm font-medium truncate">{item.name}</p>
-                              <p className="text-slate-500 text-xs">{item.sku}</p>
+                        <td className="px-3 py-2 overflow-hidden">
+                          <div className="flex items-start gap-1">
+                            {isAlerted && <Bell className="w-3 h-3 text-rose-400 flex-shrink-0 mt-1" />}
+                            <div className="overflow-hidden">
+                              <p className="text-white text-sm font-medium overflow-hidden text-ellipsis whitespace-nowrap" title={item.name}>{item.name}</p>
+                              <p className="text-slate-500 text-xs overflow-hidden text-ellipsis whitespace-nowrap">{item.sku}</p>
                             </div>
                           </div>
                         </td>
-                        <td className="text-right px-4 py-3 text-orange-400 text-sm">{formatNumber(item.amazonQty)}</td>
-                        <td className={`text-right px-4 py-3 text-sm ${settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty ? 'text-rose-400 font-bold' : 'text-violet-400'}`}>{formatNumber(item.threeplQty)}</td>
-                        <td className="text-right px-4 py-3 text-white text-sm font-medium">{formatNumber(item.totalQty)}</td>
-                        <td className="text-right px-4 py-3 text-white text-sm">{formatCurrency(item.totalValue)}</td>
-                        <td className="text-right px-4 py-3 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>
-                        <td className="text-right px-4 py-3 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
-                        <td className="text-right px-4 py-3 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
-                        <td className="text-right px-4 py-3 text-white text-sm">{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</td>
-                        <td className="text-right px-4 py-3 text-slate-400 text-xs">{item.stockoutDate ? new Date(item.stockoutDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
-                        <td className={`text-right px-4 py-3 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? new Date(item.reorderByDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
-                        <td className="text-center px-4 py-3"><HealthBadge health={item.aiUrgency || item.health} /></td>
-                        <td className="text-center px-4 py-3">
+                        <td className="text-right px-2 py-2 text-orange-400 text-sm">{formatNumber(item.amazonQty)}</td>
+                        <td className={`text-right px-2 py-2 text-sm ${settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty ? 'text-rose-400 font-bold' : 'text-violet-400'}`}>{formatNumber(item.threeplQty)}</td>
+                        <td className="text-right px-2 py-2 text-white text-sm font-medium">{formatNumber(item.totalQty)}</td>
+                        <td className="text-right px-2 py-2 text-white text-sm">{formatCurrency(item.totalValue)}</td>
+                        <td className="text-right px-2 py-2 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>
+                        <td className="text-right px-2 py-2 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
+                        <td className="text-right px-2 py-2 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
+                        <td className="text-right px-2 py-2 text-white text-sm">{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</td>
+                        <td className="text-right px-2 py-2 text-slate-400 text-xs">{item.stockoutDate ? new Date(item.stockoutDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
+                        <td className={`text-right px-2 py-2 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? new Date(item.reorderByDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
+                        <td className="text-center px-2 py-2"><HealthBadge health={item.aiUrgency || item.health} /></td>
+                        <td className="text-center px-2 py-2">
                           <button 
                             onClick={() => { setShowSkuSettings(true); setSkuSettingsSearch(item.sku); setSkuSettingsEditItem(item.sku); setSkuSettingsEditForm(settings); }}
                             className={`p-1 rounded ${hasCustomSettings ? 'bg-emerald-600/30 text-emerald-400' : 'bg-slate-700/50 text-slate-500 hover:text-slate-300'}`}
                             title={hasCustomSettings ? 'Has custom settings' : 'Configure settings'}
                           >
-                            <Settings className="w-3.5 h-3.5" />
+                            <Settings className="w-3 h-3" />
                           </button>
                         </td>
                       </tr>
