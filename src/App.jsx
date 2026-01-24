@@ -12502,7 +12502,6 @@ Analyze the data and respond with ONLY this JSON:
               return;
             }
             
-            }
             
             resolve({
               type: isMetaAds ? 'meta' : 'google',
