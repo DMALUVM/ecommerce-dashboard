@@ -12372,13 +12372,35 @@ Analyze the data and respond with ONLY this JSON:
                 const metricRaw = m[2].trim();
                 const metric = metricRaw.toLowerCase();
 
-                // Normalize common metric names
+                // Normalize metric label for safe matching (avoid derived metrics like Avg., CTR, rates)
+                const norm = metricRaw.toLowerCase().replace(/\s+/g, ' ').trim();
+
+                // Hard ignore derived metrics
+                if (
+                  norm.includes('avg') ||
+                  norm.includes('ctr') ||
+                  norm.includes('rate') ||
+                  norm.includes('cost /') ||
+                  norm.includes('value /') ||
+                  norm.includes('per ')
+                ) {
+                  continue;
+                }
+
                 let kind = null;
-                if (metric === 'cost' || metric.includes('cost')) kind = 'spend';
-                else if (metric === 'clicks' || metric.includes('click')) kind = 'clicks';
-                else if (metric === 'impr.' || metric === 'impr' || metric.includes('impr')) kind = 'impressions';
-                else if (metric.includes('conv') && (metric.includes('value') || metric.includes('revenue'))) kind = 'convValue';
-                else if (metric.includes('conv')) kind = 'conversions';
+
+                // Spend (Cost)
+                if (norm === 'cost') kind = 'spend';
+                // Clicks
+                else if (norm === 'clicks') kind = 'clicks';
+                // Impressions
+                else if (norm === 'impr.' || norm === 'impr' || norm === 'impressions') kind = 'impressions';
+                // Orders (preferred conversions)
+                else if (norm === 'orders' || norm === 'purchases' || norm === 'purchase') kind = 'conversions';
+                // Revenue / sales value
+                else if (norm === 'revenue' || norm.includes('conv. value') || norm.includes('conversion value') || norm.includes('purchase value')) kind = 'convValue';
+                // Fallback only if report truly uses "Conversions" column
+                else if (norm === 'conversions') kind = 'conversions';
                 else continue;
 
                 metricCols.push({ idx: i, dateKey, kind });
