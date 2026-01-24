@@ -1294,11 +1294,8 @@ export default function Dashboard() {
       weeksFromDaysSet.add(getWeekEndingForDateKey(dayKey));
     });
     const weeksFromDays = Array.from(weeksFromDaysSet);
-    const currentWeekEnding = getWeekEndingForDateKey(formatDateKey(new Date()));
-    return Array.from(new Set([...weeksFromSaved, ...weeksFromDays]))
-      .filter(wk => wk <= currentWeekEnding)
-      .sort();
-  }, [allWeeksData, allDaysData, getWeekEndingForDateKey, formatDateKey]);
+    return Array.from(new Set([...weeksFromSaved, ...weeksFromDays])).sort();
+  }, [allWeeksData, allDaysData, getWeekEndingForDateKey]);
 
   const aggregateWeekFromDays = useCallback((weekEndingKey) => {
     // Build a week object (same shape as saved week) from whatever daily data exists for that week.
@@ -1387,10 +1384,6 @@ export default function Dashboard() {
     agg.shopify.netMargin = agg.shopify.revenue > 0 ? (agg.shopify.netProfit / agg.shopify.revenue) * 100 : 0;
     agg.shopify.aov = agg.shopify.units > 0 ? agg.shopify.revenue / agg.shopify.units : 0;
     const shopAds = (agg.shopify.metaSpend || 0) + (agg.shopify.googleSpend || 0);
-    // Normalize Shopify ads spend fields for consistent weekly display
-    agg.shopify.adSpend = shopAds;
-    agg.shopify.metaAds = agg.shopify.metaSpend || 0;
-    agg.shopify.googleAds = agg.shopify.googleSpend || 0;
     agg.shopify.roas = shopAds > 0 ? agg.shopify.revenue / shopAds : 0;
     agg.shopify.skuData = Object.values(shopSku).sort((a,b) => (b.netSales||0) - (a.netSales||0));
 
@@ -1410,7 +1403,39 @@ export default function Dashboard() {
   const getWeekDataForDisplay = useCallback((weekEndingKey) => {
     if (!weekEndingKey) return null;
     const saved = allWeeksData?.[weekEndingKey];
-    if (saved) return { ...saved, _isLiveWTD: false };
+
+    // If a saved (finalized) week exists, use it — but backfill Meta/Google ads from daily data if the saved week
+    // was created before ads imports were added (common in beta).
+    if (saved) {
+      const savedMeta = saved?.shopify?.metaSpend ?? saved?.shopify?.metaAds ?? 0;
+      const savedGoogle = saved?.shopify?.googleSpend ?? saved?.shopify?.googleAds ?? 0;
+      const savedHasAds = (savedMeta + savedGoogle) > 0;
+
+      if (!savedHasAds) {
+        const live = aggregateWeekFromDays(weekEndingKey);
+        const liveMeta = live?.shopify?.metaSpend ?? live?.shopify?.metaAds ?? 0;
+        const liveGoogle = live?.shopify?.googleSpend ?? live?.shopify?.googleAds ?? 0;
+        if ((liveMeta + liveGoogle) > 0) {
+          const mergedShopify = {
+            ...(saved.shopify || {}),
+            metaSpend: liveMeta,
+            metaAds: liveMeta,
+            googleSpend: liveGoogle,
+            googleAds: liveGoogle,
+            adSpend: (saved.shopify?.adSpend || 0) > 0 ? (saved.shopify?.adSpend || 0) : (liveMeta + liveGoogle),
+          };
+          return { ...saved, shopify: mergedShopify, _isLiveWTD: false };
+        }
+      }
+
+      // Ensure adSpend exists even if older saved records only stored meta/google
+      const ensuredShopify = saved.shopify ? {
+        ...saved.shopify,
+        adSpend: saved.shopify.adSpend ?? ((savedMeta + savedGoogle) > 0 ? (savedMeta + savedGoogle) : 0),
+      } : saved.shopify;
+
+      return { ...saved, shopify: ensuredShopify, _isLiveWTD: false };
+    }
     return aggregateWeekFromDays(weekEndingKey);
   }, [allWeeksData, aggregateWeekFromDays]);
   // ========= End Week-to-date Weekly Helpers =========
@@ -6401,6 +6426,10 @@ const savePeriods = async (d) => {
       const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h === 'month' || h === 'hour' || h === 'quarter' || h.includes('date'));
       const costCol = headers.findIndex(h => h === 'cost' || h === 'spend' || h === 'amount spent' || (h.includes('cost') && !h.includes('/')));
       const impressionsCol = headers.findIndex(h => h === 'impressions' || h === 'impr' || h.includes('impression'));
+      const clicksCol = headers.findIndex(h => (h === 'clicks' || h === 'click' || (h.includes('click') && !h.includes('cpc') && !h.includes('cost per'))) && !h.includes('outbound') && !h.includes('unique'));
+      const conversionsCol = headers.findIndex(h => h === 'conversions' || h === 'conv.' || h.includes('conversion') || h.includes('/ conv') || h.includes('results'));
+      const purchasesCol = headers.findIndex(h => h === 'purchases' || h.includes('purchase') && !h.includes('value'));
+      const purchaseValueCol = headers.findIndex(h => h === 'purchase value' || h.includes('purchase value') || h.includes('conversion value') || h.includes('results value'));
       const cpcCol = headers.findIndex(h => h === 'avg. cpc' || h === 'cpc' || h.includes('cost per click'));
       const cpaCol = headers.findIndex(h => h === 'cost / conv.' || h === 'cpa' || h.includes('cost per') || h.includes('/ conv'));
       
@@ -6575,11 +6604,30 @@ const savePeriods = async (d) => {
         let cpaStr = cpaCol >= 0 ? cols[cpaCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '').trim() : '0';
         const cpa = parseFloat(cpaStr) || 0;
         
-        // Calculate clicks from cost/CPC
-        const clicks = cpc > 0 ? Math.round(cost / cpc) : 0;
-        
-        // Calculate conversions from cost/CPA
-        const conversions = cpa > 0 ? Math.round(cost / cpa) : 0;
+        // Parse clicks (prefer explicit column, else infer from cost/CPC)
+        let clicks = 0;
+        if (clicksCol >= 0) {
+          const clicksStr = cols[clicksCol]?.replace(/"/g, '').replace(/,/g, '').trim();
+          clicks = parseInt(clicksStr) || 0;
+        } else if (cpc > 0) {
+          clicks = Math.round(cost / cpc);
+        }
+
+        // Parse conversions/purchases (prefer explicit column, else infer from cost/CPA)
+        let conversions = 0;
+        if (conversionsCol >= 0) {
+          const convStr = cols[conversionsCol]?.replace(/"/g, '').replace(/,/g, '').trim();
+          conversions = parseFloat(convStr) ? Math.round(parseFloat(convStr)) : 0;
+        } else if (purchasesCol >= 0) {
+          const purchStr = cols[purchasesCol]?.replace(/"/g, '').replace(/,/g, '').trim();
+          conversions = parseFloat(purchStr) ? Math.round(parseFloat(purchStr)) : 0;
+        } else if (cpa > 0) {
+          conversions = Math.round(cost / cpa);
+        }
+
+        // Backfill CPC/CPA if not present but we have counts
+        const effectiveCpc = (cpcCol < 0 && clicks > 0) ? (cost / clicks) : cpc;
+        const effectiveCpa = (cpaCol < 0 && conversions > 0) ? (cost / conversions) : cpa;
         
         if (cost > 0 || impressions > 0) {
           dailyData.push({
@@ -6587,8 +6635,8 @@ const savePeriods = async (d) => {
             spend: cost,
             impressions,
             clicks,
-            cpc,
-            cpa,
+            cpc: effectiveCpc,
+            cpa: effectiveCpa,
             conversions,
             isMonthly: isMonthlyRecord,
             monthLabel: isMonthlyRecord ? dateStr : null, // Store original month label like "Apr 2024"
