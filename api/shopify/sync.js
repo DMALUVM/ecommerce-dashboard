@@ -25,11 +25,20 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Store URL is required' });
   }
   
-  // Support both legacy (accessToken) and new 2026 (clientId/clientSecret) auth methods
-  const useOAuth = clientId && clientSecret;
-  
-  if (!useOAuth && !accessToken) {
-    return res.status(400).json({ error: 'Either accessToken OR clientId + clientSecret are required' });
+  // Support both legacy (Admin API access token / shpat_) and optional OAuth-style creds.
+  // IMPORTANT: Shopify Admin API calls require an Admin API access token (typically starts with "shpat_").
+  // Some users may paste that token into the UI field labeled "Client Secret".
+  const looksLikeAdminToken = (t) => typeof t === 'string' && t.trim().toLowerCase().startsWith('shpat_');
+
+  // Prefer explicit accessToken; fall back to clientSecret if it looks like an Admin API token.
+  const legacyToken = accessToken || (looksLikeAdminToken(clientSecret) ? clientSecret : null);
+
+  // Only treat clientId/clientSecret as OAuth credentials if clientSecret does NOT look like an Admin API token.
+  // (If it *does* look like shpat_, we should NOT try to exchange it via /admin/oauth/access_token.)
+  const useOAuth = !!(clientId && clientSecret && !looksLikeAdminToken(clientSecret));
+
+  if (!useOAuth && !legacyToken) {
+    return res.status(400).json({ error: 'Missing credentials. Provide an Admin API access token (shpat_) or OAuth credentials.' });
   }
 
   // Clean up store URL
@@ -45,8 +54,8 @@ export default async function handler(req, res) {
   // Helper function to get access token (handles both old and new auth)
   const getAccessToken = async () => {
     if (!useOAuth) {
-      // Legacy: Use static access token (shpat_ tokens)
-      return accessToken;
+      // Legacy: Use static Admin API access token (shpat_ tokens)
+      return legacyToken;
     }
     
     // New 2026 OAuth: Exchange client credentials for access token
@@ -97,7 +106,7 @@ export default async function handler(req, res) {
         const errorText = await shopRes.text();
         console.error('Shopify API error:', shopRes.status, errorText);
         if (shopRes.status === 401) {
-          return res.status(401).json({ error: 'Invalid credentials. Check your Client ID and Secret in Dev Dashboard.' });
+          return res.status(401).json({ error: 'Invalid credentials. Verify your Admin API access token (shpat_) and store URL.' });
         }
         if (shopRes.status === 404) {
           return res.status(404).json({ error: 'Store not found. Please check your store URL.' });
