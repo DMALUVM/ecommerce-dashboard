@@ -4468,25 +4468,96 @@ const savePeriods = async (d) => {
     return lookup;
   }, [savedCogs, files.cogs]);
 
+  // Normalize SKU keys and support common variants (e.g. SKU vs SKUShop) for consistent cost lookups
+  const getCogsCost = useCallback((rawSku) => {
+    const sku = (rawSku || '').toString().trim();
+    if (!sku) return 0;
+
+    const pick = (k) => {
+      const v = savedCogs[k];
+      if (typeof v === 'number') return v;
+      if (v && typeof v.cost === 'number') return v.cost;
+      return 0;
+    };
+
+    let c = pick(sku);
+    if (c) return c;
+
+    const compact = sku.replace(/\s+/g, '');
+    c = pick(compact);
+    if (c) return c;
+
+    const base = compact.replace(/shop$/i, '');
+    const candidates = [
+      base,
+      base + 'Shop',
+      base.toUpperCase(),
+      (base + 'Shop').toUpperCase(),
+      base.toLowerCase(),
+      (base + 'Shop').toLowerCase(),
+    ];
+
+    for (const k of candidates) {
+      c = pick(k);
+      if (c) return c;
+    }
+    return 0;
+  }, [savedCogs]);
+
+
   const processAndSaveCogs = useCallback(() => {
     if (!files.cogs) return;
     const lookup = {};
     const names = {};
-    files.cogs.forEach(r => { 
-      const s = r['SKU'] || r['sku']; 
-      const c = parseFloat(r['Cost Per Unit'] || 0); 
-      const name = r['Product Name'] || r['Product Name '] || r['product name'] || r['Name'] || r['name'] || '';
-      if (s) {
-        lookup[s] = c;
-        if (name) names[s] = name.trim();
+
+    const upsert = (rawSku, cost, name) => {
+      const sku = (rawSku || '').toString().trim();
+      if (!sku) return;
+      const c = typeof cost === 'number' ? cost : parseFloat(cost || 0);
+      if (!(c > 0)) return;
+
+      const compact = sku.replace(/\s+/g, '');
+      const base = compact.replace(/shop$/i, '');
+
+      // Store multiple keys to maximize match rate across feeds
+      const keys = new Set([
+        sku,
+        compact,
+        base,
+        base + 'Shop',
+        sku.toUpperCase(),
+        sku.toLowerCase(),
+        compact.toUpperCase(),
+        compact.toLowerCase(),
+      ]);
+
+      keys.forEach(k => { if (k) lookup[k] = c; });
+
+      if (name) {
+        const n = name.toString().trim();
+        if (n) {
+          names[sku] = n;
+          names[compact] = n;
+          names[base] = n;
+          names[base + 'Shop'] = n;
+        }
       }
+    };
+
+    files.cogs.forEach(r => {
+      const s = r['SKU'] || r['sku'] || r['Sku'] || '';
+      const c = parseFloat(r['Cost Per Unit'] || r['cost per unit'] || r['COGS'] || r['Cost'] || 0);
+      const name = r['Product Name'] || r['Product Name '] || r['product name'] || r['Name'] || r['name'] || '';
+      upsert(s, c, name);
     });
+
     saveCogs(lookup);
     setSavedProductNames(names);
-    // Save product names to localStorage
     try { localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(names)); } catch(e) {}
-    setFiles(p => ({ ...p, cogs: null })); setFileNames(p => ({ ...p, cogs: '' })); setShowCogsManager(false);
-  }, [files.cogs]);
+    setFiles(p => ({ ...p, cogs: null }));
+    setFileNames(p => ({ ...p, cogs: '' }));
+    setShowCogsManager(false);
+  }, [files.cogs, saveCogs]);
 
   // Data Validation Function
   const validateUploadData = useCallback((type, data) => {
@@ -5665,6 +5736,7 @@ const savePeriods = async (d) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             storeUrl: shopifyCredentials.storeUrl,
+                                accessToken: shopifyCredentials.clientSecret,
             clientId: shopifyCredentials.clientId,
             clientSecret: shopifyCredentials.clientSecret,
             syncType: 'inventory',
@@ -9645,7 +9717,7 @@ Respond with ONLY this JSON:
           calculatedUrgency,
           health: item.health,
           leadTimeDays,
-          cost: savedCogs[item.sku] || item.cost || 0,
+          cost: getCogsCost(item.sku) || item.cost || 0,
         };
       });
       
@@ -10164,8 +10236,8 @@ Analyze the data and respond with ONLY this JSON:
       'SKU': i.sku,
       'Location': i.source || 'Unknown',
       'Units': i.quantity || i.units || 0,
-      'COGS': savedCogs[i.sku] || 0,
-      'Value': ((i.quantity || i.units || 0) * (savedCogs[i.sku] || 0)).toFixed(2),
+      'COGS': getCogsCost(i.sku) || 0,
+      'Value': ((i.quantity || i.units || 0) * (getCogsCost(i.sku) || 0)).toFixed(2),
     }));
     exportToCSV(data, 'inventory', ['SKU', 'Location', 'Units', 'COGS', 'Value']);
   };
@@ -10818,7 +10890,7 @@ Analyze the data and respond with ONLY this JSON:
     if (shopifyCogs === 0 && shopify.skuData) {
       shopifyCogs = (shopify.skuData || []).reduce((sum, sku) => {
         const skuKey = sku.sku || sku.title || '';
-        const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+        const unitCost = getCogsCost(skuKey) || getCogsCost(sku.title) || 0;
         return sum + (unitCost * (sku.unitsSold || sku.units || 0));
       }, 0);
     }
@@ -12284,235 +12356,138 @@ Analyze the data and respond with ONLY this JSON:
     const parseAdsFile = async (file) => {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
-
-        const parseCSVLine = (line) => {
-          const result = [];
-          let current = '';
-          let inQuotes = false;
-          for (let i = 0; i < line.length; i++) {
-            const ch = line[i];
-            if (ch === '"') {
-              // Handle escaped quotes ("")
-              if (inQuotes && line[i + 1] === '"') {
-                current += '"';
-                i++;
-              } else {
-                inQuotes = !inQuotes;
-              }
-            } else if (ch === ',' && !inQuotes) {
-              result.push(current.trim());
-              current = '';
-            } else {
-              current += ch;
-            }
-          }
-          result.push(current.trim());
-          return result;
-        };
-
-        const parseNumber = (v) => {
-          if (v === null || v === undefined) return 0;
-          const s = String(v).replace(/[$,%]/g, '').replace(/\s/g, '').trim();
-          if (!s) return 0;
-          const n = Number(s);
-          return Number.isFinite(n) ? n : 0;
-        };
-
-        const toDateKey = (raw) => {
-          if (!raw) return null;
-          const s = String(raw).trim();
-          // Accept YYYY-MM-DD or YYYY/MM/DD
-          const m = s.match(/^(\d{4})[-\/](\d{2})[-\/](\d{2})/);
-          if (!m) return null;
-          return `${m[1]}-${m[2]}-${m[3]}`;
-        };
-
-        const findHeaderRowIndex = (lines) => {
-          // Some exports include title/date-range lines. Find the first row that looks like a header.
-          for (let i = 0; i < Math.min(lines.length, 10); i++) {
-            const cols = parseCSVLine(lines[i]);
-            const joined = cols.join(' ').toLowerCase();
-            if (joined.includes('date') || joined.includes('day') || joined.includes('ad name') || joined.includes('campaign')) {
-              return i;
-            }
-            // Google wide pivot often starts with "Campaign" / "Search keyword" then date_metric columns
-            if (cols.some(c => /^\d{4}-\d{2}-\d{2}_.+/.test(c))) return i;
-          }
-          return 0;
-        };
-
         reader.onload = (e) => {
           try {
-            const text = String(e?.target?.result ?? '');
-            const rawLines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-            if (rawLines.length < 2) {
+            const text = e.target.result;
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+            if (lines.length < 2) {
               reject(new Error('File has no data rows'));
               return;
             }
-
-            const headerRowIdx = findHeaderRowIndex(rawLines);
-            const header = parseCSVLine(rawLines[headerRowIdx]).map(h => String(h || '').trim());
-            const dataLines = rawLines.slice(headerRowIdx + 1);
-
-            const headerLower = header.map(h => h.toLowerCase());
-
-            const isGoogleWide = header.some(h => /^\d{4}-\d{2}-\d{2}_.+/.test(h));
-            const isMeta = headerLower.some(h => h.includes('ad name') || h.includes('campaign name')) &&
-                           (headerLower.some(h => h.includes('amount spent')) || headerLower.some(h => h === 'spend'));
-
-            const dailyData = {};
-
-            if (isGoogleWide) {
-              // Google wide-pivot export: YYYY-MM-DD_Metric columns
-              const metricCols = [];
-              for (let i = 0; i < header.length; i++) {
-                const m = header[i].match(/^(\d{4}-\d{2}-\d{2})_(.+)$/);
-                if (!m) continue;
-                const dateKey = m[1];
-                const metricRaw = m[2].trim();
-                const metric = metricRaw.toLowerCase();
-
-                // Normalize metric label for safe matching (avoid derived metrics like Avg., CTR, rates)
-                const norm = metricRaw.toLowerCase().replace(/\s+/g, ' ').trim();
-
-                // Hard ignore derived metrics
-                if (
-                  norm.includes('avg') ||
-                  norm.includes('ctr') ||
-                  norm.includes('rate') ||
-                  norm.includes('cost /') ||
-                  norm.includes('value /') ||
-                  norm.includes('per ')
-                ) {
-                  continue;
-                }
-
-                let kind = null;
-
-                // Spend (Cost)
-                if (norm === 'cost') kind = 'spend';
-                // Clicks
-                else if (norm === 'clicks') kind = 'clicks';
-                // Impressions
-                else if (norm === 'impr.' || norm === 'impr' || norm === 'impressions') kind = 'impressions';
-                // Orders (preferred conversions)
-                else if (norm === 'orders' || norm === 'purchases' || norm === 'purchase') kind = 'conversions';
-                // Revenue / sales value
-                else if (norm === 'revenue' || norm.includes('conv. value') || norm.includes('conversion value') || norm.includes('purchase value')) kind = 'convValue';
-                // Fallback only if report truly uses "Conversions" column
-                else if (norm === 'conversions') kind = 'conversions';
-                else continue;
-
-                metricCols.push({ idx: i, dateKey, kind });
+            
+            // Parse header
+            const parseCSVLine = (line) => {
+              const result = [];
+              let current = '';
+              let inQuotes = false;
+              for (const char of line) {
+                if (char === '"') inQuotes = !inQuotes;
+                else if (char === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+                else current += char;
               }
-
-              for (const line of dataLines) {
-                const cols = parseCSVLine(line);
-                for (const mc of metricCols) {
-                  const val = parseNumber(cols[mc.idx]);
-                  if (val === 0) continue;
-                  if (!dailyData[mc.dateKey]) {
-                    dailyData[mc.dateKey] = {
-                      googleSpend: 0,
-                      googleClicks: 0,
-                      googleImpressions: 0,
-                      googleConversions: 0,
-                      googleConversionValue: 0,
-                    };
-                  }
-                  const d = dailyData[mc.dateKey];
-                  if (mc.kind === 'spend') d.googleSpend += val;
-                  else if (mc.kind === 'clicks') d.googleClicks += val;
-                  else if (mc.kind === 'impressions') d.googleImpressions += val;
-                  else if (mc.kind === 'conversions') d.googleConversions += val;
-                  else if (mc.kind === 'convValue') d.googleConversionValue += val;
-                }
-              }
-
-              // Derived KPIs
-              Object.keys(dailyData).forEach(date => {
-                const d = dailyData[date];
-                if (d.googleClicks > 0) d.googleCPC = d.googleSpend / d.googleClicks;
-                if (d.googleImpressions > 0 && d.googleClicks > 0) d.googleCTR = (d.googleClicks / d.googleImpressions) * 100;
-                if (d.googleConversions > 0) d.googleCostPerConv = d.googleSpend / d.googleConversions;
-                if (d.googleSpend > 0 && d.googleConversionValue > 0) d.googleROAS = d.googleConversionValue / d.googleSpend;
-              });
-
-              const dates = Object.keys(dailyData).sort();
-              if (dates.length === 0) {
-                reject(new Error('No valid daily data found'));
-                return;
-              }
-
-              resolve({
-                type: 'google',
-                dailyData,
-                dateRange: { start: dates[0], end: dates[dates.length - 1] },
-                daysCount: dates.length,
-              });
-              return;
-            }
-
-            // Non-wide parsing (Meta daily table OR Google "normal" daily export with Date column)
-            const dateIdx = headerLower.findIndex(h => h === 'date' || h.includes('date'));
-            if (dateIdx === -1) {
+              result.push(current.trim());
+              return result;
+            };
+            
+            const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/"/g, ''));
+            const dateColIdx = headers.findIndex(h => h === 'date' || h.includes('date'));
+            
+            if (dateColIdx === -1) {
               reject(new Error('No date column found'));
               return;
             }
-
-            const spendIdx = headerLower.findIndex(h => h === 'spend' || h.includes('amount spent') || h.includes('cost'));
-            const clicksIdx = headerLower.findIndex(h => h === 'clicks' || h.includes('link clicks'));
-            const imprIdx = headerLower.findIndex(h => h === 'impressions' || h.includes('impr'));
-            const convIdx = headerLower.findIndex(h => h === 'conversions' || h.includes('purchase') || h.includes('results'));
-            const valueIdx = headerLower.findIndex(h => h.includes('purchase value') || h.includes('conv. value') || h.includes('conversion value') || h.includes('revenue'));
-
-            for (const line of dataLines) {
-              const cols = parseCSVLine(line);
-              const dateKey = toDateKey(cols[dateIdx]);
-              if (!dateKey) continue;
-
-              if (!dailyData[dateKey]) dailyData[dateKey] = {};
-
-              if (isMeta) {
-                dailyData[dateKey].metaSpend = (dailyData[dateKey].metaSpend || 0) + parseNumber(cols[spendIdx]);
-                dailyData[dateKey].metaClicks = (dailyData[dateKey].metaClicks || 0) + parseNumber(cols[clicksIdx]);
-                dailyData[dateKey].metaImpressions = (dailyData[dateKey].metaImpressions || 0) + parseNumber(cols[imprIdx]);
-                dailyData[dateKey].metaPurchases = (dailyData[dateKey].metaPurchases || 0) + parseNumber(cols[convIdx]);
-                dailyData[dateKey].metaPurchaseValue = (dailyData[dateKey].metaPurchaseValue || 0) + parseNumber(cols[valueIdx]);
-              } else {
-                // Google normal daily export
-                dailyData[dateKey].googleSpend = (dailyData[dateKey].googleSpend || 0) + parseNumber(cols[spendIdx]);
-                dailyData[dateKey].googleClicks = (dailyData[dateKey].googleClicks || 0) + parseNumber(cols[clicksIdx]);
-                dailyData[dateKey].googleImpressions = (dailyData[dateKey].googleImpressions || 0) + parseNumber(cols[imprIdx]);
-                dailyData[dateKey].googleConversions = (dailyData[dateKey].googleConversions || 0) + parseNumber(cols[convIdx]);
-                dailyData[dateKey].googleConversionValue = (dailyData[dateKey].googleConversionValue || 0) + parseNumber(cols[valueIdx]);
+            
+            // Detect file type by headers
+            const isMetaAds = headers.some(h => h.includes('ad name') || h.includes('amount spent') || h.includes('roas'));
+            const isGoogleAds = headers.some(h => h.includes('avg. cpc') || h.includes('avg cpc') || h.includes('cost / conv'));
+            
+            if (!isMetaAds && !isGoogleAds) {
+              reject(new Error('Unrecognized ads format. Expected Meta or Google Ads export.'));
+              return;
+            }
+            
+            // Map headers to indices
+            const getColIdx = (patterns) => headers.findIndex(h => patterns.some(p => h.includes(p)));
+            
+            const dailyData = {}; // { date: { metaSpend, googleSpend, impressions, clicks, ... } }
+            
+            // Parse data rows
+            for (let i = 1; i < lines.length; i++) {
+              const cols = parseCSVLine(lines[i]);
+              const dateStr = cols[dateColIdx];
+              const parsedDate = parseAdsDate(dateStr);
+              
+              if (!parsedDate) continue; // Skip invalid dates
+              
+              if (!dailyData[parsedDate]) {
+                dailyData[parsedDate] = {
+                  metaSpend: 0, googleSpend: 0,
+                  metaImpressions: 0, googleImpressions: 0,
+                  metaClicks: 0, googleClicks: 0,
+                  metaPurchases: 0, googleConversions: 0,
+                  metaPurchaseValue: 0, googleConversionValue: 0,
+                  metaROAS: 0, googleCostPerConv: 0,
+                  metaCPM: 0, metaCPC: 0, googleCPC: 0,
+                  metaCTR: 0, googleCTR: 0,
+                };
+              }
+              
+              if (isMetaAds) {
+                // Meta columns: Amount spent, Purchases value, Purchases, ROAS, Impressions, Link clicks, CTR, CPC, CPM
+                const spendIdx = getColIdx(['amount spent']);
+                const purchaseValueIdx = getColIdx(['purchases value', 'purchase value']);
+                const purchasesIdx = getColIdx(['purchases (all)', 'purchases']);
+                const roasIdx = getColIdx(['roas']);
+                const impressionsIdx = getColIdx(['impressions']);
+                const clicksIdx = getColIdx(['link clicks', 'clicks']);
+                const ctrIdx = getColIdx(['ctr']);
+                const cpcIdx = getColIdx(['cost per link click', 'cpc']);
+                const cpmIdx = getColIdx(['cpm']);
+                
+                dailyData[parsedDate].metaSpend += parseNumber(cols[spendIdx]);
+                dailyData[parsedDate].metaImpressions += parseNumber(cols[impressionsIdx]);
+                dailyData[parsedDate].metaClicks += parseNumber(cols[clicksIdx]);
+                dailyData[parsedDate].metaPurchases += parseNumber(cols[purchasesIdx]);
+                dailyData[parsedDate].metaPurchaseValue += parseNumber(cols[purchaseValueIdx]);
+                
+                // For averages (CTR, CPC, CPM, ROAS), we'll recalculate after aggregation
+              } else if (isGoogleAds) {
+                // Google columns: Impressions, Avg. CPC, Cost, Cost / conv.
+                const impressionsIdx = getColIdx(['impressions']);
+                const cpcIdx = getColIdx(['avg. cpc', 'avg cpc']);
+                const costIdx = getColIdx(['cost']);
+                const costPerConvIdx = getColIdx(['cost / conv', 'cost/conv', 'cost per conv']);
+                
+                dailyData[parsedDate].googleSpend += parseNumber(cols[costIdx]);
+                dailyData[parsedDate].googleImpressions += parseNumber(cols[impressionsIdx]);
+                dailyData[parsedDate].googleCPC = parseNumber(cols[cpcIdx]); // Will take last value (daily totals)
+                dailyData[parsedDate].googleCostPerConv = parseNumber(cols[costPerConvIdx]);
+                
+                // Estimate conversions from cost per conv
+                const cost = parseNumber(cols[costIdx]);
+                const costPerConv = parseNumber(cols[costPerConvIdx]);
+                if (costPerConv > 0) {
+                  dailyData[parsedDate].googleConversions += Math.round(cost / costPerConv);
+                }
               }
             }
-
-            // Derived KPIs
+            
+            // Calculate derived metrics for Meta
             Object.keys(dailyData).forEach(date => {
               const d = dailyData[date];
               if (d.metaImpressions > 0) {
                 d.metaCPM = (d.metaSpend / d.metaImpressions) * 1000;
-                if (d.metaClicks > 0) d.metaCTR = (d.metaClicks / d.metaImpressions) * 100;
+                d.metaCTR = (d.metaClicks / d.metaImpressions) * 100;
               }
-              if (d.metaClicks > 0) d.metaCPC = d.metaSpend / d.metaClicks;
-              if (d.metaSpend > 0 && d.metaPurchaseValue > 0) d.metaROAS = d.metaPurchaseValue / d.metaSpend;
-
-              if (d.googleClicks > 0) d.googleCPC = d.googleSpend / d.googleClicks;
-              if (d.googleImpressions > 0 && d.googleClicks > 0) d.googleCTR = (d.googleClicks / d.googleImpressions) * 100;
-              if (d.googleConversions > 0) d.googleCostPerConv = d.googleSpend / d.googleConversions;
-              if (d.googleSpend > 0 && d.googleConversionValue > 0) d.googleROAS = d.googleConversionValue / d.googleSpend;
+              if (d.metaClicks > 0) {
+                d.metaCPC = d.metaSpend / d.metaClicks;
+              }
+              if (d.metaSpend > 0 && d.metaPurchaseValue > 0) {
+                d.metaROAS = d.metaPurchaseValue / d.metaSpend;
+              }
+              if (d.googleImpressions > 0 && d.googleSpend > 0) {
+                d.googleCTR = (d.googleSpend / d.googleCPC / d.googleImpressions) * 100 || 0;
+              }
             });
-
+            
             const dates = Object.keys(dailyData).sort();
             if (dates.length === 0) {
               reject(new Error('No valid daily data found'));
               return;
             }
-
+            
             resolve({
-              type: isMeta ? 'meta' : 'google',
+              type: isMetaAds ? 'meta' : 'google',
               dailyData,
               dateRange: { start: dates[0], end: dates[dates.length - 1] },
               daysCount: dates.length,
@@ -12521,12 +12496,11 @@ Analyze the data and respond with ONLY this JSON:
             reject(new Error(`Parse error: ${err.message}`));
           }
         };
-
         reader.onerror = () => reject(new Error('Failed to read file'));
         reader.readAsText(file);
       });
     };
-
+    
     const processFiles = async () => {
       const totalFiles = adsSelectedFiles.length;
       const processResults = [];
@@ -20513,6 +20487,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               signal: controller.signal,
                               body: JSON.stringify({
                                 storeUrl: shopifyCredentials.storeUrl,
+                                accessToken: shopifyCredentials.clientSecret,
                                 clientId: shopifyCredentials.clientId, clientSecret: shopifyCredentials.clientSecret,
                                 startDate: shopifySyncRange.start,
                                 endDate: shopifySyncRange.end,
@@ -20571,6 +20546,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 storeUrl: shopifyCredentials.storeUrl,
+                                accessToken: shopifyCredentials.clientSecret,
                                 clientId: shopifyCredentials.clientId, clientSecret: shopifyCredentials.clientSecret,
                                 startDate: shopifySyncRange.start,
                                 endDate: shopifySyncRange.end,
@@ -20849,6 +20825,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 storeUrl: shopifyCredentials.storeUrl,
+                                accessToken: shopifyCredentials.clientSecret,
                                 clientId: shopifyCredentials.clientId, clientSecret: shopifyCredentials.clientSecret,
                                 syncType: 'inventory',
                               }),
@@ -20878,6 +20855,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 storeUrl: shopifyCredentials.storeUrl,
+                                accessToken: shopifyCredentials.clientSecret,
                                 clientId: shopifyCredentials.clientId, clientSecret: shopifyCredentials.clientSecret,
                                 syncType: 'inventory',
                               }),
@@ -20936,7 +20914,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             // (These might be Amazon-only products)
                             Object.entries(existingItemsBySku).forEach(([sku, existing]) => {
                               if (!mergedItems.find(i => i.sku === sku) && (existing.amazonQty > 0 || existing.amazonInbound > 0)) {
-                                const cogsCost = typeof savedCogs[sku] === 'number' ? savedCogs[sku] : (savedCogs[sku]?.cost || 0);
+                                const cogsCost = getCogsCost(sku);
                                 const cost = cogsCost || existing.cost || 0;
                                 mergedItems.push({
                                   ...existing,
@@ -21120,6 +21098,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 storeUrl: shopifyCredentials.storeUrl,
+                                accessToken: shopifyCredentials.clientSecret,
                                 clientId: shopifyCredentials.clientId, clientSecret: shopifyCredentials.clientSecret,
                                 syncType: 'products',
                               }),
@@ -21744,250 +21723,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     );
   }
 
-  if (view === 'weekly' && selectedWeek) {
-    // ---- Week selection (no future weeks except the current week-ending) ----
-    const today = new Date();
-    const todayKey = formatDateKey(today);
-    const currentWeekEnding = getSunday(today); // week ending (Sunday) for "this week"
-
-    // Filter out any placeholder/future weeks that can be created by ad-only imports
-    const weeks = Object.keys(allWeeksData)
-      .filter(w => new Date(w + 'T12:00:00') <= new Date(currentWeekEnding + 'T12:00:00'))
-      .sort()
-      .reverse();
-
-    // Ensure current week is always selectable even if it doesn't exist yet in allWeeksData
-    if (!weeks.includes(currentWeekEnding)) weeks.unshift(currentWeekEnding);
-
-    const effectiveWeek = (new Date(selectedWeek + 'T12:00:00') > new Date(currentWeekEnding + 'T12:00:00'))
-      ? currentWeekEnding
-      : selectedWeek;
-
-    const idx = weeks.indexOf(effectiveWeek);
-
-    // Build week-to-date aggregates directly from daily data (used when the week isn't saved yet)
-    const computeWeekFromDaily = (weekKey) => {
-      const end = new Date(weekKey + 'T00:00:00');
-      const start = new Date(end);
-      start.setDate(start.getDate() - 6);
-
-      const weekDays = [];
-      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const k = formatDateKey(d);
-        // Only include days up to "today" so week-to-date never looks into the future
-        if (k <= todayKey) weekDays.push(k);
-      }
-
-      const sumSku = (arrs=[]) => {
-        const map = {};
-        arrs.forEach(arr => (arr || []).forEach(row => {
-          const key = row.sku || row.variant || row.title || 'Unknown';
-          if (!map[key]) map[key] = { ...row, revenue: 0, units: 0, cogs: 0, fees: 0, refunds: 0, discounts: 0, netSales: 0 };
-          map[key].revenue += row.revenue || 0;
-          map[key].units += row.units || 0;
-          map[key].cogs += row.cogs || 0;
-          map[key].fees += row.fees || 0;
-          map[key].refunds += row.refunds || 0;
-          map[key].discounts += row.discounts || 0;
-          map[key].netSales += row.netSales || 0;
-        }));
-        return Object.values(map);
-      };
-
-      const totals = weekDays.reduce((acc, dayKey) => {
-        const day = allDaysData[dayKey] || {};
-        const amz = day.amazon || {};
-        const shop = day.shopify || {};
-        const total = day.total || {};
-
-        // Shopify ads metrics can live in different places depending on import path
-        const ads = shop.adsMetrics || {};
-        const metaSpend = day.metaSpend ?? shop.metaSpend ?? ads.metaSpend ?? 0;
-        const googleSpend = day.googleSpend ?? shop.googleSpend ?? ads.googleSpend ?? 0;
-
-        acc.amazon.revenue += amz.revenue || 0;
-        acc.amazon.units += amz.units || 0;
-        acc.amazon.cogs += amz.cogs || 0;
-        acc.amazon.fees += amz.fees || 0;
-        acc.amazon.adSpend += amz.adSpend || 0;
-        acc.amazon.returns += amz.returns || 0;
-        acc.amazon.netProfit += amz.netProfit || 0;
-
-        acc.shopify.revenue += shop.revenue || 0;
-        acc.shopify.units += shop.units || 0;
-        acc.shopify.cogs += shop.cogs || 0;
-        acc.shopify.discounts += shop.discounts || 0;
-        acc.shopify.threeplCosts += shop.threeplCosts || 0;
-        acc.shopify.metaSpend += metaSpend;
-        acc.shopify.googleSpend += googleSpend;
-
-        // Aggregate ads KPIs
-        acc.shopify.adsMetrics.metaImpressions += ads.metaImpressions || day.metaImpressions || 0;
-        acc.shopify.adsMetrics.metaClicks += ads.metaClicks || day.metaClicks || 0;
-        acc.shopify.adsMetrics.metaPurchases += ads.metaPurchases || 0;
-        acc.shopify.adsMetrics.metaPurchaseValue += ads.metaPurchaseValue || 0;
-
-        acc.shopify.adsMetrics.googleImpressions += ads.googleImpressions || day.googleImpressions || 0;
-        acc.shopify.adsMetrics.googleClicks += ads.googleClicks || day.googleClicks || 0;
-        acc.shopify.adsMetrics.googleConversions += ads.googleConversions || day.googleConversions || 0;
-        acc.shopify.adsMetrics.googleConversionValue += ads.googleConversionValue || 0;
-
-        // Total
-        acc.total.revenue += total.revenue || ((amz.revenue || 0) + (shop.revenue || 0));
-        acc.total.units += total.units || ((amz.units || 0) + (shop.units || 0));
-        acc.total.cogs += total.cogs || ((amz.cogs || 0) + (shop.cogs || 0));
-        acc.total.adSpend += (amz.adSpend || 0) + metaSpend + googleSpend;
-
-        // SKU data (optional)
-        acc.amazonSku.push(amz.skuData || []);
-        acc.shopifySku.push(shop.skuData || []);
-        return acc;
-      }, {
-        amazon: { revenue: 0, units: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, returns: 0 },
-        shopify: { revenue: 0, units: 0, cogs: 0, discounts: 0, threeplCosts: 0, metaSpend: 0, googleSpend: 0, adsMetrics: { metaImpressions: 0, metaClicks: 0, metaPurchases: 0, metaPurchaseValue: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, googleConversionValue: 0 } },
-        total: { revenue: 0, units: 0, cogs: 0, adSpend: 0 },
-        amazonSku: [],
-        shopifySku: []
-      });
-
-      const shopAds = totals.shopify.metaSpend + totals.shopify.googleSpend;
-      const amzProfit = totals.amazon.netProfit || ((totals.amazon.revenue || 0) - (totals.amazon.cogs || 0) - (totals.amazon.fees || 0) - (totals.amazon.adSpend || 0));
-      const shopGross = (totals.shopify.revenue || 0) - (totals.shopify.cogs || 0) - (totals.shopify.threeplCosts || 0);
-      const shopProfit = shopGross - shopAds;
-
-      const totalRevenue = (totals.amazon.revenue || 0) + (totals.shopify.revenue || 0);
-      const totalProfit = amzProfit + shopProfit;
-      const totalAds = (totals.amazon.adSpend || 0) + shopAds;
-
-      // Derived ads KPIs
-      const m = totals.shopify.adsMetrics;
-      const metaCTR = m.metaImpressions > 0 ? (m.metaClicks / m.metaImpressions) * 100 : 0;
-      const metaCPC = m.metaClicks > 0 ? (totals.shopify.metaSpend / m.metaClicks) : 0;
-
-      const googleCTR = m.googleImpressions > 0 ? (m.googleClicks / m.googleImpressions) * 100 : 0;
-      const googleCPC = m.googleClicks > 0 ? (totals.shopify.googleSpend / m.googleClicks) : 0;
-      const googleCPA = m.googleConversions > 0 ? (totals.shopify.googleSpend / m.googleConversions) : 0;
-
-      const amazonShare = totalRevenue > 0 ? (totals.amazon.revenue / totalRevenue) * 100 : 0;
-      const shopifyShare = totalRevenue > 0 ? (totals.shopify.revenue / totalRevenue) * 100 : 0;
-
-      return {
-        amazon: { ...totals.amazon, netProfit: amzProfit, skuData: sumSku(totals.amazonSku) },
-        shopify: {
-          ...totals.shopify,
-          adSpend: shopAds,
-          metaAds: totals.shopify.metaSpend,
-          googleAds: totals.shopify.googleSpend,
-          netProfit: shopProfit,
-          netMargin: totals.shopify.revenue > 0 ? (shopProfit / totals.shopify.revenue) * 100 : 0,
-          roas: shopAds > 0 ? totals.shopify.revenue / shopAds : 0,
-          adsMetrics: {
-            ...totals.shopify.adsMetrics,
-            metaCTR,
-            metaCPC,
-            googleCTR,
-            googleCPC,
-            googleCPA,
-          },
-          skuData: sumSku(totals.shopifySku),
-        },
-        total: {
-          revenue: totalRevenue,
-          units: (totals.amazon.units || 0) + (totals.shopify.units || 0),
-          cogs: (totals.amazon.cogs || 0) + (totals.shopify.cogs || 0),
-          adSpend: totalAds,
-          netProfit: totalProfit,
-          netMargin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
-          roas: totalAds > 0 ? totalRevenue / totalAds : 0,
-          amazonShare,
-          shopifyShare,
-        },
-        _weekToDate: true,
-      };
-    };
-
-    // Prefer saved finalized weeks, but backfill missing channel fields from daily WTD (especially current week).
-    const getWeekForDisplay = (weekKey) => {
-      const saved = allWeeksData[weekKey];
-      const computed = computeWeekFromDaily(weekKey);
-
-      const mergeChannel = (savedCh = {}, computedCh = {}) => {
-        const out = { ...computedCh, ...savedCh };
-
-        const useComputedIfMissing = (key) => {
-          const s = savedCh?.[key];
-          const c = computedCh?.[key];
-          const sOk = typeof s === 'number' ? s !== 0 : !!s;
-          const cOk = typeof c === 'number' ? c !== 0 : !!c;
-          if (!sOk && cOk) out[key] = c;
-        };
-
-        ['revenue','units','cogs','fees','discounts','adSpend','netProfit'].forEach(useComputedIfMissing);
-
-        // Normalize Shopify ads fields
-        // Prefer explicit breakdown (meta/google) when available, even if a saved record only has combined adSpend.
-        let meta = +out.metaSpend || +out.metaAds || 0;
-        let google = +out.googleSpend || +out.googleAds || 0;
-
-        // If breakdown missing but computed (from daily) has it, pull it in.
-        if (!(meta > 0 || google > 0)) {
-          const cMeta = +(computedCh?.metaSpend ?? computedCh?.metaAds ?? 0);
-          const cGoogle = +(computedCh?.googleSpend ?? computedCh?.googleAds ?? 0);
-          if (cMeta > 0 || cGoogle > 0) {
-            meta = cMeta;
-            google = cGoogle;
-          }
-        }
-
-        if (meta > 0 || google > 0) {
-          out.metaSpend = meta;
-          out.googleSpend = google;
-          out.metaAds = meta;
-          out.googleAds = google;
-          // Ensure combined adSpend exists
-          if (!(+out.adSpend > 0)) out.adSpend = meta + google;
-        }
-
-        // Derived metrics: AOV and TACOS ratio (shown as "x" in UI)
-        const rev = +out.revenue || 0;
-        const units = +out.units || 0;
-        const ad = +out.adSpend || 0;
-        out.aov = units > 0 ? rev / units : 0;
-        out.roas = rev > 0 ? ad / rev : 0; // TACOS ratio for UI labels
-
-        return out;
-      };
-
-      const amazon = mergeChannel(saved?.amazon || {}, computed?.amazon || {});
-      const shopify = mergeChannel(saved?.shopify || {}, computed?.shopify || {});
-
-      const totalRevenue = (+amazon.revenue || 0) + (+shopify.revenue || 0);
-      const totalAds = (+amazon.adSpend || 0) + (+shopify.adSpend || 0);
-      const totalProfit = (+amazon.netProfit || 0) + (+shopify.netProfit || 0);
-
-      const total = {
-        revenue: totalRevenue,
-        units: (+amazon.units || 0) + (+shopify.units || 0),
-        cogs: (+amazon.cogs || 0) + (+shopify.cogs || 0),
-        adSpend: totalAds,
-        netProfit: totalProfit,
-        netMargin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
-        roas: totalRevenue > 0 ? totalAds / totalRevenue : 0, // TACOS ratio
-        amazonShare: totalRevenue > 0 ? ((+amazon.revenue || 0) / totalRevenue) * 100 : 0,
-        shopifyShare: totalRevenue > 0 ? ((+shopify.revenue || 0) / totalRevenue) * 100 : 0,
-      };
-
-      return {
-        ...(saved || {}),
-        ...(computed || {}),
-        amazon,
-        shopify,
-        total,
-        _weekToDate: !!computed?._weekToDate,
-      };
-    };
-
-    const rawData = getWeekForDisplay(effectiveWeek);
+  if (view === 'weekly' && selectedWeek && allWeeksData[selectedWeek]) {
+    const rawData = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
     
     // Enhance Shopify data with 3PL from ledger if available
     const ledger3PL = get3PLForWeek(threeplLedger, selectedWeek);
@@ -22026,7 +21763,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
               <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
                 <h2 className="text-xl font-bold text-white mb-2">Edit Ad Spend</h2>
-                <p className="text-slate-400 text-sm mb-4">Week ending {new Date(effectiveWeek+'T00:00:00').toLocaleDateString()}</p>
+                <p className="text-slate-400 text-sm mb-4">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString()}</p>
                 
                 <div className="space-y-4 mb-4">
                   <div>
@@ -22075,7 +21812,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
               <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
                 <h2 className="text-xl font-bold text-white mb-4">Edit 3PL / Fulfillment Costs</h2>
-                <p className="text-slate-400 text-sm mb-4">Week ending {new Date(effectiveWeek+'T00:00:00').toLocaleDateString()}</p>
+                <p className="text-slate-400 text-sm mb-4">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString()}</p>
                 
                 {/* Option 1: Upload 3PL File */}
                 <div className="mb-4">
@@ -22139,7 +21876,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
               <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
                 <h2 className="text-xl font-bold text-white mb-2">Re-process Week</h2>
-                <p className="text-slate-400 text-sm mb-4">Week ending {new Date(effectiveWeek+'T00:00:00').toLocaleDateString()} - Upload files to add SKU detail</p>
+                <p className="text-slate-400 text-sm mb-4">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString()} - Upload files to add SKU detail</p>
                 <div className="space-y-4 mb-6">
                   <div>
                     <label className="block text-sm font-medium text-slate-300 mb-2">Amazon Report <span className="text-rose-400">*</span></label>
@@ -22181,7 +21918,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     const meta = document.getElementById('reprocess-meta-ad')?.value || '';
                     const google = document.getElementById('reprocess-google-ad')?.value || '';
                     setReprocessAdSpend({ meta, google });
-                    setTimeout(() => reprocessWeek(effectiveWeek), 10);
+                    setTimeout(() => reprocessWeek(selectedWeek), 10);
                   }} disabled={!reprocessFiles.amazon || !reprocessFiles.shopify} className="flex-1 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 text-white font-semibold py-2 rounded-xl">Re-process</button>
                   <button onClick={() => { setShowReprocess(false); setReprocessFiles({ amazon: null, shopify: null, threepl: null }); setReprocessFileNames({ amazon: '', shopify: '', threepl: '' }); setReprocessAdSpend({ meta: '', google: '' }); }} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 rounded-xl">Cancel</button>
                 </div>
@@ -22193,19 +21930,19 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               {storeLogo && (
                 <img src={storeLogo} alt="Store logo" className="w-12 h-12 object-contain rounded-xl bg-white p-1.5" />
               )}
-              <div><h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'Weekly Performance'}</h1><p className="text-slate-400">Week ending {new Date(effectiveWeek+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
+              <div><h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'Weekly Performance'}</h1><p className="text-slate-400">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
             </div>
             <div className="flex gap-2">
               <button onClick={() => { setReprocessAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowReprocess(true); }} className="bg-violet-900/50 hover:bg-violet-800/50 border border-violet-600/50 text-violet-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><RefreshCw className="w-4 h-4" />Re-process</button>
               <button onClick={() => { setEditAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowEditAdSpend(true); }} className="bg-blue-900/50 hover:bg-blue-800/50 border border-blue-600/50 text-blue-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><DollarSign className="w-4 h-4" />Edit Ads</button>
               <button onClick={() => { setEdit3PLCost(data.shopify?.threeplCosts?.toString() || ''); setShowEdit3PL(true); }} className="bg-teal-900/50 hover:bg-teal-800/50 border border-teal-600/50 text-teal-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><Truck className="w-4 h-4" />Edit 3PL</button>
-              <button onClick={() => deleteWeek(effectiveWeek)} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-lg text-sm"><Trash2 className="w-4 h-4" /></button>
+              <button onClick={() => deleteWeek(selectedWeek)} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-lg text-sm"><Trash2 className="w-4 h-4" /></button>
             </div>
           </div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
             <button onClick={() => idx < weeks.length - 1 && setSelectedWeek(weeks[idx + 1])} disabled={idx >= weeks.length - 1} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
-            <select value={effectiveWeek} onChange={(e) => setSelectedWeek(e.target.value)} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">{weeks.map(w => <option key={w} value={w}>{new Date(w+'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</option>)}</select>
+            <select value={selectedWeek} onChange={(e) => setSelectedWeek(e.target.value)} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">{weeks.map(w => <option key={w} value={w}>{new Date(w+'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</option>)}</select>
             <button onClick={() => idx > 0 && setSelectedWeek(weeks[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
@@ -22225,7 +21962,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           {/* Week Notes */}
           <div className="mt-6 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
             <h3 className="text-sm font-semibold text-slate-400 uppercase mb-3 flex items-center gap-2"><StickyNote className="w-4 h-4" />Week Notes</h3>
-            <WeekNoteEditor weekKey={effectiveWeek} />
+            <WeekNoteEditor weekKey={selectedWeek} />
           </div>
         </div>
       </div>
@@ -22577,9 +22314,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       totalUnits: items.reduce((s, i) => s + (i.totalQty || 0), 0),
       totalValue: items.reduce((s, i) => s + (i.totalValue || 0), 0),
       amazonUnits: items.reduce((s, i) => s + (i.amazonQty || 0), 0),
-      amazonValue: items.reduce((s, i) => s + (i.amazonValue || 0), 0),
+      amazonValue: items.reduce((s, i) => s + ((i.amazonValue ?? ((i.amazonQty || 0) * (i.cost || 0))) || 0), 0),
       threeplUnits: items.reduce((s, i) => s + (i.threeplQty || 0), 0),
-      threeplValue: items.reduce((s, i) => s + (i.threeplValue || 0), 0),
+      threeplValue: items.reduce((s, i) => s + ((i.threeplValue ?? ((i.threeplQty || 0) * (i.cost || 0))) || 0), 0),
       skuCount: items.length,
       critical: items.filter(i => i.health === 'critical').length,
       low: items.filter(i => i.health === 'low').length,
@@ -24517,7 +24254,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         if (shopifyCogs === 0 && data.shopify?.skuData) {
           shopifyCogs = (data.shopify.skuData || []).reduce((sum, sku) => {
             const skuKey = sku.sku || sku.title || '';
-            const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+            const unitCost = getCogsCost(skuKey) || getCogsCost(sku.title) || 0;
             return sum + (unitCost * (sku.unitsSold || sku.units || 0));
           }, 0);
         }
@@ -24580,7 +24317,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           if (wkShopifyCogs === 0 && week.shopify?.skuData) {
             wkShopifyCogs = (week.shopify.skuData || []).reduce((sum, sku) => {
               const skuKey = sku.sku || sku.title || '';
-              const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+              const unitCost = getCogsCost(skuKey) || getCogsCost(sku.title) || 0;
               return sum + (unitCost * (sku.unitsSold || sku.units || 0));
             }, 0);
           }
@@ -24750,7 +24487,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       if (shopifyCogs === 0 && week.shopify?.skuData) {
         shopifyCogs = (week.shopify.skuData || []).reduce((sum, sku) => {
           const skuKey = sku.sku || sku.title || '';
-          const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+          const unitCost = getCogsCost(skuKey) || getCogsCost(sku.title) || 0;
           return sum + (unitCost * (sku.unitsSold || sku.units || 0));
         }, 0);
       }
@@ -24916,7 +24653,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       if (shopifyCogs === 0 && day.shopify?.skuData) {
         shopifyCogs = (day.shopify.skuData || []).reduce((sum, sku) => {
           const skuKey = sku.sku || sku.title || '';
-          const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+          const unitCost = getCogsCost(skuKey) || getCogsCost(sku.title) || 0;
           return sum + (unitCost * (sku.unitsSold || sku.units || 0));
         }, 0);
       }
@@ -32238,9 +31975,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   
                   {/* Bar chart */}
                   <div className="space-y-3 mb-4">
-                    {(adsTimeTab === 'daily' ? dailyData.slice(-14) : weeklyData.slice(-8)).map((w, i) => {
-                      const series = (adsTimeTab === 'daily' ? dailyData.slice(-14) : weeklyData.slice(-8));
-                      const maxSpend = Math.max(...series.map(x => x.total));
+                    {weeklyData.slice(-8).map((w, i) => {
+                      const maxSpend = Math.max(...weeklyData.slice(-8).map(x => x.total));
                       const metaWidth = maxSpend > 0 ? (w.meta / maxSpend) * 100 : 0;
                       const googleWidth = maxSpend > 0 ? (w.google / maxSpend) * 100 : 0;
                       return (
@@ -32345,8 +32081,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           
           {/* Amazon Spend vs Revenue Trend Chart */}
           {(() => {
-            const todayKey = formatDateKey(new Date());
-            const daysWithAmazonAdsMetrics = sortedDays.filter(d => d <= todayKey && allDaysData[d]?.amazonAdsMetrics?.totalRevenue > 0);
+            const daysWithAmazonAdsMetrics = sortedDays.filter(d => allDaysData[d]?.amazonAdsMetrics?.totalRevenue > 0);
             if (daysWithAmazonAdsMetrics.length < 7) return null;
             
             // Show all historical data (up to last 90 days)
@@ -32357,44 +32092,30 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             const startDate = new Date(chartDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
             const endDate = new Date(chartDays[chartDays.length - 1] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
             
-            // Use daily bars in the Daily tab, weekly aggregation elsewhere
-            const weeklyChartData = (adsTimeTab === 'daily')
-              ? chartDays.slice(-14).map(dayKey => {
-                  const amzMetrics = allDaysData[dayKey]?.amazonAdsMetrics || {};
-                  const spend = amzMetrics.spend || 0;
-                  const revenue = amzMetrics.totalRevenue || 0;
-                  const tacos = revenue > 0 ? (spend / revenue) * 100 : 0;
-                  return {
-                    week: new Date(dayKey + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-                    spend: Math.round(spend),
-                    revenue: Math.round(revenue),
-                    tacos: Math.round(tacos * 10) / 10,
-                  };
-                })
-              : (() => {
-                  const out = [];
-                  for (let i = 0; i < chartDays.length; i += 7) {
-                    const weekDays = chartDays.slice(i, Math.min(i + 7, chartDays.length));
-                    const weekData = weekDays.reduce((acc, d) => {
-                      const amzMetrics = allDaysData[d]?.amazonAdsMetrics || {};
-                      return {
-                        spend: acc.spend + (amzMetrics.spend || 0),
-                        revenue: acc.revenue + (amzMetrics.totalRevenue || 0),
-                        impressions: acc.impressions + (amzMetrics.impressions || 0),
-                        clicks: acc.clicks + (amzMetrics.clicks || 0),
-                      };
-                    }, { spend: 0, revenue: 0, impressions: 0, clicks: 0 });
-
-                    const tacos = weekData.revenue > 0 ? (weekData.spend / weekData.revenue) * 100 : 0;
-                    out.push({
-                      week: new Date(weekDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-                      spend: Math.round(weekData.spend),
-                      revenue: Math.round(weekData.revenue),
-                      tacos: Math.round(tacos * 10) / 10,
-                    });
-                  }
-                  return out;
-                })();if (weeklyChartData.length < 3) return null;
+            // Aggregate to weekly for cleaner visualization
+            const weeklyChartData = [];
+            for (let i = 0; i < chartDays.length; i += 7) {
+              const weekDays = chartDays.slice(i, Math.min(i + 7, chartDays.length));
+              const weekData = weekDays.reduce((acc, d) => {
+                const amzMetrics = allDaysData[d]?.amazonAdsMetrics || {};
+                return {
+                  spend: acc.spend + (amzMetrics.spend || 0),
+                  revenue: acc.revenue + (amzMetrics.totalRevenue || 0),
+                  impressions: acc.impressions + (amzMetrics.impressions || 0),
+                  clicks: acc.clicks + (amzMetrics.clicks || 0),
+                };
+              }, { spend: 0, revenue: 0, impressions: 0, clicks: 0 });
+              
+              const tacos = weekData.revenue > 0 ? (weekData.spend / weekData.revenue) * 100 : 0;
+              weeklyChartData.push({
+                week: new Date(weekDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                spend: Math.round(weekData.spend),
+                revenue: Math.round(weekData.revenue),
+                tacos: Math.round(tacos * 10) / 10,
+              });
+            }
+            
+            if (weeklyChartData.length < 3) return null;
             
             const avgSpend = weeklyChartData.reduce((s, w) => s + w.spend, 0) / weeklyChartData.length;
             const avgRev = weeklyChartData.reduce((s, w) => s + w.revenue, 0) / weeklyChartData.length;
@@ -32411,9 +32132,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 
                 {/* Simple bar chart visualization - USING SAME SCALE FOR BOTH */}
                 <div className="space-y-3 mb-4">
-                  {(adsTimeTab === 'daily' ? dailyChartData.slice(-14) : weeklyChartData.slice(-8)).map((w, i) => {
+                  {weeklyChartData.slice(-8).map((w, i) => {
                     // Use revenue as the max scale for BOTH bars so they're comparable
-                    const maxValue = Math.max(...series.map(x => x.revenue));
+                    const maxValue = Math.max(...weeklyChartData.slice(-8).map(x => x.revenue));
                     const revWidth = maxValue > 0 ? (w.revenue / maxValue) * 100 : 0;
                     const spendWidth = maxValue > 0 ? (w.spend / maxValue) * 100 : 0;
                     return (
@@ -37458,8 +37179,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     </div>
                     <button
                       onClick={async () => {
-                        if (!shopifyCredentials.storeUrl || !shopifyCredentials.clientId || !shopifyCredentials.clientSecret) {
-                          setToast({ message: 'Please enter store URL, Client ID, and Client Secret', type: 'error' });
+                        if (!shopifyCredentials.storeUrl || !shopifyCredentials.clientSecret) {
+                          setToast({ message: 'Please enter store URL and Admin API access token', type: 'error' });
                           return;
                         }
                         
@@ -37477,6 +37198,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             signal: controller.signal,
                             body: JSON.stringify({
                               storeUrl: shopifyCredentials.storeUrl,
+                              accessToken: shopifyCredentials.clientSecret,
                               clientId: shopifyCredentials.clientId,
                               clientSecret: shopifyCredentials.clientSecret,
                               test: true,
@@ -37508,7 +37230,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           setToast({ message: 'Connection failed: ' + errorMsg, type: 'error' });
                         }
                       }}
-                      disabled={!shopifyCredentials.storeUrl || !shopifyCredentials.clientId || !shopifyCredentials.clientSecret}
+                      disabled={!shopifyCredentials.storeUrl || !shopifyCredentials.clientSecret}
                       className="w-full py-3 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:hover:bg-green-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
                     >
                       <ShoppingBag className="w-5 h-5" />
