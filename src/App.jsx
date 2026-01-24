@@ -1275,6 +1275,138 @@ export default function Dashboard() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [toast, setToast] = useState(null); // { message: string, type: 'success' | 'error' }
+
+
+  // ========= Week-to-date Weekly Helpers (display only, does not overwrite saved weekly data) =========
+  const getWeekEndingForDateKey = useCallback((dateKey) => {
+    const d = new Date(dateKey + 'T12:00:00');
+    const dow = d.getDay(); // 0=Sun
+    const weekEnd = new Date(d);
+    weekEnd.setDate(d.getDate() + (dow === 0 ? 0 : 7 - dow));
+    return formatDateKey(weekEnd);
+  }, []);
+
+  const getAllWeekKeys = useCallback(() => {
+    // Union of saved weeks + weeks implied by daily data (supports week-to-date view)
+    const weeksFromSaved = Object.keys(allWeeksData || {});
+    const weeksFromDaysSet = new Set();
+    Object.keys(allDaysData || {}).forEach((dayKey) => {
+      weeksFromDaysSet.add(getWeekEndingForDateKey(dayKey));
+    });
+    const weeksFromDays = Array.from(weeksFromDaysSet);
+    return Array.from(new Set([...weeksFromSaved, ...weeksFromDays])).sort();
+  }, [allWeeksData, allDaysData, getWeekEndingForDateKey]);
+
+  const aggregateWeekFromDays = useCallback((weekEndingKey) => {
+    // Build a week object (same shape as saved week) from whatever daily data exists for that week.
+    const weekEnd = new Date(weekEndingKey + 'T12:00:00');
+    const weekStart = new Date(weekEnd);
+    weekStart.setDate(weekStart.getDate() - 6);
+
+    const dayKeys = Object.keys(allDaysData || {}).filter((dk) => {
+      const d = new Date(dk + 'T12:00:00');
+      return d >= weekStart && d <= weekEnd;
+    }).sort();
+
+    if (dayKeys.length === 0) return null;
+
+    const agg = {
+      weekEnding: weekEndingKey,
+      createdAt: null,
+      aggregatedFrom: dayKeys,
+      _isLiveWTD: true,
+      amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, margin: 0, aov: 0, roas: 0, returnRate: 0, skuData: [] },
+      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, netMargin: 0, aov: 0, roas: 0, skuData: [] },
+      total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0, netMargin: 0, roas: 0, amazonShare: 0, shopifyShare: 0 },
+    };
+
+    const amzSku = {};
+    const shopSku = {};
+
+    dayKeys.forEach((dk) => {
+      const day = allDaysData[dk];
+      if (!day) return;
+
+      // Amazon daily aggregation
+      if (day.amazon) {
+        agg.amazon.revenue += day.amazon.revenue || 0;
+        agg.amazon.units += day.amazon.units || 0;
+        agg.amazon.returns += day.amazon.returns || 0;
+        agg.amazon.cogs += day.amazon.cogs || 0;
+        agg.amazon.fees += day.amazon.fees || 0;
+        agg.amazon.adSpend += day.amazon.adSpend || 0;
+        agg.amazon.netProfit += day.amazon.netProfit || 0;
+
+        (day.amazon.skuData || []).forEach((s) => {
+          // Ignore SKUs without COGS (gift cards / misc) in SKU-level tables
+          if (!s || !s.sku) return;
+          if (!s.cogs || s.cogs === 0) return;
+          if (!amzSku[s.sku]) amzSku[s.sku] = { ...s, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+          amzSku[s.sku].unitsSold += s.unitsSold || 0;
+          amzSku[s.sku].returns += s.returns || 0;
+          amzSku[s.sku].netSales += s.netSales || 0;
+          amzSku[s.sku].netProceeds += s.netProceeds || 0;
+          amzSku[s.sku].adSpend += s.adSpend || 0;
+          amzSku[s.sku].cogs += s.cogs || 0;
+        });
+      }
+
+      // Shopify daily aggregation
+      if (day.shopify) {
+        agg.shopify.revenue += day.shopify.revenue || 0;
+        agg.shopify.units += day.shopify.units || 0;
+        agg.shopify.cogs += day.shopify.cogs || 0;
+        agg.shopify.adSpend += day.shopify.adSpend || 0;
+        agg.shopify.metaSpend += day.shopify.metaSpend || day.metaSpend || day.metaAds || 0;
+        agg.shopify.googleSpend += day.shopify.googleSpend || day.googleSpend || day.googleAds || 0;
+        agg.shopify.discounts += day.shopify.discounts || 0;
+        agg.shopify.netProfit += day.shopify.netProfit || 0;
+
+        (day.shopify.skuData || []).forEach((s) => {
+          if (!s || !s.sku) return;
+          if (!s.cogs || s.cogs === 0) return; // ignore SKUs without COGS
+          if (!shopSku[s.sku]) shopSku[s.sku] = { ...s, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+          shopSku[s.sku].unitsSold += s.unitsSold || 0;
+          shopSku[s.sku].netSales += s.netSales || 0;
+          shopSku[s.sku].discounts += s.discounts || 0;
+          shopSku[s.sku].cogs += s.cogs || 0;
+        });
+      }
+    });
+
+    // Derived totals
+    agg.amazon.margin = agg.amazon.revenue > 0 ? (agg.amazon.netProfit / agg.amazon.revenue) * 100 : 0;
+    agg.amazon.aov = agg.amazon.units > 0 ? agg.amazon.revenue / agg.amazon.units : 0;
+    agg.amazon.roas = agg.amazon.adSpend > 0 ? agg.amazon.revenue / agg.amazon.adSpend : 0;
+    agg.amazon.returnRate = agg.amazon.units > 0 ? (agg.amazon.returns / agg.amazon.units) * 100 : 0;
+    agg.amazon.skuData = Object.values(amzSku).sort((a,b) => (b.netSales||0) - (a.netSales||0));
+
+    agg.shopify.netMargin = agg.shopify.revenue > 0 ? (agg.shopify.netProfit / agg.shopify.revenue) * 100 : 0;
+    agg.shopify.aov = agg.shopify.units > 0 ? agg.shopify.revenue / agg.shopify.units : 0;
+    const shopAds = (agg.shopify.metaSpend || 0) + (agg.shopify.googleSpend || 0);
+    agg.shopify.roas = shopAds > 0 ? agg.shopify.revenue / shopAds : 0;
+    agg.shopify.skuData = Object.values(shopSku).sort((a,b) => (b.netSales||0) - (a.netSales||0));
+
+    agg.total.revenue = agg.amazon.revenue + agg.shopify.revenue;
+    agg.total.units = agg.amazon.units + agg.shopify.units;
+    agg.total.cogs = agg.amazon.cogs + agg.shopify.cogs;
+    agg.total.adSpend = (agg.amazon.adSpend || 0) + shopAds;
+    agg.total.netProfit = (agg.amazon.netProfit || 0) + (agg.shopify.netProfit || 0);
+    agg.total.netMargin = agg.total.revenue > 0 ? (agg.total.netProfit / agg.total.revenue) * 100 : 0;
+    agg.total.roas = agg.total.adSpend > 0 ? agg.total.revenue / agg.total.adSpend : 0;
+    agg.total.amazonShare = agg.total.revenue > 0 ? (agg.amazon.revenue / agg.total.revenue) * 100 : 0;
+    agg.total.shopifyShare = agg.total.revenue > 0 ? (agg.shopify.revenue / agg.total.revenue) * 100 : 0;
+
+    return agg;
+  }, [allDaysData]);
+
+  const getWeekDataForDisplay = useCallback((weekEndingKey) => {
+    if (!weekEndingKey) return null;
+    const saved = allWeeksData?.[weekEndingKey];
+    if (saved) return { ...saved, _isLiveWTD: false };
+    return aggregateWeekFromDays(weekEndingKey);
+  }, [allWeeksData, aggregateWeekFromDays]);
+  // ========= End Week-to-date Weekly Helpers =========
   
   // Settings tab state
   const [settingsTab, setSettingsTab] = useState(() => {
@@ -10699,7 +10831,7 @@ Analyze the data and respond with ONLY this JSON:
         <button onClick={() => { const d = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse(); if (d.length) { setSelectedDay(d[0]); setView('daily'); }}} disabled={!Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'daily' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Sun className="w-4 h-4 inline mr-1" />Days</button>
       )}
       {appSettings.modulesEnabled?.weeklyTracking !== false && (
-        <button onClick={() => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}} disabled={!Object.keys(allWeeksData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />Weeks</button>
+        <button onClick={() => { const w = getAllWeekKeys().sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}} disabled={!getAllWeekKeys().length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />Weeks</button>
       )}
       {appSettings.modulesEnabled?.periodTracking !== false && (
         <button onClick={() => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }}} disabled={!Object.keys(allPeriodsData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'period-view' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><CalendarRange className="w-4 h-4 inline mr-1" />Periods</button>
@@ -16523,7 +16655,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     } else {
       // Use weekly data
       const weeklyAggWithAds = rangeWeeks.reduce((acc, w) => {
-        const week = allWeeksData[w];
+        const week = getWeekDataForDisplay(w);
         const googleAds = week?.shopify?.googleSpend || week?.shopify?.googleAds || 0;
         const metaAds = week?.shopify?.metaSpend || week?.shopify?.metaAds || 0;
         const amazonAds = week?.amazon?.adSpend || 0;
@@ -16552,7 +16684,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         : sortedWeeks.filter(w => w.startsWith(lastYear));
         
       previous = previousRangeWeeks.reduce((acc, w) => {
-        const week = allWeeksData[w];
+        const week = getWeekDataForDisplay(w);
         return {
           revenue: acc.revenue + (week.total?.revenue || 0),
           profit: acc.profit + (week.total?.netProfit || 0),
@@ -18462,7 +18594,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   {sortedWeeks.length > 0 ? (
                     <div className="space-y-2">
                       {sortedWeeks.slice(-5).reverse().map(w => {
-                        const week = allWeeksData[w];
+                        const week = getWeekDataForDisplay(w);
                         const isSelected = compareItems.includes(w);
                         const note = weekNotes[w];
                         return (
@@ -21723,8 +21855,26 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     );
   }
 
-  if (view === 'weekly' && selectedWeek && allWeeksData[selectedWeek]) {
-    const rawData = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
+  if (view === 'weekly' && selectedWeek) {
+    const rawData = getWeekDataForDisplay(selectedWeek);
+    if (!rawData) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
+          <div className="max-w-7xl mx-auto">
+            <Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+            <div className="bg-slate-800/40 border border-slate-700 rounded-2xl p-6 mt-6">
+              <h2 className="text-xl font-bold mb-2">No data for this week yet</h2>
+              <p className="text-slate-400">Enter daily data for this week to see week-to-date totals.</p>
+              <div className="mt-4">
+                <button onClick={() => setView('dashboard')} className="bg-slate-700 hover:bg-slate-600 text-white font-semibold px-4 py-2 rounded-xl">Back to Dashboard</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    const weeks = getAllWeekKeys().sort().reverse();
+    const idx = weeks.indexOf(selectedWeek);
     
     // Enhance Shopify data with 3PL from ledger if available
     const ledger3PL = get3PLForWeek(threeplLedger, selectedWeek);
@@ -24305,7 +24455,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           };
         }
         if (monthData[monthKey].source === 'weekly') {
-          const week = allWeeksData[w];
+          const week = getWeekDataForDisplay(w);
           
           // Calculate profit using COGS lookup for weekly aggregation
           const wkAmazonProfit = week.amazon?.netProfit || 0;
@@ -26057,7 +26207,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           };
         }
         if (monthData[monthKey].source === 'weekly') {
-          const week = allWeeksData[w];
+          const week = getWeekDataForDisplay(w);
           monthData[monthKey].revenue += week.total?.revenue || 0;
           monthData[monthKey].profit += week.total?.netProfit || 0;
           monthData[monthKey].units += week.total?.units || 0;
@@ -30268,7 +30418,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     // Helper to aggregate ad data from weeks
     const aggregateWeeklyData = (weeks) => {
       return weeks.reduce((acc, w) => {
-        const week = allWeeksData[w];
+        const week = getWeekDataForDisplay(w);
         if (!week) return acc;
         const amzAds = week.amazon?.adSpend || 0;
         const amzRev = week.amazon?.revenue || 0;
