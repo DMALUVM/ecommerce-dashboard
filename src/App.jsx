@@ -4709,13 +4709,20 @@ const savePeriods = async (d) => {
 
   const processSales = useCallback(() => {
     const cogsLookup = getCogsLookup();
-    if (!files.amazon || !files.shopify || !weekEnding) { alert('Upload Amazon & Shopify files and select date'); return; }
-    if (Object.keys(cogsLookup).length === 0) { alert('Set up COGS first via the COGS button'); return; }
+    if (!weekEnding) { alert('Please select a week ending date'); return; }
+    if (!files.amazon && !files.shopify) { alert('Please upload at least one data file (Amazon or Shopify)'); return; }
+    
+    // COGS is optional - just warn but proceed
+    const noCogs = Object.keys(cogsLookup).length === 0;
     
     // Validate data before processing
-    const amazonValidation = validateUploadData('amazon', files.amazon);
-    const shopifyValidation = validateUploadData('shopify', files.shopify);
+    const amazonValidation = files.amazon ? validateUploadData('amazon', files.amazon) : { warnings: [], errors: [] };
+    const shopifyValidation = files.shopify ? validateUploadData('shopify', files.shopify) : { warnings: [], errors: [] };
     const allWarnings = [...amazonValidation.warnings, ...amazonValidation.errors, ...shopifyValidation.warnings, ...shopifyValidation.errors];
+    
+    if (noCogs) {
+      allWarnings.push({ type: 'warning', message: 'No COGS configured - profit calculations will be incomplete' });
+    }
     
     if (allWarnings.length > 0) {
       setDataValidationWarnings(allWarnings);
@@ -4733,7 +4740,7 @@ const savePeriods = async (d) => {
 
     let amzRev = 0, amzUnits = 0, amzRet = 0, amzProfit = 0, amzCogs = 0, amzFees = 0, amzAds = 0;
     const amazonSkuData = {};
-    files.amazon.forEach(r => {
+    (files.amazon || []).forEach(r => {
       const net = parseInt(r['Net units sold'] || 0), sold = parseInt(r['Units sold'] || 0), ret = parseInt(r['Units returned'] || 0);
       const sales = parseFloat(r['Net sales'] || 0), proceeds = parseFloat(r['Net proceeds total'] || 0), sku = r['MSKU'] || '';
       const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
@@ -4755,7 +4762,7 @@ const savePeriods = async (d) => {
 
     let shopRev = 0, shopUnits = 0, shopCogs = 0, shopDisc = 0;
     const shopifySkuData = {};
-    files.shopify.forEach(r => {
+    (files.shopify || []).forEach(r => {
       const units = parseInt(r['Net items sold'] || 0), sales = parseFloat(r['Net sales'] || 0), sku = r['Product variant SKU'] || '';
       const name = r['Product title'] || r['Product'] || sku;
       const disc = Math.abs(parseFloat(r['Discounts'] || 0));
@@ -16952,15 +16959,17 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               <button onClick={() => setShowInvoiceModal(true)} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-1 ${upcomingBills.length > 0 ? 'bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 text-amber-300' : 'bg-slate-700 hover:bg-slate-600 text-white'}`}>
                 <FileText className="w-4 h-4" />Bills{upcomingBills.length > 0 && <span className="ml-1 px-1.5 py-0.5 bg-amber-500/30 rounded text-xs">{upcomingBills.length}</span>}
               </button>
-              {generateForecast ? (
-                <button onClick={() => setShowForecast(true)} className="px-3 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-sm text-emerald-300 flex items-center gap-1"><TrendingUp className="w-4 h-4" />Forecast</button>
-              ) : (
-                <button onClick={() => setView('analytics')} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-400 flex items-center gap-1" title="Need 4+ weeks for forecast"><TrendingUp className="w-4 h-4" />Forecast</button>
-              )}
-              <button onClick={() => setShowBreakEven(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Calculator className="w-4 h-4" /></button>
-              <button onClick={() => setShowExportModal(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><FileDown className="w-4 h-4" /></button>
-              <button onClick={() => setShowUploadHelp(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><FileText className="w-4 h-4" /></button>
-              <button onClick={() => setView('settings')} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Settings className="w-4 h-4" /></button>
+              {/* Quick action buttons */}
+              <div className="flex items-center gap-1 bg-slate-800/50 rounded-lg p-1">
+                {generateForecast ? (
+                  <button onClick={() => setShowForecast(true)} className="p-2 hover:bg-slate-700 rounded text-emerald-400" title="View Forecast"><TrendingUp className="w-4 h-4" /></button>
+                ) : (
+                  <button onClick={() => setView('analytics')} className="p-2 hover:bg-slate-700 rounded text-slate-500" title="Need 4+ weeks for forecast"><TrendingUp className="w-4 h-4" /></button>
+                )}
+                <button onClick={() => setShowBreakEven(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Break-even Calculator"><Calculator className="w-4 h-4" /></button>
+                <button onClick={() => setShowExportModal(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Export Data"><FileDown className="w-4 h-4" /></button>
+                <button onClick={() => setShowUploadHelp(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Help"><HelpCircle className="w-4 h-4" /></button>
+              </div>
             </div>
           </div>
           
@@ -19079,7 +19088,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 )}
               </div>
               
-              {/* Date Range Guide */}
+              {/* Date Range Guide - Collapsible */}
               {weekEnding && (() => {
                 const endDate = new Date(weekEnding + 'T00:00:00');
                 const startDate = new Date(endDate);
@@ -19087,101 +19096,154 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 const formatDate = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
                 const formatShort = (d) => d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
                 return (
-                  <div className="bg-indigo-900/30 border border-indigo-500/30 rounded-xl p-4 mb-6">
-                    <h3 className="text-indigo-300 font-semibold mb-3 flex items-center gap-2">
-                      <Calendar className="w-4 h-4" />
-                      Date Ranges for Week: {formatDate(startDate)} – {formatDate(endDate)}
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                      <div className="bg-slate-800/50 rounded-lg p-3">
-                        <p className="text-orange-400 font-medium mb-1">📦 Amazon SKU Economics</p>
-                        <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
-                        <p className="text-slate-400 text-xs mt-1">Seller Central → Reports → Business Reports → SKU Economics</p>
-                      </div>
-                      <div className="bg-slate-800/50 rounded-lg p-3">
-                        <p className="text-blue-400 font-medium mb-1">🛒 Shopify Sales by Product</p>
-                        <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
-                        <p className="text-slate-400 text-xs mt-1">Analytics → Reports → Sales by product variant SKU</p>
-                      </div>
-                      <div className="bg-slate-800/50 rounded-lg p-3">
-                        <p className="text-teal-400 font-medium mb-1">🚚 3PL Invoice (if applicable)</p>
-                        <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
-                        <p className="text-slate-400 text-xs mt-1">Download fulfillment invoice for this week</p>
-                      </div>
-                      <div className="bg-slate-800/50 rounded-lg p-3">
-                        <p className="text-violet-400 font-medium mb-1">📣 Ad Spend (Meta/Google)</p>
-                        <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
-                        <p className="text-slate-400 text-xs mt-1">Enter total spend for this 7-day period</p>
+                  <details className="bg-indigo-900/20 border border-indigo-500/30 rounded-xl mb-6 group">
+                    <summary className="p-4 cursor-pointer flex items-center justify-between text-indigo-300 font-semibold">
+                      <span className="flex items-center gap-2">
+                        <Calendar className="w-4 h-4" />
+                        Date Range: {formatDate(startDate)} – {formatDate(endDate)}
+                      </span>
+                      <ChevronDown className="w-4 h-4 transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="px-4 pb-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                        <div className="bg-slate-800/50 rounded-lg p-3">
+                          <p className="text-orange-400 font-medium mb-1">📦 Amazon SKU Economics</p>
+                          <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
+                          <p className="text-slate-400 text-xs mt-1">Seller Central → Reports → Business Reports → SKU Economics</p>
+                        </div>
+                        <div className="bg-slate-800/50 rounded-lg p-3">
+                          <p className="text-blue-400 font-medium mb-1">🛒 Shopify Sales by Product</p>
+                          <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
+                          <p className="text-slate-400 text-xs mt-1">Analytics → Reports → Sales by product variant SKU</p>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  </details>
                 );
               })()}
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <FileBox type="amazon" label="Amazon Report" desc="Business Reports > Detail Page" req />
-                <FileBox type="shopify" label="Shopify Sales" desc="Analytics > Sales by product" req />
-                <div className="relative">
-                  <FileBox type="threepl" label="3PL Costs" desc="Fulfillment invoice (CSV or Excel)" multi />
-                  <button 
-                    onClick={() => setShow3PLBulkUpload(true)} 
-                    className="absolute top-2 right-2 px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs text-white flex items-center gap-1"
-                    title="Bulk upload multiple 3PL files with deduplication"
-                  >
-                    <Upload className="w-3 h-3" />Bulk
-                  </button>
-                </div>
-                <FileBox type="cogs" label="COGS File" desc="SKU & Cost Per Unit columns" />
-              </div>
-              
-              {/* 3PL Bulk Upload Banner */}
-              <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4 mb-6">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Truck className="w-8 h-8 text-blue-400" />
-                    <div>
-                      <p className="text-white font-medium">3PL Bulk Upload</p>
-                      <p className="text-slate-400 text-sm">Upload multiple Packiyo Excel files at once with auto-deduplication</p>
-                    </div>
-                  </div>
-                  <button 
-                    onClick={() => setShow3PLBulkUpload(true)}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white font-medium flex items-center gap-2"
-                  >
-                    <Upload className="w-4 h-4" />
-                    Upload 3PL Files
-                  </button>
+              {/* Sales Data Files - Need at least one */}
+              <div className="mb-4">
+                <h3 className="text-white font-medium mb-3 flex items-center gap-2">
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                  Sales Data <span className="text-slate-400 text-xs font-normal">(upload at least one)</span>
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <FileBox type="amazon" label="Amazon Report" desc="Business Reports > Detail Page" />
+                  <FileBox type="shopify" label="Shopify Sales" desc="Analytics > Sales by product" />
                 </div>
               </div>
               
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div><label className="block text-sm text-slate-400 mb-2">Meta Ad Spend</label><input type="number" id="weekly-meta-ad" defaultValue={adSpend.meta} onBlur={(e) => setAdSpend(p => ({ ...p, meta: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-violet-500" /></div>
-                <div><label className="block text-sm text-slate-400 mb-2">Google Ad Spend</label><input type="number" id="weekly-google-ad" defaultValue={adSpend.google} onBlur={(e) => setAdSpend(p => ({ ...p, google: e.target.value }))} placeholder="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-violet-500" /></div>
+              {/* Optional Files */}
+              <div className="mb-4">
+                <h3 className="text-white font-medium mb-3 flex items-center gap-2">
+                  <Package className="w-4 h-4 text-slate-400" />
+                  Additional Data <span className="text-slate-400 text-xs font-normal">(optional)</span>
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="relative">
+                    <FileBox type="threepl" label="3PL Costs" desc="Fulfillment invoice (CSV or Excel)" multi />
+                  </div>
+                  <FileBox type="cogs" label="COGS File" desc="SKU & Cost Per Unit columns" />
+                </div>
+                {/* 3PL Bulk Upload - Compact */}
+                <button 
+                  onClick={() => setShow3PLBulkUpload(true)}
+                  className="mt-3 w-full md:w-auto px-4 py-2 bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded-lg text-slate-300 text-sm flex items-center justify-center gap-2"
+                >
+                  <Truck className="w-4 h-4" />
+                  Bulk Upload 3PL Files (multiple at once)
+                </button>
               </div>
               
-              {/* Ads Bulk Upload Banner */}
-              <div className="bg-violet-900/20 border border-violet-500/30 rounded-xl p-4 mb-6">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <TrendingUp className="w-8 h-8 text-violet-400" />
-                    <div>
-                      <p className="text-white font-medium">Bulk Upload Ad Spend Data</p>
-                      <p className="text-slate-400 text-sm">Import Meta & Google Ads CSV exports with full metrics</p>
-                    </div>
-                  </div>
+              {/* Ad Spend Section - Consolidated */}
+              <div className="mb-6 bg-slate-900/50 rounded-xl p-4 border border-slate-700">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-white font-medium flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 text-violet-400" />
+                    Shopify Ad Spend
+                  </h3>
                   <button 
                     onClick={() => setShowAdsBulkUpload(true)}
-                    className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium flex items-center gap-2"
+                    className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"
                   >
-                    <Upload className="w-4 h-4" />
-                    Upload Ads Data
+                    <Upload className="w-3 h-3" />
+                    Bulk Import CSV
                   </button>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Meta (Facebook/Instagram)</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
+                      <input 
+                        type="number" 
+                        id="weekly-meta-ad" 
+                        defaultValue={adSpend.meta} 
+                        onBlur={(e) => setAdSpend(p => ({ ...p, meta: e.target.value }))} 
+                        placeholder="0.00" 
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg pl-7 pr-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500" 
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Google Ads</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
+                      <input 
+                        type="number" 
+                        id="weekly-google-ad" 
+                        defaultValue={adSpend.google} 
+                        onBlur={(e) => setAdSpend(p => ({ ...p, google: e.target.value }))} 
+                        placeholder="0.00" 
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg pl-7 pr-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500" 
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
               
-              {!hasCogs && <div className="bg-amber-900/30 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" /><div><p className="text-amber-300 font-medium">COGS not set up</p><p className="text-amber-200/70 text-sm">Upload a COGS file or configure in settings for profit tracking</p></div></div>}
+              {!hasCogs && <div className="bg-amber-900/30 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" /><div><p className="text-amber-300 font-medium">COGS not set up (optional)</p><p className="text-amber-200/70 text-sm">Upload a COGS file or configure in settings for profit tracking. You can still process without it.</p></div></div>}
               
-              <button onClick={processSales} disabled={isProcessing || !files.amazon || !files.shopify || !weekEnding || !hasCogs} className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Process Weekly Data'}</button>
+              {/* Process Button with status */}
+              <div className="space-y-3">
+                <button 
+                  onClick={processSales} 
+                  disabled={isProcessing || !weekEnding || (!files.amazon && !files.shopify)} 
+                  className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:from-slate-700 disabled:to-slate-700 disabled:cursor-not-allowed text-white font-semibold py-4 rounded-xl flex items-center justify-center gap-2"
+                >
+                  {isProcessing ? (
+                    <><Loader2 className="w-5 h-5 animate-spin" />Processing...</>
+                  ) : (
+                    <><Upload className="w-5 h-5" />Process Weekly Data</>
+                  )}
+                </button>
+                
+                {/* Requirements checklist - only show if missing required items */}
+                {(!weekEnding || (!files.amazon && !files.shopify)) && (
+                  <div className="text-xs text-slate-400 text-center">
+                    <span className="text-slate-500">Required: </span>
+                    <span className={weekEnding ? 'text-emerald-500' : 'text-amber-400'}>
+                      {weekEnding ? '✓ Week selected' : '○ Select week'}
+                    </span>
+                    <span className="mx-2">+</span>
+                    <span className={(files.amazon || files.shopify) ? 'text-emerald-500' : 'text-amber-400'}>
+                      {(files.amazon || files.shopify) ? '✓ Data file uploaded' : '○ Upload Amazon or Shopify file'}
+                    </span>
+                  </div>
+                )}
+                
+                {/* Show what's loaded */}
+                {weekEnding && (files.amazon || files.shopify) && (
+                  <div className="text-xs text-slate-500 flex flex-wrap gap-x-3 gap-y-1 justify-center">
+                    {files.amazon && <span className="text-emerald-500">✓ Amazon</span>}
+                    {files.shopify && <span className="text-emerald-500">✓ Shopify</span>}
+                    {files.threepl && <span className="text-emerald-500">✓ 3PL</span>}
+                    {(parseFloat(adSpend.meta) > 0 || parseFloat(adSpend.google) > 0) && <span className="text-emerald-500">✓ Ad Spend</span>}
+                    {!hasCogs && <span className="text-amber-400">⚠ No COGS</span>}
+                  </div>
+                )}
+              </div>
             </div>
           )}
           
@@ -20380,6 +20442,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             
                             setShopifySyncStatus({ loading: true, error: null, progress: 'Processing orders...' });
                             
+                            // Get COGS lookup for calculating product costs
+                            const cogsLookup = getCogsLookup();
+                            
                             // Create set of days to include (smart sync filter)
                             const daysToInclude = new Set(daysToSync);
                             
@@ -20400,6 +20465,26 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               const amazonData = existing.amazon || { revenue: 0, units: 0, orders: 0 };
                               const shopifyData = dayData.shopify || { revenue: 0, units: 0, orders: 0 };
                               
+                              // Calculate COGS from SKU data if not already calculated
+                              let calculatedCogs = shopifyData.cogs || 0;
+                              if (!calculatedCogs && shopifyData.skuData && Object.keys(cogsLookup).length > 0) {
+                                Object.values(shopifyData.skuData).forEach(sku => {
+                                  const unitCost = cogsLookup[sku.sku] || 0;
+                                  calculatedCogs += unitCost * (sku.unitsSold || sku.units || 0);
+                                  // Also update the SKU's cogs
+                                  if (unitCost > 0) {
+                                    sku.cogs = unitCost * (sku.unitsSold || sku.units || 0);
+                                  }
+                                });
+                              }
+                              // Also calculate from line items if available
+                              if (!calculatedCogs && shopifyData.lineItems && Object.keys(cogsLookup).length > 0) {
+                                shopifyData.lineItems.forEach(item => {
+                                  const unitCost = cogsLookup[item.sku] || 0;
+                                  calculatedCogs += unitCost * (item.quantity || 0);
+                                });
+                              }
+                              
                               // Preserve existing ad data (from Meta/Google uploads)
                               const existingMetaSpend = existing.metaSpend || existing.shopify?.metaSpend || 0;
                               const existingGoogleSpend = existing.googleSpend || existing.shopify?.googleSpend || 0;
@@ -20407,6 +20492,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               // Merge ad data into shopify object for consistency
                               const mergedShopifyData = {
                                 ...shopifyData,
+                                cogs: calculatedCogs,
                                 metaSpend: existingMetaSpend,
                                 metaAds: existingMetaSpend,
                                 googleSpend: existingGoogleSpend,
@@ -20414,12 +20500,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                 adSpend: existingMetaSpend + existingGoogleSpend,
                               };
                               
-                              // Recalculate profit with ad spend
+                              // Recalculate profit with COGS and ad spend
+                              const grossProfit = (mergedShopifyData.revenue || 0) - calculatedCogs - (mergedShopifyData.threeplCosts || 0);
+                              mergedShopifyData.netProfit = grossProfit - mergedShopifyData.adSpend;
+                              mergedShopifyData.netMargin = mergedShopifyData.revenue > 0 ? (mergedShopifyData.netProfit / mergedShopifyData.revenue) * 100 : 0;
                               if (mergedShopifyData.adSpend > 0) {
-                                const grossProfit = (mergedShopifyData.revenue || 0) - (mergedShopifyData.cogs || 0) - (mergedShopifyData.threeplCosts || 0);
-                                mergedShopifyData.netProfit = grossProfit - mergedShopifyData.adSpend;
-                                mergedShopifyData.netMargin = mergedShopifyData.revenue > 0 ? (mergedShopifyData.netProfit / mergedShopifyData.revenue) * 100 : 0;
-                                mergedShopifyData.roas = mergedShopifyData.adSpend > 0 ? mergedShopifyData.revenue / mergedShopifyData.adSpend : 0;
+                                mergedShopifyData.roas = mergedShopifyData.revenue / mergedShopifyData.adSpend;
                               }
                               
                               updatedDays[dateKey] = {
@@ -20433,6 +20519,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                   revenue: (amazonData.revenue || 0) + (mergedShopifyData.revenue || 0),
                                   units: (amazonData.units || 0) + (mergedShopifyData.units || 0),
                                   orders: (amazonData.orders || 0) + (mergedShopifyData.orders || 0),
+                                  cogs: (amazonData.cogs || 0) + calculatedCogs,
+                                  netProfit: (amazonData.netProfit || 0) + (mergedShopifyData.netProfit || 0),
                                 },
                                 // PRESERVE all existing ad data at top level
                                 metaSpend: existingMetaSpend,
@@ -20472,9 +20560,19 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                 const googleSpend = existingShopify.googleSpend || existingShopify.googleAds || 0;
                                 const totalAds = metaSpend + googleSpend;
                                 
-                                // Merge shopify data, preserving ads
+                                // Calculate COGS from SKU data if not already calculated
+                                let weekCogs = weekData.shopify?.cogs || 0;
+                                if (!weekCogs && weekData.shopify?.skuData && Object.keys(cogsLookup).length > 0) {
+                                  Object.values(weekData.shopify.skuData).forEach(sku => {
+                                    const unitCost = cogsLookup[sku.sku] || 0;
+                                    weekCogs += unitCost * (sku.unitsSold || sku.units || 0);
+                                  });
+                                }
+                                
+                                // Merge shopify data, preserving ads and adding COGS
                                 const mergedShopify = {
                                   ...weekData.shopify,
+                                  cogs: weekCogs,
                                   metaSpend: metaSpend,
                                   metaAds: metaSpend,
                                   googleSpend: googleSpend,
@@ -20482,12 +20580,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                   adSpend: totalAds,
                                 };
                                 
-                                // Recalculate profit with ad spend
-                                if (totalAds > 0 && mergedShopify.revenue > 0) {
-                                  const grossProfit = (mergedShopify.revenue || 0) - (mergedShopify.cogs || 0) - (mergedShopify.threeplCosts || 0);
-                                  mergedShopify.netProfit = grossProfit - totalAds;
-                                  mergedShopify.netMargin = mergedShopify.revenue > 0 ? (mergedShopify.netProfit / mergedShopify.revenue) * 100 : 0;
-                                  mergedShopify.roas = totalAds > 0 ? mergedShopify.revenue / totalAds : 0;
+                                // Recalculate profit with COGS and ad spend
+                                const grossProfit = (mergedShopify.revenue || 0) - weekCogs - (mergedShopify.threeplCosts || 0);
+                                mergedShopify.netProfit = grossProfit - totalAds;
+                                mergedShopify.netMargin = mergedShopify.revenue > 0 ? (mergedShopify.netProfit / mergedShopify.revenue) * 100 : 0;
+                                if (totalAds > 0) {
+                                  mergedShopify.roas = mergedShopify.revenue / totalAds;
                                 }
                                 
                                 updatedWeeks[weekKey] = {
@@ -20499,10 +20597,37 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                     units: (existingWeek.amazon?.units || 0) + (mergedShopify.units || 0),
                                     adSpend: (existingWeek.amazon?.adSpend || 0) + totalAds,
                                     netProfit: (existingWeek.amazon?.netProfit || 0) + (mergedShopify.netProfit || 0),
+                                    cogs: (existingWeek.amazon?.cogs || 0) + weekCogs,
                                   },
                                 };
                               } else {
-                                updatedWeeks[weekKey] = weekData;
+                                // New week - calculate COGS from SKU data
+                                let newWeekCogs = weekData.shopify?.cogs || 0;
+                                if (!newWeekCogs && weekData.shopify?.skuData && Object.keys(cogsLookup).length > 0) {
+                                  Object.values(weekData.shopify.skuData).forEach(sku => {
+                                    const unitCost = cogsLookup[sku.sku] || 0;
+                                    newWeekCogs += unitCost * (sku.unitsSold || sku.units || 0);
+                                  });
+                                }
+                                
+                                // Update the week data with calculated COGS
+                                const updatedWeekData = { ...weekData };
+                                if (updatedWeekData.shopify) {
+                                  updatedWeekData.shopify = {
+                                    ...updatedWeekData.shopify,
+                                    cogs: newWeekCogs,
+                                  };
+                                  // Recalculate profit
+                                  const revenue = updatedWeekData.shopify.revenue || 0;
+                                  const threeplCosts = updatedWeekData.shopify.threeplCosts || 0;
+                                  const adSpend = updatedWeekData.shopify.adSpend || 0;
+                                  updatedWeekData.shopify.netProfit = revenue - newWeekCogs - threeplCosts - adSpend;
+                                  updatedWeekData.shopify.netMargin = revenue > 0 ? (updatedWeekData.shopify.netProfit / revenue) * 100 : 0;
+                                }
+                                if (updatedWeekData.total) {
+                                  updatedWeekData.total.cogs = newWeekCogs;
+                                }
+                                updatedWeeks[weekKey] = updatedWeekData;
                               }
                             });
                             setAllWeeksData(updatedWeeks);
