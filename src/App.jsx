@@ -1294,8 +1294,11 @@ export default function Dashboard() {
       weeksFromDaysSet.add(getWeekEndingForDateKey(dayKey));
     });
     const weeksFromDays = Array.from(weeksFromDaysSet);
-    return Array.from(new Set([...weeksFromSaved, ...weeksFromDays])).sort();
-  }, [allWeeksData, allDaysData, getWeekEndingForDateKey]);
+    const currentWeekEnding = getWeekEndingForDateKey(formatDateKey(new Date()));
+    return Array.from(new Set([...weeksFromSaved, ...weeksFromDays]))
+      .filter(wk => wk <= currentWeekEnding)
+      .sort();
+  }, [allWeeksData, allDaysData, getWeekEndingForDateKey, formatDateKey]);
 
   const aggregateWeekFromDays = useCallback((weekEndingKey) => {
     // Build a week object (same shape as saved week) from whatever daily data exists for that week.
@@ -1384,6 +1387,10 @@ export default function Dashboard() {
     agg.shopify.netMargin = agg.shopify.revenue > 0 ? (agg.shopify.netProfit / agg.shopify.revenue) * 100 : 0;
     agg.shopify.aov = agg.shopify.units > 0 ? agg.shopify.revenue / agg.shopify.units : 0;
     const shopAds = (agg.shopify.metaSpend || 0) + (agg.shopify.googleSpend || 0);
+    // Normalize Shopify ads spend fields for consistent weekly display
+    agg.shopify.adSpend = shopAds;
+    agg.shopify.metaAds = agg.shopify.metaSpend || 0;
+    agg.shopify.googleAds = agg.shopify.googleSpend || 0;
     agg.shopify.roas = shopAds > 0 ? agg.shopify.revenue / shopAds : 0;
     agg.shopify.skuData = Object.values(shopSku).sort((a,b) => (b.netSales||0) - (a.netSales||0));
 
