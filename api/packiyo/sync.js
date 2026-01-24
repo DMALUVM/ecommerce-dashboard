@@ -1,456 +1,470 @@
-// Vercel Serverless Function - Packiyo 3PL Inventory Sync
-// Path: /api/packiyo/sync.js
+// Vercel Serverless Function - Shopify Sync API
+// Path: /api/shopify/sync.js
+// This handles secure communication with Shopify's Admin API
 // 
-// This provides DIRECT inventory data from Packiyo, bypassing Shopify
-// More accurate for 3PL inventory tracking
+// Updated for 2026: Supports Client Credentials Grant (OAuth 2.0)
+// New apps use clientId/clientSecret, tokens expire after 24 hours
 //
 // Features:
-// - Real-time inventory levels from Packiyo
-// - Separate from Shopify inventory (for home/office stock)
-// - Supports multiple warehouses if you have them
+// - Syncs orders, SKU data, and tax information
+// - EXCLUDES Shop Pay orders from tax calculations (Shopify remits those automatically)
+// - Aggregates tax by state for sales tax filing
 
 export default async function handler(req, res) {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  
+  // Only allow POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { apiKey, customerId, syncType, test } = req.body;
+  const { storeUrl, accessToken, clientId, clientSecret, startDate, endDate, preview, test, syncType } = req.body;
+  
+  // syncType can be: 'orders' (default), 'inventory', 'products', 'both'
 
   // Validate required fields
-  if (!apiKey) {
-    return res.status(400).json({ error: 'Packiyo API key is required' });
+  if (!storeUrl) {
+    return res.status(400).json({ error: 'Store URL is required' });
   }
   
-  if (!customerId) {
-    return res.status(400).json({ error: 'Packiyo Customer ID is required' });
+  // Support both legacy (accessToken) and new 2026 (clientId/clientSecret) auth methods
+  const useOAuth = clientId && clientSecret;
+  
+  if (!useOAuth && !accessToken) {
+    return res.status(400).json({ error: 'Either accessToken OR clientId + clientSecret are required' });
   }
 
-  // Use tenant-specific URL if provided, otherwise default
-  // Your tenant: excel3pl.packiyo.com
-  const baseUrl = req.body.baseUrl || 'https://excel3pl.packiyo.com/api/v1';
+  // Clean up store URL
+  let cleanStoreUrl = storeUrl.trim().toLowerCase();
+  cleanStoreUrl = cleanStoreUrl.replace(/^https?:\/\//, '');
+  cleanStoreUrl = cleanStoreUrl.replace(/\/$/, '');
+  if (!cleanStoreUrl.includes('.myshopify.com')) {
+    cleanStoreUrl = cleanStoreUrl.replace('.myshopify.com', '') + '.myshopify.com';
+  }
+
+  const baseUrl = `https://${cleanStoreUrl}/admin/api/2024-01`;
   
-  // Try different header combinations - Packiyo may require specific Accept format
-  const headerVariants = [
-    {
-      'Authorization': `Bearer ${apiKey}`,
-      'Accept': 'application/vnd.api+json',  // JSON:API format
-    },
-    {
-      'Authorization': `Bearer ${apiKey}`,
-      'Accept': '*/*',  // Accept anything
-    },
-    {
-      'Authorization': `Bearer ${apiKey}`,
-      // No Accept header
-    },
-  ];
+  // Helper function to get access token (handles both old and new auth)
+  const getAccessToken = async () => {
+    if (!useOAuth) {
+      // Legacy: Use static access token (shpat_ tokens)
+      return accessToken;
+    }
+    
+    // New 2026 OAuth: Exchange client credentials for access token
+    try {
+      const tokenResponse = await fetch(`https://${cleanStoreUrl}/admin/oauth/access_token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          grant_type: 'client_credentials',
+          client_id: clientId,
+          client_secret: clientSecret,
+        }).toString(),
+      });
+      
+      if (!tokenResponse.ok) {
+        const errorText = await tokenResponse.text();
+        console.error('OAuth token error:', tokenResponse.status, errorText);
+        
+        if (tokenResponse.status === 401 || tokenResponse.status === 403) {
+          throw new Error('Invalid Client ID or Secret. Check your Dev Dashboard credentials.');
+        }
+        throw new Error(`Failed to get access token: ${tokenResponse.status}`);
+      }
+      
+      const tokenData = await tokenResponse.json();
+      return tokenData.access_token;
+    } catch (err) {
+      console.error('OAuth error:', err);
+      throw new Error(`Authentication failed: ${err.message}`);
+    }
+  };
 
   // Test connection
   if (test) {
     try {
-      const testEndpoints = [
-        `${baseUrl}/products?page[size]=1`,
-        `${baseUrl}/customers/${customerId}`,
-      ];
+      const token = await getAccessToken();
       
-      let lastError = null;
-      let success = false;
-      let customerName = 'Packiyo Connected';
+      const shopRes = await fetch(`${baseUrl}/shop.json`, {
+        headers: {
+          'X-Shopify-Access-Token': token,
+          'Content-Type': 'application/json',
+        },
+      });
       
-      // Try each header variant with each endpoint
-      for (const headers of headerVariants) {
-        if (success) break;
-        
-        for (const endpoint of testEndpoints) {
-          try {
-            console.log('Trying endpoint with headers:', endpoint, JSON.stringify(headers));
-            const testRes = await fetch(endpoint, {
-              method: 'GET',
-              headers,
-            });
-            
-            console.log('Response status:', testRes.status);
-            
-            if (testRes.ok) {
-              const data = await testRes.json();
-              // Try to extract customer name from response
-              if (data.data?.name) customerName = data.data.name;
-              else if (data.data?.[0]?.customer?.name) customerName = data.data[0].customer.name;
-              else if (Array.isArray(data.data) && data.data.length > 0) customerName = 'Excel 3PL';
-              success = true;
-              console.log('Success with endpoint:', endpoint);
-              break;
-            } else if (testRes.status === 401) {
-              return res.status(200).json({ error: 'Invalid API key. Please check your API token in Packiyo settings.' });
-            } else if (testRes.status === 403) {
-              return res.status(200).json({ error: 'Access forbidden. Your API key may not have permission for this customer.' });
-            } else {
-              const errorText = await testRes.text();
-              lastError = `${testRes.status}: ${errorText.slice(0, 100)}`;
-              console.log('Endpoint failed:', endpoint, lastError);
-            }
-          } catch (endpointErr) {
-            lastError = endpointErr.message;
-            console.log('Endpoint error:', endpoint, lastError);
-          }
+      if (!shopRes.ok) {
+        const errorText = await shopRes.text();
+        console.error('Shopify API error:', shopRes.status, errorText);
+        if (shopRes.status === 401) {
+          return res.status(401).json({ error: 'Invalid credentials. Check your Client ID and Secret in Dev Dashboard.' });
         }
+        if (shopRes.status === 404) {
+          return res.status(404).json({ error: 'Store not found. Please check your store URL.' });
+        }
+        return res.status(shopRes.status).json({ error: `Shopify API error: ${shopRes.status}` });
       }
       
-      if (success) {
-        return res.status(200).json({ 
-          success: true, 
-          customerName: customerName,
-          customerId: customerId,
-        });
-      } else {
-        return res.status(200).json({ 
-          error: `Could not connect to Packiyo. Last error: ${lastError}. Please verify your API key and Customer ID are correct.` 
-        });
-      }
+      const shopData = await shopRes.json();
+      return res.status(200).json({ 
+        success: true, 
+        shopName: shopData.shop?.name || cleanStoreUrl,
+        email: shopData.shop?.email,
+        authMethod: useOAuth ? 'oauth2026' : 'legacy',
+      });
     } catch (err) {
       console.error('Connection test error:', err);
-      return res.status(200).json({ error: err.message || 'Connection failed' });
+      return res.status(500).json({ error: err.message || 'Connection failed' });
+    }
+  }
+  
+  // Get access token for all other operations
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    return res.status(401).json({ error: err.message });
+  }
+
+  // ============ PRODUCT CATALOG SYNC ============
+  // Returns SKU -> product info mapping for the entire catalog
+  if (syncType === 'products') {
+    try {
+      const products = [];
+      let pageInfo = null;
+      let hasNextPage = true;
+      
+      while (hasNextPage) {
+        let url = pageInfo 
+          ? `${baseUrl}/products.json?page_info=${pageInfo}&limit=250`
+          : `${baseUrl}/products.json?limit=250`;
+        
+        const productsRes = await fetch(url, {
+          headers: {
+            'X-Shopify-Access-Token': token,
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        if (!productsRes.ok) {
+          return res.status(productsRes.status).json({ error: 'Failed to fetch products' });
+        }
+        
+        const data = await productsRes.json();
+        products.push(...(data.products || []));
+        
+        const linkHeader = productsRes.headers.get('Link');
+        if (linkHeader && linkHeader.includes('rel="next"')) {
+          const nextMatch = linkHeader.match(/<[^>]*page_info=([^>&]+)[^>]*>;\s*rel="next"/);
+          pageInfo = nextMatch ? nextMatch[1] : null;
+          hasNextPage = !!pageInfo;
+        } else {
+          hasNextPage = false;
+        }
+        
+        if (products.length > 5000) break;
+      }
+      
+      // Build SKU -> product info catalog
+      // SKU is the PRIMARY KEY - product name is just metadata
+      const productCatalog = {};
+      let skuCount = 0;
+      let variantCount = 0;
+      
+      products.forEach(product => {
+        (product.variants || []).forEach(variant => {
+          variantCount++;
+          const sku = variant.sku?.trim();
+          
+          // Skip items without SKU - they can't be matched across systems
+          if (!sku) return;
+          
+          skuCount++;
+          productCatalog[sku] = {
+            // SKU is the key, everything else is metadata
+            sku: sku,
+            name: product.title + (variant.title !== 'Default Title' ? ` - ${variant.title}` : ''),
+            productTitle: product.title,
+            variantTitle: variant.title,
+            productType: product.product_type || '',
+            vendor: product.vendor || '',
+            tags: product.tags || '',
+            price: parseFloat(variant.price) || 0,
+            compareAtPrice: parseFloat(variant.compare_at_price) || 0,
+            cost: parseFloat(variant.inventory_item?.cost) || 0,
+            barcode: variant.barcode || '',
+            weight: variant.weight || 0,
+            weightUnit: variant.weight_unit || 'lb',
+            // Shopify IDs (for reference, not for matching)
+            shopifyProductId: product.id,
+            shopifyVariantId: variant.id,
+            shopifyInventoryItemId: variant.inventory_item_id,
+          };
+        });
+      });
+      
+      return res.status(200).json({
+        success: true,
+        syncType: 'products',
+        productCount: products.length,
+        variantCount,
+        skuCount,
+        skusWithoutSku: variantCount - skuCount,
+        catalog: productCatalog,
+      });
+      
+    } catch (err) {
+      console.error('Product catalog sync error:', err);
+      return res.status(500).json({ error: `Product sync failed: ${err.message}` });
     }
   }
 
   // ============ INVENTORY SYNC ============
   if (syncType === 'inventory') {
-    // Use JSON:API Accept header for inventory sync
-    const invHeaders = {
-      'Authorization': `Bearer ${apiKey}`,
-      'Accept': 'application/vnd.api+json',
-    };
-    
     try {
-      // Fetch all products with inventory
-      const products = [];
-      let page = 1;
-      let hasMore = true;
+      // Step 1: Get all locations (warehouses)
+      const locationsRes = await fetch(`${baseUrl}/locations.json`, {
+        headers: {
+          'X-Shopify-Access-Token': token,
+          'Content-Type': 'application/json',
+        },
+      });
       
-      // Try with include parameter first, then without if it fails
-      let useInclude = true;
-      let retryWithoutInclude = false;
-      
-      while (hasMore) {
-        // JSON:API pagination - API key is already scoped to customer
-        const url = useInclude 
-          ? `${baseUrl}/products?page[number]=${page}&page[size]=100&include=inventory_levels`
-          : `${baseUrl}/products?page[number]=${page}&page[size]=100`;
-        
-        console.log('Fetching:', url);
-        
-        const productsRes = await fetch(url, { headers: invHeaders });
-        
-        if (!productsRes.ok) {
-          const errorText = await productsRes.text();
-          console.log('Products fetch error:', productsRes.status, errorText);
-          
-          // If 400 error and we're using include, retry without it
-          if (productsRes.status === 400 && useInclude && !retryWithoutInclude) {
-            console.log('Retrying without include parameter...');
-            useInclude = false;
-            retryWithoutInclude = true;
-            continue;
-          }
-          
-          return res.status(200).json({ 
-            error: `Failed to fetch products: ${productsRes.status} - ${errorText.slice(0, 200)}` 
-          });
-        }
-        
-        const data = await productsRes.json();
-        const pageProducts = data.data || [];
-        products.push(...pageProducts);
-        
-        // JSON:API often returns related data in "included" section
-        // We need to merge this with products
-        if (data.included && Array.isArray(data.included)) {
-          console.log(`Page ${page}: Found ${data.included.length} included items`);
-          
-          // Group included items by type and relationship
-          const inventoryLevelsByProductId = {};
-          data.included.forEach(item => {
-            if (item.type === 'inventory_levels' || item.type === 'inventory-levels') {
-              const productId = item.relationships?.product?.data?.id || item.attributes?.product_id;
-              if (productId) {
-                if (!inventoryLevelsByProductId[productId]) inventoryLevelsByProductId[productId] = [];
-                inventoryLevelsByProductId[productId].push(item);
-              }
-            }
-          });
-          
-          // Attach inventory levels to their products
-          pageProducts.forEach(product => {
-            const productId = product.id;
-            if (productId && inventoryLevelsByProductId[productId]) {
-              product.inventory_levels = inventoryLevelsByProductId[productId];
-            }
-          });
-          
-          console.log(`Attached inventory levels to ${Object.keys(inventoryLevelsByProductId).length} products`);
-        }
-        
-        console.log(`Page ${page}: fetched ${pageProducts.length} products, total: ${products.length}`);
-        
-        // Log full pagination structure to debug
-        if (page === 1) {
-          console.log('Full response structure keys:', Object.keys(data));
-          if (data.meta) console.log('Meta structure:', JSON.stringify(data.meta));
-          if (data.links) console.log('Links structure:', JSON.stringify(data.links));
-        }
-        
-        // Determine if there are more pages
-        let foundNextPage = false;
-        
-        // Method 1: Check links.next (most reliable for JSON:API)
-        if (data.links?.next) {
-          foundNextPage = true;
-          console.log('Found next via links.next');
-        }
-        
-        // Method 2: Check meta for pagination info (various formats)
-        if (!foundNextPage && data.meta) {
-          const m = data.meta;
-          
-          // Packiyo might use: meta.current_page/last_page directly
-          // OR meta.page.current_page/last_page
-          // OR meta.pagination.current_page/last_page
-          
-          const currentPage = m.current_page || m.currentPage || m.page?.current_page || m.page?.currentPage || m.pagination?.current_page || page;
-          const lastPage = m.last_page || m.lastPage || m.page?.last_page || m.page?.lastPage || m.pagination?.last_page || m.pagination?.total_pages || m.total_pages;
-          const total = m.total || m.page?.total || m.pagination?.total;
-          const perPage = m.per_page || m.perPage || m.page?.per_page || m.pagination?.per_page || 100;
-          
-          console.log(`Pagination check: current=${currentPage}, last=${lastPage}, total=${total}, perPage=${perPage}`);
-          
-          if (lastPage && currentPage < lastPage) {
-            foundNextPage = true;
-            console.log('Found next via meta (page comparison)');
-          } else if (total && (products.length < total)) {
-            foundNextPage = true;
-            console.log(`Found next via meta.total (${products.length} < ${total})`);
-          }
-        }
-        
-        // Method 3: If we got a full page worth of products, assume there might be more
-        if (!foundNextPage && pageProducts.length >= 100) {
-          foundNextPage = true;
-          console.log('Assuming next page exists (got full page of 100)');
-        }
-        
-        if (foundNextPage) {
-          page++;
-        } else {
-          console.log('No more pages detected, stopping');
-          hasMore = false;
-        }
-        
-        // Safety: if we got 0 products this page, stop
-        if (pageProducts.length === 0) {
-          console.log('Empty page, stopping');
-          hasMore = false;
-        }
-        
-        // Safety limit - increase to handle 15k+ products
-        if (products.length > 20000) {
-          console.log('Safety limit (20k) reached');
-          break;
-        }
-        
-        // Rate limit protection - slightly longer delay
-        await new Promise(r => setTimeout(r, 150));
+      if (!locationsRes.ok) {
+        return res.status(locationsRes.status).json({ error: 'Failed to fetch locations' });
       }
       
-      // If we didn't get inventory_levels included, try to fetch them separately
-      if (!useInclude && products.length > 0) {
-        console.log('Fetching inventory levels separately...');
-        
-        // Try the inventory endpoint
-        try {
-          const invRes = await fetch(
-            `${baseUrl}/inventory?page[size]=500`,
-            { headers: invHeaders }
-          );
-          
-          if (invRes.ok) {
-            const invData = await invRes.json();
-            const inventoryLevels = invData.data || [];
-            
-            // Map inventory levels to products by product_id
-            const invByProductId = {};
-            inventoryLevels.forEach(inv => {
-              const productId = inv.product_id || inv.attributes?.product_id;
-              if (productId) {
-                if (!invByProductId[productId]) invByProductId[productId] = [];
-                invByProductId[productId].push(inv);
-              }
-            });
-            
-            // Attach to products
-            products.forEach(p => {
-              const pid = p.id || p.attributes?.id;
-              if (pid && invByProductId[pid]) {
-                p.inventory_levels = invByProductId[pid];
-              }
-            });
-            
-            console.log('Attached inventory to', Object.keys(invByProductId).length, 'products');
-          }
-        } catch (invErr) {
-          console.log('Could not fetch separate inventory:', invErr.message);
-        }
-      }
+      const locationsData = await locationsRes.json();
+      const allLocations = locationsData.locations || [];
       
-      // Process products into inventory format
-      // Handle both JSON:API format (attributes nested) and regular format
-      // Also handle direct quantity fields as shown in CSV export
-      const inventoryBySku = {};
-      let totalUnits = 0;
-      let totalValue = 0;
-      let skippedNoSku = 0;
-      let skippedZeroQty = 0;
-      
-      products.forEach((product, idx) => {
-        // Log first product structure for debugging
-        if (idx === 0) {
-          console.log('=== FIRST PRODUCT STRUCTURE ===');
-          console.log('Keys:', Object.keys(product));
-          console.log('Has attributes?', !!product.attributes);
-          console.log('Has relationships?', !!product.relationships);
-          if (product.attributes) {
-            console.log('Attribute keys:', Object.keys(product.attributes));
-            console.log('quantity_on_hand:', product.attributes.quantity_on_hand);
-          }
-          console.log('Direct quantity_on_hand:', product.quantity_on_hand);
-          console.log('Full first product (truncated):', JSON.stringify(product).slice(0, 1000));
+      // Create location map for easy lookup
+      const locationMap = {};
+      allLocations.forEach(loc => {
+        const nameLower = loc.name.toLowerCase();
+        // Identify location type based on name
+        let locType = 'other';
+        if (nameLower.includes('wormans') || nameLower.includes('worman') || 
+            nameLower.includes('home') || nameLower.includes('office')) {
+          locType = 'home';
+        } else if (nameLower.includes('excel') || nameLower.includes('3pl') || 
+                   nameLower.includes('packiyo') || nameLower.includes('warehouse') ||
+                   nameLower.includes('fulfillment')) {
+          locType = '3pl';
         }
         
-        // JSON:API format has data in attributes, regular format has it directly
-        const attrs = product.attributes || product;
-        const sku = (attrs.sku || product.sku)?.trim();
-        
-        // SKU is required for cross-platform matching
-        if (!sku) {
-          skippedNoSku++;
-          return;
-        }
-        
-        // Get quantity - check multiple possible locations
-        // Priority 1: Direct fields on attributes (matches CSV export format)
-        let quantityOnHand = parseInt(attrs.quantity_on_hand) || 0;
-        let quantityAvailable = parseInt(attrs.quantity_available) || 0;
-        let quantityInbound = parseInt(attrs.quantity_inbound) || 0;
-        let quantityAllocated = parseInt(attrs.quantity_allocated) || 0;
-        let quantityReserved = parseInt(attrs.quantity_reserved) || 0;
-        
-        // Log quantity finding for first few products
-        if (idx < 3) {
-          console.log(`Product ${idx} (${sku}): direct qty=${quantityOnHand}, available=${quantityAvailable}`);
-        }
-        
-        // Priority 2: Check inventory_levels array if direct fields are 0
-        if (quantityOnHand === 0) {
-          let inventoryLevels = product.inventory_levels || attrs.inventory_levels || [];
-          
-          // If inventory_levels is in relationships (JSON:API format)
-          if (product.relationships?.inventory_levels?.data) {
-            inventoryLevels = product.relationships.inventory_levels.data;
-          }
-          
-          if (idx < 3 && inventoryLevels.length > 0) {
-            console.log(`Product ${idx} inventory_levels count:`, inventoryLevels.length);
-            console.log('First level:', JSON.stringify(inventoryLevels[0]).slice(0, 300));
-          }
-          
-          inventoryLevels.forEach(level => {
-            const levelAttrs = level.attributes || level;
-            quantityOnHand += parseInt(levelAttrs.quantity_on_hand) || 0;
-            quantityAvailable += parseInt(levelAttrs.quantity_available) || 0;
-            quantityInbound += parseInt(levelAttrs.quantity_inbound) || 0;
-          });
-          
-          if (idx < 3) {
-            console.log(`Product ${idx} (${sku}): after levels qty=${quantityOnHand}`);
-          }
-        }
-        
-        // Skip products with no inventory at all (bundles, inactive, etc)
-        if (quantityOnHand === 0 && quantityInbound === 0) {
-          skippedZeroQty++;
-          return;
-        }
-        
-        const cost = parseFloat(attrs.cost) || parseFloat(attrs.value) || parseFloat(product.cost) || parseFloat(product.value) || 0;
-        const value = quantityOnHand * cost;
-        
-        totalUnits += quantityOnHand;
-        totalValue += value;
-        
-        inventoryBySku[sku] = {
-          sku,  // PRIMARY KEY - matches across platforms
-          name: attrs.name || product.name || sku,
-          barcode: attrs.barcode || product.barcode || '',
-          totalQty: quantityOnHand,
-          quantityOnHand,
-          quantityAvailable,
-          quantityInbound,
-          quantityAllocated,
-          quantityReserved,
-          cost,
-          totalValue: value,
-          packiyoProductId: product.id || attrs.id,
+        locationMap[loc.id] = {
+          id: loc.id,
+          name: loc.name,
+          address: loc.address1,
+          city: loc.city,
+          province: loc.province,
+          country: loc.country,
+          isActive: loc.active,
+          type: locType,
         };
       });
       
-      // Format response for app integration
-      console.log(`Processing complete: ${products.length} products fetched, ${skippedNoSku} without SKU, ${skippedZeroQty} with zero qty, ${Object.keys(inventoryBySku).length} with inventory`);
-      console.log(`=== FINAL TOTALS: ${totalUnits} units, $${totalValue.toFixed(2)} value ===`);
+      // FILTER: Only sync from home location (Wormans Mill), NOT 3PL
+      // 3PL inventory comes from Packiyo sync instead
+      const homeLocations = allLocations.filter(loc => {
+        const nameLower = loc.name.toLowerCase();
+        return nameLower.includes('wormans') || nameLower.includes('worman') || 
+               nameLower.includes('home') || nameLower.includes('office');
+      });
       
-      // Log top 5 products by quantity for verification
-      const topProducts = Object.values(inventoryBySku)
-        .sort((a, b) => b.quantityOnHand - a.quantityOnHand)
-        .slice(0, 5);
-      console.log('Top 5 products by qty:', topProducts.map(p => `${p.sku}: ${p.quantityOnHand}`).join(', '));
+      if (homeLocations.length === 0) {
+        // Fallback: exclude known 3PL locations
+        const non3plLocations = allLocations.filter(loc => {
+          const nameLower = loc.name.toLowerCase();
+          return !nameLower.includes('excel') && !nameLower.includes('3pl') && 
+                 !nameLower.includes('packiyo') && !nameLower.includes('warehouse') &&
+                 !nameLower.includes('fulfillment');
+        });
+        homeLocations.push(...non3plLocations);
+      }
       
+      // Use only home locations for inventory
+      const locations = homeLocations;
+      
+      console.log('Syncing inventory from locations:', locations.map(l => l.name).join(', '));
+      console.log('Excluded 3PL locations:', allLocations.filter(l => !locations.includes(l)).map(l => l.name).join(', ') || 'none');
+      
+      // Step 2: Get all products with variants (for SKU mapping)
+      const products = [];
+      let pageInfo = null;
+      let hasNextPage = true;
+      
+      while (hasNextPage) {
+        let url;
+        if (pageInfo) {
+          url = `${baseUrl}/products.json?page_info=${pageInfo}&limit=250`;
+        } else {
+          url = `${baseUrl}/products.json?limit=250`;
+        }
+        
+        const productsRes = await fetch(url, {
+          headers: {
+            'X-Shopify-Access-Token': token,
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        if (!productsRes.ok) {
+          return res.status(productsRes.status).json({ error: 'Failed to fetch products' });
+        }
+        
+        const data = await productsRes.json();
+        products.push(...(data.products || []));
+        
+        // Check pagination
+        const linkHeader = productsRes.headers.get('Link');
+        if (linkHeader && linkHeader.includes('rel="next"')) {
+          const nextMatch = linkHeader.match(/<[^>]*page_info=([^>&]+)[^>]*>;\s*rel="next"/);
+          pageInfo = nextMatch ? nextMatch[1] : null;
+          hasNextPage = !!pageInfo;
+        } else {
+          hasNextPage = false;
+        }
+        
+        if (products.length > 5000) break; // Safety limit
+      }
+      
+      // Build variant/SKU map - SKU IS THE PRIMARY KEY
+      // Items without SKUs cannot be matched across systems and are skipped
+      const variantMap = {}; // inventory_item_id -> { sku, name, product_id, variant_id }
+      let skippedNoSku = 0;
+      
+      products.forEach(product => {
+        (product.variants || []).forEach(variant => {
+          const sku = variant.sku?.trim();
+          
+          // SKU is REQUIRED - skip items without it
+          if (!sku) {
+            skippedNoSku++;
+            return;
+          }
+          
+          if (variant.inventory_item_id) {
+            variantMap[variant.inventory_item_id] = {
+              sku: sku, // PRIMARY KEY
+              name: product.title + (variant.title !== 'Default Title' ? ` - ${variant.title}` : ''),
+              productId: product.id,
+              variantId: variant.id,
+              price: parseFloat(variant.price) || 0,
+              cost: parseFloat(variant.inventory_item?.cost) || 0,
+            };
+          }
+        });
+      });
+      
+      // Step 3: Get inventory levels for all locations
+      const inventoryItems = [];
+      const locationIds = locations.map(l => l.id).join(',');
+      
+      // Need to fetch inventory levels in batches by inventory_item_id
+      const inventoryItemIds = Object.keys(variantMap);
+      const batchSize = 50; // Shopify limit
+      
+      for (let i = 0; i < inventoryItemIds.length; i += batchSize) {
+        const batchIds = inventoryItemIds.slice(i, i + batchSize).join(',');
+        
+        const levelsRes = await fetch(
+          `${baseUrl}/inventory_levels.json?inventory_item_ids=${batchIds}&location_ids=${locationIds}`,
+          {
+            headers: {
+              'X-Shopify-Access-Token': token,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        
+        if (levelsRes.ok) {
+          const levelsData = await levelsRes.json();
+          inventoryItems.push(...(levelsData.inventory_levels || []));
+        }
+        
+        // Small delay to avoid rate limits
+        if (i + batchSize < inventoryItemIds.length) {
+          await new Promise(r => setTimeout(r, 100));
+        }
+      }
+      
+      // Step 4: Aggregate inventory by SKU and location
+      // SKU is the PRIMARY KEY - this allows matching with Amazon data
+      const inventoryBySku = {};
+      let totalUnits = 0;
+      let totalValue = 0;
+      
+      inventoryItems.forEach(level => {
+        const variant = variantMap[level.inventory_item_id];
+        if (!variant) return;
+        
+        const location = locationMap[level.location_id];
+        const qty = level.available || 0;
+        
+        if (!inventoryBySku[variant.sku]) {
+          inventoryBySku[variant.sku] = {
+            sku: variant.sku,
+            name: variant.name,
+            price: variant.price,
+            cost: variant.cost,
+            totalQty: 0,
+            totalValue: 0,
+            byLocation: {},
+            locations: [],
+          };
+        }
+        
+        inventoryBySku[variant.sku].totalQty += qty;
+        inventoryBySku[variant.sku].totalValue += qty * (variant.cost || 0);
+        totalUnits += qty;
+        totalValue += qty * (variant.cost || 0);
+        
+        if (qty > 0 || location) {
+          const locName = location?.name || `Location ${level.location_id}`;
+          const locType = location?.type || 'other';
+          
+          inventoryBySku[variant.sku].byLocation[locName] = {
+            qty,
+            locationId: level.location_id,
+            type: locType,
+          };
+          
+          if (!inventoryBySku[variant.sku].locations.includes(locName)) {
+            inventoryBySku[variant.sku].locations.push(locName);
+          }
+        }
+      });
+      
+      // Format for app's inventory structure
       const inventorySnapshot = {
         date: new Date().toISOString().split('T')[0],
-        source: 'packiyo-direct',
+        source: 'shopify-home-only', // Only syncing from home location (Wormans Mill)
+        syncedLocations: locations.map(l => l.name), // Which locations were synced
+        excludedLocations: allLocations.filter(l => !locations.find(h => h.id === l.id)).map(l => l.name),
+        locations: Object.values(locationMap),
         summary: {
           totalUnits,
           totalValue,
+          homeUnits: totalUnits, // All units are from home since we filtered
           skuCount: Object.keys(inventoryBySku).length,
-          skippedNoSku,
-          skippedZeroQty,
-          productsFetched: products.length,  // Total products from API
-          productsWithInventory: Object.keys(inventoryBySku).length, // Products with qty > 0
+          skippedNoSku, // Items without SKU cannot be matched across systems
+          locationCount: locations.length,
+          note: '3PL inventory excluded - use Packiyo sync for 3PL',
         },
-        // Format items array for easy merging with existing inventory structure
         items: Object.values(inventoryBySku)
           .map(item => ({
-            sku: item.sku,
-            name: item.name,
-            barcode: item.barcode,
-            quantity_on_hand: item.quantityOnHand,
-            quantity_available: item.quantityAvailable,
-            quantity_inbound: item.quantityInbound,
-            quantity_allocated: item.quantityAllocated,
-            quantity_reserved: item.quantityReserved,
+            sku: item.sku, // PRIMARY KEY - matches across Amazon & Shopify
+            name: item.name, // Display only - may differ between platforms
+            totalQty: item.totalQty,
+            homeQty: item.totalQty, // All qty is home qty since we filtered to home only
+            threeplQty: 0, // 3PL not included in this sync
             cost: item.cost,
-            value: item.totalValue,
-            source: 'packiyo',
+            totalValue: item.totalValue,
+            locations: item.locations,
+            byLocation: item.byLocation,
           }))
-          .sort((a, b) => b.quantity_on_hand - a.quantity_on_hand),  // Sort by qty
-        // Also include raw inventory for detailed view
-        inventoryBySku,
+          .sort((a, b) => b.totalValue - a.totalValue),
       };
       
       return res.status(200).json({
@@ -460,125 +474,522 @@ export default async function handler(req, res) {
       });
       
     } catch (err) {
-      console.error('Packiyo inventory sync error:', err);
+      console.error('Inventory sync error:', err);
       return res.status(500).json({ error: `Inventory sync failed: ${err.message}` });
     }
   }
-  
-  // ============ SHIPMENTS SYNC (for 3PL costs) ============
-  if (syncType === 'shipments') {
-    const { startDate, endDate } = req.body;
-    
-    if (!startDate || !endDate) {
-      return res.status(400).json({ error: 'Start and end dates required for shipments sync' });
-    }
-    
-    // Use JSON:API Accept header for shipments sync
-    const shipHeaders = {
-      'Authorization': `Bearer ${apiKey}`,
-      'Accept': 'application/vnd.api+json',
-    };
-    
-    try {
-      const shipments = [];
-      let page = 1;
-      let hasMore = true;
-      
-      while (hasMore) {
-        const shipmentsRes = await fetch(
-          `${baseUrl}/shipments?page[number]=${page}&page[size]=100&filter[shipped_after]=${startDate}&filter[shipped_before]=${endDate}`, 
-          { headers: shipHeaders }
-        );
-        
-        if (!shipmentsRes.ok) {
-          return res.status(shipmentsRes.status).json({ 
-            error: `Failed to fetch shipments: ${shipmentsRes.status}` 
-          });
-        }
-        
-        const data = await shipmentsRes.json();
-        const pageShipments = data.data || [];
-        shipments.push(...pageShipments);
-        
-        // Check pagination - handle both JSON:API and standard formats
-        const meta = data.meta;
-        const links = data.links;
-        
-        if (links && links.next) {
-          page++;
-        } else if (meta?.page?.current_page && meta?.page?.last_page) {
-          if (meta.page.current_page < meta.page.last_page) {
-            page++;
-          } else {
-            hasMore = false;
-          }
-        } else if (meta && meta.current_page !== undefined && meta.last_page !== undefined) {
-          if (meta.current_page < meta.last_page) {
-            page++;
-          } else {
-            hasMore = false;
-          }
-        } else {
-          hasMore = false;
-        }
-        
-        if (pageShipments.length === 0) hasMore = false;
-        if (shipments.length > 10000) break;
-        await new Promise(r => setTimeout(r, 100));
-      }
-      
-      // Aggregate shipments by week
-      const byWeek = {};
-      
-      shipments.forEach(shipment => {
-        const shipDate = new Date(shipment.shipped_at || shipment.created_at);
-        const weekKey = getWeekEnding(shipDate);
-        
-        if (!byWeek[weekKey]) {
-          byWeek[weekKey] = {
-            weekEnding: weekKey,
-            shipmentCount: 0,
-            totalUnits: 0,
-            orders: [],
-          };
-        }
-        
-        const units = (shipment.shipment_items || [])
-          .reduce((sum, item) => sum + (item.quantity || 0), 0);
-        
-        byWeek[weekKey].shipmentCount++;
-        byWeek[weekKey].totalUnits += units;
-        byWeek[weekKey].orders.push({
-          orderNumber: shipment.order?.order_number || shipment.order_id,
-          trackingNumber: shipment.tracking_number,
-          shippedAt: shipment.shipped_at,
-          carrier: shipment.shipping_method?.carrier,
-          units,
-        });
-      });
-      
-      return res.status(200).json({
-        success: true,
-        syncType: 'shipments',
-        shipmentCount: shipments.length,
-        dateRange: { startDate, endDate },
-        byWeek,
-      });
-      
-    } catch (err) {
-      console.error('Packiyo shipments sync error:', err);
-      return res.status(500).json({ error: `Shipments sync failed: ${err.message}` });
-    }
+
+  // Validate date range for sync
+  if (!startDate || !endDate) {
+    return res.status(400).json({ error: 'Missing date range' });
   }
 
-  return res.status(400).json({ error: 'Invalid syncType. Use: inventory, shipments' });
-}
+  try {
+    // Fetch orders from Shopify
+    const orders = [];
+    let pageInfo = null;
+    let hasNextPage = true;
+    
+    // Format dates for Shopify API
+    const startDateTime = `${startDate}T00:00:00-00:00`;
+    const endDateTime = `${endDate}T23:59:59-00:00`;
+    
+    while (hasNextPage) {
+      let url;
+      if (pageInfo) {
+        url = `${baseUrl}/orders.json?page_info=${pageInfo}&limit=250`;
+      } else {
+        url = `${baseUrl}/orders.json?created_at_min=${startDateTime}&created_at_max=${endDateTime}&status=any&limit=250`;
+      }
+      
+      const ordersRes = await fetch(url, {
+        headers: {
+          'X-Shopify-Access-Token': token,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (!ordersRes.ok) {
+        const errorText = await ordersRes.text();
+        console.error('Orders fetch error:', ordersRes.status, errorText);
+        return res.status(ordersRes.status).json({ error: `Failed to fetch orders: ${ordersRes.status}` });
+      }
+      
+      const data = await ordersRes.json();
+      orders.push(...(data.orders || []));
+      
+      // Check for pagination
+      const linkHeader = ordersRes.headers.get('Link');
+      if (linkHeader && linkHeader.includes('rel="next"')) {
+        const nextMatch = linkHeader.match(/<[^>]*page_info=([^>&]+)[^>]*>;\s*rel="next"/);
+        pageInfo = nextMatch ? nextMatch[1] : null;
+        hasNextPage = !!pageInfo;
+      } else {
+        hasNextPage = false;
+      }
+      
+      // Safety limit
+      if (orders.length > 10000) {
+        console.warn('Hit safety limit of 10,000 orders');
+        break;
+      }
+    }
 
-// Helper to get week ending (Sunday)
-function getWeekEnding(date) {
-  const d = new Date(date);
-  const day = d.getDay();
-  const daysUntilSunday = day === 0 ? 0 : 7 - day;
-  d.setDate(d.getDate() + daysUntilSunday);
-  return d.toISOString().split('T')[0];
+    // Process orders into daily/weekly format
+    const dailyData = {};
+    const weeklyData = {};
+    const skuTotals = {};
+    let totalRevenue = 0;
+    let totalUnits = 0;
+    let totalDiscounts = 0;
+    const taxByJurisdiction = {};
+    
+    // Tax tracking - separate Shop Pay vs non-Shop Pay
+    const taxByState = {}; // { stateCode: { taxCollected, taxableSales, orderCount, excludedShopPayTax } }
+    let totalTaxCollected = 0;
+    let totalShopPayTaxExcluded = 0;
+    let shopPayOrderCount = 0;
+    
+    // Track all payment gateways seen (for debugging Shop Pay detection)
+    const allPaymentGateways = new Set();
+    const shopPayGatewaysFound = new Set();
+
+    // Helper to get week ending (Sunday)
+    const getWeekEnding = (dateStr) => {
+      const date = new Date(dateStr);
+      const day = date.getDay();
+      const daysUntilSunday = day === 0 ? 0 : 7 - day;
+      date.setDate(date.getDate() + daysUntilSunday);
+      return date.toISOString().split('T')[0];
+    };
+    
+    // Helper to check if order used Shop Pay (accelerated checkout)
+    // IMPORTANT: "shopify_payments" is just credit card processing - NOT Shop Pay
+    // Only actual "shop_pay" orders have tax remitted by Shopify
+    const isShopPayOrder = (order) => {
+      const gateways = order.payment_gateway_names || [];
+      const sourceName = (order.source_name || '').toLowerCase();
+      const tags = (order.tags || '').toLowerCase();
+      
+      // Track all gateways seen
+      gateways.forEach(g => allPaymentGateways.add(g));
+      
+      // Check payment gateways
+      let matchedGateway = null;
+      const hasShopPayGateway = gateways.some(g => {
+        const lower = g.toLowerCase().replace(/[\s_-]/g, '');
+        const original = g.toLowerCase();
+        
+        // Match variations of Shop Pay
+        const isMatch = lower === 'shoppay' || 
+               lower.includes('shoppay') ||
+               lower === 'shopifyinstallments' ||
+               lower.includes('shopifyinstallments') ||
+               original === 'shop pay' ||
+               original === 'shop_pay' ||
+               original.includes('shop pay');
+        if (isMatch) matchedGateway = g;
+        return isMatch;
+      });
+      
+      // Also check source_name and tags for Shop Pay indicators
+      const hasShopPaySource = sourceName.includes('shop_pay') || 
+                               sourceName.includes('shoppay') ||
+                               sourceName === 'shop pay' ||
+                               tags.includes('shop_pay') ||
+                               tags.includes('shoppay') ||
+                               tags.includes('shop pay');
+      
+      // Check if payment was processed through Shop Pay Installments
+      const hasInstallments = order.payment_terms?.payment_terms_type === 'INSTALLMENTS' ||
+                              order.payment_terms?.payment_terms_name?.toLowerCase().includes('shop pay');
+      
+      // Check for Shop Pay in payment details
+      const paymentDetails = order.payment_details || {};
+      const hasShopPayDetails = paymentDetails.credit_card_company?.toLowerCase() === 'shop pay';
+      
+      // Check for "accelerated_checkout" in source
+      const hasAcceleratedCheckout = sourceName.includes('accelerated');
+      
+      // NEW: Check wallet_type on transactions
+      const transactions = order.transactions || [];
+      const hasShopPayWallet = transactions.some(t => 
+        t.receipt?.wallet_type?.toLowerCase() === 'shop_pay' ||
+        t.receipt?.wallet_payment_method?.toLowerCase()?.includes('shop_pay') ||
+        t.payment_details?.wallet_type?.toLowerCase() === 'shop_pay'
+      );
+      
+      // NEW: Check checkout_completion_target
+      const checkoutTarget = (order.checkout_completion_target || '').toLowerCase();
+      const hasShopCheckout = checkoutTarget.includes('shop');
+      
+      // NEW: Check buyer_accepts_marketing and customer - Shop Pay users often have these patterns
+      // This is less reliable but can help
+      const landingSite = (order.landing_site || '').toLowerCase();
+      const referringSite = (order.referring_site || '').toLowerCase();
+      const hasShopReferral = landingSite.includes('shop.app') || 
+                              referringSite.includes('shop.app') ||
+                              landingSite.includes('shop/') ||
+                              referringSite.includes('shop/');
+      
+      const isShopPay = hasShopPayGateway || hasShopPaySource || hasInstallments || 
+                        hasShopPayDetails || hasAcceleratedCheckout || hasShopPayWallet || hasShopCheckout;
+      
+      // Track which method matched
+      if (isShopPay) {
+        const method = hasShopPayGateway ? `gateway:${matchedGateway}` : 
+                       hasShopPaySource ? 'source/tags' :
+                       hasInstallments ? 'installments' :
+                       hasShopPayDetails ? 'payment_details' :
+                       hasAcceleratedCheckout ? 'accelerated' :
+                       hasShopPayWallet ? 'wallet_type' :
+                       hasShopCheckout ? 'checkout_target' : 'unknown';
+        shopPayGatewaysFound.add(method);
+      }
+      
+      return isShopPay;
+    };
+    
+    // Helper to get state code from order
+    const getStateCode = (order) => {
+      // Try billing address first, then shipping
+      const billing = order.billing_address;
+      const shipping = order.shipping_address;
+      
+      // Province code is the state abbreviation (e.g., "WV", "CA")
+      return billing?.province_code || shipping?.province_code || null;
+    };
+
+    // Process each order
+    for (const order of orders) {
+      try {
+        // Skip cancelled/refunded orders in most calculations
+        const isCancelled = order.cancelled_at || order.financial_status === 'refunded';
+        if (isCancelled) continue;
+        
+        // Defensive check for created_at
+        if (!order.created_at) {
+          console.warn('Order missing created_at:', order.id);
+          continue;
+        }
+        
+        const orderDate = order.created_at.split('T')[0];
+        const weekEnding = getWeekEnding(orderDate);
+        const isShopPay = isShopPayOrder(order);
+        const stateCode = getStateCode(order);
+      
+      if (isShopPay) shopPayOrderCount++;
+      
+      // Initialize daily data
+      if (!dailyData[orderDate]) {
+        dailyData[orderDate] = {
+          shopify: {
+            revenue: 0,
+            units: 0,
+            discounts: 0,
+            orders: 0,
+            skuData: [],
+            taxTotal: 0,
+            taxByState: {},
+            shopPayOrders: 0,
+            shopPayTaxExcluded: 0,
+          },
+          total: { revenue: 0, units: 0 },
+        };
+      }
+      
+      // Initialize weekly data
+      if (!weeklyData[weekEnding]) {
+        weeklyData[weekEnding] = {
+          shopify: {
+            revenue: 0,
+            units: 0,
+            discounts: 0,
+            orders: 0,
+            skuData: [],
+            taxTotal: 0,
+            taxByState: {},
+            shopPayOrders: 0,
+            shopPayTaxExcluded: 0,
+          },
+          total: { revenue: 0, units: 0 },
+        };
+      }
+
+      // Order totals
+      const orderRevenue = parseFloat(order.total_price) || 0;
+      const orderDiscount = parseFloat(order.total_discounts) || 0;
+      const orderTax = parseFloat(order.total_tax) || 0;
+      // Use subtotal_price for net item sales (excludes tax and shipping)
+      const orderSubtotal = parseFloat(order.subtotal_price) || 0;
+      // Track shipping separately
+      const orderShipping = parseFloat(order.total_shipping_price_set?.shop_money?.amount) || 
+                           parseFloat(order.shipping_lines?.reduce((s, l) => s + parseFloat(l.price || 0), 0)) || 0;
+      // Calculate shipping tax from tax_lines
+      const shippingTax = (order.tax_lines || [])
+        .filter(t => t.title?.toLowerCase().includes('shipping'))
+        .reduce((s, t) => s + parseFloat(t.price || 0), 0);
+      
+      dailyData[orderDate].shopify.revenue += orderRevenue;
+      dailyData[orderDate].shopify.discounts += orderDiscount;
+      dailyData[orderDate].shopify.orders += 1;
+      dailyData[orderDate].total.revenue += orderRevenue;
+      
+      weeklyData[weekEnding].shopify.revenue += orderRevenue;
+      weeklyData[weekEnding].shopify.discounts += orderDiscount;
+      weeklyData[weekEnding].shopify.orders += 1;
+      weeklyData[weekEnding].total.revenue += orderRevenue;
+      
+      totalRevenue += orderRevenue;
+      totalDiscounts += orderDiscount;
+
+      // Process tax - EXCLUDE Shop Pay orders from tax totals
+      // (Shopify remits tax automatically for Shop Pay orders)
+      // BUT still track ALL orders in taxByState for visibility
+      
+      // First, track this order in daily/weekly taxByState regardless of Shop Pay status
+      // This ensures we have complete sales data by state
+      if (stateCode) {
+        // Daily state tracking (ALL orders)
+        if (!dailyData[orderDate].shopify.taxByState[stateCode]) {
+          dailyData[orderDate].shopify.taxByState[stateCode] = { 
+            tax: 0, 
+            sales: 0,  // Item subtotal only
+            shipping: 0,  // Shipping charges
+            orders: 0,
+            shopPayTax: 0,
+            shopPaySales: 0,
+            shopPayShipping: 0,
+            shopPayOrders: 0
+          };
+        }
+        dailyData[orderDate].shopify.taxByState[stateCode].sales += orderSubtotal;
+        dailyData[orderDate].shopify.taxByState[stateCode].shipping += orderShipping;
+        dailyData[orderDate].shopify.taxByState[stateCode].orders += 1;
+        
+        // Weekly state tracking (ALL orders)
+        if (!weeklyData[weekEnding].shopify.taxByState[stateCode]) {
+          weeklyData[weekEnding].shopify.taxByState[stateCode] = { 
+            tax: 0, 
+            sales: 0,
+            shipping: 0,
+            orders: 0,
+            shopPayTax: 0,
+            shopPaySales: 0,
+            shopPayShipping: 0,
+            shopPayOrders: 0
+          };
+        }
+        weeklyData[weekEnding].shopify.taxByState[stateCode].sales += orderSubtotal;
+        weeklyData[weekEnding].shopify.taxByState[stateCode].shipping += orderShipping;
+        weeklyData[weekEnding].shopify.taxByState[stateCode].orders += 1;
+        
+        // Global state tracking
+        if (!taxByState[stateCode]) {
+          taxByState[stateCode] = {
+            stateCode,
+            taxCollected: 0,
+            itemSales: 0,  // Renamed for clarity
+            shipping: 0,
+            orderCount: 0,
+            excludedShopPayTax: 0,
+            shopPaySales: 0,
+            shopPayShipping: 0,
+            shopPayOrders: 0,
+          };
+        }
+        taxByState[stateCode].itemSales += orderSubtotal;
+        taxByState[stateCode].shipping += orderShipping;
+        taxByState[stateCode].orderCount += 1;
+      }
+      
+      // Now handle tax amounts based on Shop Pay status
+      if (isShopPay) {
+        // Track excluded tax for reporting (Shopify remits this)
+        dailyData[orderDate].shopify.shopPayOrders += 1;
+        dailyData[orderDate].shopify.shopPayTaxExcluded += orderTax;
+        weeklyData[weekEnding].shopify.shopPayOrders += 1;
+        weeklyData[weekEnding].shopify.shopPayTaxExcluded += orderTax;
+        totalShopPayTaxExcluded += orderTax;
+        
+        // Track Shop Pay tax separately by state (for visibility, not filing)
+        if (stateCode) {
+          dailyData[orderDate].shopify.taxByState[stateCode].shopPayTax += orderTax;
+          dailyData[orderDate].shopify.taxByState[stateCode].shopPaySales += orderSubtotal;
+          dailyData[orderDate].shopify.taxByState[stateCode].shopPayShipping += orderShipping;
+          dailyData[orderDate].shopify.taxByState[stateCode].shopPayOrders += 1;
+          
+          weeklyData[weekEnding].shopify.taxByState[stateCode].shopPayTax += orderTax;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].shopPaySales += orderSubtotal;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].shopPayShipping += orderShipping;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].shopPayOrders += 1;
+          
+          taxByState[stateCode].excludedShopPayTax += orderTax;
+          taxByState[stateCode].shopPaySales += orderSubtotal;
+          taxByState[stateCode].shopPayShipping += orderShipping;
+          taxByState[stateCode].shopPayOrders += 1;
+        }
+      } else {
+        // Include tax in totals for non-Shop Pay orders (YOU owe this tax)
+        dailyData[orderDate].shopify.taxTotal += orderTax;
+        weeklyData[weekEnding].shopify.taxTotal += orderTax;
+        totalTaxCollected += orderTax;
+        
+        // Add to taxByState for non-Shop Pay (this is what you file)
+        if (stateCode) {
+          dailyData[orderDate].shopify.taxByState[stateCode].tax += orderTax;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].tax += orderTax;
+          taxByState[stateCode].taxCollected += orderTax;
+        }
+      }
+
+      // Process tax jurisdictions (for detailed reporting by state/county/city)
+      for (const taxLine of order.tax_lines || []) {
+        const jurisdiction = taxLine.title || 'Unknown';
+        const taxAmount = parseFloat(taxLine.price) || 0;
+        const taxRate = parseFloat(taxLine.rate) || 0;
+        
+        // Global jurisdiction tracking
+        if (!taxByJurisdiction[jurisdiction]) {
+          taxByJurisdiction[jurisdiction] = { total: 0, shopPayExcluded: 0, rate: taxRate };
+        }
+        
+        if (isShopPay) {
+          taxByJurisdiction[jurisdiction].shopPayExcluded += taxAmount;
+        } else {
+          taxByJurisdiction[jurisdiction].total += taxAmount;
+        }
+        
+        // Track jurisdiction data by state for state-specific filing
+        if (stateCode) {
+          // Initialize jurisdiction tracking in daily/weekly data
+          if (!dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions) {
+            dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions = {};
+          }
+          if (!dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction]) {
+            dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction] = {
+              tax: 0, sales: 0, rate: taxRate, orders: 0
+            };
+          }
+          dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction].tax += isShopPay ? 0 : taxAmount;
+          dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction].sales += orderSubtotal;
+          dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction].orders += 1;
+        }
+      }
+
+      // Process line items for SKU data
+      // SKU is the PRIMARY KEY - only items with real SKUs can be matched across systems
+      for (const item of order.line_items || []) {
+        const sku = item.sku?.trim();
+        const productName = item.name || item.title || 'Unknown Product';
+        const quantity = item.quantity || 0;
+        const itemRevenue = parseFloat(item.price) * quantity || 0;
+        const itemDiscount = parseFloat(item.total_discount) || 0;
+        
+        dailyData[orderDate].shopify.units += quantity;
+        dailyData[orderDate].total.units += quantity;
+        weeklyData[weekEnding].shopify.units += quantity;
+        weeklyData[weekEnding].total.units += quantity;
+        
+        totalUnits += quantity;
+        
+        // Only track SKU-level data for items WITH a SKU
+        // Items without SKU still count toward total units/revenue but can't be matched
+        if (sku) {
+          // Track SKU totals
+          if (!skuTotals[sku]) {
+            skuTotals[sku] = { sku, productName, units: 0, revenue: 0, discounts: 0 };
+          }
+          skuTotals[sku].units += quantity;
+          skuTotals[sku].revenue += itemRevenue;
+          skuTotals[sku].discounts += itemDiscount;
+          
+          // Add to daily SKU data
+          const existingDailySku = dailyData[orderDate].shopify.skuData.find(s => s.sku === sku);
+          if (existingDailySku) {
+            existingDailySku.units += quantity;
+            existingDailySku.revenue += itemRevenue;
+          } else {
+            dailyData[orderDate].shopify.skuData.push({
+              sku, // PRIMARY KEY
+              productName, // Display only
+              units: quantity,
+              revenue: itemRevenue,
+            });
+          }
+          
+          // Add to weekly SKU data
+          const existingWeeklySku = weeklyData[weekEnding].shopify.skuData.find(s => s.sku === sku);
+          if (existingWeeklySku) {
+            existingWeeklySku.units += quantity;
+            existingWeeklySku.revenue += itemRevenue;
+          } else {
+            weeklyData[weekEnding].shopify.skuData.push({
+              sku, // PRIMARY KEY
+              productName, // Display only
+              units: quantity,
+              revenue: itemRevenue,
+            });
+          }
+        }
+      }
+      } catch (orderErr) {
+        // Log and skip problematic orders instead of crashing
+        console.error('Error processing order:', order?.id || 'unknown', orderErr.message);
+        continue;
+      }
+    }
+
+    // Sort SKU data in each day/week by units descending
+    Object.values(dailyData).forEach(d => {
+      d.shopify.skuData.sort((a, b) => b.units - a.units);
+    });
+    Object.values(weeklyData).forEach(w => {
+      w.shopify.skuData.sort((a, b) => b.units - a.units);
+    });
+
+    // Build SKU breakdown for preview
+    const skuBreakdown = Object.values(skuTotals)
+      .sort((a, b) => b.units - a.units)
+      .slice(0, 20);
+    
+    // Build tax by state summary
+    const taxByStateSummary = Object.values(taxByState)
+      .sort((a, b) => b.taxCollected - a.taxCollected);
+
+    // Return response
+    // Log payment gateway info for debugging
+    console.log('Payment Gateways Found:', Array.from(allPaymentGateways));
+    console.log('Shop Pay Gateways Matched:', Array.from(shopPayGatewaysFound));
+    console.log(`Shop Pay Orders: ${shopPayOrderCount} out of ${orders.length} total orders`);
+    
+    return res.status(200).json({
+      success: true,
+      orderCount: orders.length,
+      totalRevenue,
+      totalUnits,
+      totalDiscounts,
+      uniqueDays: Object.keys(dailyData).length,
+      uniqueWeeks: Object.keys(weeklyData).length,
+      skuBreakdown,
+      // Enhanced tax data
+      tax: {
+        totalCollected: totalTaxCollected,
+        shopPayExcluded: totalShopPayTaxExcluded,
+        shopPayOrderCount,
+        byState: taxByStateSummary,
+        byJurisdiction: taxByJurisdiction,
+        // Payment gateway debugging info
+        paymentGateways: Array.from(allPaymentGateways),
+        shopPayGatewaysMatched: Array.from(shopPayGatewaysFound),
+      },
+      taxByJurisdiction, // Keep for backward compatibility
+      dateRange: { start: startDate, end: endDate },
+      ...(preview ? {} : { dailyData, weeklyData }),
+    });
+
+  } catch (err) {
+    console.error('Sync error:', err);
+    return res.status(500).json({ error: `Sync failed: ${err.message}` });
+  }
 }

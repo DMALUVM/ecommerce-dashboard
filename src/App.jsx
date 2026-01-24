@@ -20589,91 +20589,131 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             setAllDaysData(updatedDays);
                             // Save daily data to localStorage
                             try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
-                            
-                            // Merge weekly data - PRESERVE existing ad data
-                            const updatedWeeks = { ...allWeeksData };
-                            Object.entries(data.weeklyData || {}).forEach(([weekKey, weekData]) => {
-                              if (updatedWeeks[weekKey]) {
-                                const existingWeek = updatedWeeks[weekKey];
-                                const existingShopify = existingWeek.shopify || {};
-                                
-                                // Preserve existing ad data
-                                const metaSpend = existingShopify.metaSpend || existingShopify.metaAds || 0;
-                                const googleSpend = existingShopify.googleSpend || existingShopify.googleAds || 0;
-                                const totalAds = metaSpend + googleSpend;
-                                
-                                // Calculate COGS from SKU data if not already calculated
-                                let weekCogs = weekData.shopify?.cogs || 0;
-                                if (!weekCogs && weekData.shopify?.skuData && Object.keys(cogsLookup).length > 0) {
-                                  Object.values(weekData.shopify.skuData).forEach(sku => {
-                                    const unitCost = cogsLookup[sku.sku] || 0;
-                                    weekCogs += unitCost * (sku.unitsSold || sku.units || 0);
-                                  });
-                                }
-                                
-                                // Merge shopify data, preserving ads and adding COGS
-                                const mergedShopify = {
-                                  ...weekData.shopify,
-                                  cogs: weekCogs,
-                                  metaSpend: metaSpend,
-                                  metaAds: metaSpend,
-                                  googleSpend: googleSpend,
-                                  googleAds: googleSpend,
-                                  adSpend: totalAds,
-                                };
-                                
-                                // Recalculate profit with COGS and ad spend
-                                const grossProfit = (mergedShopify.revenue || 0) - weekCogs - (mergedShopify.threeplCosts || 0);
-                                mergedShopify.netProfit = grossProfit - totalAds;
-                                mergedShopify.netMargin = mergedShopify.revenue > 0 ? (mergedShopify.netProfit / mergedShopify.revenue) * 100 : 0;
-                                if (totalAds > 0) {
-                                  mergedShopify.roas = mergedShopify.revenue / totalAds;
-                                }
-                                
-                                updatedWeeks[weekKey] = {
-                                  ...existingWeek,
-                                  shopify: mergedShopify,
-                                  total: {
-                                    ...existingWeek.total,
-                                    revenue: (existingWeek.amazon?.revenue || 0) + (mergedShopify.revenue || 0),
-                                    units: (existingWeek.amazon?.units || 0) + (mergedShopify.units || 0),
-                                    adSpend: (existingWeek.amazon?.adSpend || 0) + totalAds,
-                                    netProfit: (existingWeek.amazon?.netProfit || 0) + (mergedShopify.netProfit || 0),
-                                    cogs: (existingWeek.amazon?.cogs || 0) + weekCogs,
-                                  },
-                                };
-                              } else {
-                                // New week - calculate COGS from SKU data
-                                let newWeekCogs = weekData.shopify?.cogs || 0;
-                                if (!newWeekCogs && weekData.shopify?.skuData && Object.keys(cogsLookup).length > 0) {
-                                  Object.values(weekData.shopify.skuData).forEach(sku => {
-                                    const unitCost = cogsLookup[sku.sku] || 0;
-                                    newWeekCogs += unitCost * (sku.unitsSold || sku.units || 0);
-                                  });
-                                }
-                                
-                                // Update the week data with calculated COGS
-                                const updatedWeekData = { ...weekData };
-                                if (updatedWeekData.shopify) {
-                                  updatedWeekData.shopify = {
-                                    ...updatedWeekData.shopify,
-                                    cogs: newWeekCogs,
+
+                            // Rebuild weekly data FROM the merged daily data so dashboard/daily always roll up correctly
+                            // (Prevents preview being close but weekly/monthly drifting after merge)
+                            const rebuiltWeeks = { ...allWeeksData };
+                            const weeksToRecalc = new Set();
+                            daysToSync.forEach(d => weeksToRecalc.add(getSunday(d)));
+
+                            // Helper: merge SKU maps
+                            const mergeSkuMaps = (target, source) => {
+                              if (!source) return target;
+                              Object.values(source).forEach(skuRow => {
+                                const key = skuRow.sku || skuRow.SKU || skuRow.skuId;
+                                if (!key) return;
+                                if (!target[key]) {
+                                  target[key] = { ...skuRow };
+                                } else {
+                                  target[key] = {
+                                    ...target[key],
+                                    unitsSold: (target[key].unitsSold || target[key].units || 0) + (skuRow.unitsSold || skuRow.units || 0),
+                                    units: (target[key].units || target[key].unitsSold || 0) + (skuRow.units || skuRow.unitsSold || 0),
+                                    netSales: (target[key].netSales || 0) + (skuRow.netSales || 0),
+                                    revenue: (target[key].revenue || 0) + (skuRow.revenue || 0),
+                                    discounts: (target[key].discounts || 0) + (skuRow.discounts || 0),
+                                    tax: (target[key].tax || 0) + (skuRow.tax || 0),
+                                    cogs: (target[key].cogs || 0) + (skuRow.cogs || 0),
                                   };
-                                  // Recalculate profit
-                                  const revenue = updatedWeekData.shopify.revenue || 0;
-                                  const threeplCosts = updatedWeekData.shopify.threeplCosts || 0;
-                                  const adSpend = updatedWeekData.shopify.adSpend || 0;
-                                  updatedWeekData.shopify.netProfit = revenue - newWeekCogs - threeplCosts - adSpend;
-                                  updatedWeekData.shopify.netMargin = revenue > 0 ? (updatedWeekData.shopify.netProfit / revenue) * 100 : 0;
                                 }
-                                if (updatedWeekData.total) {
-                                  updatedWeekData.total.cogs = newWeekCogs;
-                                }
-                                updatedWeeks[weekKey] = updatedWeekData;
+                              });
+                              return target;
+                            };
+
+                            weeksToRecalc.forEach(weekKey => {
+                              const existingWeek = rebuiltWeeks[weekKey] || {};
+
+                              let amazonRevenue = 0, amazonUnits = 0, amazonOrders = 0, amazonCogs = 0, amazonNetProfit = 0, amazonAdSpend = 0;
+                              let shopRevenue = 0, shopUnits = 0, shopOrders = 0, shopDiscounts = 0, shopCogs = 0, shopThreepl = 0, shopMeta = 0, shopGoogle = 0, shopTax = 0, shopShip = 0;
+                              let shopSkuMap = {};
+
+                              Object.entries(updatedDays).forEach(([dayKey, dayVal]) => {
+                                if (getSunday(dayKey) !== weekKey) return;
+
+                                const a = dayVal.amazon || {};
+                                amazonRevenue += a.revenue || 0;
+                                amazonUnits += a.units || 0;
+                                amazonOrders += a.orders || 0;
+                                amazonCogs += a.cogs || 0;
+                                amazonNetProfit += a.netProfit || 0;
+                                amazonAdSpend += a.adSpend || 0;
+
+                                const s = dayVal.shopify || {};
+                                shopRevenue += s.revenue || 0;
+                                shopUnits += s.units || 0;
+                                shopOrders += s.orders || 0;
+                                shopDiscounts += s.discounts || 0;
+                                shopCogs += s.cogs || 0;
+                                shopThreepl += s.threeplCosts || 0;
+                                shopMeta += (dayVal.metaSpend || s.metaSpend || s.metaAds || 0);
+                                shopGoogle += (dayVal.googleSpend || s.googleSpend || s.googleAds || 0);
+                                shopTax += s.taxTotal || 0;
+                                shopShip += s.shippingTotal || 0;
+
+                                shopSkuMap = mergeSkuMaps(shopSkuMap, s.skuData);
+                              });
+
+                              // If we still don't have COGS and we have SKU map + lookup, compute it
+                              if ((!shopCogs || shopCogs === 0) && Object.keys(shopSkuMap).length > 0 && Object.keys(cogsLookup).length > 0) {
+                                Object.values(shopSkuMap).forEach(skuRow => {
+                                  const sku = skuRow.sku;
+                                  const unitCost = cogsLookup[sku] || 0;
+                                  const units = skuRow.unitsSold || skuRow.units || 0;
+                                  shopCogs += unitCost * units;
+                                  if (unitCost > 0) skuRow.cogs = (skuRow.cogs || 0) + unitCost * units;
+                                });
                               }
+
+                              const shopAdSpend = shopMeta + shopGoogle;
+                              const shopNetProfit = shopRevenue - shopCogs - shopThreepl - shopAdSpend;
+                              const shopNetMargin = shopRevenue > 0 ? (shopNetProfit / shopRevenue) * 100 : 0;
+
+                              rebuiltWeeks[weekKey] = {
+                                ...existingWeek,
+                                amazon: {
+                                  ...(existingWeek.amazon || {}),
+                                  revenue: amazonRevenue,
+                                  units: amazonUnits,
+                                  orders: amazonOrders,
+                                  cogs: amazonCogs,
+                                  adSpend: amazonAdSpend,
+                                  netProfit: amazonNetProfit,
+                                },
+                                shopify: {
+                                  ...(existingWeek.shopify || {}),
+                                  revenue: shopRevenue, // Gross collected (incl tax + shipping)
+                                  units: shopUnits,
+                                  orders: shopOrders,
+                                  discounts: shopDiscounts,
+                                  cogs: shopCogs,
+                                  threeplCosts: shopThreepl,
+                                  metaSpend: shopMeta,
+                                  metaAds: shopMeta,
+                                  googleSpend: shopGoogle,
+                                  googleAds: shopGoogle,
+                                  adSpend: shopAdSpend,
+                                  taxTotal: shopTax,
+                                  shippingTotal: shopShip,
+                                  skuData: shopSkuMap,
+                                  netProfit: shopNetProfit,
+                                  netMargin: shopNetMargin,
+                                  roas: shopAdSpend > 0 ? (shopRevenue / shopAdSpend) : 0,
+                                },
+                                total: {
+                                  ...(existingWeek.total || {}),
+                                  revenue: amazonRevenue + shopRevenue,
+                                  units: amazonUnits + shopUnits,
+                                  orders: amazonOrders + shopOrders,
+                                  cogs: amazonCogs + shopCogs,
+                                  adSpend: amazonAdSpend + shopAdSpend,
+                                  netProfit: amazonNetProfit + shopNetProfit,
+                                },
+                                aggregatedFrom: 'daily',
+                              };
                             });
-                            setAllWeeksData(updatedWeeks);
-                            save(updatedWeeks);
+
+                            setAllWeeksData(rebuiltWeeks);
+                            save(rebuiltWeeks);
                             
                             const updatedCreds = { ...shopifyCredentials, lastSync: new Date().toISOString() };
                             setShopifyCredentials(updatedCreds);
