@@ -1463,8 +1463,6 @@ export default function Dashboard() {
       }
 
 
-        }
-      }
 
       // Ensure adSpend exists even if older saved records only stored meta/google
       const ensuredShopify = saved.shopify ? {
