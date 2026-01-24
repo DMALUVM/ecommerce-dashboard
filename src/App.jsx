@@ -1286,6 +1286,16 @@ export default function Dashboard() {
     return formatDateKey(weekEnd);
   }, []);
 
+  const getCurrentWeekEndingKey = useCallback(() => {
+    const now = new Date();
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+    const dow = d.getDay(); // 0=Sun
+    const weekEnd = new Date(d);
+    weekEnd.setDate(d.getDate() + (dow === 0 ? 0 : 7 - dow));
+    return formatDateKey(weekEnd);
+  }, []);
+
+
   const getAllWeekKeys = useCallback(() => {
     // Union of saved weeks + weeks implied by daily data (supports week-to-date view)
     const weeksFromSaved = Object.keys(allWeeksData || {});
@@ -1294,8 +1304,9 @@ export default function Dashboard() {
       weeksFromDaysSet.add(getWeekEndingForDateKey(dayKey));
     });
     const weeksFromDays = Array.from(weeksFromDaysSet);
-    return Array.from(new Set([...weeksFromSaved, ...weeksFromDays])).sort();
-  }, [allWeeksData, allDaysData, getWeekEndingForDateKey]);
+        const currentWeekEnd = getCurrentWeekEndingKey();
+    return Array.from(new Set([...weeksFromSaved, ...weeksFromDays])).filter(w => w <= currentWeekEnd).sort();
+    }, [allWeeksData, allDaysData, getWeekEndingForDateKey, getCurrentWeekEndingKey]);
 
   const aggregateWeekFromDays = useCallback((weekEndingKey) => {
     // Build a week object (same shape as saved week) from whatever daily data exists for that week.
@@ -1409,6 +1420,10 @@ export default function Dashboard() {
     if (saved) {
       const savedMeta = saved?.shopify?.metaSpend ?? saved?.shopify?.metaAds ?? 0;
       const savedGoogle = saved?.shopify?.googleSpend ?? saved?.shopify?.googleAds ?? 0;
+
+      const savedAmazonRevenue = saved?.amazon?.revenue ?? 0;
+      const savedHasAmazon = savedAmazonRevenue > 0;
+
       const savedHasAds = (savedMeta + savedGoogle) > 0;
 
       if (!savedHasAds) {
@@ -1425,6 +1440,29 @@ export default function Dashboard() {
             adSpend: (saved.shopify?.adSpend || 0) > 0 ? (saved.shopify?.adSpend || 0) : (liveMeta + liveGoogle),
           };
           return { ...saved, shopify: mergedShopify, _isLiveWTD: false };
+        }
+      }
+
+      // Backfill Amazon data for older saved weeks that predate Amazon weekly aggregation (or had partial saves)
+      if (!savedHasAmazon) {
+        const live = aggregateWeekFromDays(weekEndingKey);
+        const liveAmazonRevenue = live?.amazon?.revenue ?? 0;
+        if (liveAmazonRevenue > 0) {
+          // Merge amazon + recompute totals for display
+          const mergedAmazon = { ...(saved.amazon || {}), ...(live.amazon || {}) };
+          const mergedShopify2 = { ...(saved.shopify || {}) };
+          const totalRevenue = (mergedAmazon.revenue || 0) + (mergedShopify2.revenue || 0);
+          const totalAdSpend = (mergedAmazon.adSpend || 0) + (mergedShopify2.adSpend || 0) + (mergedShopify2.metaSpend || mergedShopify2.metaAds || 0) + (mergedShopify2.googleSpend || mergedShopify2.googleAds || 0);
+          const mergedTotal = {
+            ...(saved.total || {}),
+            revenue: totalRevenue,
+            adSpend: totalAdSpend,
+          };
+          return { ...saved, amazon: mergedAmazon, shopify: mergedShopify2, total: mergedTotal, _isLiveWTD: false };
+        }
+      }
+
+
         }
       }
 
@@ -6427,7 +6465,7 @@ const savePeriods = async (d) => {
       const costCol = headers.findIndex(h => h === 'cost' || h === 'spend' || h === 'amount spent' || (h.includes('cost') && !h.includes('/')));
       const impressionsCol = headers.findIndex(h => h === 'impressions' || h === 'impr' || h.includes('impression'));
       const clicksCol = headers.findIndex(h => (h === 'clicks' || h === 'click' || (h.includes('click') && !h.includes('cpc') && !h.includes('cost per'))) && !h.includes('outbound') && !h.includes('unique'));
-      const conversionsCol = headers.findIndex(h => h === 'conversions' || h === 'conv.' || h.includes('conversion') || h.includes('/ conv') || h.includes('results'));
+            const conversionsCol = headers.findIndex(h => h === 'conversions' || h === 'conv.' || h.includes('conversion') || h.includes('/ conv') || h.includes('results'));
       const purchasesCol = headers.findIndex(h => h === 'purchases' || h.includes('purchase') && !h.includes('value'));
       const purchaseValueCol = headers.findIndex(h => h === 'purchase value' || h.includes('purchase value') || h.includes('conversion value') || h.includes('results value'));
       const cpcCol = headers.findIndex(h => h === 'avg. cpc' || h === 'cpc' || h.includes('cost per click'));
@@ -10886,7 +10924,7 @@ Analyze the data and respond with ONLY this JSON:
         <button onClick={() => { const d = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse(); if (d.length) { setSelectedDay(d[0]); setView('daily'); }}} disabled={!Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'daily' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Sun className="w-4 h-4 inline mr-1" />Days</button>
       )}
       {appSettings.modulesEnabled?.weeklyTracking !== false && (
-        <button onClick={() => { const w = getAllWeekKeys().sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}} disabled={!getAllWeekKeys().length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />Weeks</button>
+        <button onClick={() => { const w = getAllWeekKeys().sort().reverse(); const cur = getCurrentWeekEndingKey(); const pick = w.includes(cur) ? cur : (w[0] || null); if (pick) { setSelectedWeek(pick); setView('weekly'); }}} disabled={!getAllWeekKeys().length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />Weeks</button>
       )}
       {appSettings.modulesEnabled?.periodTracking !== false && (
         <button onClick={() => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }}} disabled={!Object.keys(allPeriodsData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'period-view' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><CalendarRange className="w-4 h-4 inline mr-1" />Periods</button>
@@ -21929,6 +21967,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       );
     }
     const weeks = getAllWeekKeys().sort().reverse();
+    const currentWeekEnd = getCurrentWeekEndingKey();
+    // Safety: if selectedWeek is missing or somehow future, snap to current or latest available
+    if (!weeks.includes(selectedWeek) || selectedWeek > currentWeekEnd) {
+      const pick = weeks.includes(currentWeekEnd) ? currentWeekEnd : (weeks[0] || null);
+      if (pick && pick !== selectedWeek) setSelectedWeek(pick);
+    }
     const idx = weeks.indexOf(selectedWeek);
     
     // Enhance Shopify data with 3PL from ledger if available
@@ -32091,150 +32135,168 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               </div>
             )}
             
-            {/* Shopify Ads (Meta + Google) Weekly Trend Chart */}
-            {(() => {
-              // Get days with Meta or Google ads data
-              const daysWithShopifyAds = sortedDays.filter(d => {
-                const day = allDaysData[d];
-                const meta = day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
-                const google = day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
-                return (meta + google) > 0;
-              });
-              
-              if (daysWithShopifyAds.length < 7) return null;
-              
-              const chartDays = daysWithShopifyAds.slice(-90);
-              if (chartDays.length < 7) return null;
-              
-              const startDate = new Date(chartDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-              const endDate = new Date(chartDays[chartDays.length - 1] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-              
-              // Aggregate to weekly
-              const weeklyData = [];
-              for (let i = 0; i < chartDays.length; i += 7) {
-                const weekDays = chartDays.slice(i, Math.min(i + 7, chartDays.length));
-                const weekAgg = weekDays.reduce((acc, d) => {
-                  const day = allDaysData[d];
-                  const meta = day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
-                  const google = day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
-                  const metaImpr = day?.shopify?.adsMetrics?.metaImpressions || day?.metaImpressions || 0;
-                  const googleImpr = day?.shopify?.adsMetrics?.googleImpressions || day?.googleImpressions || 0;
-                  const metaClicks = day?.shopify?.adsMetrics?.metaClicks || day?.metaClicks || 0;
-                  const googleClicks = day?.shopify?.adsMetrics?.googleClicks || day?.googleClicks || 0;
-                  const metaPurch = day?.shopify?.adsMetrics?.metaPurchases || day?.metaConversions || 0;
-                  const googleConv = day?.shopify?.adsMetrics?.googleConversions || day?.googleConversions || 0;
-                  const metaRev = day?.shopify?.adsMetrics?.metaPurchaseValue || 0;
-                  const shopRev = day?.shopify?.revenue || 0;
-                  return {
-                    meta: acc.meta + meta,
-                    google: acc.google + google,
-                    metaImpr: acc.metaImpr + metaImpr,
-                    googleImpr: acc.googleImpr + googleImpr,
-                    metaClicks: acc.metaClicks + metaClicks,
-                    googleClicks: acc.googleClicks + googleClicks,
-                    metaPurch: acc.metaPurch + metaPurch,
-                    googleConv: acc.googleConv + googleConv,
-                    metaRev: acc.metaRev + metaRev,
-                    shopRev: acc.shopRev + shopRev,
-                  };
-                }, { meta: 0, google: 0, metaImpr: 0, googleImpr: 0, metaClicks: 0, googleClicks: 0, metaPurch: 0, googleConv: 0, metaRev: 0, shopRev: 0 });
-                
-                const totalSpend = weekAgg.meta + weekAgg.google;
-                const totalClicks = weekAgg.metaClicks + weekAgg.googleClicks;
-                const avgCpc = totalClicks > 0 ? totalSpend / totalClicks : 0;
-                const metaRoas = weekAgg.meta > 0 && weekAgg.metaRev > 0 ? weekAgg.metaRev / weekAgg.meta : 0;
-                
-                weeklyData.push({
-                  week: new Date(weekDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-                  meta: Math.round(weekAgg.meta),
-                  google: Math.round(weekAgg.google),
-                  total: Math.round(totalSpend),
-                  avgCpc: Math.round(avgCpc * 100) / 100,
-                  metaRoas: Math.round(metaRoas * 100) / 100,
-                  shopRev: Math.round(weekAgg.shopRev),
-                });
-              }
-              
-              if (weeklyData.length < 3) return null;
-              
-              const avgMeta = weeklyData.reduce((s, w) => s + w.meta, 0) / weeklyData.length;
-              const avgGoogle = weeklyData.reduce((s, w) => s + w.google, 0) / weeklyData.length;
-              const avgCpc = weeklyData.reduce((s, w) => s + w.avgCpc, 0) / weeklyData.filter(w => w.avgCpc > 0).length || 0;
-              const avgRoas = weeklyData.reduce((s, w) => s + w.metaRoas, 0) / weeklyData.filter(w => w.metaRoas > 0).length || 0;
-              
-              // Trend calculation
-              const firstHalf = weeklyData.slice(0, Math.floor(weeklyData.length / 2));
-              const secondHalf = weeklyData.slice(Math.floor(weeklyData.length / 2));
-              const firstAvgSpend = firstHalf.reduce((s, w) => s + w.total, 0) / firstHalf.length;
-              const secondAvgSpend = secondHalf.reduce((s, w) => s + w.total, 0) / secondHalf.length;
-              const spendTrend = firstAvgSpend > 0 ? ((secondAvgSpend - firstAvgSpend) / firstAvgSpend * 100) : 0;
-              
-              return (
-                <div className="bg-slate-800/50 rounded-xl border border-violet-500/30 p-5 mb-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                      <TrendingUp className="w-5 h-5 text-violet-400" />Shopify Ads: Meta & Google Trend
-                    </h3>
-                    <span className="text-slate-400 text-sm">{startDate} - {endDate}</span>
-                  </div>
-                  
-                  {/* Bar chart */}
-                  <div className="space-y-3 mb-4">
-                    {weeklyData.slice(-8).map((w, i) => {
-                      const maxSpend = Math.max(...weeklyData.slice(-8).map(x => x.total));
-                      const metaWidth = maxSpend > 0 ? (w.meta / maxSpend) * 100 : 0;
-                      const googleWidth = maxSpend > 0 ? (w.google / maxSpend) * 100 : 0;
-                      return (
-                        <div key={i} className="flex items-center gap-3">
-                          <span className="text-slate-400 text-xs w-16">{w.week}</span>
-                          <div className="flex-1 flex flex-col gap-1">
-                            <div className="flex items-center gap-2">
-                              <div className="h-2.5 bg-blue-500/80 rounded" style={{ width: `${metaWidth}%`, minWidth: w.meta > 0 ? '4px' : '0' }} />
-                              <span className="text-blue-400 text-xs">{formatCurrency(w.meta)}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <div className="h-2.5 bg-red-500/80 rounded" style={{ width: `${googleWidth}%`, minWidth: w.google > 0 ? '4px' : '0' }} />
-                              <span className="text-red-400 text-xs">{formatCurrency(w.google)}</span>
-                            </div>
-                          </div>
-                          <span className="text-white text-xs font-medium w-16 text-right">{formatCurrency(w.total)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  
-                  {/* Legend */}
-                  <div className="flex items-center gap-6 text-xs border-t border-slate-700 pt-3">
-                    <div className="flex items-center gap-2"><div className="w-3 h-3 bg-blue-500 rounded" /><span className="text-slate-400">Meta</span></div>
-                    <div className="flex items-center gap-2"><div className="w-3 h-3 bg-red-500 rounded" /><span className="text-slate-400">Google</span></div>
-                    <div className="flex items-center gap-2"><span className="text-slate-400">Total</span></div>
-                  </div>
-                  
-                  {/* Summary Stats */}
-                  <div className="grid grid-cols-4 gap-4 mt-4 pt-4 border-t border-slate-700">
-                    <div className="text-center">
-                      <p className="text-slate-400 text-xs">Avg Meta/wk</p>
-                      <p className="text-blue-400 font-bold">{formatCurrency(avgMeta)}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-slate-400 text-xs">Avg Google/wk</p>
-                      <p className="text-red-400 font-bold">{formatCurrency(avgGoogle)}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-slate-400 text-xs">Avg CPC</p>
-                      <p className={`font-bold ${avgCpc <= 1.00 ? 'text-emerald-400' : avgCpc <= 2.00 ? 'text-amber-400' : 'text-rose-400'}`}>{formatCurrency(avgCpc)}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-slate-400 text-xs">Spend Trend</p>
-                      <p className={`font-bold flex items-center justify-center gap-1 ${spendTrend > 10 ? 'text-amber-400' : spendTrend < -10 ? 'text-emerald-400' : 'text-slate-400'}`}>
-                        {spendTrend > 5 ? <ArrowUpRight className="w-4 h-4" /> : spendTrend < -5 ? <ArrowDownRight className="w-4 h-4" /> : null}
-                        {Math.abs(spendTrend).toFixed(0)}%
-                      </p>
-                    </div>
-                  </div>
+{/* Shopify Ads (Meta + Google) Trend Chart */}
+{(() => {
+  const daysWithShopifyAds = sortedDays.filter(d => {
+    const day = allDaysData[d];
+    const meta = day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
+    const google = day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
+    return (meta + google) > 0;
+  });
+
+  const isDaily = adsTimeTab === 'daily';
+  const minPoints = isDaily ? 3 : 7;
+  if (daysWithShopifyAds.length < minPoints) return null;
+
+  const chartDays = daysWithShopifyAds.slice(-90);
+  if (chartDays.length < minPoints) return null;
+
+  const viewDays = isDaily ? chartDays.slice(-30) : chartDays;
+  const startDate = new Date(viewDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const endDate = new Date(viewDays[viewDays.length - 1] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+  const data = [];
+  if (isDaily) {
+    for (const d of viewDays) {
+      const day = allDaysData[d];
+      const meta = day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
+      const google = day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
+      const metaClicks = day?.shopify?.adsMetrics?.metaClicks || day?.metaClicks || 0;
+      const googleClicks = day?.shopify?.adsMetrics?.googleClicks || day?.googleClicks || 0;
+      const metaRev = day?.shopify?.adsMetrics?.metaPurchaseValue || 0;
+      const totalSpend = meta + google;
+      const totalClicks = metaClicks + googleClicks;
+      const avgCpc = totalClicks > 0 ? totalSpend / totalClicks : 0;
+      const metaRoas = meta > 0 && metaRev > 0 ? metaRev / meta : 0;
+      data.push({
+        label: new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        meta: Math.round(meta),
+        google: Math.round(google),
+        total: Math.round(totalSpend),
+        avgCpc: Math.round(avgCpc * 100) / 100,
+        metaRoas: Math.round(metaRoas * 100) / 100,
+      });
+    }
+  } else {
+    // Aggregate to weekly
+    for (let i = 0; i < viewDays.length; i += 7) {
+      const weekDays = viewDays.slice(i, Math.min(i + 7, viewDays.length));
+      const weekAgg = weekDays.reduce((acc, d) => {
+        const day = allDaysData[d];
+        const meta = day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
+        const google = day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
+        const metaClicks = day?.shopify?.adsMetrics?.metaClicks || day?.metaClicks || 0;
+        const googleClicks = day?.shopify?.adsMetrics?.googleClicks || day?.googleClicks || 0;
+        const metaRev = day?.shopify?.adsMetrics?.metaPurchaseValue || 0;
+        return {
+          meta: acc.meta + meta,
+          google: acc.google + google,
+          metaClicks: acc.metaClicks + metaClicks,
+          googleClicks: acc.googleClicks + googleClicks,
+          metaRev: acc.metaRev + metaRev,
+        };
+      }, { meta: 0, google: 0, metaClicks: 0, googleClicks: 0, metaRev: 0 });
+
+      const totalSpend = weekAgg.meta + weekAgg.google;
+      const totalClicks = weekAgg.metaClicks + weekAgg.googleClicks;
+      const avgCpc = totalClicks > 0 ? totalSpend / totalClicks : 0;
+      const metaRoas = weekAgg.meta > 0 && weekAgg.metaRev > 0 ? weekAgg.metaRev / weekAgg.meta : 0;
+
+      data.push({
+        label: new Date(weekDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        meta: Math.round(weekAgg.meta),
+        google: Math.round(weekAgg.google),
+        total: Math.round(totalSpend),
+        avgCpc: Math.round(avgCpc * 100) / 100,
+        metaRoas: Math.round(metaRoas * 100) / 100,
+      });
+    }
+  }
+
+  if (data.length < 3) return null;
+
+  const avgMeta = data.reduce((s, w) => s + w.meta, 0) / data.length;
+  const avgGoogle = data.reduce((s, w) => s + w.google, 0) / data.length;
+  const cpcs = data.map(w => w.avgCpc).filter(v => v > 0);
+  const avgCpc = cpcs.length ? (cpcs.reduce((s, v) => s + v, 0) / cpcs.length) : 0;
+
+  // Spend trend (split into halves)
+  const split = Math.max(1, Math.floor(data.length / 2));
+  const firstHalf = data.slice(0, split);
+  const secondHalf = data.slice(split);
+  const firstAvgSpend = firstHalf.reduce((s, w) => s + w.total, 0) / firstHalf.length;
+  const secondAvgSpend = secondHalf.reduce((s, w) => s + w.total, 0) / secondHalf.length;
+  const spendTrend = firstAvgSpend > 0 ? ((secondAvgSpend - firstAvgSpend) / firstAvgSpend * 100) : 0;
+
+  const lastN = isDaily ? 14 : 8;
+  const displayData = data.slice(-lastN);
+  const maxSpend = Math.max(...displayData.map(x => x.total), 1);
+
+  return (
+    <div className="bg-slate-800/50 rounded-xl border border-violet-500/30 p-5 mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+          <TrendingUp className="w-5 h-5 text-violet-400" />Shopify Ads: Meta & Google Trend
+        </h3>
+        <span className="text-slate-400 text-sm">{startDate} - {endDate}</span>
+      </div>
+
+      {/* Bar chart */}
+      <div className="space-y-3 mb-4">
+        {displayData.map((w, i) => {
+          const metaWidth = maxSpend > 0 ? (w.meta / maxSpend) * 100 : 0;
+          const googleWidth = maxSpend > 0 ? (w.google / maxSpend) * 100 : 0;
+          return (
+            <div key={i} className="flex items-center gap-3">
+              <span className="text-slate-400 text-xs w-16">{w.label}</span>
+              <div className="flex-1 flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <div className="h-2.5 bg-blue-500/80 rounded" style={{ width: `${metaWidth}%`, minWidth: w.meta > 0 ? '4px' : '0' }} />
+                  <span className="text-blue-400 text-xs">{formatCurrency(w.meta)}</span>
                 </div>
-              );
-            })()}
+                <div className="flex items-center gap-2">
+                  <div className="h-2.5 bg-red-500/80 rounded" style={{ width: `${googleWidth}%`, minWidth: w.google > 0 ? '4px' : '0' }} />
+                  <span className="text-red-400 text-xs">{formatCurrency(w.google)}</span>
+                </div>
+              </div>
+              <span className="text-white text-xs font-medium w-16 text-right">{formatCurrency(w.total)}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Legend */}
+      <div className="flex items-center gap-6 text-xs border-t border-slate-700 pt-3">
+        <div className="flex items-center gap-2"><div className="w-3 h-3 bg-blue-500 rounded" /><span className="text-slate-400">Meta</span></div>
+        <div className="flex items-center gap-2"><div className="w-3 h-3 bg-red-500 rounded" /><span className="text-slate-400">Google</span></div>
+        <div className="flex items-center gap-2"><span className="text-slate-400">Total</span></div>
+      </div>
+
+      {/* Summary Stats */}
+      <div className="grid grid-cols-4 gap-4 mt-4 pt-4 border-t border-slate-700">
+        <div className="text-center">
+          <p className="text-slate-400 text-xs">{isDaily ? 'Avg Meta/day' : 'Avg Meta/wk'}</p>
+          <p className="text-blue-400 font-bold">{formatCurrency(avgMeta)}</p>
+        </div>
+        <div className="text-center">
+          <p className="text-slate-400 text-xs">{isDaily ? 'Avg Google/day' : 'Avg Google/wk'}</p>
+          <p className="text-red-400 font-bold">{formatCurrency(avgGoogle)}</p>
+        </div>
+        <div className="text-center">
+          <p className="text-slate-400 text-xs">Avg CPC</p>
+          <p className={`font-bold ${avgCpc <= 1.00 ? 'text-emerald-400' : avgCpc <= 2.00 ? 'text-amber-400' : 'text-rose-400'}`}>{avgCpc > 0 ? formatCurrency(avgCpc) : '—'}</p>
+        </div>
+        <div className="text-center">
+          <p className="text-slate-400 text-xs">Spend Trend</p>
+          <p className={`font-bold flex items-center justify-center gap-1 ${spendTrend > 10 ? 'text-amber-400' : spendTrend < -10 ? 'text-emerald-400' : 'text-slate-400'}`}>
+            {spendTrend > 5 ? <ArrowUpRight className="w-4 h-4" /> : spendTrend < -5 ? <ArrowDownRight className="w-4 h-4" /> : null}
+            {Math.abs(spendTrend).toFixed(0)}%
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+})()}
             </>
           ) : (
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -32284,125 +32346,146 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             </div>
           )}
           
-          {/* Amazon Spend vs Revenue Trend Chart */}
-          {(() => {
-            const daysWithAmazonAdsMetrics = sortedDays.filter(d => allDaysData[d]?.amazonAdsMetrics?.totalRevenue > 0);
-            if (daysWithAmazonAdsMetrics.length < 7) return null;
-            
-            // Show all historical data (up to last 90 days)
-            const chartDays = daysWithAmazonAdsMetrics.slice(-90);
-            if (chartDays.length < 7) return null;
-            
-            // Get date range for display
-            const startDate = new Date(chartDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-            const endDate = new Date(chartDays[chartDays.length - 1] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-            
-            // Aggregate to weekly for cleaner visualization
-            const weeklyChartData = [];
-            for (let i = 0; i < chartDays.length; i += 7) {
-              const weekDays = chartDays.slice(i, Math.min(i + 7, chartDays.length));
-              const weekData = weekDays.reduce((acc, d) => {
-                const amzMetrics = allDaysData[d]?.amazonAdsMetrics || {};
-                return {
-                  spend: acc.spend + (amzMetrics.spend || 0),
-                  revenue: acc.revenue + (amzMetrics.totalRevenue || 0),
-                  impressions: acc.impressions + (amzMetrics.impressions || 0),
-                  clicks: acc.clicks + (amzMetrics.clicks || 0),
-                };
-              }, { spend: 0, revenue: 0, impressions: 0, clicks: 0 });
-              
-              const tacos = weekData.revenue > 0 ? (weekData.spend / weekData.revenue) * 100 : 0;
-              weeklyChartData.push({
-                week: new Date(weekDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-                spend: Math.round(weekData.spend),
-                revenue: Math.round(weekData.revenue),
-                tacos: Math.round(tacos * 10) / 10,
-              });
-            }
-            
-            if (weeklyChartData.length < 3) return null;
-            
-            const avgSpend = weeklyChartData.reduce((s, w) => s + w.spend, 0) / weeklyChartData.length;
-            const avgRev = weeklyChartData.reduce((s, w) => s + w.revenue, 0) / weeklyChartData.length;
-            const avgTacos = weeklyChartData.reduce((s, w) => s + w.tacos, 0) / weeklyChartData.length;
-            
-            return (
-              <div className="bg-slate-800/50 rounded-xl border border-orange-500/30 p-5 mb-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-orange-400" />Amazon Ads: Spend vs Revenue Trend
-                  </h3>
-                  <span className="text-slate-400 text-sm">{startDate} - {endDate}</span>
+{/* Amazon Spend vs Revenue Trend Chart */}
+{(() => {
+  const daysWithAmazonAdsMetrics = sortedDays.filter(d => (allDaysData[d]?.amazonAdsMetrics?.totalRevenue || 0) > 0 || (allDaysData[d]?.amazonAdsMetrics?.spend || 0) > 0);
+  // For daily view, allow fewer data points; for weekly view keep higher threshold
+  const minPoints = adsTimeTab === 'daily' ? 3 : 7;
+  if (daysWithAmazonAdsMetrics.length < minPoints) return null;
+
+  // Show all historical data (up to last 90 days)
+  const chartDays = daysWithAmazonAdsMetrics.slice(-90);
+  if (chartDays.length < minPoints) return null;
+
+  const isDaily = adsTimeTab === 'daily';
+  const viewDays = isDaily ? chartDays.slice(-30) : chartDays; // daily charts show last 30 days, weekly charts use last 90 days
+
+  const startDate = new Date(viewDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const endDate = new Date(viewDays[viewDays.length - 1] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+  // Build chart data
+  const chartData = [];
+  if (isDaily) {
+    for (const d of viewDays) {
+      const amzMetrics = allDaysData[d]?.amazonAdsMetrics || {};
+      const spend = amzMetrics.spend || 0;
+      const revenue = amzMetrics.totalRevenue || 0;
+      const tacos = revenue > 0 ? (spend / revenue) * 100 : 0;
+      chartData.push({
+        label: new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        spend: Math.round(spend),
+        revenue: Math.round(revenue),
+        tacos: Math.round(tacos * 10) / 10,
+      });
+    }
+  } else {
+    // Aggregate to weekly for cleaner visualization
+    for (let i = 0; i < viewDays.length; i += 7) {
+      const weekDays = viewDays.slice(i, Math.min(i + 7, viewDays.length));
+      const weekData = weekDays.reduce((acc, d) => {
+        const amzMetrics = allDaysData[d]?.amazonAdsMetrics || {};
+        return {
+          spend: acc.spend + (amzMetrics.spend || 0),
+          revenue: acc.revenue + (amzMetrics.totalRevenue || 0),
+        };
+      }, { spend: 0, revenue: 0 });
+
+      const tacos = weekData.revenue > 0 ? (weekData.spend / weekData.revenue) * 100 : 0;
+      chartData.push({
+        label: new Date(weekDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        spend: Math.round(weekData.spend),
+        revenue: Math.round(weekData.revenue),
+        tacos: Math.round(tacos * 10) / 10,
+      });
+    }
+  }
+
+  if (chartData.length < (isDaily ? 3 : 3)) return null;
+
+  const avgSpend = chartData.reduce((s, w) => s + w.spend, 0) / chartData.length;
+  const avgRev = chartData.reduce((s, w) => s + w.revenue, 0) / chartData.length;
+  const tacosVals = chartData.filter(x => x.revenue > 0).map(x => x.tacos);
+  const avgTacos = tacosVals.length ? (tacosVals.reduce((s, v) => s + v, 0) / tacosVals.length) : 0;
+
+  const lastN = isDaily ? 14 : 8;
+  const displayData = chartData.slice(-lastN);
+  const maxValue = Math.max(...displayData.map(x => x.revenue), 1);
+
+  return (
+    <div className="bg-slate-800/50 rounded-xl border border-orange-500/30 p-5 mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+          <TrendingUp className="w-5 h-5 text-orange-400" />Amazon Ads: Spend vs Revenue Trend
+        </h3>
+        <span className="text-slate-400 text-sm">{startDate} - {endDate}</span>
+      </div>
+
+      {/* Simple bar chart visualization - USING SAME SCALE FOR BOTH */}
+      <div className="space-y-3 mb-4">
+        {displayData.map((w, i) => {
+          const revWidth = maxValue > 0 ? (w.revenue / maxValue) * 100 : 0;
+          const spendWidth = maxValue > 0 ? (w.spend / maxValue) * 100 : 0;
+          return (
+            <div key={i} className="flex items-center gap-3">
+              <span className="text-slate-400 text-xs w-16">{w.label}</span>
+              <div className="flex-1 flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <div className="h-3 bg-emerald-500/80 rounded" style={{ width: `${revWidth}%`, minWidth: w.revenue > 0 ? '4px' : '0' }} />
+                  <span className="text-emerald-400 text-xs">{formatCurrency(w.revenue)}</span>
                 </div>
-                
-                {/* Simple bar chart visualization - USING SAME SCALE FOR BOTH */}
-                <div className="space-y-3 mb-4">
-                  {weeklyChartData.slice(-8).map((w, i) => {
-                    // Use revenue as the max scale for BOTH bars so they're comparable
-                    const maxValue = Math.max(...weeklyChartData.slice(-8).map(x => x.revenue));
-                    const revWidth = maxValue > 0 ? (w.revenue / maxValue) * 100 : 0;
-                    const spendWidth = maxValue > 0 ? (w.spend / maxValue) * 100 : 0;
-                    return (
-                      <div key={i} className="flex items-center gap-3">
-                        <span className="text-slate-400 text-xs w-16">{w.week}</span>
-                        <div className="flex-1 flex flex-col gap-1">
-                          <div className="flex items-center gap-2">
-                            <div className="h-3 bg-emerald-500/80 rounded" style={{ width: `${revWidth}%`, minWidth: '4px' }} />
-                            <span className="text-emerald-400 text-xs">{formatCurrency(w.revenue)}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <div className="h-3 bg-orange-500/80 rounded" style={{ width: `${spendWidth}%`, minWidth: '4px' }} />
-                            <span className="text-orange-400 text-xs">{formatCurrency(w.spend)}</span>
-                          </div>
-                        </div>
-                        <span className={`text-xs font-medium w-12 text-right ${w.tacos <= 12 ? 'text-emerald-400' : w.tacos <= 18 ? 'text-amber-400' : 'text-rose-400'}`}>{w.tacos.toFixed(1)}%</span>
-                      </div>
-                    );
-                  })}
-                </div>
-                
-                {/* Legend */}
-                <div className="flex items-center gap-6 text-xs border-t border-slate-700 pt-3">
-                  <div className="flex items-center gap-2"><div className="w-3 h-3 bg-emerald-500 rounded" /><span className="text-slate-400">Revenue</span></div>
-                  <div className="flex items-center gap-2"><div className="w-3 h-3 bg-orange-500 rounded" /><span className="text-slate-400">Ad Spend</span></div>
-                  <div className="flex items-center gap-2"><span className="text-slate-400">TACOS %</span></div>
-                </div>
-                
-                {/* Summary Stats */}
-                <div className="grid grid-cols-4 gap-4 mt-4 pt-4 border-t border-slate-700">
-                  <div className="text-center">
-                    <p className="text-slate-400 text-xs">Avg Weekly Spend</p>
-                    <p className="text-orange-400 font-bold">{formatCurrency(avgSpend)}</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-slate-400 text-xs">Avg Weekly Revenue</p>
-                    <p className="text-emerald-400 font-bold">{formatCurrency(avgRev)}</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-slate-400 text-xs">Avg TACOS</p>
-                    <p className="text-purple-400 font-bold">{avgTacos.toFixed(1)}%</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-slate-400 text-xs">Trend</p>
-                    {(() => {
-                      const firstHalf = weeklyChartData.slice(0, Math.floor(weeklyChartData.length / 2));
-                      const secondHalf = weeklyChartData.slice(Math.floor(weeklyChartData.length / 2));
-                      const firstAvg = firstHalf.reduce((s, w) => s + w.tacos, 0) / firstHalf.length;
-                      const secondAvg = secondHalf.reduce((s, w) => s + w.tacos, 0) / secondHalf.length;
-                      const diff = secondAvg - firstAvg;
-                      // Lower TACOS is better, so negative diff = improving
-                      return diff < -1 
-                        ? <p className="text-emerald-400 font-bold flex items-center justify-center gap-1"><CheckCircle className="w-4 h-4" />Improving</p>
-                        : diff > 1 
-                          ? <p className="text-rose-400 font-bold flex items-center justify-center gap-1"><AlertTriangle className="w-4 h-4" />Rising</p>
-                          : <p className="text-slate-400 font-bold">Stable</p>;
-                    })()}
-                  </div>
+                <div className="flex items-center gap-2">
+                  <div className="h-3 bg-orange-500/80 rounded" style={{ width: `${spendWidth}%`, minWidth: w.spend > 0 ? '4px' : '0' }} />
+                  <span className="text-orange-400 text-xs">{formatCurrency(w.spend)}</span>
                 </div>
               </div>
-            );
+              <span className={`text-xs font-medium w-12 text-right ${w.tacos <= 12 ? 'text-emerald-400' : w.tacos <= 18 ? 'text-amber-400' : 'text-rose-400'}`}>{w.tacos > 0 ? w.tacos.toFixed(1) + '%' : '—'}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Legend */}
+      <div className="flex items-center gap-6 text-xs border-t border-slate-700 pt-3">
+        <div className="flex items-center gap-2"><div className="w-3 h-3 bg-emerald-500 rounded" /><span className="text-slate-400">Revenue</span></div>
+        <div className="flex items-center gap-2"><div className="w-3 h-3 bg-orange-500 rounded" /><span className="text-slate-400">Ad Spend</span></div>
+        <div className="flex items-center gap-2"><span className="text-slate-400">TACOS %</span></div>
+      </div>
+
+      {/* Summary Stats */}
+      <div className="grid grid-cols-4 gap-4 mt-4 pt-4 border-t border-slate-700">
+        <div className="text-center">
+          <p className="text-slate-400 text-xs">{isDaily ? 'Avg Daily Spend' : 'Avg Weekly Spend'}</p>
+          <p className="text-orange-400 font-bold">{formatCurrency(avgSpend)}</p>
+        </div>
+        <div className="text-center">
+          <p className="text-slate-400 text-xs">{isDaily ? 'Avg Daily Revenue' : 'Avg Weekly Revenue'}</p>
+          <p className="text-emerald-400 font-bold">{formatCurrency(avgRev)}</p>
+        </div>
+        <div className="text-center">
+          <p className="text-slate-400 text-xs">Avg TACOS</p>
+          <p className="text-purple-400 font-bold">{avgTacos > 0 ? avgTacos.toFixed(1) + '%' : '—'}</p>
+        </div>
+        <div className="text-center">
+          <p className="text-slate-400 text-xs">Trend</p>
+          {(() => {
+            const split = Math.max(1, Math.floor(chartData.length / 2));
+            const firstHalf = chartData.slice(0, split).filter(x => x.revenue > 0);
+            const secondHalf = chartData.slice(split).filter(x => x.revenue > 0);
+            const firstAvg = firstHalf.length ? firstHalf.reduce((s, w) => s + w.tacos, 0) / firstHalf.length : 0;
+            const secondAvg = secondHalf.length ? secondHalf.reduce((s, w) => s + w.tacos, 0) / secondHalf.length : 0;
+            const diff = secondAvg - firstAvg;
+            return diff < -1 
+              ? <p className="text-emerald-400 font-bold flex items-center justify-center gap-1"><CheckCircle className="w-4 h-4" />Improving</p>
+              : diff > 1 
+                ? <p className="text-rose-400 font-bold flex items-center justify-center gap-1"><AlertTriangle className="w-4 h-4" />Rising</p>
+                : <p className="text-slate-400 font-bold">Stable</p>;
           })()}
-          
+        </div>
+      </div>
+    </div>
+  );
+})()}
+
           {/* Daily Table */}
           {useDailyData && dailyTableData.length > 0 && (
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
