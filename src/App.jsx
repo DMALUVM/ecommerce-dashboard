@@ -20155,32 +20155,62 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   {/* Sync Controls */}
                   <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
                     <h3 className="text-white font-medium mb-4">Select Date Range to Sync</h3>
+                    
+                    {/* Quick Select Buttons - Moved to top for easier access */}
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {[
+                        { label: 'Last 7 Days', days: 7 },
+                        { label: 'Last 14 Days', days: 14 },
+                        { label: 'Last 30 Days', days: 30 },
+                        { label: 'This Month', days: 'month' },
+                        { label: 'Last Month', days: 'lastMonth' },
+                      ].map(({ label, days }) => {
+                        // Calculate what dates this button would set
+                        let start = new Date();
+                        let end = new Date();
+                        if (days === 'month') {
+                          start = new Date(end.getFullYear(), end.getMonth(), 1);
+                        } else if (days === 'lastMonth') {
+                          start = new Date(end.getFullYear(), end.getMonth() - 1, 1);
+                          end = new Date(end.getFullYear(), end.getMonth(), 0);
+                        } else {
+                          start.setDate(end.getDate() - days + 1);
+                        }
+                        const startStr = start.toISOString().split('T')[0];
+                        const endStr = end.toISOString().split('T')[0];
+                        const isSelected = shopifySyncRange.start === startStr && shopifySyncRange.end === endStr;
+                        
+                        return (
+                          <button
+                            key={label}
+                            onClick={() => {
+                              setShopifySyncRange({ start: startStr, end: endStr });
+                              // Clear smart sync - user needs to click Find Missing
+                              setShopifySmartSync({ enabled: true, missingDays: [], existingDays: [] });
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-sm transition-all ${
+                              isSelected 
+                                ? 'bg-green-600 text-white' 
+                                : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                       <div>
                         <label className="block text-slate-400 text-sm mb-2">Start Date</label>
                         <input
                           type="date"
                           value={shopifySyncRange.start}
+                          max={shopifySyncRange.end || new Date().toISOString().split('T')[0]}
                           onChange={(e) => {
-                            const newStart = e.target.value;
-                            setShopifySyncRange(p => ({ ...p, start: newStart }));
-                            // Calculate missing days
-                            if (newStart && shopifySyncRange.end) {
-                              const start = new Date(newStart);
-                              const end = new Date(shopifySyncRange.end);
-                              const missing = [];
-                              const existing = [];
-                              for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-                                const dateStr = d.toISOString().split('T')[0];
-                                const hasShopifyData = allDaysData[dateStr]?.shopify?.revenue > 0;
-                                if (hasShopifyData) {
-                                  existing.push(dateStr);
-                                } else {
-                                  missing.push(dateStr);
-                                }
-                              }
-                              setShopifySmartSync(p => ({ ...p, missingDays: missing, existingDays: existing }));
-                            }
+                            setShopifySyncRange(p => ({ ...p, start: e.target.value }));
+                            // Clear smart sync when dates change - user needs to recalculate
+                            setShopifySmartSync({ enabled: true, missingDays: [], existingDays: [] });
                           }}
                           className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white"
                         />
@@ -20190,100 +20220,112 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                         <input
                           type="date"
                           value={shopifySyncRange.end}
+                          min={shopifySyncRange.start}
+                          max={new Date().toISOString().split('T')[0]}
                           onChange={(e) => {
-                            const newEnd = e.target.value;
-                            setShopifySyncRange(p => ({ ...p, end: newEnd }));
-                            // Calculate missing days
-                            if (shopifySyncRange.start && newEnd) {
-                              const start = new Date(shopifySyncRange.start);
-                              const end = new Date(newEnd);
-                              const missing = [];
-                              const existing = [];
-                              for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-                                const dateStr = d.toISOString().split('T')[0];
-                                const hasShopifyData = allDaysData[dateStr]?.shopify?.revenue > 0;
-                                if (hasShopifyData) {
-                                  existing.push(dateStr);
-                                } else {
-                                  missing.push(dateStr);
-                                }
-                              }
-                              setShopifySmartSync(p => ({ ...p, missingDays: missing, existingDays: existing }));
-                            }
+                            setShopifySyncRange(p => ({ ...p, end: e.target.value }));
+                            // Clear smart sync when dates change
+                            setShopifySmartSync({ enabled: true, missingDays: [], existingDays: [] });
                           }}
                           className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white"
                         />
                       </div>
                     </div>
                     
-                    {/* Quick Select Buttons */}
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      {[
-                        { label: 'Last 7 Days', days: 7 },
-                        { label: 'Last 14 Days', days: 14 },
-                        { label: 'Last 30 Days', days: 30 },
-                        { label: 'This Month', days: 'month' },
-                        { label: 'Last Month', days: 'lastMonth' },
-                      ].map(({ label, days }) => (
-                        <button
-                          key={label}
-                          onClick={() => {
-                            const end = new Date();
-                            let start = new Date();
-                            if (days === 'month') {
-                              start = new Date(end.getFullYear(), end.getMonth(), 1);
-                            } else if (days === 'lastMonth') {
-                              start = new Date(end.getFullYear(), end.getMonth() - 1, 1);
-                              end.setDate(0);
+                    {/* Date range validation warning */}
+                    {shopifySyncRange.start && shopifySyncRange.end && new Date(shopifySyncRange.start) > new Date(shopifySyncRange.end) && (
+                      <div className="bg-rose-900/30 border border-rose-500/50 rounded-lg p-3 mb-4 flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                        <span className="text-rose-300 text-sm">Start date must be before end date</span>
+                      </div>
+                    )}
+                    
+                    {/* Range info */}
+                    {shopifySyncRange.start && shopifySyncRange.end && new Date(shopifySyncRange.start) <= new Date(shopifySyncRange.end) && (
+                      <div className="text-slate-400 text-sm mb-4">
+                        {(() => {
+                          const days = Math.ceil((new Date(shopifySyncRange.end) - new Date(shopifySyncRange.start)) / (1000 * 60 * 60 * 24)) + 1;
+                          return (
+                            <span>
+                              Selected range: <span className="text-white font-medium">{days} days</span>
+                              {days > 90 && <span className="text-amber-400 ml-2">(large range may take longer to sync)</span>}
+                            </span>
+                          );
+                        })()}
+                      </div>
+                    )}
+                    
+                    {/* Find Missing Button - Now a prominent action */}
+                    <div className="flex flex-wrap gap-3 mb-4">
+                      <button
+                        onClick={() => {
+                          if (!shopifySyncRange.start || !shopifySyncRange.end) {
+                            setToast({ message: 'Please select a date range first', type: 'error' });
+                            return;
+                          }
+                          
+                          const start = new Date(shopifySyncRange.start);
+                          const end = new Date(shopifySyncRange.end);
+                          
+                          if (start > end) {
+                            setToast({ message: 'Start date must be before end date', type: 'error' });
+                            return;
+                          }
+                          
+                          const dayCount = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+                          if (dayCount > 730) {
+                            setToast({ message: 'Range too large. Max 2 years (730 days).', type: 'error' });
+                            return;
+                          }
+                          
+                          // Calculate missing days
+                          const missing = [];
+                          const existing = [];
+                          for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+                            const dateStr = d.toISOString().split('T')[0];
+                            const hasShopifyData = allDaysData[dateStr]?.shopify?.revenue > 0;
+                            if (hasShopifyData) {
+                              existing.push(dateStr);
                             } else {
-                              start.setDate(end.getDate() - days);
+                              missing.push(dateStr);
                             }
-                            const startStr = start.toISOString().split('T')[0];
-                            const endStr = end.toISOString().split('T')[0];
-                            setShopifySyncRange({ start: startStr, end: endStr });
-                            
-                            // Calculate missing days
-                            const missing = [];
-                            const existing = [];
-                            for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-                              const dateStr = d.toISOString().split('T')[0];
-                              const hasShopifyData = allDaysData[dateStr]?.shopify?.revenue > 0;
-                              if (hasShopifyData) {
-                                existing.push(dateStr);
-                              } else {
-                                missing.push(dateStr);
-                              }
-                            }
-                            setShopifySmartSync(p => ({ ...p, missingDays: missing, existingDays: existing }));
-                          }}
-                          className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300"
-                        >
-                          {label}
-                        </button>
-                      ))}
+                          }
+                          setShopifySmartSync({ enabled: true, missingDays: missing, existingDays: existing });
+                          
+                          if (missing.length === 0) {
+                            setToast({ message: 'All days in range already have Shopify data!', type: 'success' });
+                          }
+                        }}
+                        disabled={!shopifySyncRange.start || !shopifySyncRange.end}
+                        className="px-4 py-2 bg-amber-600/30 hover:bg-amber-600/50 disabled:opacity-50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-2"
+                      >
+                        <Zap className="w-4 h-4" />
+                        Find Missing Days
+                      </button>
+                      
                       <button
                         onClick={() => {
                           // Find the full range of data (earliest to today)
                           const allDates = Object.keys(allDaysData).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+                          const end = new Date();
+                          let start;
+                          
                           if (allDates.length === 0) {
                             // No data yet - default to last 30 days
-                            const end = new Date();
-                            const start = new Date();
+                            start = new Date();
                             start.setDate(end.getDate() - 30);
-                            setShopifySyncRange({ start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] });
-                            
-                            const missing = [];
-                            for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-                              missing.push(d.toISOString().split('T')[0]);
-                            }
-                            setShopifySmartSync(p => ({ ...p, missingDays: missing, existingDays: [] }));
-                            return;
+                          } else {
+                            start = new Date(allDates[0]);
                           }
                           
-                          const start = new Date(allDates[0]);
-                          const end = new Date();
+                          // Limit to 2 years max
+                          const twoYearsAgo = new Date();
+                          twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+                          if (start < twoYearsAgo) {
+                            start = twoYearsAgo;
+                          }
                           
-                          // Calculate all missing days in the full range
+                          // Calculate missing days
                           const missing = [];
                           const existing = [];
                           for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
@@ -20297,7 +20339,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           }
                           
                           setShopifySyncRange({ start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] });
-                          setShopifySmartSync(p => ({ ...p, missingDays: missing, existingDays: existing }));
+                          setShopifySmartSync({ enabled: true, missingDays: missing, existingDays: existing });
                           
                           if (missing.length === 0) {
                             setToast({ message: 'All days already have Shopify data!', type: 'success' });
@@ -20305,10 +20347,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             setToast({ message: `Found ${missing.length} days missing Shopify data`, type: 'info' });
                           }
                         }}
-                        className="px-3 py-1.5 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-1"
+                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300 flex items-center gap-2"
                       >
-                        <Zap className="w-3 h-3" />
-                        Find Missing
+                        <RefreshCw className="w-4 h-4" />
+                        Scan Full History
                       </button>
                     </div>
                     
