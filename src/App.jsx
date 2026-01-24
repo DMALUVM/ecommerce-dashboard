@@ -1885,6 +1885,7 @@ const handleLogout = async () => {
   const [adsMonth, setAdsMonth] = useState(new Date().getMonth()); // Selected month (0-11)
   const [adsQuarter, setAdsQuarter] = useState(Math.floor(new Date().getMonth() / 3) + 1); // 1-4
   const [adsSelectedWeek, setAdsSelectedWeek] = useState(null); // Selected week ending date for weekly comparison
+  const [adsSelectedDay, setAdsSelectedDay] = useState(null); // Selected day (YYYY-MM-DD) for daily ads view
   const [adsViewMode, setAdsViewMode] = useState('performance'); // 'performance' | 'campaigns' for ads tab
   
   // Forecast view state
@@ -5222,6 +5223,146 @@ const savePeriods = async (d) => {
     }
     setToast({ message, type: 'success' });
   }, [allDaysData, allWeeksData, save]);
+
+
+  // Build a provisional weekly summary from daily data (useful for the current, incomplete week)
+  const buildWeekFromDaily = useCallback((weekEndingKey) => {
+    if (!weekEndingKey) return null;
+
+    const normalizeSkuArray = (skuData) => {
+      if (Array.isArray(skuData)) return skuData;
+      if (skuData && typeof skuData === 'object') return Object.values(skuData);
+      return [];
+    };
+
+    const weekEndDate = new Date(weekEndingKey + 'T12:00:00');
+    if (isNaN(weekEndDate.getTime())) return null;
+
+    // Mon-Sun week ending on weekEndingKey (Sunday)
+    const dayKeys = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(weekEndDate);
+      d.setDate(weekEndDate.getDate() - i);
+      dayKeys.push(formatDateKey(d));
+    }
+
+    const agg = {
+      daysPresent: 0,
+      amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, skuData: {} },
+      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, skuData: {} },
+    };
+
+    dayKeys.forEach(dayKey => {
+      const dayData = allDaysData[dayKey];
+      if (!dayData) return;
+      if (!hasDailySalesData(dayData)) return;
+
+      agg.daysPresent += 1;
+
+      if (dayData.amazon) {
+        agg.amazon.revenue += dayData.amazon.revenue || 0;
+        agg.amazon.units += dayData.amazon.units || 0;
+        agg.amazon.returns += dayData.amazon.returns || 0;
+        agg.amazon.cogs += dayData.amazon.cogs || 0;
+        agg.amazon.fees += dayData.amazon.fees || 0;
+        agg.amazon.adSpend += dayData.amazon.adSpend || 0;
+        agg.amazon.netProfit += dayData.amazon.netProfit || 0;
+
+        normalizeSkuArray(dayData.amazon.skuData).forEach(sku => {
+          if (!sku || !sku.sku) return;
+          if (!agg.amazon.skuData[sku.sku]) {
+            agg.amazon.skuData[sku.sku] = { sku: sku.sku, name: sku.name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+          }
+          agg.amazon.skuData[sku.sku].unitsSold += sku.unitsSold || 0;
+          agg.amazon.skuData[sku.sku].returns += sku.returns || 0;
+          agg.amazon.skuData[sku.sku].netSales += sku.netSales || 0;
+          agg.amazon.skuData[sku.sku].netProceeds += sku.netProceeds || 0;
+          agg.amazon.skuData[sku.sku].adSpend += sku.adSpend || 0;
+          agg.amazon.skuData[sku.sku].cogs += sku.cogs || 0;
+        });
+      }
+
+      if (dayData.shopify) {
+        agg.shopify.revenue += dayData.shopify.revenue || 0;
+        agg.shopify.units += dayData.shopify.units || 0;
+        agg.shopify.cogs += dayData.shopify.cogs || 0;
+        agg.shopify.threeplCosts += dayData.shopify.threeplCosts || 0;
+        agg.shopify.adSpend += dayData.shopify.adSpend || 0;
+        agg.shopify.metaSpend += dayData.shopify.metaSpend || 0;
+        agg.shopify.googleSpend += dayData.shopify.googleSpend || 0;
+        agg.shopify.discounts += dayData.shopify.discounts || 0;
+        agg.shopify.netProfit += dayData.shopify.netProfit || 0;
+
+        normalizeSkuArray(dayData.shopify.skuData).forEach(sku => {
+          if (!sku || !sku.sku) return;
+          if (!agg.shopify.skuData[sku.sku]) {
+            agg.shopify.skuData[sku.sku] = { sku: sku.sku, name: sku.name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+          }
+          agg.shopify.skuData[sku.sku].unitsSold += sku.unitsSold || 0;
+          agg.shopify.skuData[sku.sku].netSales += sku.netSales || 0;
+          agg.shopify.skuData[sku.sku].discounts += sku.discounts || 0;
+          agg.shopify.skuData[sku.sku].cogs += sku.cogs || 0;
+        });
+      }
+    });
+
+    if (agg.daysPresent === 0) return null;
+
+    const amz = agg.amazon;
+    const shop = agg.shopify;
+    const totalRev = amz.revenue + shop.revenue;
+    const totalProfit = amz.netProfit + shop.netProfit;
+    const totalCogs = amz.cogs + shop.cogs;
+    const totalAds = amz.adSpend + shop.adSpend;
+
+    return {
+      provisional: true,
+      daysPresent: agg.daysPresent,
+      weekEnding: weekEndingKey,
+      createdAt: new Date().toISOString(),
+      amazon: {
+        revenue: amz.revenue,
+        units: amz.units,
+        returns: amz.returns,
+        cogs: amz.cogs,
+        fees: amz.fees,
+        adSpend: amz.adSpend,
+        netProfit: amz.netProfit,
+        margin: amz.revenue > 0 ? (amz.netProfit / amz.revenue) * 100 : 0,
+        aov: amz.units > 0 ? amz.revenue / amz.units : 0,
+        roas: amz.adSpend > 0 ? amz.revenue / amz.adSpend : 0,
+        returnRate: amz.units > 0 ? (amz.returns / amz.units) * 100 : 0,
+        skuData: Object.values(amz.skuData).sort((a, b) => (b.netSales || 0) - (a.netSales || 0)),
+      },
+      shopify: {
+        revenue: shop.revenue,
+        units: shop.units,
+        cogs: shop.cogs,
+        threeplCosts: shop.threeplCosts,
+        adSpend: shop.adSpend,
+        metaSpend: shop.metaSpend,
+        googleSpend: shop.googleSpend,
+        discounts: shop.discounts,
+        netProfit: shop.netProfit,
+        netMargin: shop.revenue > 0 ? (shop.netProfit / shop.revenue) * 100 : 0,
+        aov: shop.units > 0 ? shop.revenue / shop.units : 0,
+        roas: shop.adSpend > 0 ? shop.revenue / shop.adSpend : 0,
+        skuData: Object.values(shop.skuData).sort((a, b) => (b.netSales || 0) - (a.netSales || 0)),
+      },
+      total: {
+        revenue: totalRev,
+        units: amz.units + shop.units,
+        cogs: totalCogs,
+        adSpend: totalAds,
+        netProfit: totalProfit,
+        netMargin: totalRev > 0 ? (totalProfit / totalRev) * 100 : 0,
+        roas: totalAds > 0 ? totalRev / totalAds : 0,
+        amazonShare: totalRev > 0 ? (amz.revenue / totalRev) * 100 : 0,
+        shopifyShare: totalRev > 0 ? (shop.revenue / totalRev) * 100 : 0,
+      },
+    };
+  }, [allDaysData]);
+
 
   const processBulkImport = useCallback(() => {
     const cogsLookup = getCogsLookup();
@@ -10257,7 +10398,7 @@ Analyze the data and respond with ONLY this JSON:
     const [expanded, setExpanded] = useState(false);
     const [show3plBreakdown, setShow3plBreakdown] = useState(false);
     const [skuSort, setSkuSort] = useState({ field: 'netSales', dir: 'desc' });
-    const skuDataRaw = data.skuData || [];
+    const skuDataRaw = Array.isArray(data.skuData) ? data.skuData : (data.skuData && typeof data.skuData === 'object' ? Object.values(data.skuData) : []);
     const threeplBreakdown = data.threeplBreakdown || {};
     const has3plData = !isAmz && (data.threeplCosts > 0);
     const has3plBreakdown = has3plData && Object.values(threeplBreakdown).some(v => v > 0);
@@ -21646,8 +21787,30 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     );
   }
 
-  if (view === 'weekly' && selectedWeek && allWeeksData[selectedWeek]) {
-    const rawData = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
+  if (view === 'weekly' && selectedWeek) {
+    const rawData = allWeeksData[selectedWeek] || buildWeekFromDaily(selectedWeek);
+
+    // If we don't have a saved weekly summary yet (common for the current week), fall back to daily-derived week data.
+    if (!rawData) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-white p-6">
+          <div className="max-w-4xl mx-auto">
+            <button
+              onClick={() => setView('dashboard')}
+              className="mb-6 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm"
+            >
+              Back
+            </button>
+            <div className="bg-slate-900/60 border border-slate-700 rounded-xl p-6">
+              <h2 className="text-xl font-semibold mb-2">No data for this week</h2>
+              <p className="text-slate-400 text-sm">Select another week, or add daily sales data for this period.</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
     
     // Enhance Shopify data with 3PL from ledger if available
     const ledger3PL = get3PLForWeek(threeplLedger, selectedWeek);
@@ -30187,6 +30350,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     if (adsTimeTab === 'weekly' && !adsSelectedWeek && weeksInYear.length > 0) {
       setTimeout(() => setAdsSelectedWeek(weeksInYear[weeksInYear.length - 1]), 0);
     }
+
+    // Initialize selected day for daily view if not set
+    if (adsTimeTab === 'daily' && !adsSelectedDay && daysInYear.length > 0) {
+      const mostRecentWithAds = daysInYear.filter(d => {
+        const day = allDaysData[d];
+        const shop = day?.shopify || {};
+        const hasShopAds = (shop.googleSpend || shop.metaSpend || 0) > 0 || (day?.googleSpend || day?.metaSpend || 0) > 0;
+        const hasAmzAds = (day?.amazon?.adSpend || day?.amazonAdsMetrics?.spend || 0) > 0;
+        return hasShopAds || hasAmzAds;
+      }).slice(-1);
+      const fallbackDay = mostRecentWithAds.length > 0 ? mostRecentWithAds[0] : daysInYear[daysInYear.length - 1];
+      setTimeout(() => setAdsSelectedDay(fallbackDay), 0);
+    }
     
     // Helper to aggregate ad data from weeks
     const aggregateWeeklyData = (weeks) => {
@@ -30375,6 +30551,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       
       switch (adsTimeTab) {
         case 'daily': {
+          // Selected day (from dropdown)
+          if (adsSelectedDay && sortedDays.includes(adsSelectedDay)) {
+            return [adsSelectedDay];
+          }
+
           // Yesterday only - get the most recent day with ad data
           const yesterday = new Date(now);
           yesterday.setDate(yesterday.getDate() - 1);
@@ -30391,6 +30572,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           return mostRecentWithAds.length > 0 ? mostRecentWithAds : sortedDays.slice(-1);
         }
         case 'weekly': {
+          // Selected week (week ending) from dropdown
+          if (adsSelectedWeek) {
+            const weekEndDate = new Date(adsSelectedWeek + 'T12:00:00');
+            if (!isNaN(weekEndDate.getTime())) {
+              const expectedDays = [];
+              for (let i = 6; i >= 0; i--) {
+                const d = new Date(weekEndDate);
+                d.setDate(weekEndDate.getDate() - i);
+                expectedDays.push(formatDateKey(d));
+              }
+              return expectedDays;
+            }
+          }
+
           // Last 7 days
           const sevenDaysAgo = new Date(now);
           sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
@@ -31497,7 +31692,42 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               </div>
             )}
             
-            <div className="flex items-center gap-1 ml-auto">
+            
+
+            {adsTimeTab === 'daily' && (
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 text-sm">Date:</span>
+                <select
+                  value={adsSelectedDay || ''}
+                  onChange={(e) => setAdsSelectedDay(e.target.value)}
+                  className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm"
+                >
+                  {daysInYear.slice().reverse().map(d => (
+                    <option key={d} value={d}>
+                      {new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {adsTimeTab === 'weekly' && (
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 text-sm">Week Ending:</span>
+                <select
+                  value={adsSelectedWeek || ''}
+                  onChange={(e) => setAdsSelectedWeek(e.target.value)}
+                  className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm"
+                >
+                  {weeksInYear.slice().reverse().map(w => (
+                    <option key={w} value={w}>
+                      {new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+<div className="flex items-center gap-1 ml-auto">
               <button onClick={goToPrev} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"><ChevronLeft className="w-4 h-4" /></button>
               <button onClick={goToNext} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"><ChevronRight className="w-4 h-4" /></button>
             </div>
@@ -32015,35 +32245,55 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             const startDate = new Date(chartDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
             const endDate = new Date(chartDays[chartDays.length - 1] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
             
-            // Aggregate to weekly for cleaner visualization
-            const weeklyChartData = [];
-            for (let i = 0; i < chartDays.length; i += 7) {
-              const weekDays = chartDays.slice(i, Math.min(i + 7, chartDays.length));
-              const weekData = weekDays.reduce((acc, d) => {
+            // Build chart series based on the active time tab
+            const trendData = [];
+
+            if (adsTimeTab === 'daily') {
+              // Daily points (keep it readable)
+              const dailyChartDays = chartDays.slice(-14);
+              dailyChartDays.forEach(d => {
                 const amzMetrics = allDaysData[d]?.amazonAdsMetrics || {};
-                return {
-                  spend: acc.spend + (amzMetrics.spend || 0),
-                  revenue: acc.revenue + (amzMetrics.totalRevenue || 0),
-                  impressions: acc.impressions + (amzMetrics.impressions || 0),
-                  clicks: acc.clicks + (amzMetrics.clicks || 0),
-                };
-              }, { spend: 0, revenue: 0, impressions: 0, clicks: 0 });
-              
-              const tacos = weekData.revenue > 0 ? (weekData.spend / weekData.revenue) * 100 : 0;
-              weeklyChartData.push({
-                week: new Date(weekDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-                spend: Math.round(weekData.spend),
-                revenue: Math.round(weekData.revenue),
-                tacos: Math.round(tacos * 10) / 10,
+                const spend = amzMetrics.spend || 0;
+                const revenue = amzMetrics.totalRevenue || 0;
+                const tacos = revenue > 0 ? (spend / revenue) * 100 : 0;
+
+                trendData.push({
+                  label: new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                  spend: Math.round(spend),
+                  revenue: Math.round(revenue),
+                  tacos: Math.round(tacos * 10) / 10,
+                });
               });
+            } else {
+              // Aggregate to weekly for cleaner visualization
+              for (let i = 0; i < chartDays.length; i += 7) {
+                const weekDays = chartDays.slice(i, Math.min(i + 7, chartDays.length));
+                const weekData = weekDays.reduce((acc, d) => {
+                  const amzMetrics = allDaysData[d]?.amazonAdsMetrics || {};
+                  return {
+                    spend: acc.spend + (amzMetrics.spend || 0),
+                    revenue: acc.revenue + (amzMetrics.totalRevenue || 0),
+                    impressions: acc.impressions + (amzMetrics.impressions || 0),
+                    clicks: acc.clicks + (amzMetrics.clicks || 0),
+                  };
+                }, { spend: 0, revenue: 0, impressions: 0, clicks: 0 });
+
+                const tacos = weekData.revenue > 0 ? (weekData.spend / weekData.revenue) * 100 : 0;
+                trendData.push({
+                  label: new Date(weekDays[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                  spend: Math.round(weekData.spend),
+                  revenue: Math.round(weekData.revenue),
+                  tacos: Math.round(tacos * 10) / 10,
+                });
+              }
             }
-            
-            if (weeklyChartData.length < 3) return null;
-            
-            const avgSpend = weeklyChartData.reduce((s, w) => s + w.spend, 0) / weeklyChartData.length;
-            const avgRev = weeklyChartData.reduce((s, w) => s + w.revenue, 0) / weeklyChartData.length;
-            const avgTacos = weeklyChartData.reduce((s, w) => s + w.tacos, 0) / weeklyChartData.length;
-            
+
+            if (trendData.length < (adsTimeTab === 'daily' ? 5 : 3)) return null;
+
+            const avgSpend = trendData.reduce((s, w) => s + w.spend, 0) / trendData.length;
+            const avgRev = trendData.reduce((s, w) => s + w.revenue, 0) / trendData.length;
+            const avgTacos = trendData.reduce((s, w) => s + w.tacos, 0) / trendData.length;
+
             return (
               <div className="bg-slate-800/50 rounded-xl border border-orange-500/30 p-5 mb-6">
                 <div className="flex items-center justify-between mb-4">
@@ -32055,14 +32305,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 
                 {/* Simple bar chart visualization - USING SAME SCALE FOR BOTH */}
                 <div className="space-y-3 mb-4">
-                  {weeklyChartData.slice(-8).map((w, i) => {
+                  {trendData.slice(-(adsTimeTab === 'daily' ? 10 : 8)).map((w, i) => {
                     // Use revenue as the max scale for BOTH bars so they're comparable
-                    const maxValue = Math.max(...weeklyChartData.slice(-8).map(x => x.revenue));
+                    const maxValue = Math.max(...trendData.slice(-(adsTimeTab === 'daily' ? 10 : 8)).map(x => x.revenue));
                     const revWidth = maxValue > 0 ? (w.revenue / maxValue) * 100 : 0;
                     const spendWidth = maxValue > 0 ? (w.spend / maxValue) * 100 : 0;
                     return (
                       <div key={i} className="flex items-center gap-3">
-                        <span className="text-slate-400 text-xs w-16">{w.week}</span>
+                        <span className="text-slate-400 text-xs w-16">{w.label}</span>
                         <div className="flex-1 flex flex-col gap-1">
                           <div className="flex items-center gap-2">
                             <div className="h-3 bg-emerald-500/80 rounded" style={{ width: `${revWidth}%`, minWidth: '4px' }} />
@@ -32103,8 +32353,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   <div className="text-center">
                     <p className="text-slate-400 text-xs">Trend</p>
                     {(() => {
-                      const firstHalf = weeklyChartData.slice(0, Math.floor(weeklyChartData.length / 2));
-                      const secondHalf = weeklyChartData.slice(Math.floor(weeklyChartData.length / 2));
+                      const firstHalf = trendData.slice(0, Math.floor(trendData.length / 2));
+                      const secondHalf = trendData.slice(Math.floor(trendData.length / 2));
                       const firstAvg = firstHalf.reduce((s, w) => s + w.tacos, 0) / firstHalf.length;
                       const secondAvg = secondHalf.reduce((s, w) => s + w.tacos, 0) / secondHalf.length;
                       const diff = secondAvg - firstAvg;
