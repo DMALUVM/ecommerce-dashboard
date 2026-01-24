@@ -6162,9 +6162,24 @@ const savePeriods = async (d) => {
   // Parse bulk ad file (Google Ads or Meta Ads CSV)
   const parseBulkAdFile = useCallback((content, platform, filename = '') => {
     try {
-      const lines = content.trim().split('\n');
-      if (lines.length < 2) return { error: 'File is empty or has no data rows' };
-      
+      const rawLines = content.replace(/\r/g, '').split('\n').filter(l => l !== '');
+      if (rawLines.length < 2) return { error: 'File is empty or has no data rows' };
+
+      // Some Google time-series exports include a title line + date range line before the real header row
+      let headerIndex = 0;
+      const looksLikeWideGoogleHeader = (l) => /\d{4}-\d{2}-\d{2}_.+/.test(l) && l.toLowerCase().includes('campaign');
+      if (!rawLines[0].includes(',') && rawLines.length >= 3 && rawLines[2].includes(',')) {
+        // Likely: title line + date range line + header
+        headerIndex = 2;
+      } else if (rawLines.length >= 3 && looksLikeWideGoogleHeader(rawLines[2])) {
+        headerIndex = 2;
+      } else if (rawLines.length >= 2 && looksLikeWideGoogleHeader(rawLines[1])) {
+        headerIndex = 1;
+      }
+
+      const lines = rawLines.slice(headerIndex);
+      if (lines.length < 2) return { error: 'No data rows found after header' };
+
       const header = lines[0].toLowerCase();
       const dailyData = [];
       let totalSpend = 0;
@@ -6180,7 +6195,96 @@ const savePeriods = async (d) => {
       const isMetaAds = (hasDateCol || hasHourCol) && (header.includes('amount spent') || hasCostCol);
       const isHourlyData = hasHourCol && !hasDateCol;
       const isQuarterlyData = header.includes('quarter');
-      
+
+      // Handle Google "Untitled report" wide time-series exports (date_metric columns)
+      const hasWideDateMetrics = /\d{4}-\d{2}-\d{2}_.+/.test(lines[0]);
+      if (platform === 'google' && hasWideDateMetrics) {
+        // Parse header mapping: YYYY-MM-DD_Metric
+        const rawHeaders = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
+        const metricColsByDate = {};
+        for (let c = 0; c < rawHeaders.length; c++) {
+          const h = rawHeaders[c];
+          const mm = h.match(/^(\d{4}-\d{2}-\d{2})_(.+)$/);
+          if (!mm) continue;
+          const d = mm[1];
+          const metric = mm[2].toLowerCase();
+          if (!metricColsByDate[d]) metricColsByDate[d] = {};
+          metricColsByDate[d][metric] = c;
+        }
+
+        const sums = {};
+        const ensure = (d) => (sums[d] ||= { date: d, spend: 0, impressions: 0, clicks: 0, conversions: 0, revenue: 0, orders: 0 });
+
+        const parseNum = (v) => {
+          const s = (v ?? '').toString().replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '').trim();
+          if (s === '' || s === '--') return 0;
+          const n = parseFloat(s);
+          return Number.isFinite(n) ? n : 0;
+        };
+
+        const parseIntSafe = (v) => Math.round(parseNum(v));
+
+        // Iterate rows and aggregate per date across campaigns/ad groups
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line || !line.trim()) continue;
+
+          // CSV split with quotes
+          const cols = [];
+          let current = '';
+          let inQuotes = false;
+          for (const ch of line) {
+            if (ch === '"') inQuotes = !inQuotes;
+            else if (ch === ',' && !inQuotes) { cols.push(current); current = ''; }
+            else current += ch;
+          }
+          cols.push(current);
+
+          for (const d of Object.keys(metricColsByDate)) {
+            const mcols = metricColsByDate[d];
+            const rec = ensure(d);
+
+            // cost/spend column naming varies: 'cost' or 'amount spent'
+            if (mcols['cost'] != null) rec.spend += parseNum(cols[mcols['cost']]);
+            if (mcols['amount spent'] != null) rec.spend += parseNum(cols[mcols['amount spent']]);
+
+            if (mcols['clicks'] != null) rec.clicks += parseIntSafe(cols[mcols['clicks']]);
+            if (mcols['impr.'] != null) rec.impressions += parseIntSafe(cols[mcols['impr.']]);
+            if (mcols['impressions'] != null) rec.impressions += parseIntSafe(cols[mcols['impressions']]);
+
+            if (mcols['conversions'] != null) rec.conversions += parseNum(cols[mcols['conversions']]);
+            if (mcols['orders'] != null) rec.orders += parseNum(cols[mcols['orders']]);
+            if (mcols['revenue'] != null) rec.revenue += parseNum(cols[mcols['revenue']]);
+          }
+        }
+
+        const daily = Object.values(sums)
+          .filter(r => r.spend > 0 || r.clicks > 0 || r.impressions > 0 || r.conversions > 0 || r.revenue > 0 || r.orders > 0)
+          .sort((a,b) => a.date.localeCompare(b.date))
+          .map(r => {
+            const cpc = r.clicks > 0 ? r.spend / r.clicks : 0;
+            const cpa = r.conversions > 0 ? r.spend / r.conversions : 0;
+            const ctr = r.impressions > 0 ? (r.clicks / r.impressions) * 100 : 0;
+            return { ...r, cpc, cpa, ctr };
+          });
+
+        const totSpend = daily.reduce((s,x) => s + (x.spend||0), 0);
+        const totImp = daily.reduce((s,x) => s + (x.impressions||0), 0);
+        const totClk = daily.reduce((s,x) => s + (x.clicks||0), 0);
+        const totConv = daily.reduce((s,x) => s + (x.conversions||0), 0);
+
+        return {
+          dailyData: daily,
+          weeklyData: [], // weekly computed later in app from daily
+          monthlyData: [],
+          totalSpend: totSpend,
+          totalImpressions: totImp,
+          totalClicks: totClk,
+          totalConversions: totConv,
+          isWideGoogle: true,
+        };
+      }
+
       if (!isGoogleAds && !isMetaAds) {
         return { error: 'Could not detect file format. Expected columns: Date/Month/Quarter/Hour and Cost/Spend' };
       }
@@ -6190,6 +6294,16 @@ const savePeriods = async (d) => {
       const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h === 'month' || h === 'hour' || h === 'quarter' || h.includes('date'));
       const costCol = headers.findIndex(h => h === 'cost' || h === 'spend' || h === 'amount spent' || (h.includes('cost') && !h.includes('/')));
       const impressionsCol = headers.findIndex(h => h === 'impressions' || h === 'impr' || h.includes('impression'));
+      const clicksCol = headers.findIndex(h =>
+        h === 'clicks' || h === 'link clicks' || h.includes('click') && !h.includes('cost per') && !h.includes('cpc')
+      );
+      const conversionsCol = headers.findIndex(h =>
+        h === 'conversions' || h === 'purchases' || h === 'purchases (all)' || h.includes('purchase') && !h.includes('value') ||
+        h.includes('conversion') && !h.includes('rate') && !h.includes('value')
+      );
+      const revenueCol = headers.findIndex(h =>
+        h === 'revenue' || h === 'conv. value' || h.includes('conversion value') || h.includes('purchases value') || h.includes('purchase value')
+      );
       const cpcCol = headers.findIndex(h => h === 'avg. cpc' || h === 'cpc' || h.includes('cost per click'));
       const cpaCol = headers.findIndex(h => h === 'cost / conv.' || h === 'cpa' || h.includes('cost per') || h.includes('/ conv'));
       
