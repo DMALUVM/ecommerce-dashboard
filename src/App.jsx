@@ -400,22 +400,13 @@ const buildWeekFromDaily = (allDaysData, weekEndingKey, nowDate = new Date()) =>
 
   // Only include days up to "now" for the current week (future days should not count as missing)
   const nowKey = formatDateKey(nowDate);
-
-  // Normalize existing day keys (some sources may store dates in different string formats)
-  const normalizedIndex = {};
-  Object.keys(allDaysData || {}).forEach((k) => {
-    const nk = formatDateKey(k);
-    if (!normalizedIndex[nk]) normalizedIndex[nk] = k;
-  });
-
   const days = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(weekStart);
     d.setDate(weekStart.getDate() + i);
     const dayKey = formatDateKey(d);
     if (dayKey > nowKey) continue;
-    const sourceKey = normalizedIndex[dayKey] || dayKey;
-    if (allDaysData?.[sourceKey]) days.push(sourceKey);
+    if (allDaysData?.[dayKey]) days.push(dayKey);
   }
   if (days.length === 0) return null;
 
@@ -480,7 +471,8 @@ const buildWeekFromDaily = (allDaysData, weekEndingKey, nowDate = new Date()) =>
     createdAt: new Date().toISOString(),
     aggregatedFrom: days,
     isPartial: days.length < 7,
-    partialDays: days.length,
+    // Keep the actual day keys so the UI can show X/7 and the date range
+    partialDays: days,
     amazon: {
       revenue: amz.revenue,
       units: amz.units,
@@ -10470,7 +10462,14 @@ Analyze the data and respond with ONLY this JSON:
     const [expanded, setExpanded] = useState(false);
     const [show3plBreakdown, setShow3plBreakdown] = useState(false);
     const [skuSort, setSkuSort] = useState({ field: 'netSales', dir: 'desc' });
-    const skuDataRaw = data.skuData || [];
+    // skuData may be stored as an array (preferred) or an object keyed by sku
+    const skuDataRaw = useMemo(() => {
+      const raw = data?.skuData;
+      if (!raw) return [];
+      if (Array.isArray(raw)) return raw;
+      if (typeof raw === 'object') return Object.values(raw);
+      return [];
+    }, [data]);
     const threeplBreakdown = data.threeplBreakdown || {};
     const has3plData = !isAmz && (data.threeplCosts > 0);
     const has3plBreakdown = has3plData && Object.values(threeplBreakdown).some(v => v > 0);
@@ -10478,16 +10477,20 @@ Analyze the data and respond with ONLY this JSON:
     // Add calculated fields and sort
     const skuData = useMemo(() => {
       const withCalcs = skuDataRaw.map(item => {
+        const unitsSold = Number(item.unitsSold || 0);
+        const netSales = Number(item.netSales || 0);
+        const netProceeds = Number(item.netProceeds || 0);
+        const cogs = Number(item.cogs || 0);
         // Amazon: netProceeds IS the profit (already has COGS, fees, and ad spend deducted)
         // Shopify: netSales already has discounts deducted, subtract COGS
         const profit = isAmz 
-          ? (item.netProceeds || 0)
-          : (item.netSales || 0) - (item.cogs || 0);
+          ? netProceeds
+          : netSales - cogs;
         // For $/Unit: Amazon uses proceeds (the profit), Shopify uses netSales
-        const proceedsPerUnit = item.unitsSold > 0 
-          ? (isAmz ? item.netProceeds : item.netSales) / item.unitsSold 
+        const proceedsPerUnit = unitsSold > 0 
+          ? (isAmz ? netProceeds : netSales) / unitsSold 
           : 0;
-        return { ...item, profit, proceedsPerUnit };
+        return { ...item, unitsSold, netSales, netProceeds, cogs, profit, proceedsPerUnit };
       });
       return withCalcs.sort((a, b) => {
         const aVal = a[skuSort.field] || 0;
@@ -21577,7 +21580,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               );})}
             </div>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz /><ChannelCard title="Shopify" color="blue" data={data.shopify} showSkuTable /></div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz /><ChannelCard title="Shopify" color="blue" data={data.shopify} /></div>
         </div>
       </div>
     );
@@ -22177,7 +22180,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             <MetricCard label="Ad Spend" value={formatCurrency(data.total.adSpend)} icon={BarChart3} color="violet" />
             <MetricCard label="COGS" value={formatCurrency(data.total.cogs)} icon={ShoppingCart} color="amber" />
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz /><ChannelCard title="Shopify" color="blue" data={data.shopify} showSkuTable /></div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz /><ChannelCard title="Shopify" color="blue" data={data.shopify} /></div>
         </div>
       </div>
     );
