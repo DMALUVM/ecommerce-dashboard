@@ -4468,25 +4468,96 @@ const savePeriods = async (d) => {
     return lookup;
   }, [savedCogs, files.cogs]);
 
+  // Normalize SKU keys and support common variants (e.g. SKU vs SKUShop) for consistent cost lookups
+  const getCogsCost = useCallback((rawSku) => {
+    const sku = (rawSku || '').toString().trim();
+    if (!sku) return 0;
+
+    const pick = (k) => {
+      const v = savedCogs[k];
+      if (typeof v === 'number') return v;
+      if (v && typeof v.cost === 'number') return v.cost;
+      return 0;
+    };
+
+    let c = pick(sku);
+    if (c) return c;
+
+    const compact = sku.replace(/\s+/g, '');
+    c = pick(compact);
+    if (c) return c;
+
+    const base = compact.replace(/shop$/i, '');
+    const candidates = [
+      base,
+      base + 'Shop',
+      base.toUpperCase(),
+      (base + 'Shop').toUpperCase(),
+      base.toLowerCase(),
+      (base + 'Shop').toLowerCase(),
+    ];
+
+    for (const k of candidates) {
+      c = pick(k);
+      if (c) return c;
+    }
+    return 0;
+  }, [savedCogs]);
+
+
   const processAndSaveCogs = useCallback(() => {
     if (!files.cogs) return;
     const lookup = {};
     const names = {};
-    files.cogs.forEach(r => { 
-      const s = r['SKU'] || r['sku']; 
-      const c = parseFloat(r['Cost Per Unit'] || 0); 
-      const name = r['Product Name'] || r['Product Name '] || r['product name'] || r['Name'] || r['name'] || '';
-      if (s) {
-        lookup[s] = c;
-        if (name) names[s] = name.trim();
+
+    const upsert = (rawSku, cost, name) => {
+      const sku = (rawSku || '').toString().trim();
+      if (!sku) return;
+      const c = typeof cost === 'number' ? cost : parseFloat(cost || 0);
+      if (!(c > 0)) return;
+
+      const compact = sku.replace(/\s+/g, '');
+      const base = compact.replace(/shop$/i, '');
+
+      // Store multiple keys to maximize match rate across feeds
+      const keys = new Set([
+        sku,
+        compact,
+        base,
+        base + 'Shop',
+        sku.toUpperCase(),
+        sku.toLowerCase(),
+        compact.toUpperCase(),
+        compact.toLowerCase(),
+      ]);
+
+      keys.forEach(k => { if (k) lookup[k] = c; });
+
+      if (name) {
+        const n = name.toString().trim();
+        if (n) {
+          names[sku] = n;
+          names[compact] = n;
+          names[base] = n;
+          names[base + 'Shop'] = n;
+        }
       }
+    };
+
+    files.cogs.forEach(r => {
+      const s = r['SKU'] || r['sku'] || r['Sku'] || '';
+      const c = parseFloat(r['Cost Per Unit'] || r['cost per unit'] || r['COGS'] || r['Cost'] || 0);
+      const name = r['Product Name'] || r['Product Name '] || r['product name'] || r['Name'] || r['name'] || '';
+      upsert(s, c, name);
     });
+
     saveCogs(lookup);
     setSavedProductNames(names);
-    // Save product names to localStorage
     try { localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(names)); } catch(e) {}
-    setFiles(p => ({ ...p, cogs: null })); setFileNames(p => ({ ...p, cogs: '' })); setShowCogsManager(false);
-  }, [files.cogs]);
+    setFiles(p => ({ ...p, cogs: null }));
+    setFileNames(p => ({ ...p, cogs: '' }));
+    setShowCogsManager(false);
+  }, [files.cogs, saveCogs]);
 
   // Data Validation Function
   const validateUploadData = useCallback((type, data) => {
@@ -9646,7 +9717,7 @@ Respond with ONLY this JSON:
           calculatedUrgency,
           health: item.health,
           leadTimeDays,
-          cost: savedCogs[item.sku] || item.cost || 0,
+          cost: getCogsCost(item.sku) || item.cost || 0,
         };
       });
       
@@ -10165,8 +10236,8 @@ Analyze the data and respond with ONLY this JSON:
       'SKU': i.sku,
       'Location': i.source || 'Unknown',
       'Units': i.quantity || i.units || 0,
-      'COGS': savedCogs[i.sku] || 0,
-      'Value': ((i.quantity || i.units || 0) * (savedCogs[i.sku] || 0)).toFixed(2),
+      'COGS': getCogsCost(i.sku) || 0,
+      'Value': ((i.quantity || i.units || 0) * (getCogsCost(i.sku) || 0)).toFixed(2),
     }));
     exportToCSV(data, 'inventory', ['SKU', 'Location', 'Units', 'COGS', 'Value']);
   };
@@ -10819,7 +10890,7 @@ Analyze the data and respond with ONLY this JSON:
     if (shopifyCogs === 0 && shopify.skuData) {
       shopifyCogs = (shopify.skuData || []).reduce((sum, sku) => {
         const skuKey = sku.sku || sku.title || '';
-        const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+        const unitCost = getCogsCost(skuKey) || getCogsCost(sku.title) || 0;
         return sum + (unitCost * (sku.unitsSold || sku.units || 0));
       }, 0);
     }
@@ -20843,7 +20914,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             // (These might be Amazon-only products)
                             Object.entries(existingItemsBySku).forEach(([sku, existing]) => {
                               if (!mergedItems.find(i => i.sku === sku) && (existing.amazonQty > 0 || existing.amazonInbound > 0)) {
-                                const cogsCost = typeof savedCogs[sku] === 'number' ? savedCogs[sku] : (savedCogs[sku]?.cost || 0);
+                                const cogsCost = getCogsCost(sku);
                                 const cost = cogsCost || existing.cost || 0;
                                 mergedItems.push({
                                   ...existing,
@@ -22243,9 +22314,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       totalUnits: items.reduce((s, i) => s + (i.totalQty || 0), 0),
       totalValue: items.reduce((s, i) => s + (i.totalValue || 0), 0),
       amazonUnits: items.reduce((s, i) => s + (i.amazonQty || 0), 0),
-      amazonValue: items.reduce((s, i) => s + (i.amazonValue || 0), 0),
+      amazonValue: items.reduce((s, i) => s + ((i.amazonValue ?? ((i.amazonQty || 0) * (i.cost || 0))) || 0), 0),
       threeplUnits: items.reduce((s, i) => s + (i.threeplQty || 0), 0),
-      threeplValue: items.reduce((s, i) => s + (i.threeplValue || 0), 0),
+      threeplValue: items.reduce((s, i) => s + ((i.threeplValue ?? ((i.threeplQty || 0) * (i.cost || 0))) || 0), 0),
       skuCount: items.length,
       critical: items.filter(i => i.health === 'critical').length,
       low: items.filter(i => i.health === 'low').length,
@@ -24183,7 +24254,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         if (shopifyCogs === 0 && data.shopify?.skuData) {
           shopifyCogs = (data.shopify.skuData || []).reduce((sum, sku) => {
             const skuKey = sku.sku || sku.title || '';
-            const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+            const unitCost = getCogsCost(skuKey) || getCogsCost(sku.title) || 0;
             return sum + (unitCost * (sku.unitsSold || sku.units || 0));
           }, 0);
         }
@@ -24246,7 +24317,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           if (wkShopifyCogs === 0 && week.shopify?.skuData) {
             wkShopifyCogs = (week.shopify.skuData || []).reduce((sum, sku) => {
               const skuKey = sku.sku || sku.title || '';
-              const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+              const unitCost = getCogsCost(skuKey) || getCogsCost(sku.title) || 0;
               return sum + (unitCost * (sku.unitsSold || sku.units || 0));
             }, 0);
           }
@@ -24416,7 +24487,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       if (shopifyCogs === 0 && week.shopify?.skuData) {
         shopifyCogs = (week.shopify.skuData || []).reduce((sum, sku) => {
           const skuKey = sku.sku || sku.title || '';
-          const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+          const unitCost = getCogsCost(skuKey) || getCogsCost(sku.title) || 0;
           return sum + (unitCost * (sku.unitsSold || sku.units || 0));
         }, 0);
       }
@@ -24582,7 +24653,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       if (shopifyCogs === 0 && day.shopify?.skuData) {
         shopifyCogs = (day.shopify.skuData || []).reduce((sum, sku) => {
           const skuKey = sku.sku || sku.title || '';
-          const unitCost = savedCogs[skuKey] || savedCogs[sku.title] || 0;
+          const unitCost = getCogsCost(skuKey) || getCogsCost(sku.title) || 0;
           return sum + (unitCost * (sku.unitsSold || sku.units || 0));
         }, 0);
       }
