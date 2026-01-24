@@ -387,6 +387,134 @@ const getSunday = (date) => {
   return formatDateKey(d);
 };
 
+
+// --- Week-to-date helpers (used by Dashboard + Weekly views) ---
+const computeWeekFromDaily = (weekKey, allDaysData, referenceDateKey) => {
+  const end = new Date(weekKey + 'T00:00:00');
+  const start = new Date(end);
+  start.setDate(start.getDate() - 6);
+
+  const weekDays = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const k = formatDateKey(d);
+    if (!referenceDateKey || k <= referenceDateKey) weekDays.push(k);
+  }
+
+  const totals = weekDays.reduce((acc, dayKey) => {
+    const day = allDaysData?.[dayKey] || {};
+    const amz = day.amazon || {};
+    const shop = day.shopify || {};
+    const total = day.total || {};
+
+    const ads = shop.adsMetrics || {};
+    const metaSpend = day.metaSpend ?? shop.metaSpend ?? ads.metaSpend ?? 0;
+    const googleSpend = day.googleSpend ?? shop.googleSpend ?? ads.googleSpend ?? 0;
+
+    acc.amazon.revenue += amz.revenue || 0;
+    acc.amazon.units += amz.units || 0;
+    acc.amazon.cogs += amz.cogs || 0;
+    acc.amazon.fees += amz.fees || 0;
+    acc.amazon.adSpend += amz.adSpend || 0;
+    acc.amazon.returns += amz.returns || 0;
+    acc.amazon.netProfit += amz.netProfit || 0;
+
+    acc.shopify.revenue += shop.revenue || 0;
+    acc.shopify.units += shop.units || 0;
+    acc.shopify.cogs += shop.cogs || 0;
+    acc.shopify.discounts += shop.discounts || 0;
+    acc.shopify.threeplCosts += shop.threeplCosts || 0;
+    acc.shopify.metaSpend += metaSpend;
+    acc.shopify.googleSpend += googleSpend;
+
+    acc.shopify.adsMetrics.metaImpressions += ads.metaImpressions || day.metaImpressions || 0;
+    acc.shopify.adsMetrics.metaClicks += ads.metaClicks || day.metaClicks || 0;
+    acc.shopify.adsMetrics.metaPurchases += ads.metaPurchases || 0;
+    acc.shopify.adsMetrics.metaPurchaseValue += ads.metaPurchaseValue || 0;
+
+    acc.shopify.adsMetrics.googleImpressions += ads.googleImpressions || day.googleImpressions || 0;
+    acc.shopify.adsMetrics.googleClicks += ads.googleClicks || day.googleClicks || 0;
+    acc.shopify.adsMetrics.googleConversions += ads.googleConversions || day.googleConversions || 0;
+    acc.shopify.adsMetrics.googleConversionValue += ads.googleConversionValue || 0;
+
+    acc.total.revenue += total.revenue || ((amz.revenue || 0) + (shop.revenue || 0));
+    acc.total.units += total.units || ((amz.units || 0) + (shop.units || 0));
+    acc.total.cogs += total.cogs || ((amz.cogs || 0) + (shop.cogs || 0));
+    acc.total.adSpend += (amz.adSpend || 0) + metaSpend + googleSpend;
+
+    return acc;
+  }, {
+    amazon: { revenue: 0, units: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, returns: 0 },
+    shopify: {
+      revenue: 0, units: 0, cogs: 0, discounts: 0, threeplCosts: 0,
+      metaSpend: 0, googleSpend: 0,
+      adsMetrics: {
+        metaImpressions: 0, metaClicks: 0, metaPurchases: 0, metaPurchaseValue: 0,
+        googleImpressions: 0, googleClicks: 0, googleConversions: 0, googleConversionValue: 0,
+      }
+    },
+    total: { revenue: 0, units: 0, cogs: 0, adSpend: 0 }
+  });
+
+  const shopify = {
+    ...totals.shopify,
+    adSpend: (totals.shopify.metaSpend || 0) + (totals.shopify.googleSpend || 0),
+    metaAds: totals.shopify.metaSpend || 0,
+    googleAds: totals.shopify.googleSpend || 0,
+    googleSpend: totals.shopify.googleSpend || 0,
+  };
+
+  return {
+    total: totals.total,
+    amazon: totals.amazon,
+    shopify,
+    isWeekToDate: !!referenceDateKey && referenceDateKey < weekKey
+  };
+};
+
+const getWeekMergedForDisplay = (weekKey, allWeeksData, allDaysData, referenceDateKey) => {
+  const saved = allWeeksData?.[weekKey];
+  const computed = computeWeekFromDaily(weekKey, allDaysData, referenceDateKey);
+  if (!saved) return computed;
+
+  // merge: keep saved as source of truth, but backfill missing Amazon/Ads from computed
+  const savedAmz = saved.amazon || {};
+  const savedShop = saved.shopify || {};
+  const mergedAmazon = {
+    ...savedAmz,
+    revenue: (savedAmz.revenue ?? 0) || computed.amazon.revenue,
+    units: (savedAmz.units ?? 0) || computed.amazon.units,
+    adSpend: (savedAmz.adSpend ?? 0) || computed.amazon.adSpend,
+    cogs: (savedAmz.cogs ?? 0) || computed.amazon.cogs,
+    fees: (savedAmz.fees ?? 0) || computed.amazon.fees,
+    netProfit: (savedAmz.netProfit ?? 0) || computed.amazon.netProfit,
+  };
+
+  const mergedShopify = {
+    ...savedShop,
+    metaSpend: (savedShop.metaSpend ?? savedShop.metaAds ?? 0) || computed.shopify.metaSpend,
+    googleSpend: (savedShop.googleSpend ?? savedShop.googleAds ?? 0) || computed.shopify.googleSpend,
+  };
+  mergedShopify.adSpend = mergedShopify.adSpend ?? ((mergedShopify.metaSpend || 0) + (mergedShopify.googleSpend || 0));
+  mergedShopify.metaAds = mergedShopify.metaAds ?? mergedShopify.metaSpend ?? 0;
+  mergedShopify.googleAds = mergedShopify.googleAds ?? mergedShopify.googleSpend ?? 0;
+
+  const mergedTotal = {
+    ...(saved.total || {}),
+    adSpend: (saved.total?.adSpend ?? 0) || ((mergedAmazon.adSpend || 0) + (mergedShopify.metaSpend || 0) + (mergedShopify.googleSpend || 0)),
+    revenue: (saved.total?.revenue ?? 0) || ((mergedAmazon.revenue || 0) + (mergedShopify.revenue || 0)),
+    units: (saved.total?.units ?? 0) || ((mergedAmazon.units || 0) + (mergedShopify.units || 0)),
+    cogs: (saved.total?.cogs ?? 0) || ((mergedAmazon.cogs || 0) + (mergedShopify.cogs || 0)),
+  };
+
+  return {
+    ...saved,
+    total: mergedTotal,
+    amazon: mergedAmazon,
+    shopify: mergedShopify,
+    isWeekToDate: computed.isWeekToDate,
+  };
+};
+// --- end helpers ---
 const STORAGE_KEY = 'ecommerce_dashboard_v5';
 const INVENTORY_KEY = 'ecommerce_inventory_v5';
 const COGS_KEY = 'ecommerce_cogs_v1';
@@ -21906,7 +22034,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       };
     };
 
-    const rawData = allWeeksData[effectiveWeek] || computeWeekFromDaily(effectiveWeek);
+    const rawData = getWeekMergedForDisplay(effectiveWeek, allWeeksData, allDaysData, todayKey) || computeWeekFromDaily(effectiveWeek);
+    rawData._weekToDate = rawData._weekToDate ?? rawData.isWeekToDate;
     
     // Enhance Shopify data with 3PL from ledger if available
     const ledger3PL = get3PLForWeek(threeplLedger, selectedWeek);
