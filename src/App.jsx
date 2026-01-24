@@ -1773,6 +1773,7 @@ const handleLogout = async () => {
         amazon: { minDaysOfSupply: 60, alertEnabled: true },
         threepl: { alertEnabled: true, defaultQtyThreshold: 50, skuThresholds: {}, categoryThresholds: { 'soap': 50, 'balm': 100, 'lip': 100 } },
       },
+      skuSettings: {}, // SKU-level settings: { [sku]: { leadTime, reorderPoint, targetDays, alertThreshold, alertEnabled } }
       storageCostAllocation: 'proportional',
     };
     const saved = safeLocalStorageGet('ecommerce_lead_times_v1', null);
@@ -1784,9 +1785,18 @@ const handleLogout = async () => {
       reorderTriggerDays: saved.reorderTriggerDays || 60,
       minOrderWeeks: saved.minOrderWeeks || 22,
       channelRules: saved.channelRules || defaultSettings.channelRules,
+      skuSettings: saved.skuSettings || {},
       storageCostAllocation: saved.storageCostAllocation || 'proportional',
     }; 
   });
+  
+  // SKU Settings Modal
+  const [showSkuSettings, setShowSkuSettings] = useState(false);
+  const [editingSku, setEditingSku] = useState(null);
+  const [invShowZeroStock, setInvShowZeroStock] = useState(false);
+  const [skuSettingsSearch, setSkuSettingsSearch] = useState('');
+  const [skuSettingsEditItem, setSkuSettingsEditItem] = useState(null);
+  const [skuSettingsEditForm, setSkuSettingsEditForm] = useState({});
   
   // Save lead time settings
   useEffect(() => {
@@ -22004,14 +22014,335 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       amazonInbound: 0, threeplUnits: 0, threeplValue: 0, threeplInbound: 0,
       critical: 0, low: 0, healthy: 0, overstock: 0, skuCount: 0
     };
-    const items = data.items || [];
+    const rawItems = data.items || [];
+    
+    // FILTER AND DEDUPLICATE SKUs
+    // Priority: SKUs with inventory > 0, prefer "Shop" suffix variants
+    const deduplicatedItems = (() => {
+      const skuMap = new Map();
+      
+      rawItems.forEach(item => {
+        // Normalize SKU - check if this is a "Shop" variant
+        const baseSku = item.sku.replace(/Shop$/i, '');
+        const isShopVariant = item.sku.toLowerCase().endsWith('shop');
+        const hasInventory = (item.totalQty || 0) > 0;
+        
+        // Check if we already have this base SKU
+        const existing = skuMap.get(baseSku);
+        
+        if (!existing) {
+          // First time seeing this SKU
+          skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+        } else {
+          // We have a duplicate - decide which to keep
+          const existingHasInventory = (existing.totalQty || 0) > 0;
+          
+          // Priority: 
+          // 1. Has inventory beats no inventory
+          // 2. Shop variant beats non-Shop if both have same inventory status
+          // 3. Higher inventory wins if tied
+          if (hasInventory && !existingHasInventory) {
+            // New item has inventory, existing doesn't - replace
+            skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+          } else if (hasInventory === existingHasInventory) {
+            // Both have same inventory status
+            if (isShopVariant && !existing._isShopVariant) {
+              // Prefer Shop variant
+              skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+            } else if ((item.totalQty || 0) > (existing.totalQty || 0)) {
+              // Higher inventory wins
+              skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+            }
+          }
+          // Otherwise keep existing
+        }
+      });
+      
+      return Array.from(skuMap.values());
+    })();
+    
+    // Filter items based on user preference (show only with inventory by default)
+    const items = invShowZeroStock ? deduplicatedItems : deduplicatedItems.filter(item => (item.totalQty || 0) > 0);
+    
+    // Recalculate summary based on filtered items
+    const filteredSummary = {
+      ...summary,
+      totalUnits: items.reduce((s, i) => s + (i.totalQty || 0), 0),
+      totalValue: items.reduce((s, i) => s + (i.totalValue || 0), 0),
+      amazonUnits: items.reduce((s, i) => s + (i.amazonQty || 0), 0),
+      amazonValue: items.reduce((s, i) => s + (i.amazonValue || 0), 0),
+      threeplUnits: items.reduce((s, i) => s + (i.threeplQty || 0), 0),
+      threeplValue: items.reduce((s, i) => s + (i.threeplValue || 0), 0),
+      skuCount: items.length,
+      critical: items.filter(i => i.health === 'critical').length,
+      low: items.filter(i => i.health === 'low').length,
+      healthy: items.filter(i => i.health === 'healthy').length,
+      overstock: items.filter(i => i.health === 'overstock').length,
+    };
+    
+    // Get SKU settings helper
+    const getSkuSettings = (sku) => leadTimeSettings.skuSettings?.[sku] || {};
+    
+    // Check for custom low stock alerts
+    const customAlerts = items.filter(item => {
+      const settings = getSkuSettings(item.sku);
+      if (!settings.alertEnabled) return false;
+      
+      // Check 3PL quantity threshold
+      if (settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty) {
+        return true;
+      }
+      // Check Amazon days of supply threshold  
+      if (settings.amazonAlertDays) {
+        const amzDays = item.amzWeeklyVel > 0 ? (item.amazonQty || 0) / (item.amzWeeklyVel / 7) : 999;
+        if (amzDays <= settings.amazonAlertDays) return true;
+      }
+      // Check total reorder point
+      if (settings.reorderPoint && (item.totalQty || 0) <= settings.reorderPoint) {
+        return true;
+      }
+      return false;
+    });
+    
+    // SKU Settings Modal Component
+    const SkuSettingsModal = () => {
+      if (!showSkuSettings) return null;
+      
+      const filteredSkus = items.filter(item => 
+        item.sku.toLowerCase().includes(skuSettingsSearch.toLowerCase()) ||
+        item.name.toLowerCase().includes(skuSettingsSearch.toLowerCase())
+      );
+      
+      const saveSkuSettings = (sku, settings) => {
+        setLeadTimeSettings(prev => ({
+          ...prev,
+          skuSettings: {
+            ...prev.skuSettings,
+            [sku]: { ...prev.skuSettings?.[sku], ...settings }
+          }
+        }));
+        setSkuSettingsEditItem(null);
+        setToast({ message: `Settings saved for ${sku}`, type: 'success' });
+      };
+      
+      return (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="bg-gradient-to-r from-emerald-600 to-teal-600 p-6 flex items-center justify-between">
+              <div>
+                <h2 className="text-white text-xl font-bold">⚙️ SKU Inventory Settings</h2>
+                <p className="text-white/70 text-sm">Configure lead times, reorder points, and alerts per SKU</p>
+              </div>
+              <button onClick={() => { setShowSkuSettings(false); setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); }} className="p-2 hover:bg-white/20 rounded-lg text-white">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            {/* Global Defaults */}
+            <div className="p-4 bg-slate-800/50 border-b border-slate-700">
+              <h3 className="text-white font-semibold mb-3">🌐 Global Defaults</h3>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div>
+                  <label className="text-slate-400 text-xs">Default Lead Time</label>
+                  <div className="flex items-center gap-1 mt-1">
+                    <input 
+                      type="number" 
+                      value={leadTimeSettings.defaultLeadTimeDays} 
+                      onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, defaultLeadTimeDays: parseInt(e.target.value) || 14 }))}
+                      className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                    />
+                    <span className="text-slate-500 text-xs">days</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-slate-400 text-xs">Reorder Trigger</label>
+                  <div className="flex items-center gap-1 mt-1">
+                    <input 
+                      type="number" 
+                      value={leadTimeSettings.reorderTriggerDays} 
+                      onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, reorderTriggerDays: parseInt(e.target.value) || 60 }))}
+                      className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                    />
+                    <span className="text-slate-500 text-xs">days</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-slate-400 text-xs">Amazon Min Supply</label>
+                  <div className="flex items-center gap-1 mt-1">
+                    <input 
+                      type="number" 
+                      value={leadTimeSettings.channelRules?.amazon?.minDaysOfSupply || 60} 
+                      onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, channelRules: { ...prev.channelRules, amazon: { ...prev.channelRules?.amazon, minDaysOfSupply: parseInt(e.target.value) || 60 }}}))}
+                      className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                    />
+                    <span className="text-slate-500 text-xs">days</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-slate-400 text-xs">3PL Default Alert</label>
+                  <div className="flex items-center gap-1 mt-1">
+                    <input 
+                      type="number" 
+                      value={leadTimeSettings.channelRules?.threepl?.defaultQtyThreshold || 50} 
+                      onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, channelRules: { ...prev.channelRules, threepl: { ...prev.channelRules?.threepl, defaultQtyThreshold: parseInt(e.target.value) || 50 }}}))}
+                      className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                    />
+                    <span className="text-slate-500 text-xs">units</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-slate-400 text-xs">Reorder Buffer</label>
+                  <div className="flex items-center gap-1 mt-1">
+                    <input 
+                      type="number" 
+                      value={leadTimeSettings.reorderBuffer || 7} 
+                      onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, reorderBuffer: parseInt(e.target.value) || 7 }))}
+                      className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                    />
+                    <span className="text-slate-500 text-xs">days</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {/* Search and Filter */}
+            <div className="p-4 border-b border-slate-700 flex gap-4 items-center">
+              <input 
+                type="text"
+                placeholder="🔍 Search SKUs..."
+                value={skuSettingsSearch}
+                onChange={(e) => setSkuSettingsSearch(e.target.value)}
+                className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white"
+              />
+              <label className="flex items-center gap-2 text-sm text-slate-400">
+                <input 
+                  type="checkbox" 
+                  checked={invShowZeroStock} 
+                  onChange={(e) => setInvShowZeroStock(e.target.checked)}
+                  className="rounded bg-slate-700 border-slate-600"
+                />
+                Show zero stock
+              </label>
+            </div>
+            
+            {/* SKU List */}
+            <div className="flex-1 overflow-y-auto p-4">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-900 z-10">
+                  <tr className="border-b border-slate-700">
+                    <th className="text-left text-slate-400 py-2 px-2">SKU / Product</th>
+                    <th className="text-right text-slate-400 py-2 px-2">Amazon</th>
+                    <th className="text-right text-slate-400 py-2 px-2">3PL</th>
+                    <th className="text-center text-slate-400 py-2 px-2">Lead Time</th>
+                    <th className="text-center text-slate-400 py-2 px-2">Reorder Qty</th>
+                    <th className="text-center text-slate-400 py-2 px-2">3PL Alert Qty</th>
+                    <th className="text-center text-slate-400 py-2 px-2">AMZ Alert Days</th>
+                    <th className="text-center text-slate-400 py-2 px-2">Target Days</th>
+                    <th className="text-center text-slate-400 py-2 px-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSkus.map(item => {
+                    const settings = getSkuSettings(item.sku);
+                    const isEditing = skuSettingsEditItem === item.sku;
+                    
+                    if (isEditing) {
+                      return (
+                        <tr key={item.sku} className="border-b border-slate-700/50 bg-emerald-900/20">
+                          <td className="py-2 px-2">
+                            <p className="text-white font-medium">{item.sku}</p>
+                            <p className="text-slate-500 text-xs truncate max-w-[180px]">{item.name}</p>
+                          </td>
+                          <td className="text-right py-2 px-2 text-orange-400">{formatNumber(item.amazonQty || 0)}</td>
+                          <td className="text-right py-2 px-2 text-violet-400">{formatNumber(item.threeplQty || 0)}</td>
+                          <td className="py-2 px-2 text-center">
+                            <input type="number" value={skuSettingsEditForm.leadTime || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, leadTime: e.target.value}))} placeholder={String(leadTimeSettings.defaultLeadTimeDays)} className="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-center text-sm" />
+                          </td>
+                          <td className="py-2 px-2 text-center">
+                            <input type="number" value={skuSettingsEditForm.reorderPoint || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, reorderPoint: e.target.value}))} placeholder="—" className="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-center text-sm" />
+                          </td>
+                          <td className="py-2 px-2 text-center">
+                            <input type="number" value={skuSettingsEditForm.threeplAlertQty || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, threeplAlertQty: e.target.value}))} placeholder="50" className="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-center text-sm" />
+                          </td>
+                          <td className="py-2 px-2 text-center">
+                            <input type="number" value={skuSettingsEditForm.amazonAlertDays || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, amazonAlertDays: e.target.value}))} placeholder="60" className="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-center text-sm" />
+                          </td>
+                          <td className="py-2 px-2 text-center">
+                            <input type="number" value={skuSettingsEditForm.targetDays || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, targetDays: e.target.value}))} placeholder="90" className="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-center text-sm" />
+                          </td>
+                          <td className="py-2 px-2 text-center whitespace-nowrap">
+                            <button onClick={() => saveSkuSettings(item.sku, { 
+                              leadTime: skuSettingsEditForm.leadTime ? parseInt(skuSettingsEditForm.leadTime) : undefined,
+                              reorderPoint: skuSettingsEditForm.reorderPoint ? parseInt(skuSettingsEditForm.reorderPoint) : undefined,
+                              threeplAlertQty: skuSettingsEditForm.threeplAlertQty ? parseInt(skuSettingsEditForm.threeplAlertQty) : undefined,
+                              amazonAlertDays: skuSettingsEditForm.amazonAlertDays ? parseInt(skuSettingsEditForm.amazonAlertDays) : undefined,
+                              targetDays: skuSettingsEditForm.targetDays ? parseInt(skuSettingsEditForm.targetDays) : undefined,
+                              alertEnabled: true,
+                            })} className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 rounded text-white text-xs mr-1">Save</button>
+                            <button onClick={() => { setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); }} className="px-2 py-1 bg-slate-600 hover:bg-slate-500 rounded text-white text-xs">Cancel</button>
+                          </td>
+                        </tr>
+                      );
+                    }
+                    
+                    const hasCustomSettings = settings.leadTime || settings.reorderPoint || settings.threeplAlertQty || settings.amazonAlertDays || settings.targetDays;
+                    
+                    return (
+                      <tr key={item.sku} className={`border-b border-slate-700/50 hover:bg-slate-800/30 ${hasCustomSettings ? 'bg-emerald-900/10' : ''}`}>
+                        <td className="py-2 px-2">
+                          <div className="flex items-center gap-2">
+                            {hasCustomSettings && <span className="w-2 h-2 bg-emerald-500 rounded-full" title="Custom settings" />}
+                            <div>
+                              <p className="text-white font-medium">{item.sku}</p>
+                              <p className="text-slate-500 text-xs truncate max-w-[180px]">{item.name}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="text-right py-2 px-2 text-orange-400">{formatNumber(item.amazonQty || 0)}</td>
+                        <td className="text-right py-2 px-2 text-violet-400">{formatNumber(item.threeplQty || 0)}</td>
+                        <td className="text-center py-2 px-2">{settings.leadTime ? <span className="text-emerald-400">{settings.leadTime}d</span> : <span className="text-slate-500">{leadTimeSettings.defaultLeadTimeDays}d</span>}</td>
+                        <td className="text-center py-2 px-2">{settings.reorderPoint ? <span className="text-emerald-400">{formatNumber(settings.reorderPoint)}</span> : <span className="text-slate-500">—</span>}</td>
+                        <td className="text-center py-2 px-2">
+                          {settings.threeplAlertQty ? <span className="text-amber-400">{settings.threeplAlertQty}</span> : <span className="text-slate-500">—</span>}
+                        </td>
+                        <td className="text-center py-2 px-2">
+                          {settings.amazonAlertDays ? <span className="text-amber-400">{settings.amazonAlertDays}d</span> : <span className="text-slate-500">—</span>}
+                        </td>
+                        <td className="text-center py-2 px-2">
+                          {settings.targetDays ? <span className="text-cyan-400">{settings.targetDays}d</span> : <span className="text-slate-500">90d</span>}
+                        </td>
+                        <td className="py-2 px-2 text-center">
+                          <button onClick={() => { setSkuSettingsEditItem(item.sku); setSkuSettingsEditForm(settings); }} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs">Edit</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {filteredSkus.length === 0 && (
+                <div className="text-center py-8 text-slate-400">No SKUs found matching your search</div>
+              )}
+            </div>
+            
+            {/* Footer with summary */}
+            <div className="p-4 border-t border-slate-700 bg-slate-800/50 flex items-center justify-between">
+              <div className="text-slate-400 text-sm">
+                <span className="text-white font-medium">{Object.keys(leadTimeSettings.skuSettings || {}).length}</span> SKUs with custom settings
+              </div>
+              <button onClick={() => { setShowSkuSettings(false); setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white">Close</button>
+            </div>
+          </div>
+        </div>
+      );
+    };
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal /><SkuSettingsModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-            <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Inventory</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
+            <div><h1 className="text-2xl lg:text-3xl font-bold text-white">📦 Inventory Management</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} • {items.length} active SKUs</p></div>
             <div className="flex gap-2">
+              <button onClick={() => setShowSkuSettings(true)} className="bg-violet-700 hover:bg-violet-600 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-1"><Settings className="w-4 h-4" />SKU Settings</button>
               <button onClick={() => { setUploadTab('inventory'); setView('upload'); }} className="bg-emerald-700 hover:bg-emerald-600 text-white px-3 py-2 rounded-lg text-sm"><RefreshCw className="w-4 h-4 inline mr-1" />New</button>
               <button onClick={() => deleteInv(selectedInvDate)} className="bg-rose-900/50 hover:bg-rose-800/50 text-rose-300 px-3 py-2 rounded-lg text-sm"><Trash2 className="w-4 h-4" /></button>
             </div>
@@ -22025,10 +22356,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             </div>
           )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <MetricCard label="Total Units" value={formatNumber(summary.totalUnits)} sub={summary.skuCount + ' SKUs'} icon={Package} color="blue" />
-            <MetricCard label="Total Value" value={formatCurrency(summary.totalValue)} icon={DollarSign} color="emerald" />
-            <MetricCard label="Amazon FBA" value={formatNumber(summary.amazonUnits)} sub={formatCurrency(summary.amazonValue)} icon={ShoppingCart} color="orange" />
-            <MetricCard label="3PL" value={formatNumber(summary.threeplUnits)} sub={formatCurrency(summary.threeplValue)} icon={Boxes} color="violet" />
+            <MetricCard label="Total Units" value={formatNumber(filteredSummary.totalUnits)} sub={filteredSummary.skuCount + ' active SKUs'} icon={Package} color="blue" />
+            <MetricCard label="Total Value" value={formatCurrency(filteredSummary.totalValue)} icon={DollarSign} color="emerald" />
+            <MetricCard label="Amazon FBA" value={formatNumber(filteredSummary.amazonUnits)} sub={formatCurrency(filteredSummary.amazonValue)} icon={ShoppingCart} color="orange" />
+            <MetricCard label="3PL" value={formatNumber(filteredSummary.threeplUnits)} sub={formatCurrency(filteredSummary.threeplValue)} icon={Boxes} color="violet" />
           </div>
           {data.velocitySource && <div className="bg-cyan-900/20 border border-cyan-500/30 rounded-xl p-3 mb-6"><p className="text-cyan-400 text-sm"><span className="font-semibold">Velocity:</span> {data.velocitySource}</p></div>}
           
@@ -22060,10 +22391,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             </div>
           )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><AlertCircle className="w-5 h-5 text-rose-400" /><span className="text-rose-400 font-medium">Critical</span></div><p className="text-2xl font-bold text-white">{summary.critical}</p><p className="text-xs text-slate-400">&lt;14 days</p></div>
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><AlertTriangle className="w-5 h-5 text-amber-400" /><span className="text-amber-400 font-medium">Low</span></div><p className="text-2xl font-bold text-white">{summary.low}</p><p className="text-xs text-slate-400">14-30 days</p></div>
-            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><CheckCircle className="w-5 h-5 text-emerald-400" /><span className="text-emerald-400 font-medium">Healthy</span></div><p className="text-2xl font-bold text-white">{summary.healthy}</p><p className="text-xs text-slate-400">30-90 days</p></div>
-            <div className="bg-violet-500/10 border border-violet-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><Clock className="w-5 h-5 text-violet-400" /><span className="text-violet-400 font-medium">Overstock</span></div><p className="text-2xl font-bold text-white">{summary.overstock}</p><p className="text-xs text-slate-400">&gt;90 days</p></div>
+            <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><AlertCircle className="w-5 h-5 text-rose-400" /><span className="text-rose-400 font-medium">Critical</span></div><p className="text-2xl font-bold text-white">{filteredSummary.critical}</p><p className="text-xs text-slate-400">&lt;14 days</p></div>
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><AlertTriangle className="w-5 h-5 text-amber-400" /><span className="text-amber-400 font-medium">Low</span></div><p className="text-2xl font-bold text-white">{filteredSummary.low}</p><p className="text-xs text-slate-400">14-30 days</p></div>
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><CheckCircle className="w-5 h-5 text-emerald-400" /><span className="text-emerald-400 font-medium">Healthy</span></div><p className="text-2xl font-bold text-white">{filteredSummary.healthy}</p><p className="text-xs text-slate-400">30-90 days</p></div>
+            <div className="bg-violet-500/10 border border-violet-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><Clock className="w-5 h-5 text-violet-400" /><span className="text-violet-400 font-medium">Overstock</span></div><p className="text-2xl font-bold text-white">{filteredSummary.overstock}</p><p className="text-xs text-slate-400">&gt;90 days</p></div>
           </div>
           {/* Reorder Alert - Items with less than 120 days supply */}
           {(() => {
@@ -22121,8 +22452,92 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               </div>
             );
           })()}
+          
+          {/* Custom SKU Alerts - Based on user-defined thresholds */}
+          {customAlerts.length > 0 && (
+            <div className="bg-rose-900/20 border border-rose-500/30 rounded-xl p-4 mb-6">
+              <div className="flex items-start gap-3">
+                <Bell className="w-6 h-6 text-rose-400 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <h4 className="text-rose-400 font-semibold mb-1">🔔 Custom Threshold Alerts</h4>
+                  <p className="text-slate-300 text-sm mb-3">
+                    {customAlerts.length} SKU{customAlerts.length > 1 ? 's' : ''} hit your custom alert thresholds
+                  </p>
+                  <div className="bg-slate-900/50 rounded-lg p-3 max-h-48 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-slate-500 text-xs">
+                          <th className="text-left pb-2">SKU</th>
+                          <th className="text-right pb-2">Amazon</th>
+                          <th className="text-right pb-2">3PL</th>
+                          <th className="text-right pb-2">Total</th>
+                          <th className="text-left pb-2 pl-2">Alert Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {customAlerts.map(item => {
+                          const settings = getSkuSettings(item.sku);
+                          let alertReason = [];
+                          if (settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty) {
+                            alertReason.push(`3PL ≤ ${settings.threeplAlertQty}`);
+                          }
+                          if (settings.amazonAlertDays) {
+                            const amzDays = item.amzWeeklyVel > 0 ? (item.amazonQty || 0) / (item.amzWeeklyVel / 7) : 999;
+                            if (amzDays <= settings.amazonAlertDays) {
+                              alertReason.push(`AMZ ≤ ${settings.amazonAlertDays}d`);
+                            }
+                          }
+                          if (settings.reorderPoint && (item.totalQty || 0) <= settings.reorderPoint) {
+                            alertReason.push(`Total ≤ ${settings.reorderPoint}`);
+                          }
+                          return (
+                            <tr key={item.sku} className="border-t border-slate-700/50">
+                              <td className="py-1.5">
+                                <p className="text-white max-w-[150px] truncate" title={item.name}>{item.sku}</p>
+                                <p className="text-slate-500 text-xs truncate">{item.name}</p>
+                              </td>
+                              <td className="py-1.5 text-right text-orange-400">{formatNumber(item.amazonQty || 0)}</td>
+                              <td className="py-1.5 text-right text-violet-400">{formatNumber(item.threeplQty || 0)}</td>
+                              <td className="py-1.5 text-right text-white font-medium">{formatNumber(item.totalQty)}</td>
+                              <td className="py-1.5 pl-2">
+                                {alertReason.map((r, i) => (
+                                  <span key={i} className="text-xs bg-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded mr-1">{r}</span>
+                                ))}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex justify-between items-center mt-3">
+                    <p className="text-slate-500 text-xs">Based on your custom SKU settings</p>
+                    <button onClick={() => setShowSkuSettings(true)} className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1">
+                      <Settings className="w-3 h-3" />Manage Settings
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
-            <div className="p-4 border-b border-slate-700"><h3 className="text-lg font-semibold text-white">Products ({items.length})</h3></div>
+            <div className="p-4 border-b border-slate-700 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white">Products ({items.length})</h3>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 text-sm text-slate-400">
+                  <input 
+                    type="checkbox" 
+                    checked={invShowZeroStock} 
+                    onChange={(e) => setInvShowZeroStock(e.target.checked)}
+                    className="rounded bg-slate-700 border-slate-600"
+                  />
+                  Show zero stock
+                </label>
+                <button onClick={() => setShowSkuSettings(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-1">
+                  <Settings className="w-4 h-4" />Settings
+                </button>
+              </div>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-slate-900/50"><tr>
@@ -22138,24 +22553,48 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Stockout</th>
                   <th className="text-right text-xs font-medium text-slate-400 uppercase px-4 py-3">Order By</th>
                   <th className="text-center text-xs font-medium text-slate-400 uppercase px-4 py-3">Status</th>
+                  <th className="text-center text-xs font-medium text-slate-400 uppercase px-4 py-3">⚙️</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-700/50">
-                  {items.map((item) => (
-                    <tr key={item.sku} className={`hover:bg-slate-700/30 ${item.health === 'critical' ? 'bg-rose-950/20' : item.health === 'low' ? 'bg-amber-950/20' : ''}`}>
-                      <td className="px-4 py-3"><div className="max-w-xs"><p className="text-white text-sm font-medium truncate">{item.name}</p><p className="text-slate-500 text-xs">{item.sku}</p></div></td>
-                      <td className="text-right px-4 py-3 text-white text-sm">{formatNumber(item.amazonQty)}</td>
-                      <td className="text-right px-4 py-3 text-white text-sm">{formatNumber(item.threeplQty)}</td>
-                      <td className="text-right px-4 py-3 text-white text-sm font-medium">{formatNumber(item.totalQty)}</td>
-                      <td className="text-right px-4 py-3 text-white text-sm">{formatCurrency(item.totalValue)}</td>
-                      <td className="text-right px-4 py-3 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>
-                      <td className="text-right px-4 py-3 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
-                      <td className="text-right px-4 py-3 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
-                      <td className="text-right px-4 py-3 text-white text-sm">{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</td>
-                      <td className="text-right px-4 py-3 text-slate-400 text-xs">{item.stockoutDate ? new Date(item.stockoutDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
-                      <td className={`text-right px-4 py-3 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? new Date(item.reorderByDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
-                      <td className="text-center px-4 py-3"><HealthBadge health={item.aiUrgency || item.health} /></td>
-                    </tr>
-                  ))}
+                  {items.map((item) => {
+                    const settings = getSkuSettings(item.sku);
+                    const hasCustomSettings = settings.leadTime || settings.reorderPoint || settings.threeplAlertQty || settings.amazonAlertDays || settings.targetDays;
+                    const isAlerted = customAlerts.some(a => a.sku === item.sku);
+                    
+                    return (
+                      <tr key={item.sku} className={`hover:bg-slate-700/30 ${isAlerted ? 'bg-rose-950/30' : item.health === 'critical' ? 'bg-rose-950/20' : item.health === 'low' ? 'bg-amber-950/20' : ''}`}>
+                        <td className="px-4 py-3">
+                          <div className="max-w-xs flex items-start gap-2">
+                            {isAlerted && <Bell className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />}
+                            <div>
+                              <p className="text-white text-sm font-medium truncate">{item.name}</p>
+                              <p className="text-slate-500 text-xs">{item.sku}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="text-right px-4 py-3 text-orange-400 text-sm">{formatNumber(item.amazonQty)}</td>
+                        <td className={`text-right px-4 py-3 text-sm ${settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty ? 'text-rose-400 font-bold' : 'text-violet-400'}`}>{formatNumber(item.threeplQty)}</td>
+                        <td className="text-right px-4 py-3 text-white text-sm font-medium">{formatNumber(item.totalQty)}</td>
+                        <td className="text-right px-4 py-3 text-white text-sm">{formatCurrency(item.totalValue)}</td>
+                        <td className="text-right px-4 py-3 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>
+                        <td className="text-right px-4 py-3 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
+                        <td className="text-right px-4 py-3 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
+                        <td className="text-right px-4 py-3 text-white text-sm">{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</td>
+                        <td className="text-right px-4 py-3 text-slate-400 text-xs">{item.stockoutDate ? new Date(item.stockoutDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
+                        <td className={`text-right px-4 py-3 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? new Date(item.reorderByDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
+                        <td className="text-center px-4 py-3"><HealthBadge health={item.aiUrgency || item.health} /></td>
+                        <td className="text-center px-4 py-3">
+                          <button 
+                            onClick={() => { setShowSkuSettings(true); setSkuSettingsSearch(item.sku); setSkuSettingsEditItem(item.sku); setSkuSettingsEditForm(settings); }}
+                            className={`p-1 rounded ${hasCustomSettings ? 'bg-emerald-600/30 text-emerald-400' : 'bg-slate-700/50 text-slate-500 hover:text-slate-300'}`}
+                            title={hasCustomSettings ? 'Has custom settings' : 'Configure settings'}
+                          >
+                            <Settings className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
