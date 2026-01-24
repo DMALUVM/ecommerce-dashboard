@@ -387,6 +387,137 @@ const getSunday = (date) => {
   return formatDateKey(d);
 };
 
+
+// Helper: Build an in-progress week object from daily data (Mon-Sun, week key is Sunday)
+// Used when weekly upload isn't available yet for the current week.
+const buildWeekFromDaily = (allDaysData, weekEndingKey, nowDate = new Date()) => {
+  if (!weekEndingKey) return null;
+  const weekEnd = new Date(weekEndingKey + 'T12:00:00');
+  if (isNaN(weekEnd)) return null;
+
+  const weekStart = new Date(weekEnd);
+  weekStart.setDate(weekEnd.getDate() - 6);
+
+  // Only include days up to "now" for the current week (future days should not count as missing)
+  const nowKey = formatDateKey(nowDate);
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(weekStart);
+    d.setDate(weekStart.getDate() + i);
+    const dayKey = formatDateKey(d);
+    if (dayKey > nowKey) continue;
+    if (allDaysData?.[dayKey]) days.push(dayKey);
+  }
+  if (days.length === 0) return null;
+
+  const agg = {
+    amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, skuData: {} },
+    shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, skuData: {} },
+  };
+
+  days.forEach(dayKey => {
+    const day = allDaysData[dayKey] || {};
+    if (day.amazon) {
+      agg.amazon.revenue += day.amazon.revenue || 0;
+      agg.amazon.units += day.amazon.units || 0;
+      agg.amazon.returns += day.amazon.returns || 0;
+      agg.amazon.cogs += day.amazon.cogs || 0;
+      agg.amazon.fees += day.amazon.fees || 0;
+      agg.amazon.adSpend += day.amazon.adSpend || 0;
+      agg.amazon.netProfit += day.amazon.netProfit || 0;
+      (day.amazon.skuData || []).forEach(sku => {
+        const key = sku.sku || sku.name || 'unknown';
+        if (!agg.amazon.skuData[key]) agg.amazon.skuData[key] = { ...sku };
+        else {
+          agg.amazon.skuData[key].unitsSold = (agg.amazon.skuData[key].unitsSold || 0) + (sku.unitsSold || 0);
+          agg.amazon.skuData[key].returns = (agg.amazon.skuData[key].returns || 0) + (sku.returns || 0);
+          agg.amazon.skuData[key].netSales = (agg.amazon.skuData[key].netSales || 0) + (sku.netSales || 0);
+          agg.amazon.skuData[key].netProceeds = (agg.amazon.skuData[key].netProceeds || 0) + (sku.netProceeds || 0);
+          agg.amazon.skuData[key].adSpend = (agg.amazon.skuData[key].adSpend || 0) + (sku.adSpend || 0);
+          agg.amazon.skuData[key].cogs = (agg.amazon.skuData[key].cogs || 0) + (sku.cogs || 0);
+        }
+      });
+    }
+    if (day.shopify) {
+      agg.shopify.revenue += day.shopify.revenue || 0;
+      agg.shopify.units += day.shopify.units || 0;
+      agg.shopify.cogs += day.shopify.cogs || 0;
+      agg.shopify.threeplCosts += day.shopify.threeplCosts || 0;
+      agg.shopify.adSpend += day.shopify.adSpend || 0;
+      agg.shopify.metaSpend += day.shopify.metaSpend || 0;
+      agg.shopify.googleSpend += day.shopify.googleSpend || 0;
+      agg.shopify.discounts += day.shopify.discounts || 0;
+      agg.shopify.netProfit += day.shopify.netProfit || 0;
+      (day.shopify.skuData || []).forEach(sku => {
+        const key = sku.sku || sku.name || 'unknown';
+        if (!agg.shopify.skuData[key]) agg.shopify.skuData[key] = { ...sku };
+        else {
+          agg.shopify.skuData[key].unitsSold = (agg.shopify.skuData[key].unitsSold || 0) + (sku.unitsSold || 0);
+          agg.shopify.skuData[key].netSales = (agg.shopify.skuData[key].netSales || 0) + (sku.netSales || 0);
+          agg.shopify.skuData[key].discounts = (agg.shopify.skuData[key].discounts || 0) + (sku.discounts || 0);
+          agg.shopify.skuData[key].cogs = (agg.shopify.skuData[key].cogs || 0) + (sku.cogs || 0);
+        }
+      });
+    }
+  });
+
+  const amz = agg.amazon;
+  const shop = agg.shopify;
+  const totalRev = amz.revenue + shop.revenue;
+  const totalAds = (amz.adSpend || 0) + (shop.adSpend || 0);
+
+  const weekData = {
+    weekEnding: weekEndingKey,
+    createdAt: new Date().toISOString(),
+    aggregatedFrom: days,
+    isPartial: days.length < 7,
+    partialDays: days.length,
+    amazon: {
+      revenue: amz.revenue,
+      units: amz.units,
+      returns: amz.returns,
+      cogs: amz.cogs,
+      fees: amz.fees,
+      adSpend: amz.adSpend,
+      netProfit: amz.netProfit,
+      margin: amz.revenue > 0 ? (amz.netProfit / amz.revenue) * 100 : 0,
+      aov: amz.units > 0 ? amz.revenue / amz.units : 0,
+      roas: amz.adSpend > 0 ? amz.revenue / amz.adSpend : 0,
+      returnRate: amz.units > 0 ? (amz.returns / amz.units) * 100 : 0,
+      skuData: Object.values(amz.skuData || {}).sort((a, b) => (b.netSales || 0) - (a.netSales || 0)),
+    },
+    shopify: {
+      revenue: shop.revenue,
+      units: shop.units,
+      cogs: shop.cogs,
+      threeplCosts: shop.threeplCosts,
+      adSpend: shop.adSpend,
+      metaSpend: shop.metaSpend,
+      googleSpend: shop.googleSpend,
+      discounts: shop.discounts,
+      netProfit: shop.netProfit,
+      netMargin: shop.revenue > 0 ? (shop.netProfit / shop.revenue) * 100 : 0,
+      aov: shop.units > 0 ? shop.revenue / shop.units : 0,
+      roas: shop.adSpend > 0 ? shop.revenue / shop.adSpend : 0,
+      skuData: Object.values(shop.skuData || {}).sort((a, b) => (b.netSales || 0) - (a.netSales || 0)),
+    },
+    total: {
+      revenue: totalRev,
+      units: (amz.units || 0) + (shop.units || 0),
+      cogs: (amz.cogs || 0) + (shop.cogs || 0),
+      adSpend: totalAds,
+      netProfit: (amz.netProfit || 0) + (shop.netProfit || 0),
+      netMargin: totalRev > 0 ? (((amz.netProfit || 0) + (shop.netProfit || 0)) / totalRev) * 100 : 0,
+      roas: totalAds > 0 ? totalRev / totalAds : 0,
+      amazonShare: totalRev > 0 ? (amz.revenue / totalRev) * 100 : 0,
+      shopifyShare: totalRev > 0 ? (shop.revenue / totalRev) * 100 : 0,
+    },
+  };
+
+  return weekData;
+};
+
+
 const STORAGE_KEY = 'ecommerce_dashboard_v5';
 const INVENTORY_KEY = 'ecommerce_inventory_v5';
 const COGS_KEY = 'ecommerce_cogs_v1';
@@ -1885,6 +2016,7 @@ const handleLogout = async () => {
   const [adsMonth, setAdsMonth] = useState(new Date().getMonth()); // Selected month (0-11)
   const [adsQuarter, setAdsQuarter] = useState(Math.floor(new Date().getMonth() / 3) + 1); // 1-4
   const [adsSelectedWeek, setAdsSelectedWeek] = useState(null); // Selected week ending date for weekly comparison
+  const [adsSelectedDay, setAdsSelectedDay] = useState(null); // Selected day for daily deep-dives
   const [adsViewMode, setAdsViewMode] = useState('performance'); // 'performance' | 'campaigns' for ads tab
   
   // Forecast view state
@@ -21723,8 +21855,33 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     );
   }
 
-  if (view === 'weekly' && selectedWeek && allWeeksData[selectedWeek]) {
-    const rawData = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
+  if (view === 'weekly' && selectedWeek) {
+    const computedWeek = buildWeekFromDaily(allDaysData, selectedWeek, new Date());
+    const rawData = allWeeksData[selectedWeek] || computedWeek;
+    if (!rawData) { setView('upload'); return null; }
+    const nowKey = getSunday(new Date());
+    const weeks = (() => {
+      const base = Object.keys(allWeeksData).sort().reverse();
+      // Include current week (partial) if we have daily sales/ad data for it
+      if (!base.includes(nowKey)) {
+        const w = buildWeekFromDaily(allDaysData, nowKey, new Date());
+        if (w && (w.total?.revenue > 0 || w.total?.adSpend > 0)) base.unshift(nowKey);
+      }
+      return base;
+    })();
+    const idx = weeks.indexOf(selectedWeek);
+
+    // Partial-week indicator (week-to-date from daily uploads)
+    const currentWeekInfo = buildWeekFromDaily(allDaysData, nowKey, new Date());
+    const selectedWeekInfo = selectedWeek === nowKey ? currentWeekInfo : buildWeekFromDaily(allDaysData, selectedWeek, new Date());
+    const isPartialWeek = !!selectedWeekInfo?.isPartial;
+    const partialDaysCount = selectedWeekInfo?.partialDays?.length || 0;
+    const partialLastDay = (() => {
+      const days = selectedWeekInfo?.partialDays || [];
+      if (!days.length) return null;
+      const last = [...days].sort().slice(-1)[0];
+      return last ? new Date(last + 'T00:00:00') : null;
+    })();
     
     // Enhance Shopify data with 3PL from ledger if available
     const ledger3PL = get3PLForWeek(threeplLedger, selectedWeek);
@@ -21930,7 +22087,23 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               {storeLogo && (
                 <img src={storeLogo} alt="Store logo" className="w-12 h-12 object-contain rounded-xl bg-white p-1.5" />
               )}
-              <div><h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'Weekly Performance'}</h1><p className="text-slate-400">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
+              <div>
+                <h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'Weekly Performance'}</h1>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-slate-400">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                  {isPartialWeek && (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full bg-amber-900/40 border border-amber-600/40 text-amber-300">
+                      <Clock className="w-3 h-3" />
+                      WTD (partial {partialDaysCount}/7)
+                      {partialLastDay && (
+                        <span className="text-amber-200/90">
+                          • through {partialLastDay.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="flex gap-2">
               <button onClick={() => { setReprocessAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowReprocess(true); }} className="bg-violet-900/50 hover:bg-violet-800/50 border border-violet-600/50 text-violet-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><RefreshCw className="w-4 h-4" />Re-process</button>
@@ -21942,7 +22115,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
             <button onClick={() => idx < weeks.length - 1 && setSelectedWeek(weeks[idx + 1])} disabled={idx >= weeks.length - 1} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
-            <select value={selectedWeek} onChange={(e) => setSelectedWeek(e.target.value)} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">{weeks.map(w => <option key={w} value={w}>{new Date(w+'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</option>)}</select>
+            <select value={selectedWeek} onChange={(e) => setSelectedWeek(e.target.value)} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">{weeks.map(w => {
+              const isCurrent = w === nowKey;
+              const wInfo = isCurrent ? currentWeekInfo : null;
+              const label = new Date(w+'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+              const suffix = (isCurrent && wInfo?.isPartial) ? ` (WTD • partial ${wInfo.partialDays?.length || 0}/7)` : '';
+              return <option key={w} value={w}>{label}{suffix}</option>;
+            })}</select>
             <button onClick={() => idx > 0 && setSelectedWeek(weeks[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
@@ -30264,14 +30443,45 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     if (adsTimeTab === 'weekly' && !adsSelectedWeek && weeksInYear.length > 0) {
       setTimeout(() => setAdsSelectedWeek(weeksInYear[weeksInYear.length - 1]), 0);
     }
+
+    // Initialize selected day if not set (daily deep-dive)
+    if (adsTimeTab === 'daily' && !adsSelectedDay && daysInYear.length > 0) {
+      const now = new Date();
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayKey = formatDateKey(yesterday);
+      const fallback = daysInYear.includes(yesterdayKey) ? yesterdayKey : (daysInYear[daysInYear.length - 1] || null);
+      if (fallback) setTimeout(() => setAdsSelectedDay(fallback), 0);
+    }
     
     // Helper to aggregate ad data from weeks
     const aggregateWeeklyData = (weeks) => {
       return weeks.reduce((acc, w) => {
         const week = allWeeksData[w];
         if (!week) return acc;
-        const amzAds = week.amazon?.adSpend || 0;
-        const amzRev = week.amazon?.revenue || 0;
+
+        // Amazon: prefer weekly SKU Economics, otherwise build from daily for that week
+        let amzAds = week.amazon?.adSpend || 0;
+        let amzRev = week.amazon?.revenue || 0;
+
+        if ((amzAds === 0 && amzRev === 0) && allDaysData) {
+          const weekEnd = new Date(w + 'T12:00:00');
+          if (!isNaN(weekEnd)) {
+            const weekStart = new Date(weekEnd);
+            weekStart.setDate(weekEnd.getDate() - 6);
+            const dailyFallback = Object.keys(allDaysData).filter(dk => {
+              const dd = new Date(dk + 'T12:00:00');
+              return dd >= weekStart && dd <= weekEnd;
+            }).reduce((a, dk) => {
+              const day = allDaysData[dk] || {};
+              const ads = (day.amazon?.adSpend || day.amazonAdsMetrics?.spend || 0);
+              const rev = (day.amazon?.revenue || day.amazonAdsMetrics?.totalRevenue || 0);
+              return { ads: a.ads + ads, rev: a.rev + rev };
+            }, { ads: 0, rev: 0 });
+            amzAds = dailyFallback.ads;
+            amzRev = dailyFallback.rev;
+          }
+        }
         
         // Check weekly data first for Meta/Google
         let metaAds = week.shopify?.metaAds || week.shopify?.metaSpend || 0;
@@ -30452,27 +30662,35 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       
       switch (adsTimeTab) {
         case 'daily': {
-          // Yesterday only - get the most recent day with ad data
+          // User-selected day, otherwise default to yesterday / most recent day with ad data
+          if (adsSelectedDay && sortedDays.includes(adsSelectedDay)) return [adsSelectedDay];
           const yesterday = new Date(now);
           yesterday.setDate(yesterday.getDate() - 1);
-          const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-          // Return yesterday if we have data, otherwise the most recent day with any data
-          if (sortedDays.includes(yesterdayStr)) {
-            return [yesterdayStr];
-          }
-          // Fall back to most recent day with data
+          const yesterdayStr = formatDateKey(yesterday);
+          if (sortedDays.includes(yesterdayStr)) return [yesterdayStr];
           const mostRecentWithAds = sortedDays.filter(d => {
             const day = allDaysData[d];
-            return (day?.shopify?.googleSpend || day?.shopify?.metaSpend || day?.amazon?.adSpend || 0) > 0;
+            return ((day?.shopify?.googleSpend || day?.shopify?.metaSpend || day?.amazon?.adSpend || day?.amazonAdsMetrics?.spend || 0) > 0);
           }).slice(-1);
           return mostRecentWithAds.length > 0 ? mostRecentWithAds : sortedDays.slice(-1);
         }
         case 'weekly': {
-          // Last 7 days
+          // Calendar week (Mon-Sun) for selected week; fallback to last 7 days
+          if (adsSelectedWeek) {
+            const weekEnd = new Date(adsSelectedWeek + 'T12:00:00');
+            if (!isNaN(weekEnd)) {
+              const weekStart = new Date(weekEnd);
+              weekStart.setDate(weekEnd.getDate() - 6);
+              return sortedDays.filter(d => {
+                const date = new Date(d + 'T12:00:00');
+                return date >= weekStart && date <= weekEnd;
+              });
+            }
+          }
           const sevenDaysAgo = new Date(now);
           sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
           return sortedDays.filter(d => {
-            const date = new Date(d + 'T00:00:00');
+            const date = new Date(d + 'T12:00:00');
             return date >= sevenDaysAgo && date <= now;
           });
         }
@@ -30499,6 +30717,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     // For monthly/quarterly/yearly: prefer daily totals if we have Meta/Google there
     const hasDailyMetaGoogle = dailyTotals.metaAds > 0 || dailyTotals.googleAds > 0;
     const hasWeeklyMetaGoogle = weeklyTotals.metaAds > 0 || weeklyTotals.googleAds > 0;
+    const hasDailyAmazon = (dailyTotals.amazonAds || 0) > 0 || (dailyTotals.amazonRev || 0) > 0;
+    const hasWeeklyAmazon = (weeklyTotals.amzAds || 0) > 0 || (weeklyTotals.amzRev || 0) > 0;
     
     const totals = useDailyData ? {
       ...dailyTotals, 
@@ -30509,14 +30729,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       totalRev: dailyTotals.totalRev || 0
     } : {
       ...weeklyTotals,
+      // If weekly Amazon is missing but daily has it, use daily for Amazon too
+      amzAds: hasDailyAmazon && !hasWeeklyAmazon ? dailyTotals.amazonAds : weeklyTotals.amzAds,
+      amzRev: hasDailyAmazon && !hasWeeklyAmazon ? dailyTotals.amazonRev : weeklyTotals.amzRev,
       // If daily has Meta/Google but weekly doesn't, use daily values
       metaAds: hasDailyMetaGoogle && !hasWeeklyMetaGoogle ? dailyTotals.metaAds : weeklyTotals.metaAds,
       googleAds: hasDailyMetaGoogle && !hasWeeklyMetaGoogle ? dailyTotals.googleAds : weeklyTotals.googleAds,
       shopAds: hasDailyMetaGoogle && !hasWeeklyMetaGoogle 
         ? (dailyTotals.metaAds + dailyTotals.googleAds) 
         : weeklyTotals.shopAds,
-      totalAds: hasDailyMetaGoogle && !hasWeeklyMetaGoogle
-        ? (weeklyTotals.amzAds + dailyTotals.metaAds + dailyTotals.googleAds)
+      totalAds: (hasDailyMetaGoogle && !hasWeeklyMetaGoogle) || (hasDailyAmazon && !hasWeeklyAmazon)
+        ? ((hasDailyAmazon && !hasWeeklyAmazon ? dailyTotals.amazonAds : weeklyTotals.amzAds) + dailyTotals.metaAds + dailyTotals.googleAds)
         : weeklyTotals.totalAds,
     };
     
@@ -30647,7 +30870,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     // Navigation
     const goToPrev = () => {
-      if (adsTimeTab === 'daily' || adsTimeTab === 'monthly') {
+      if (adsTimeTab === 'daily') {
+        const idx = daysInYear.indexOf(adsSelectedDay);
+        if (idx > 0) setAdsSelectedDay(daysInYear[idx - 1]);
+      } else if (adsTimeTab === 'monthly') {
         if (adsMonth === 0) { setAdsMonth(11); setAdsYear(adsYear - 1); }
         else setAdsMonth(adsMonth - 1);
       } else if (adsTimeTab === 'weekly') {
@@ -30663,7 +30889,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     };
     
     const goToNext = () => {
-      if (adsTimeTab === 'daily' || adsTimeTab === 'monthly') {
+      if (adsTimeTab === 'daily') {
+        const idx = daysInYear.indexOf(adsSelectedDay);
+        if (idx >= 0 && idx < daysInYear.length - 1) setAdsSelectedDay(daysInYear[idx + 1]);
+      } else if (adsTimeTab === 'monthly') {
         if (adsMonth === 11) { setAdsMonth(0); setAdsYear(adsYear + 1); }
         else setAdsMonth(adsMonth + 1);
       } else if (adsTimeTab === 'weekly') {
@@ -31574,6 +31803,33 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               </div>
             )}
             
+            {adsTimeTab === 'daily' && (
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 text-sm">Day:</span>
+                <select value={adsSelectedDay || ''} onChange={(e) => setAdsSelectedDay(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
+                  {daysInYear.filter(d => {
+                    const day = allDaysData[d];
+                    const shop = (day?.shopify?.googleSpend || 0) + (day?.shopify?.metaSpend || 0);
+                    const amz = (day?.amazon?.adSpend || day?.amazonAdsMetrics?.spend || 0);
+                    return (shop + amz) > 0;
+                  }).slice().reverse().map(d => (
+                    <option key={d} value={d}>{new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {adsTimeTab === 'weekly' && (
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 text-sm">Week:</span>
+                <select value={adsSelectedWeek || ''} onChange={(e) => setAdsSelectedWeek(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
+                  {weeksInYear.map(w => (
+                    <option key={w} value={w}>{new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="flex items-center gap-1 ml-auto">
               <button onClick={goToPrev} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"><ChevronLeft className="w-4 h-4" /></button>
               <button onClick={goToNext} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"><ChevronRight className="w-4 h-4" /></button>
@@ -31886,8 +32142,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               </div>
             )}
             
-            {/* Shopify Ads (Meta + Google) Weekly Trend Chart */}
-            {(() => {
+            {/* Shopify Ads (Meta + Google) Trend Chart */}
+            {adsTimeTab !== 'daily' && (() => {
               // Get days with Meta or Google ads data
               const daysWithShopifyAds = sortedDays.filter(d => {
                 const day = allDaysData[d];
@@ -32080,7 +32336,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           )}
           
           {/* Amazon Spend vs Revenue Trend Chart */}
-          {(() => {
+          {adsTimeTab !== 'daily' && (() => {
             const daysWithAmazonAdsMetrics = sortedDays.filter(d => allDaysData[d]?.amazonAdsMetrics?.totalRevenue > 0);
             if (daysWithAmazonAdsMetrics.length < 7) return null;
             
