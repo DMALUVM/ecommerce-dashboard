@@ -6162,24 +6162,9 @@ const savePeriods = async (d) => {
   // Parse bulk ad file (Google Ads or Meta Ads CSV)
   const parseBulkAdFile = useCallback((content, platform, filename = '') => {
     try {
-      const rawLines = content.replace(/\r/g, '').split('\n').filter(l => l !== '');
-      if (rawLines.length < 2) return { error: 'File is empty or has no data rows' };
-
-      // Some Google time-series exports include a title line + date range line before the real header row
-      let headerIndex = 0;
-      const looksLikeWideGoogleHeader = (l) => /\d{4}-\d{2}-\d{2}_.+/.test(l) && l.toLowerCase().includes('campaign');
-      if (!rawLines[0].includes(',') && rawLines.length >= 3 && rawLines[2].includes(',')) {
-        // Likely: title line + date range line + header
-        headerIndex = 2;
-      } else if (rawLines.length >= 3 && looksLikeWideGoogleHeader(rawLines[2])) {
-        headerIndex = 2;
-      } else if (rawLines.length >= 2 && looksLikeWideGoogleHeader(rawLines[1])) {
-        headerIndex = 1;
-      }
-
-      const lines = rawLines.slice(headerIndex);
-      if (lines.length < 2) return { error: 'No data rows found after header' };
-
+      const lines = content.trim().split('\n');
+      if (lines.length < 2) return { error: 'File is empty or has no data rows' };
+      
       const header = lines[0].toLowerCase();
       const dailyData = [];
       let totalSpend = 0;
@@ -6195,96 +6180,7 @@ const savePeriods = async (d) => {
       const isMetaAds = (hasDateCol || hasHourCol) && (header.includes('amount spent') || hasCostCol);
       const isHourlyData = hasHourCol && !hasDateCol;
       const isQuarterlyData = header.includes('quarter');
-
-      // Handle Google "Untitled report" wide time-series exports (date_metric columns)
-      const hasWideDateMetrics = /\d{4}-\d{2}-\d{2}_.+/.test(lines[0]);
-      if (platform === 'google' && hasWideDateMetrics) {
-        // Parse header mapping: YYYY-MM-DD_Metric
-        const rawHeaders = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
-        const metricColsByDate = {};
-        for (let c = 0; c < rawHeaders.length; c++) {
-          const h = rawHeaders[c];
-          const mm = h.match(/^(\d{4}-\d{2}-\d{2})_(.+)$/);
-          if (!mm) continue;
-          const d = mm[1];
-          const metric = mm[2].toLowerCase();
-          if (!metricColsByDate[d]) metricColsByDate[d] = {};
-          metricColsByDate[d][metric] = c;
-        }
-
-        const sums = {};
-        const ensure = (d) => (sums[d] ||= { date: d, spend: 0, impressions: 0, clicks: 0, conversions: 0, revenue: 0, orders: 0 });
-
-        const parseNum = (v) => {
-          const s = (v ?? '').toString().replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '').trim();
-          if (s === '' || s === '--') return 0;
-          const n = parseFloat(s);
-          return Number.isFinite(n) ? n : 0;
-        };
-
-        const parseIntSafe = (v) => Math.round(parseNum(v));
-
-        // Iterate rows and aggregate per date across campaigns/ad groups
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i];
-          if (!line || !line.trim()) continue;
-
-          // CSV split with quotes
-          const cols = [];
-          let current = '';
-          let inQuotes = false;
-          for (const ch of line) {
-            if (ch === '"') inQuotes = !inQuotes;
-            else if (ch === ',' && !inQuotes) { cols.push(current); current = ''; }
-            else current += ch;
-          }
-          cols.push(current);
-
-          for (const d of Object.keys(metricColsByDate)) {
-            const mcols = metricColsByDate[d];
-            const rec = ensure(d);
-
-            // cost/spend column naming varies: 'cost' or 'amount spent'
-            if (mcols['cost'] != null) rec.spend += parseNum(cols[mcols['cost']]);
-            if (mcols['amount spent'] != null) rec.spend += parseNum(cols[mcols['amount spent']]);
-
-            if (mcols['clicks'] != null) rec.clicks += parseIntSafe(cols[mcols['clicks']]);
-            if (mcols['impr.'] != null) rec.impressions += parseIntSafe(cols[mcols['impr.']]);
-            if (mcols['impressions'] != null) rec.impressions += parseIntSafe(cols[mcols['impressions']]);
-
-            if (mcols['conversions'] != null) rec.conversions += parseNum(cols[mcols['conversions']]);
-            if (mcols['orders'] != null) rec.orders += parseNum(cols[mcols['orders']]);
-            if (mcols['revenue'] != null) rec.revenue += parseNum(cols[mcols['revenue']]);
-          }
-        }
-
-        const daily = Object.values(sums)
-          .filter(r => r.spend > 0 || r.clicks > 0 || r.impressions > 0 || r.conversions > 0 || r.revenue > 0 || r.orders > 0)
-          .sort((a,b) => a.date.localeCompare(b.date))
-          .map(r => {
-            const cpc = r.clicks > 0 ? r.spend / r.clicks : 0;
-            const cpa = r.conversions > 0 ? r.spend / r.conversions : 0;
-            const ctr = r.impressions > 0 ? (r.clicks / r.impressions) * 100 : 0;
-            return { ...r, cpc, cpa, ctr };
-          });
-
-        const totSpend = daily.reduce((s,x) => s + (x.spend||0), 0);
-        const totImp = daily.reduce((s,x) => s + (x.impressions||0), 0);
-        const totClk = daily.reduce((s,x) => s + (x.clicks||0), 0);
-        const totConv = daily.reduce((s,x) => s + (x.conversions||0), 0);
-
-        return {
-          dailyData: daily,
-          weeklyData: [], // weekly computed later in app from daily
-          monthlyData: [],
-          totalSpend: totSpend,
-          totalImpressions: totImp,
-          totalClicks: totClk,
-          totalConversions: totConv,
-          isWideGoogle: true,
-        };
-      }
-
+      
       if (!isGoogleAds && !isMetaAds) {
         return { error: 'Could not detect file format. Expected columns: Date/Month/Quarter/Hour and Cost/Spend' };
       }
@@ -6294,16 +6190,6 @@ const savePeriods = async (d) => {
       const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h === 'month' || h === 'hour' || h === 'quarter' || h.includes('date'));
       const costCol = headers.findIndex(h => h === 'cost' || h === 'spend' || h === 'amount spent' || (h.includes('cost') && !h.includes('/')));
       const impressionsCol = headers.findIndex(h => h === 'impressions' || h === 'impr' || h.includes('impression'));
-      const clicksCol = headers.findIndex(h =>
-        h === 'clicks' || h === 'link clicks' || h.includes('click') && !h.includes('cost per') && !h.includes('cpc')
-      );
-      const conversionsCol = headers.findIndex(h =>
-        h === 'conversions' || h === 'purchases' || h === 'purchases (all)' || h.includes('purchase') && !h.includes('value') ||
-        h.includes('conversion') && !h.includes('rate') && !h.includes('value')
-      );
-      const revenueCol = headers.findIndex(h =>
-        h === 'revenue' || h === 'conv. value' || h.includes('conversion value') || h.includes('purchases value') || h.includes('purchase value')
-      );
       const cpcCol = headers.findIndex(h => h === 'avg. cpc' || h === 'cpc' || h.includes('cost per click'));
       const cpaCol = headers.findIndex(h => h === 'cost / conv.' || h === 'cpa' || h.includes('cost per') || h.includes('/ conv'));
       
@@ -12421,17 +12307,31 @@ Analyze the data and respond with ONLY this JSON:
               return result;
             };
             
-            const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/"/g, ''));
+            // Find the real header row (some exports include title/date-range lines)
+            const maxProbe = Math.min(lines.length, 6);
+            let headerRowIdx = 0;
+            for (let i = 0; i < maxProbe; i++) {
+              const cols = parseCSVLine(lines[i]).map(c => c.replace(/"/g, '').trim());
+              const lower = cols.map(c => c.toLowerCase());
+              const hasDateMetric = cols.some(c => /^\d{4}-\d{2}-\d{2}_.+/.test(c));
+              const hasDateCol = lower.some(h => h === 'date' || h.includes('date'));
+              if (hasDateMetric || hasDateCol) { headerRowIdx = i; break; }
+            }
+
+            const rawHeaders = parseCSVLine(lines[headerRowIdx]).map(h => h.replace(/"/g, '').trim());
+            const headers = rawHeaders.map(h => h.toLowerCase());
+            const isGoogleWide = rawHeaders.some(h => /^\d{4}-\d{2}-\d{2}_.+/.test(h));
             const dateColIdx = headers.findIndex(h => h === 'date' || h.includes('date'));
-            
-            if (dateColIdx === -1) {
+
+            if (!isGoogleWide && dateColIdx === -1) {
               reject(new Error('No date column found'));
               return;
             }
-            
+
+            const dataStartIdx = headerRowIdx + 1;
             // Detect file type by headers
             const isMetaAds = headers.some(h => h.includes('ad name') || h.includes('amount spent') || h.includes('roas'));
-            const isGoogleAds = headers.some(h => h.includes('avg. cpc') || h.includes('avg cpc') || h.includes('cost / conv'));
+            const isGoogleAds = isGoogleWide || headers.some(h => h.includes('avg. cpc') || h.includes('avg cpc') || h.includes('cost / conv') || h.includes('cost / conversion') || h.includes('conversions'));
             
             if (!isMetaAds && !isGoogleAds) {
               reject(new Error('Unrecognized ads format. Expected Meta or Google Ads export.'));
@@ -12442,9 +12342,55 @@ Analyze the data and respond with ONLY this JSON:
             const getColIdx = (patterns) => headers.findIndex(h => patterns.some(p => h.includes(p)));
             
             const dailyData = {}; // { date: { metaSpend, googleSpend, impressions, clicks, ... } }
-            
-            // Parse data rows
-            for (let i = 1; i < lines.length; i++) {
+
+            // Google wide/pivot exports: headers like YYYY-MM-DD_Cost, YYYY-MM-DD_Clicks, ...
+            if (isGoogleWide) {
+              const colMap = []; // { idx, date, metric }
+              for (let j = 0; j < rawHeaders.length; j++) {
+                const h = rawHeaders[j];
+                const m = h.match(/^(\d{4}-\d{2}-\d{2})_(.+)$/);
+                if (!m) continue;
+                const date = m[1];
+                const metricRaw = (m[2] || '').toLowerCase();
+                let metric = null;
+                if (metricRaw.includes('cost') || metricRaw.includes('spend')) metric = 'googleSpend';
+                else if (metricRaw.includes('click')) metric = 'googleClicks';
+                else if (metricRaw.includes('impr')) metric = 'googleImpressions';
+                else if (metricRaw.includes('conv') && metricRaw.includes('value')) metric = 'googleRevenue';
+                else if (metricRaw.includes('conv') || metricRaw.includes('purchase')) metric = 'googleConversions';
+                else if (metricRaw.includes('ctr')) metric = 'googleCTR';
+                else if (metricRaw.includes('cpc')) metric = 'googleCPC';
+                if (!metric) continue;
+                colMap.push({ idx: j, date, metric });
+              }
+
+              for (let i = dataStartIdx; i < lines.length; i++) {
+                const cols = parseCSVLine(lines[i]);
+                if (!cols || cols.length === 0) continue;
+                for (const c of colMap) {
+                  const raw = (cols[c.idx] ?? '').toString().replace(/[$,%"]/g, '').trim();
+                  if (!raw) continue;
+                  const val = parseFloat(raw);
+                  if (!Number.isFinite(val)) continue;
+                  if (!dailyData[c.date]) dailyData[c.date] = {};
+                  dailyData[c.date][c.metric] = (dailyData[c.date][c.metric] || 0) + val;
+                }
+              }
+
+              // Derive KPIs where possible
+              Object.keys(dailyData).forEach(d => {
+                const row = dailyData[d];
+                const spend = row.googleSpend || 0;
+                const clicks = row.googleClicks || 0;
+                const imps = row.googleImpressions || 0;
+                const conv = row.googleConversions || 0;
+                if (!row.googleCPC && clicks > 0) row.googleCPC = spend / clicks;
+                if (!row.googleCTR && imps > 0) row.googleCTR = clicks / imps;
+                if (!row.googleCPA && conv > 0) row.googleCPA = spend / conv;
+              });
+            } else {
+              // Parse data rows
+            for (let i = dataStartIdx; i < lines.length; i++) {
               const cols = parseCSVLine(lines[i]);
               const dateStr = cols[dateColIdx];
               const parsedDate = parseAdsDate(dateStr);
@@ -12554,6 +12500,8 @@ Analyze the data and respond with ONLY this JSON:
             if (dates.length === 0) {
               reject(new Error('No valid daily data found'));
               return;
+            }
+            
             }
             
             resolve({
