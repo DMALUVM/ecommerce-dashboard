@@ -400,13 +400,22 @@ const buildWeekFromDaily = (allDaysData, weekEndingKey, nowDate = new Date()) =>
 
   // Only include days up to "now" for the current week (future days should not count as missing)
   const nowKey = formatDateKey(nowDate);
+
+  // Normalize existing day keys (some sources may store dates in different string formats)
+  const normalizedIndex = {};
+  Object.keys(allDaysData || {}).forEach((k) => {
+    const nk = formatDateKey(k);
+    if (!normalizedIndex[nk]) normalizedIndex[nk] = k;
+  });
+
   const days = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(weekStart);
     d.setDate(weekStart.getDate() + i);
     const dayKey = formatDateKey(d);
     if (dayKey > nowKey) continue;
-    if (allDaysData?.[dayKey]) days.push(dayKey);
+    const sourceKey = normalizedIndex[dayKey] || dayKey;
+    if (allDaysData?.[sourceKey]) days.push(sourceKey);
   }
   if (days.length === 0) return null;
 
@@ -21568,7 +21577,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               );})}
             </div>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz /><ChannelCard title="Shopify" color="blue" data={data.shopify} /></div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz /><ChannelCard title="Shopify" color="blue" data={data.shopify} showSkuTable /></div>
         </div>
       </div>
     );
@@ -22168,7 +22177,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             <MetricCard label="Ad Spend" value={formatCurrency(data.total.adSpend)} icon={BarChart3} color="violet" />
             <MetricCard label="COGS" value={formatCurrency(data.total.cogs)} icon={ShoppingCart} color="amber" />
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz /><ChannelCard title="Shopify" color="blue" data={data.shopify} /></div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz /><ChannelCard title="Shopify" color="blue" data={data.shopify} showSkuTable /></div>
         </div>
       </div>
     );
