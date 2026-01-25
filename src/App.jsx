@@ -30656,7 +30656,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     };
     
     // Months with data
-    const monthsWithData = [...new Set([...sortedWeeks, ...sortedDays].filter(d => d.startsWith(String(adsYear))).map(d => new Date(d + 'T00:00:00').getMonth()))].sort((a, b) => a - b);
+    const monthsWithData = [...new Set([
+      ...sortedWeeks,
+      ...sortedDays,
+      ...Object.keys(amazonCampaigns?.historicalDaily || {})
+    ].filter(d => d.startsWith(String(adsYear))).map(d => new Date(d + 'T00:00:00').getMonth()))].sort((a, b) => a - b);
     
     // Filter and sort campaigns (use campaigns defined earlier)
     const filteredCampaigns = campaigns.filter(c => {
@@ -32061,26 +32065,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
 })()}
 
           {/* Amazon Spend vs Revenue Trend Chart */}
-
 {(() => {
-  // We want a stable daily/weekly series (not sparse "random dates").
-  // Use the most recent date that has either Amazon revenue or Amazon ads spend, then build a contiguous window.
-  const hasSignals = (day) => {
-    const spend = Number(day?.amazonAdsMetrics?.spend ?? day?.amazon?.adSpend ?? 0);
-    const rev = Number(day?.amazon?.revenue ?? day?.amazonAdsMetrics?.totalRevenue ?? 0);
-    return spend > 0 || rev > 0;
-  };
-
-  const maxDateKey = (() => {
-    for (let i = sortedDays.length - 1; i >= 0; i--) {
-      const d = sortedDays[i];
-      const day = allDaysData[d];
-      if (day && hasSignals(day)) return d;
-    }
-    return null;
-  })();
-
-  if (!maxDateKey) return null;
+  const hist = amazonCampaigns?.historicalDaily || {};
 
   const toKey = (dt) => {
     const yyyy = dt.getFullYear();
@@ -32095,95 +32081,188 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     return toKey(dt);
   };
 
-  const labelDay = (key, includeYear) => {
-    const opts = includeYear ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' };
-    return new Date(key + 'T12:00:00').toLocaleDateString('en-US', opts);
+  const monthRange = (year, monthIdx) => {
+    const start = new Date(year, monthIdx, 1, 12, 0, 0);
+    const end = new Date(year, monthIdx + 1, 0, 12, 0, 0);
+    return { startKey: toKey(start), endKey: toKey(end), daysInMonth: end.getDate() };
   };
 
-  const seriesDaily = () => {
-    const windowDays = 14;
-    const startKey = addDays(maxDateKey, -(windowDays - 1));
-    const startDt = new Date(startKey + 'T12:00:00');
-    const endDt = new Date(maxDateKey + 'T12:00:00');
-    const includeYear = startDt.getFullYear() !== endDt.getFullYear();
+  const weekEndSunday = (key) => {
+    const dt = new Date(key + 'T12:00:00');
+    const dow = dt.getDay(); // 0=Sun
+    const end = new Date(dt);
+    end.setDate(dt.getDate() + (dow === 0 ? 0 : 7 - dow));
+    return toKey(end);
+  };
 
-    const keys = [];
-    for (let i = 0; i < windowDays; i++) keys.push(addDays(startKey, i));
+  const weekStartFromEnd = (endKey) => addDays(endKey, -6);
 
-    const data = keys.map(k => {
-      const day = allDaysData[k] || {};
-      const spend = Number(day.amazonAdsMetrics?.spend ?? day.amazon?.adSpend ?? 0);
-      const revenue = Number(day.amazon?.revenue ?? day.amazonAdsMetrics?.totalRevenue ?? 0);
+  const fmtDay = (key, includeYear = false) =>
+    new Date(key + 'T12:00:00').toLocaleDateString('en-US', includeYear ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' });
+
+  const fmtMonth = (year, monthIdx) =>
+    new Date(year, monthIdx, 1, 12, 0, 0).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+
+  const fmtQuarter = (year, q) => `Q${q} '${String(year).slice(-2)}`;
+
+  // Pull Amazon PPC metrics from the *Amazon Ads history* if available (most complete),
+  // otherwise fall back to per-day stored metrics.
+  const getMetrics = (dateKey) => {
+    const h = hist[dateKey];
+    if (h) return h;
+    const m = allDaysData?.[dateKey]?.amazonAdsMetrics;
+    if (m) return m;
+    return {};
+  };
+
+  const getSpend = (dateKey) => Number(getMetrics(dateKey)?.spend ?? 0);
+  const getRevenue = (dateKey) => {
+    const m = getMetrics(dateKey) || {};
+    // historicalDaily uses totalRevenue; some imports may use revenue
+    const fromHist = Number(m.totalRevenue ?? m.revenue ?? 0);
+    if (fromHist > 0) return fromHist;
+    // final fallback: daily Amazon sales revenue, if present
+    return Number(allDaysData?.[dateKey]?.amazon?.revenue ?? 0);
+  };
+
+  // Determine the currently selected "anchor" for the period tabs
+  const anchorDateKey = (() => {
+    // Prefer selected week end when in weekly mode
+    if (adsTimeTab === 'weekly' && adsSelectedWeek) return weekEndSunday(adsSelectedWeek);
+    // Prefer month selection (monthly tab has explicit month selector; daily uses current adsMonth in the UI navigation)
+    if ((adsTimeTab === 'daily' || adsTimeTab === 'monthly') && typeof adsMonth === 'number') {
+      const r = monthRange(adsYear, adsMonth);
+      return r.endKey;
+    }
+    // Quarterly / yearly: anchor on end of period in selected year
+    if (adsTimeTab === 'quarterly') {
+      const qEndMonth = (adsQuarter * 3) - 1; // 0-based month index
+      return monthRange(adsYear, qEndMonth).endKey;
+    }
+    if (adsTimeTab === 'yearly') {
+      return monthRange(adsYear, 11).endKey;
+    }
+    // Otherwise use latest date in history
+    const keys = Object.keys(hist).sort();
+    return keys.length ? keys[keys.length - 1] : null;
+  })();
+
+  if (!anchorDateKey) return null;
+
+  // Build series based on the Ads tab time period
+  let series = [];
+
+  if (adsTimeTab === 'daily') {
+    const r = monthRange(adsYear, adsMonth);
+    const includeYear = (new Date(r.startKey + 'T12:00:00').getFullYear() !== new Date(r.endKey + 'T12:00:00').getFullYear());
+    for (let i = 0; i < r.daysInMonth; i++) {
+      const k = addDays(r.startKey, i);
+      const spend = getSpend(k);
+      const revenue = getRevenue(k);
       const tacos = revenue > 0 ? (spend / revenue) * 100 : 0;
-      return {
-        week: labelDay(k, includeYear),
-        spend: Math.round(spend),
-        revenue: Math.round(revenue),
-        tacos: Math.round(tacos * 10) / 10,
-      };
-    });
-
-    return { data, startLabel: labelDay(startKey, true), endLabel: labelDay(maxDateKey, true) };
-  };
-
-  const seriesWeekly = () => {
-    const weekEnd = (key) => {
-      const dt = new Date(key + 'T12:00:00');
-      const dow = dt.getDay(); // 0=Sun
-      const end = new Date(dt);
-      end.setDate(dt.getDate() + (dow === 0 ? 0 : 7 - dow));
-      return toKey(end);
-    };
-
-    const endWeekKey = weekEnd(maxDateKey);
-    const weeksToShow = 8;
-    const firstWeekEnd = addDays(endWeekKey, -7 * (weeksToShow - 1));
-
-    const weekEnds = [];
-    for (let i = 0; i < weeksToShow; i++) weekEnds.push(addDays(firstWeekEnd, 7 * i));
-
-    const data = weekEnds.map(we => {
-      // Week window is Mon-Sun ending at `we`
-      const endDt = new Date(we + 'T12:00:00');
-      const startDt = new Date(endDt);
-      startDt.setDate(endDt.getDate() - 6);
-      const startKey = toKey(startDt);
-
-      let spend = 0;
-      let revenue = 0;
+      series.push({ label: fmtDay(k, includeYear), spend, revenue, tacos, key: k });
+    }
+    // Keep the series readable: show only days with signal, but keep at least the last 14 days
+    const withSignal = series.filter(x => x.spend > 0 || x.revenue > 0);
+    if (withSignal.length >= 10) series = withSignal;
+    series = series.slice(-14);
+  } else if (adsTimeTab === 'weekly') {
+    const endWeek = weekEndSunday(anchorDateKey);
+    // show 8 weeks ending at selected week
+    for (let w = 0; w < 8; w++) {
+      const weekEnd = addDays(endWeek, -7 * (7 - w));
+      const weekStart = weekStartFromEnd(weekEnd);
+      let spend = 0, revenue = 0;
       for (let i = 0; i < 7; i++) {
-        const k = addDays(startKey, i);
-        const day = allDaysData[k] || {};
-        spend += Number(day.amazonAdsMetrics?.spend ?? day.amazon?.adSpend ?? 0);
-        revenue += Number(day.amazon?.revenue ?? day.amazonAdsMetrics?.totalRevenue ?? 0);
+        const k = addDays(weekStart, i);
+        spend += getSpend(k);
+        revenue += getRevenue(k);
       }
       const tacos = revenue > 0 ? (spend / revenue) * 100 : 0;
+      series.push({
+        label: new Date(weekEnd + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        spend, revenue, tacos, key: weekEnd
+      });
+    }
+  } else if (adsTimeTab === 'monthly') {
+    // Rolling 12 months ending at selected month
+    const endY = adsYear;
+    const endM = adsMonth;
+    for (let i = 11; i >= 0; i--) {
+      const dt = new Date(endY, endM, 1, 12, 0, 0);
+      dt.setMonth(dt.getMonth() - i);
+      const y = dt.getFullYear();
+      const m = dt.getMonth();
+      const r = monthRange(y, m);
+      let spend = 0, revenue = 0;
+      for (let d = 0; d < r.daysInMonth; d++) {
+        const k = addDays(r.startKey, d);
+        spend += getSpend(k);
+        revenue += getRevenue(k);
+      }
+      const tacos = revenue > 0 ? (spend / revenue) * 100 : 0;
+      series.push({ label: fmtMonth(y, m), spend, revenue, tacos, key: r.endKey });
+    }
+  } else if (adsTimeTab === 'quarterly') {
+    // Last 8 quarters ending at selected quarter
+    const endQ = adsQuarter;
+    const endY = adsYear;
+    const quarterIndex = (y, q) => y * 4 + (q - 1);
+    const endIdx = quarterIndex(endY, endQ);
+    for (let i = 7; i >= 0; i--) {
+      const idx = endIdx - i;
+      const y = Math.floor(idx / 4);
+      const q = (idx % 4) + 1;
+      const startMonth = (q - 1) * 3;
+      const endMonth = startMonth + 2;
+      const rStart = monthRange(y, startMonth);
+      const rEnd = monthRange(y, endMonth);
+      let spend = 0, revenue = 0;
+      const days = Math.round((new Date(rEnd.endKey + 'T12:00:00') - new Date(rStart.startKey + 'T12:00:00')) / (24*3600*1000)) + 1;
+      for (let d = 0; d < days; d++) {
+        const k = addDays(rStart.startKey, d);
+        spend += getSpend(k);
+        revenue += getRevenue(k);
+      }
+      const tacos = revenue > 0 ? (spend / revenue) * 100 : 0;
+      series.push({ label: fmtQuarter(y, q), spend, revenue, tacos, key: rEnd.endKey });
+    }
+  } else if (adsTimeTab === 'yearly') {
+    // Last 5 years ending at adsYear
+    for (let i = 4; i >= 0; i--) {
+      const y = adsYear - i;
+      const r = monthRange(y, 11);
+      let spend = 0, revenue = 0;
+      // iterate through all days in year
+      const startKey = `${y}-01-01`;
+      const endKey = r.endKey;
+      const days = Math.round((new Date(endKey + 'T12:00:00') - new Date(startKey + 'T12:00:00')) / (24*3600*1000)) + 1;
+      for (let d = 0; d < days; d++) {
+        const k = addDays(startKey, d);
+        spend += getSpend(k);
+        revenue += getRevenue(k);
+      }
+      const tacos = revenue > 0 ? (spend / revenue) * 100 : 0;
+      series.push({ label: String(y), spend, revenue, tacos, key: endKey });
+    }
+  }
 
-      return {
-        week: new Date(we + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-        spend: Math.round(spend),
-        revenue: Math.round(revenue),
-        tacos: Math.round(tacos * 10) / 10,
-      };
-    });
-
-    return {
-      data,
-      startLabel: new Date(firstWeekEnd + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      endLabel: new Date(endWeekKey + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-    };
-  };
-
-  const series = adsTimeTab === 'daily' ? seriesDaily() : seriesWeekly();
-  const chartData = series.data;
-
-  // Hide if totally empty
-  const anySignal = chartData.some(r => (r.spend || 0) > 0 || (r.revenue || 0) > 0);
+  // Remove empty points unless everything is empty
+  const anySignal = series.some(r => (r.spend || 0) > 0 || (r.revenue || 0) > 0);
   if (!anySignal) return null;
 
-  const avgSpend = chartData.reduce((s, w) => s + (w.spend || 0), 0) / chartData.length;
-  const avgRev = chartData.reduce((s, w) => s + (w.revenue || 0), 0) / chartData.length;
-  const avgTacos = chartData.reduce((s, w) => s + (w.tacos || 0), 0) / chartData.length;
+  const startLabel = series[0]?.label || '';
+  const endLabel = series[series.length - 1]?.label || '';
+  const chartData = series.map(r => ({
+    ...r,
+    spend: Math.round(r.spend || 0),
+    revenue: Math.round(r.revenue || 0),
+    tacos: Math.round(((r.tacos || 0) * 10)) / 10,
+  }));
+
+  const avgSpend = chartData.reduce((s, w) => s + w.spend, 0) / chartData.length;
+  const avgRev = chartData.reduce((s, w) => s + w.revenue, 0) / chartData.length;
+  const avgTacos = chartData.reduce((s, w) => s + w.tacos, 0) / chartData.length;
 
   return (
     <div className="bg-slate-800/50 rounded-xl border border-orange-500/30 p-5 mb-6">
@@ -32191,7 +32270,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         <h3 className="text-lg font-semibold text-white flex items-center gap-2">
           <TrendingUp className="w-5 h-5 text-orange-400" />Amazon Ads: Spend vs Revenue Trend
         </h3>
-        <span className="text-slate-400 text-sm">{series.startLabel} - {series.endLabel}</span>
+        <span className="text-slate-400 text-sm">{startLabel} - {endLabel}</span>
       </div>
 
       <div className="space-y-3 mb-4">
@@ -32201,7 +32280,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           const revWidth = maxValue > 0 ? (w.revenue / maxValue) * 100 : 0;
           return (
             <div key={i} className="flex items-center gap-3">
-              <span className="text-slate-400 text-xs w-32">{w.week}</span>
+              <span className="text-slate-400 text-xs w-28">{w.label}</span>
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1">
                   <div className="h-2 bg-orange-500/70 rounded" style={{ width: `${spendWidth}%`, minWidth: w.spend > 0 ? '4px' : '0' }} />
@@ -32238,7 +32317,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       </div>
     </div>
   );
-})()}          {/* Daily Table */}
+})()}{/* Daily Table */}
           {useDailyData && dailyTableData.length > 0 && (
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
               <div className="flex items-center justify-between mb-4">
