@@ -17568,7 +17568,26 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 const expectedWeekEnd = `${lastSunday.getFullYear()}-${String(lastSunday.getMonth() + 1).padStart(2, '0')}-${String(lastSunday.getDate()).padStart(2, '0')}`;
                 
                 // Check if we have data for the expected week OR the most recent week is within 7 days
-                const hasExpectedWeek = allWeeksData[expectedWeekEnd];
+                const hasExpectedWeek = allWeeksData[expectedWeekEnd] || (() => {
+                  const weekEnd = new Date(expectedWeekEnd + 'T12:00:00');
+                  if (isNaN(weekEnd.getTime())) return false;
+                  for (let i = 0; i < 7; i++) {
+                    const d = new Date(weekEnd);
+                    d.setDate(weekEnd.getDate() - i);
+                    const key = d.toISOString().split('T')[0];
+                    const dd = allDaysData[key];
+                    if (!dd) continue;
+                    const hasSales = hasDailySalesData(dd);
+                    const hasAds = (
+                      (dd?.shopify?.metaSpend || dd?.metaSpend || dd?.metaAds || 0) > 0 ||
+                      (dd?.shopify?.googleSpend || dd?.googleSpend || dd?.googleAds || 0) > 0 ||
+                      (dd?.shopify?.adsMetrics?.metaImpressions || dd?.metaImpressions || 0) > 0 ||
+                      (dd?.shopify?.adsMetrics?.googleImpressions || dd?.googleImpressions || 0) > 0
+                    );
+                    if (hasSales || hasAds) return true;
+                  }
+                  return false;
+                })();
                 const mostRecentWeek = sortedWeeks[sortedWeeks.length - 1];
                 const mostRecentDate = new Date(mostRecentWeek + 'T00:00:00');
                 const daysSinceLast = Math.floor((today - mostRecentDate) / (1000 * 60 * 60 * 24));
@@ -21726,8 +21745,187 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     );
   }
 
-  if (view === 'weekly' && selectedWeek && allWeeksData[selectedWeek]) {
-    const rawData = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
+  if (view === 'weekly' && selectedWeek) {
+    // Build week list from saved weekly data + any daily uploads/syncs (supports week-in-progress)
+    const weeks = (() => {
+      const weekSet = new Set(Object.keys(allWeeksData || {}));
+      Object.keys(allDaysData || {}).forEach(dayKey => {
+        const dd = allDaysData[dayKey];
+        const hasSales = hasDailySalesData(dd);
+        const hasAds = !!(
+
+          (dd?.shopify?.metaSpend || dd?.metaSpend || dd?.metaAds || 0) > 0 ||
+
+          (dd?.shopify?.googleSpend || dd?.googleSpend || dd?.googleAds || 0) > 0 ||
+
+          (dd?.shopify?.adsMetrics?.metaImpressions || dd?.metaImpressions || 0) > 0 ||
+
+          (dd?.shopify?.adsMetrics?.googleImpressions || dd?.googleImpressions || 0) > 0
+
+        );
+        if (hasSales || hasAds) {
+          const sunday = getSunday(new Date(dayKey + 'T12:00:00'));
+          weekSet.add(sunday);
+        }
+      });
+      return Array.from(weekSet).sort().reverse();
+    })();
+    const idx = weeks.indexOf(selectedWeek);
+
+    const buildWeekFromDaily = (weekKey) => {
+      const weekEnd = new Date(weekKey + 'T12:00:00');
+      if (isNaN(weekEnd.getTime())) return null;
+      const expectedDays = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(weekEnd);
+        d.setDate(weekEnd.getDate() - i);
+        expectedDays.push(formatDateKey(d));
+      }
+
+      const amzSku = {};
+      const shopSku = {};
+      const ads = {
+        metaImpressions: 0, metaClicks: 0, metaPurchases: 0, metaPurchaseValue: 0, metaROAS: 0, metaCPM: 0, metaCPC: 0,
+        googleImpressions: 0, googleClicks: 0, googleConversions: 0, googleConversionValue: 0, googleROAS: 0, googleCPM: 0, googleCPC: 0,
+      };
+
+      const agg = {
+        weekEnding: weekKey,
+        createdAt: new Date().toISOString(),
+        aggregatedFrom: [],
+        isWeekInProgress: true,
+        daysPresent: 0,
+        missingDays: [],
+        amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, margin: 0, aov: 0, roas: 0, returnRate: 0, skuData: [] },
+        shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, netMargin: 0, aov: 0, roas: 0, skuData: [], adsMetrics: {} },
+        total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0, netMargin: 0, roas: 0, amazonShare: 0, shopifyShare: 0 },
+      };
+
+      expectedDays.forEach(dayKey => {
+        const dayData = allDaysData[dayKey];
+        if (!dayData) return;
+        const hasSales = hasDailySalesData(dayData);
+        const hasAds = !!(dayData?.shopify?.metaSpend || dayData?.shopify?.googleSpend || dayData?.shopify?.adsMetrics?.metaImpressions || dayData?.shopify?.adsMetrics?.googleImpressions);
+        if (!hasSales && !hasAds) return;
+
+        agg.aggregatedFrom.push(dayKey);
+        agg.daysPresent += 1;
+
+        const a = dayData.amazon || {};
+        agg.amazon.revenue += a.revenue || 0;
+        agg.amazon.units += a.units || 0;
+        agg.amazon.returns += a.returns || 0;
+        agg.amazon.cogs += a.cogs || 0;
+        agg.amazon.fees += a.fees || 0;
+        agg.amazon.adSpend += a.adSpend || 0;
+        agg.amazon.netProfit += ((a.netProfit ?? a.netProceeds ?? 0) || 0);
+        (a.skuData || []).forEach(sku => {
+          const key = sku?.sku;
+          if (!key) return;
+          if (!amzSku[key]) amzSku[key] = { ...sku, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0, profit: 0 };
+          amzSku[key].unitsSold += sku.unitsSold || sku.units || 0;
+          amzSku[key].netSales += sku.netSales || sku.netProceeds || sku.revenue || 0;
+          amzSku[key].discounts += sku.discounts || 0;
+          amzSku[key].cogs += sku.cogs || 0;
+          amzSku[key].profit += sku.profit || sku.netProceeds || 0;
+        });
+
+        const s = dayData.shopify || {};
+        agg.shopify.revenue += s.revenue || 0;
+        agg.shopify.units += s.units || 0;
+        agg.shopify.cogs += s.cogs || 0;
+        const dayMeta = (s.metaSpend || dayData?.metaSpend || dayData?.metaAds || 0);
+        const dayGoogle = (s.googleSpend || dayData?.googleSpend || dayData?.googleAds || 0);
+        const dayAdSpend = (typeof s.adSpend === 'number' && s.adSpend > 0) ? s.adSpend : (dayMeta + dayGoogle);
+        agg.shopify.adSpend += dayAdSpend;
+        agg.shopify.metaSpend += dayMeta;
+        agg.shopify.googleSpend += dayGoogle;
+        agg.shopify.discounts += s.discounts || 0;
+        agg.shopify.netProfit += s.netProfit || 0;
+        (s.skuData || []).forEach(sku => {
+          const key = sku?.sku;
+          if (!key) return;
+          if (!shopSku[key]) shopSku[key] = { ...sku, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+          shopSku[key].unitsSold += sku.unitsSold || sku.units || 0;
+          shopSku[key].netSales += sku.netSales || sku.revenue || 0;
+          shopSku[key].discounts += sku.discounts || 0;
+          shopSku[key].cogs += sku.cogs || 0;
+        });
+
+        const m = s.adsMetrics || {};
+        // Some ad uploads store metrics at the root (metaImpressions/googleImpressions/etc). Fold those in too.
+        const flat = {
+          metaImpressions: dayData?.metaImpressions, metaClicks: dayData?.metaClicks, metaPurchases: dayData?.metaPurchases,
+          metaPurchaseValue: dayData?.metaPurchaseValue, metaROAS: dayData?.metaROAS, metaCPM: dayData?.metaCPM, metaCPC: dayData?.metaCPC, metaCTR: dayData?.metaCTR,
+          googleImpressions: dayData?.googleImpressions, googleClicks: dayData?.googleClicks, googleConversions: dayData?.googleConversions,
+          googleConversionValue: dayData?.googleConversionValue, googleROAS: dayData?.googleROAS, googleCPM: dayData?.googleCPM, googleCPC: dayData?.googleCPC, googleCTR: dayData?.googleCTR, googleCostPerConv: dayData?.googleCostPerConv,
+        };
+        Object.keys(ads).forEach(k => {
+          const v = (typeof m[k] === 'number') ? m[k] : (typeof flat[k] === 'number' ? flat[k] : 0);
+          ads[k] += v;
+        });
+      });
+
+      agg.missingDays = expectedDays.filter(d => !agg.aggregatedFrom.includes(d));
+      agg.isWeekInProgress = agg.aggregatedFrom.length < 7;
+      agg.shopify.skuData = Object.values(shopSku).sort((a, b) => (b.netSales || 0) - (a.netSales || 0));
+      agg.amazon.skuData = Object.values(amzSku).sort((a, b) => (b.netSales || 0) - (a.netSales || 0));
+      agg.shopify.adsMetrics = ads;
+
+      // Derived metrics
+      agg.amazon.margin = agg.amazon.revenue > 0 ? (agg.amazon.netProfit / agg.amazon.revenue) * 100 : 0;
+      agg.amazon.aov = agg.amazon.units > 0 ? agg.amazon.revenue / agg.amazon.units : 0;
+      agg.amazon.roas = agg.amazon.adSpend > 0 ? agg.amazon.revenue / agg.amazon.adSpend : 0;
+      agg.amazon.returnRate = agg.amazon.units > 0 ? (agg.amazon.returns / agg.amazon.units) * 100 : 0;
+
+      agg.shopify.netMargin = agg.shopify.revenue > 0 ? (agg.shopify.netProfit / agg.shopify.revenue) * 100 : 0;
+      agg.shopify.aov = agg.shopify.units > 0 ? agg.shopify.revenue / agg.shopify.units : 0;
+      agg.shopify.roas = agg.shopify.adSpend > 0 ? agg.shopify.revenue / agg.shopify.adSpend : 0;
+
+      const totalRev = agg.amazon.revenue + agg.shopify.revenue;
+      const totalAds = agg.amazon.adSpend + agg.shopify.adSpend;
+      const totalCogs = agg.amazon.cogs + agg.shopify.cogs;
+      const totalProfit = agg.amazon.netProfit + agg.shopify.netProfit;
+      agg.total.revenue = totalRev;
+      agg.total.units = agg.amazon.units + agg.shopify.units;
+      agg.total.cogs = totalCogs;
+      agg.total.adSpend = totalAds;
+      agg.total.netProfit = totalProfit;
+      agg.total.netMargin = totalRev > 0 ? (totalProfit / totalRev) * 100 : 0;
+      agg.total.roas = totalAds > 0 ? totalRev / totalAds : 0;
+      agg.total.amazonShare = totalRev > 0 ? (agg.amazon.revenue / totalRev) * 100 : 0;
+      agg.total.shopifyShare = totalRev > 0 ? (agg.shopify.revenue / totalRev) * 100 : 0;
+
+      return agg;
+    };
+
+    const storedWeek = allWeeksData[selectedWeek] || null;
+    const derivedWeek = buildWeekFromDaily(selectedWeek);
+    let rawData = storedWeek || derivedWeek;
+    if (storedWeek && derivedWeek) {
+      const storedHasAmazon = (storedWeek.amazon?.revenue || 0) > 0 || (storedWeek.amazon?.units || 0) > 0 || (storedWeek.amazon?.skuData?.length || 0) > 0;
+      const storedHasAdsKPIs = !!(storedWeek.shopify?.adsMetrics?.metaImpressions || storedWeek.shopify?.adsMetrics?.googleImpressions);
+      rawData = {
+        ...storedWeek,
+        amazon: storedHasAmazon ? storedWeek.amazon : derivedWeek.amazon,
+        shopify: {
+          ...storedWeek.shopify,
+          metaSpend: (storedWeek.shopify?.metaSpend || 0) || (derivedWeek.shopify?.metaSpend || 0),
+          googleSpend: (storedWeek.shopify?.googleSpend || 0) || (derivedWeek.shopify?.googleSpend || 0),
+          adSpend: (storedWeek.shopify?.adSpend || 0) || (derivedWeek.shopify?.adSpend || 0),
+          adsMetrics: storedHasAdsKPIs ? storedWeek.shopify.adsMetrics : derivedWeek.shopify.adsMetrics,
+        },
+        total: (storedWeek.total?.revenue || 0) > 0 ? storedWeek.total : derivedWeek.total,
+        isWeekInProgress: derivedWeek.isWeekInProgress,
+        daysPresent: derivedWeek.daysPresent,
+        missingDays: derivedWeek.missingDays,
+        aggregatedFrom: storedWeek.aggregatedFrom || derivedWeek.aggregatedFrom,
+      };
+    }
+
+    if (!rawData) {
+      return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
+    }
     
     // Enhance Shopify data with 3PL from ledger if available
     const ledger3PL = get3PLForWeek(threeplLedger, selectedWeek);
@@ -21933,7 +22131,17 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               {storeLogo && (
                 <img src={storeLogo} alt="Store logo" className="w-12 h-12 object-contain rounded-xl bg-white p-1.5" />
               )}
-              <div><h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'Weekly Performance'}</h1><p className="text-slate-400">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p></div>
+              <div>
+                <h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'Weekly Performance'}</h1>
+                <p className="text-slate-400">
+                  Week ending {new Date(selectedWeek + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                  {rawData?.isWeekInProgress && typeof rawData?.daysPresent === 'number' ? (
+                    <span className="ml-2 inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-300 border border-amber-500/30">
+                      Week in progress · {rawData.daysPresent}/7 days
+                    </span>
+                  ) : null}
+                </p>
+              </div>
             </div>
             <div className="flex gap-2">
               <button onClick={() => { setReprocessAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowReprocess(true); }} className="bg-violet-900/50 hover:bg-violet-800/50 border border-violet-600/50 text-violet-300 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><RefreshCw className="w-4 h-4" />Re-process</button>
