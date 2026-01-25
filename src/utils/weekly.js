@@ -84,7 +84,7 @@ export const deriveWeeksFromDays = (allDaysData = {}) => {
         days: [],
         meta: { isInProgress: true, daysPresent: 0 },
         amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, skuData: [] },
-        shopify: { revenue: 0, units: 0, cogs: 0, shippingCollected: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, skuData: [], adsMetrics: { metaImpressions: 0, metaClicks: 0, metaPurchases: 0, metaPurchaseValue: 0, metaCTR: 0, metaCPC: 0, metaCPM: 0, metaROAS: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, googleCTR: 0, googleCPC: 0, googleCostPerConv: 0 } },
+        shopify: { revenue: 0, units: 0, orders: 0, cogs: 0, shippingCollected: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, skuData: [], adsMetrics: { metaImpressions: 0, metaClicks: 0, metaPurchases: 0, metaPurchaseValue: 0, metaCTR: 0, metaCPC: 0, metaCPM: 0, metaROAS: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, googleCTR: 0, googleCPC: 0, googleCostPerConv: 0 } },
         total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0, netMargin: 0, roas: 0, amazonShare: 0, shopifyShare: 0 },
       };
     }
@@ -246,7 +246,12 @@ if (w.shopify.adsMetrics) {
   am.googleCostPerConv = am.googleConversions > 0 ? (googleSpend / am.googleConversions) : 0;
 }
 
-    const totalRevenue = num(w.amazon.revenue) + num(w.shopify.revenue);
+    
+// Derived averages
+w.amazon.aov = num(w.amazon.units) > 0 ? (num(w.amazon.revenue) / num(w.amazon.units)) : 0;
+w.shopify.aov = num(w.shopify.orders) > 0 ? (num(w.shopify.revenue) / num(w.shopify.orders)) : 0;
+
+const totalRevenue = num(w.amazon.revenue) + num(w.shopify.revenue);
     const totalUnits = num(w.amazon.units) + num(w.shopify.units);
     const totalCogs = num(w.amazon.cogs) + num(w.shopify.cogs);
     const totalAdSpend = num(w.amazon.adSpend) + num(w.shopify.adSpend);
