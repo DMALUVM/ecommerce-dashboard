@@ -10342,9 +10342,9 @@ Analyze the data and respond with ONLY this JSON:
         const profit = isAmz 
           ? (item.netProceeds || 0)
           : (item.netSales || 0) - (item.cogs || 0);
-        // For $/Unit: Amazon uses proceeds (the profit), Shopify uses netSales
+        // Profit per unit should be Profit / Units for both channels
         const proceedsPerUnit = item.unitsSold > 0 
-          ? (isAmz ? item.netProceeds : item.netSales) / item.unitsSold 
+          ? profit / item.unitsSold 
           : 0;
         return { ...item, profit, proceedsPerUnit };
       });
@@ -10496,7 +10496,7 @@ Analyze the data and respond with ONLY this JSON:
                           {!isAmz && <SortHeader field="discounts" label="Discounts" />}
                           <SortHeader field="cogs" label="COGS" />
                           <SortHeader field="profit" label="Profit" />
-                          <SortHeader field="proceedsPerUnit" label="$/Unit" />
+                          <SortHeader field="proceedsPerUnit" label="Profit/Unit" />
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-700/50">
