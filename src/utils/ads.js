@@ -64,3 +64,52 @@ export const hasShopifyAdsSignals = (ads) => {
     num(a.googleConversions) > 0
   );
 };
+
+export const aggregateShopifyAdsForDays = (dayRecords) => {
+  const days = Array.isArray(dayRecords) ? dayRecords : [];
+  const totals = {
+    metaSpend: 0,
+    googleSpend: 0,
+    metaImpressions: 0,
+    metaClicks: 0,
+    metaPurchases: 0,
+    metaPurchaseValue: 0,
+    googleImpressions: 0,
+    googleClicks: 0,
+    googleConversions: 0,
+  };
+
+  days.forEach((d) => {
+    const a = getShopifyAdsForDay(d);
+    totals.metaSpend += num(a.metaSpend);
+    totals.googleSpend += num(a.googleSpend);
+    totals.metaImpressions += num(a.metaImpressions);
+    totals.metaClicks += num(a.metaClicks);
+    totals.metaPurchases += num(a.metaPurchases);
+    totals.metaPurchaseValue += num(a.metaPurchaseValue);
+    totals.googleImpressions += num(a.googleImpressions);
+    totals.googleClicks += num(a.googleClicks);
+    totals.googleConversions += num(a.googleConversions);
+  });
+
+  // Derive KPIs
+  const metaCTR = totals.metaImpressions > 0 ? (totals.metaClicks / totals.metaImpressions) * 100 : 0;
+  const metaCPC = totals.metaClicks > 0 ? (totals.metaSpend / totals.metaClicks) : 0;
+  const metaCPM = totals.metaImpressions > 0 ? (totals.metaSpend / totals.metaImpressions) * 1000 : 0;
+  const metaROAS = totals.metaSpend > 0 ? (totals.metaPurchaseValue / totals.metaSpend) : 0;
+
+  const googleCTR = totals.googleImpressions > 0 ? (totals.googleClicks / totals.googleImpressions) * 100 : 0;
+  const googleCPC = totals.googleClicks > 0 ? (totals.googleSpend / totals.googleClicks) : 0;
+  const googleCostPerConv = totals.googleConversions > 0 ? (totals.googleSpend / totals.googleConversions) : 0;
+
+  return {
+    ...totals,
+    metaCTR,
+    metaCPC,
+    metaCPM,
+    metaROAS,
+    googleCTR,
+    googleCPC,
+    googleCostPerConv,
+  };
+};

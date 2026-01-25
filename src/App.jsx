@@ -7,7 +7,7 @@ import { parseCSV, parseCSVLine } from './utils/csv';
 import { formatCurrency, formatPercent, formatNumber } from './utils/format';
 import { hasDailySalesData, formatDateKey, getSunday } from './utils/date';
 import { deriveWeeksFromDays, mergeWeekData } from './utils/weekly';
-import { getShopifyAdsForDay } from './utils/ads';
+import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from './utils/ads';
 import { withShippingSkuRow, sumSkuRows } from './utils/reconcile';
 import {
   STORAGE_KEY, INVENTORY_KEY, COGS_KEY, STORE_KEY, GOALS_KEY, PERIODS_KEY, SALES_TAX_KEY, PRODUCT_NAMES_KEY,
@@ -32013,6 +32013,52 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             </div>
           )}
           
+
+
+{/* Shopify Ads KPIs (derived from the same time window as the trend chart) */}
+{(() => {
+  const daysWithShopifyAds = sortedDays.filter(d => {
+    const day = allDaysData[d];
+    if (!day) return false;
+    const ads = getShopifyAdsForDay(day);
+    return (ads.metaSpend || 0) > 0 || (ads.googleSpend || 0) > 0 || (ads.metaImpressions || 0) > 0 || (ads.googleImpressions || 0) > 0;
+  });
+  const chartDays = adsTimeTab === 'daily'
+    ? daysWithShopifyAds.slice(-14)
+    : daysWithShopifyAds.slice(-56); // ~8 weeks of daily data for weekly aggregation context
+
+  const metrics = aggregateShopifyAdsForDays(chartDays.map(d => allDaysData[d]).filter(Boolean));
+  const show = (metrics.metaSpend + metrics.googleSpend + metrics.metaImpressions + metrics.googleImpressions) > 0;
+  if (!show) return null;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+      <div className="bg-indigo-900/20 border border-indigo-500/30 rounded-xl p-4">
+        <h4 className="text-indigo-300 font-semibold mb-3">Meta Ads KPIs</h4>
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <div><p className="text-slate-400 text-xs mb-1">Spend</p><p className="text-white font-semibold">{formatCurrency(metrics.metaSpend)}</p></div>
+          <div><p className="text-slate-400 text-xs mb-1">CTR</p><p className="text-white font-semibold">{metrics.metaCTR.toFixed(2)}%</p></div>
+          <div><p className="text-slate-400 text-xs mb-1">CPC</p><p className="text-white font-semibold">{formatCurrency(metrics.metaCPC)}</p></div>
+          <div><p className="text-slate-400 text-xs mb-1">ROAS</p><p className="text-white font-semibold">{metrics.metaROAS.toFixed(2)}</p></div>
+          <div><p className="text-slate-400 text-xs mb-1">CPM</p><p className="text-white font-semibold">{formatCurrency(metrics.metaCPM)}</p></div>
+          <div><p className="text-slate-400 text-xs mb-1">Purchases</p><p className="text-white font-semibold">{formatNumber(metrics.metaPurchases)}</p></div>
+        </div>
+      </div>
+
+      <div className="bg-red-900/20 border border-red-500/30 rounded-xl p-4">
+        <h4 className="text-red-300 font-semibold mb-3">Google Ads KPIs</h4>
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <div><p className="text-slate-400 text-xs mb-1">Spend</p><p className="text-white font-semibold">{formatCurrency(metrics.googleSpend)}</p></div>
+          <div><p className="text-slate-400 text-xs mb-1">CTR</p><p className="text-white font-semibold">{metrics.googleCTR.toFixed(2)}%</p></div>
+          <div><p className="text-slate-400 text-xs mb-1">CPC</p><p className="text-white font-semibold">{formatCurrency(metrics.googleCPC)}</p></div>
+          <div><p className="text-slate-400 text-xs mb-1">CPA</p><p className="text-white font-semibold">{formatCurrency(metrics.googleCostPerConv)}</p></div>
+          <div><p className="text-slate-400 text-xs mb-1">Conversions</p><p className="text-white font-semibold">{formatNumber(metrics.googleConversions)}</p></div>
+          <div><p className="text-slate-400 text-xs mb-1">Clicks</p><p className="text-white font-semibold">{formatNumber(metrics.googleClicks)}</p></div>
+        </div>
+      </div>
+    </div>
+  );
+})()}
           {/* Amazon Spend vs Revenue Trend Chart */}
           
 {(() => {
@@ -32131,12 +32177,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     </div>
   );
 })()}
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-          
           {/* Daily Table */}
           {useDailyData && dailyTableData.length > 0 && (
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
