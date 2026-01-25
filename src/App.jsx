@@ -11103,6 +11103,9 @@ Analyze the data and respond with ONLY this JSON:
               {hasShopify ? (
                 <div className="space-y-1.5 sm:space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-slate-400">Revenue</span><span className="text-white font-medium">{formatCurrency(shopify.revenue || 0)}</span></div>
+                  {(shopify.shippingCollected || 0) > 0 && (
+                    <div className="flex justify-between"><span className="text-slate-400">Shipping Collected</span><span className="text-emerald-400 font-medium">{formatCurrency(shopify.shippingCollected || 0)}</span></div>
+                  )}
                   <div className="flex justify-between"><span className="text-slate-400">Units</span><span className="text-white font-medium">{formatNumber(shopify.units || 0)}</span></div>
                   <div className="border-t border-green-500/20 pt-1.5 mt-1.5">
                     {shopifyCogs > 0 && <div className="flex justify-between text-slate-500"><span>COGS</span><span className="text-rose-400/70">-{formatCurrency(shopifyCogs)}</span></div>}
@@ -16812,7 +16815,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         
         // Check if day has REAL Amazon data (not zero which means not yet reported)
         const hasAmazonData = dayData?.amazon?.revenue > 0;
-        const hasShopifyData = dayData?.shopify?.syncedFrom === 'shopify-api';
+        const hasShopifyData = dayData?.shopify?.revenue > 0;
         const dayRevenue = dayData?.total?.revenue || 0;
         
         if (hasAmazonData) {
@@ -20355,7 +20358,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           const existing = [];
                           for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
                             const dateStr = d.toISOString().split('T')[0];
-                            const hasShopifyData = allDaysData[dateStr]?.shopify?.syncedFrom === 'shopify-api';
+                            const hasShopifyData = allDaysData[dateStr]?.shopify?.revenue > 0;
                             if (hasShopifyData) {
                               existing.push(dateStr);
                             } else {
@@ -20402,7 +20405,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           const existing = [];
                           for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
                             const dateStr = d.toISOString().split('T')[0];
-                            const hasShopifyData = allDaysData[dateStr]?.shopify?.syncedFrom === 'shopify-api';
+                            const hasShopifyData = allDaysData[dateStr]?.shopify?.revenue > 0;
                             if (hasShopifyData) {
                               existing.push(dateStr);
                             } else {
@@ -20584,27 +20587,20 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               // Calculate COGS from SKU data if not already calculated
                               let calculatedCogs = shopifyData.cogs || 0;
                               if (!calculatedCogs && shopifyData.skuData && Object.keys(cogsLookup).length > 0) {
-                                const skuRows = Array.isArray(shopifyData.skuData) ? shopifyData.skuData : Object.values(shopifyData.skuData);
-                                skuRows.forEach(sku => {
-                                  const skuKey = sku?.sku || sku?.MSKU || sku?.id || '';
-                                  const qty = sku.unitsSold || sku.units || 0;
-                                  const unitCost = cogsLookup[skuKey] || getCogsCost(skuKey) || 0;
-                                  if (unitCost > 0 && qty > 0) {
-                                    const skuCogs = unitCost * qty;
-                                    calculatedCogs += skuCogs;
-                                    sku.cogs = skuCogs;
+                                Object.values(shopifyData.skuData).forEach(sku => {
+                                  const unitCost = cogsLookup[sku.sku] || 0;
+                                  calculatedCogs += unitCost * (sku.unitsSold || sku.units || 0);
+                                  // Also update the SKU's cogs
+                                  if (unitCost > 0) {
+                                    sku.cogs = unitCost * (sku.unitsSold || sku.units || 0);
                                   }
                                 });
                               }
                               // Also calculate from line items if available
                               if (!calculatedCogs && shopifyData.lineItems && Object.keys(cogsLookup).length > 0) {
                                 shopifyData.lineItems.forEach(item => {
-                                  const skuKey = item?.sku || '';
-                                  const qty = item?.quantity || 0;
-                                  const unitCost = cogsLookup[skuKey] || getCogsCost(skuKey) || 0;
-                                  if (unitCost > 0 && qty > 0) {
-                                    calculatedCogs += unitCost * qty;
-                                  }
+                                  const unitCost = cogsLookup[item.sku] || 0;
+                                  calculatedCogs += unitCost * (item.quantity || 0);
                                 });
                               }
                               
@@ -20621,9 +20617,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                 googleSpend: existingGoogleSpend,
                                 googleAds: existingGoogleSpend,
                                 adSpend: existingMetaSpend + existingGoogleSpend,
-                                // Marks this day as sourced from the Shopify Orders API (not CSV)
-                                syncedFrom: 'shopify-api',
-                                syncedAt: new Date().toISOString(),
                               };
                               
                               // Recalculate profit with COGS and ad spend
@@ -20689,16 +20682,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                 // Calculate COGS from SKU data if not already calculated
                                 let weekCogs = weekData.shopify?.cogs || 0;
                                 if (!weekCogs && weekData.shopify?.skuData && Object.keys(cogsLookup).length > 0) {
-                                  const skuRows = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
-                                  skuRows.forEach(sku => {
-                                    const skuKey = sku?.sku || '';
-                                    const qty = sku.unitsSold || sku.units || 0;
-                                    const unitCost = cogsLookup[skuKey] || getCogsCost(skuKey) || 0;
-                                    if (unitCost > 0 && qty > 0) {
-                                      const skuCogs = unitCost * qty;
-                                      weekCogs += skuCogs;
-                                      sku.cogs = skuCogs;
-                                    }
+                                  Object.values(weekData.shopify.skuData).forEach(sku => {
+                                    const unitCost = cogsLookup[sku.sku] || 0;
+                                    weekCogs += unitCost * (sku.unitsSold || sku.units || 0);
                                   });
                                 }
                                 
@@ -20737,14 +20723,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                 // New week - calculate COGS from SKU data
                                 let newWeekCogs = weekData.shopify?.cogs || 0;
                                 if (!newWeekCogs && weekData.shopify?.skuData && Object.keys(cogsLookup).length > 0) {
-                                  const skuRows = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
-                                  skuRows.forEach(sku => {
-                                    const skuKey = sku?.sku || '';
-                                    const qty = sku.unitsSold || sku.units || 0;
-                                    const unitCost = cogsLookup[skuKey] || getCogsCost(skuKey) || 0;
-                                    if (unitCost > 0 && qty > 0) {
-                                      newWeekCogs += unitCost * qty;
-                                    }
+                                  Object.values(weekData.shopify.skuData).forEach(sku => {
+                                    const unitCost = cogsLookup[sku.sku] || 0;
+                                    newWeekCogs += unitCost * (sku.unitsSold || sku.units || 0);
                                   });
                                 }
                                 
