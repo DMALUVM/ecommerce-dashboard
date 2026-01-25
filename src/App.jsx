@@ -22043,7 +22043,61 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             <div className="bg-slate-800/50 rounded-2xl border border-purple-500/30 p-5 mb-6">
               <h3 className="text-lg font-semibold text-purple-400 mb-4 flex items-center gap-2"><Zap className="w-5 h-5" />Ad Performance - {data.label}</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4"><div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">Total Ad Spend</p><p className="text-white text-xl font-bold">{formatCurrency(data.total.adSpend)}</p></div><div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">TACOS</p><p className={`text-xl font-bold ${data.total.revenue > 0 && (data.total.adSpend / data.total.revenue) * 100 <= 15 ? 'text-emerald-400' : 'text-amber-400'}`}>{data.total.revenue > 0 ? ((data.total.adSpend / data.total.revenue) * 100).toFixed(1) : 0}%</p></div><div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">Amazon Ads</p><p className="text-orange-400 text-xl font-bold">{formatCurrency(data.amazon?.adSpend || 0)}</p></div><div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">Shopify Ads</p><p className="text-blue-400 text-xl font-bold">{formatCurrency(data.shopify?.adSpend || 0)}</p></div></div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div className="bg-orange-900/20 rounded-lg p-4 border border-orange-500/30"><h4 className="text-orange-400 font-semibold mb-2">Amazon</h4><div className="space-y-1 text-sm"><div className="flex justify-between"><span className="text-slate-400">Sponsored Products</span><span className="text-white">{formatCurrency(data.amazon?.adSpend || 0)}</span></div><div className="flex justify-between"><span className="text-slate-400">TACOS</span><span className="text-white">{data.amazon?.revenue > 0 ? ((data.amazon.adSpend / data.amazon.revenue) * 100).toFixed(1) : 0}%</span></div></div></div><div className="bg-blue-900/20 rounded-lg p-4 border border-blue-500/30"><h4 className="text-blue-400 font-semibold mb-2">Shopify</h4><div className="space-y-1 text-sm"><div className="flex justify-between"><span className="text-slate-400">Meta Ads</span><span className="text-white">{formatCurrency(data.shopify?.metaSpend || 0)}</span></div><div className="flex justify-between"><span className="text-slate-400">Google Ads</span><span className="text-white">{formatCurrency(data.shopify?.googleSpend || 0)}</span></div><div className="flex justify-between"><span className="text-slate-400">TACOS</span><span className="text-white">{data.shopify?.revenue > 0 ? ((data.shopify.adSpend / data.shopify.revenue) * 100).toFixed(1) : 0}%</span></div></div></div></div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div className="bg-orange-900/20 rounded-lg p-4 border border-orange-500/30">
+    <h4 className="text-orange-400 font-semibold mb-2">Amazon</h4>
+    <div className="space-y-1 text-sm">
+      <div className="flex justify-between"><span className="text-slate-400">Sponsored Products</span><span className="text-white">{formatCurrency(data.amazon?.adSpend || 0)}</span></div>
+      <div className="flex justify-between"><span className="text-slate-400">TACOS</span><span className="text-white">{data.amazon?.revenue > 0 ? ((data.amazon.adSpend / data.amazon.revenue) * 100).toFixed(1) : 0}%</span></div>
+    </div>
+  </div>
+
+  <div className="bg-blue-900/20 rounded-lg p-4 border border-blue-500/30">
+    <h4 className="text-blue-400 font-semibold mb-2">Shopify</h4>
+    <div className="space-y-1 text-sm">
+      <div className="flex justify-between"><span className="text-slate-400">Meta Ads</span><span className="text-white">{formatCurrency(data.shopify?.metaSpend || 0)}</span></div>
+      <div className="flex justify-between"><span className="text-slate-400">Google Ads</span><span className="text-white">{formatCurrency(data.shopify?.googleSpend || 0)}</span></div>
+      <div className="flex justify-between"><span className="text-slate-400">TACOS</span><span className="text-white">{data.shopify?.revenue > 0 ? ((data.shopify.adSpend / data.shopify.revenue) * 100).toFixed(1) : 0}%</span></div>
+    </div>
+
+    {/* Weekly KPIs (populated from daily ads uploads via utils/weekly.js) */}
+    {(() => {
+      const m = data.shopify?.adsMetrics || {};
+      const metaImpr = m.metaImpressions || 0;
+      const googleImpr = m.googleImpressions || 0;
+      const has = (metaImpr + googleImpr) > 0 || (m.metaClicks || 0) > 0 || (m.googleClicks || 0) > 0;
+      if (!has) return null;
+
+      return (
+        <div className="mt-4 pt-4 border-t border-blue-500/20 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="bg-slate-900/50 rounded-lg p-3">
+            <p className="text-slate-400 text-xs font-medium mb-2">Meta KPIs</p>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div><p className="text-slate-500 text-[10px]">Impr</p><p className="text-white text-sm font-semibold">{formatNumber(metaImpr)}</p></div>
+              <div><p className="text-slate-500 text-[10px]">Clicks</p><p className="text-white text-sm font-semibold">{formatNumber(m.metaClicks || 0)}</p></div>
+              <div><p className="text-slate-500 text-[10px]">Purch</p><p className="text-white text-sm font-semibold">{formatNumber(m.metaPurchases || 0)}</p></div>
+              <div><p className="text-slate-500 text-[10px]">CTR</p><p className="text-white text-sm font-semibold">{(m.metaCTR || 0).toFixed(2)}%</p></div>
+              <div><p className="text-slate-500 text-[10px]">CPC</p><p className="text-white text-sm font-semibold">{formatCurrency(m.metaCPC || 0)}</p></div>
+              <div><p className="text-slate-500 text-[10px]">ROAS</p><p className="text-white text-sm font-semibold">{(m.metaROAS || 0).toFixed(2)}</p></div>
+            </div>
+          </div>
+
+          <div className="bg-slate-900/50 rounded-lg p-3">
+            <p className="text-slate-400 text-xs font-medium mb-2">Google KPIs</p>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div><p className="text-slate-500 text-[10px]">Impr</p><p className="text-white text-sm font-semibold">{formatNumber(googleImpr)}</p></div>
+              <div><p className="text-slate-500 text-[10px]">Clicks</p><p className="text-white text-sm font-semibold">{formatNumber(m.googleClicks || 0)}</p></div>
+              <div><p className="text-slate-500 text-[10px]">Conv</p><p className="text-white text-sm font-semibold">{formatNumber(m.googleConversions || 0)}</p></div>
+              <div><p className="text-slate-500 text-[10px]">CTR</p><p className="text-white text-sm font-semibold">{(m.googleCTR || 0).toFixed(2)}%</p></div>
+              <div><p className="text-slate-500 text-[10px]">CPC</p><p className="text-white text-sm font-semibold">{formatCurrency(m.googleCPC || 0)}</p></div>
+              <div><p className="text-slate-500 text-[10px]">CPA</p><p className="text-white text-sm font-semibold">{formatCurrency(m.googleCostPerConv || 0)}</p></div>
+            </div>
+          </div>
+        </div>
+      );
+    })()}
+  </div>
+</div>
             </div>
           )}
           

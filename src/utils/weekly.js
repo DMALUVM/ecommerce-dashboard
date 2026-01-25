@@ -84,7 +84,7 @@ export const deriveWeeksFromDays = (allDaysData = {}) => {
         days: [],
         meta: { isInProgress: true, daysPresent: 0 },
         amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, skuData: [] },
-        shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, skuData: [] },
+        shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, skuData: [], adsMetrics: { metaImpressions: 0, metaClicks: 0, metaPurchases: 0, metaPurchaseValue: 0, metaCTR: 0, metaCPC: 0, metaCPM: 0, metaROAS: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, googleCTR: 0, googleCPC: 0, googleCostPerConv: 0 } },
         total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0, netMargin: 0, roas: 0, amazonShare: 0, shopifyShare: 0 },
       };
     }
@@ -148,6 +148,26 @@ export const deriveWeeksFromDays = (allDaysData = {}) => {
       w.shopify.googleSpend += google;
       w.shopify.adSpend += num(day.shopify.adSpend ?? (meta + google));
       w.shopify.netProfit += num(day.shopify.netProfit);
+// Ads KPI metrics (supports nested shopify.adsMetrics or flat root fields from bulk imports)
+const dm = day.shopify.adsMetrics || {};
+const metaImpr = num(dm.metaImpressions ?? day.metaImpressions);
+const metaClicks = num(dm.metaClicks ?? day.metaClicks);
+const metaPurch = num(dm.metaPurchases ?? day.metaPurchases ?? day.metaConversions);
+const metaValue = num(dm.metaPurchaseValue ?? day.metaPurchaseValue);
+const googleImpr = num(dm.googleImpressions ?? day.googleImpressions);
+const googleClicks = num(dm.googleClicks ?? day.googleClicks);
+const googleConv = num(dm.googleConversions ?? day.googleConversions);
+
+if (!w.shopify.adsMetrics) {
+  w.shopify.adsMetrics = { metaImpressions: 0, metaClicks: 0, metaPurchases: 0, metaPurchaseValue: 0, metaCTR: 0, metaCPC: 0, metaCPM: 0, metaROAS: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, googleCTR: 0, googleCPC: 0, googleCostPerConv: 0 };
+}
+w.shopify.adsMetrics.metaImpressions += metaImpr;
+w.shopify.adsMetrics.metaClicks += metaClicks;
+w.shopify.adsMetrics.metaPurchases += metaPurch;
+w.shopify.adsMetrics.metaPurchaseValue += metaValue;
+w.shopify.adsMetrics.googleImpressions += googleImpr;
+w.shopify.adsMetrics.googleClicks += googleClicks;
+w.shopify.adsMetrics.googleConversions += googleConv;
 
       if (!w.shopify._skuMap) w.shopify._skuMap = {};
       const skuArr = Array.isArray(day.shopify.skuData) ? day.shopify.skuData : [];
@@ -187,6 +207,22 @@ export const deriveWeeksFromDays = (allDaysData = {}) => {
       w.shopify.skuData = [];
     }
 
+// Derive weekly ad KPIs from accumulated totals (prefer weighted / ratio-based metrics)
+if (w.shopify.adsMetrics) {
+  const am = w.shopify.adsMetrics;
+  const metaSpend = num(w.shopify.metaSpend);
+  const googleSpend = num(w.shopify.googleSpend);
+
+  am.metaCTR = am.metaImpressions > 0 ? (am.metaClicks / am.metaImpressions) * 100 : 0;
+  am.metaCPC = am.metaClicks > 0 ? (metaSpend / am.metaClicks) : 0;
+  am.metaCPM = am.metaImpressions > 0 ? (metaSpend / am.metaImpressions) * 1000 : 0;
+  am.metaROAS = metaSpend > 0 ? (am.metaPurchaseValue / metaSpend) : 0;
+
+  am.googleCTR = am.googleImpressions > 0 ? (am.googleClicks / am.googleImpressions) * 100 : 0;
+  am.googleCPC = am.googleClicks > 0 ? (googleSpend / am.googleClicks) : 0;
+  am.googleCostPerConv = am.googleConversions > 0 ? (googleSpend / am.googleConversions) : 0;
+}
+
     const totalRevenue = num(w.amazon.revenue) + num(w.shopify.revenue);
     const totalUnits = num(w.amazon.units) + num(w.shopify.units);
     const totalCogs = num(w.amazon.cogs) + num(w.shopify.cogs);
@@ -223,6 +259,26 @@ export const mergeWeekData = (storedWeek, derivedWeek) => {
     ...(storedWeek?.shopify || {}),
     ...(derivedWeek?.shopify || {}),
   };
+
+// Merge Shopify adsMetrics (weekly KPIs). Prefer derived if it contains any non-zero signals.
+const storedAds = storedWeek?.shopify?.adsMetrics || {};
+const derivedAds = derivedWeek?.shopify?.adsMetrics || {};
+const hasAdsSignals = (m) => {
+  const n = (v) => (v === null || v === undefined || isNaN(v) ? 0 : Number(v));
+  return (
+    n(m.metaImpressions) > 0 ||
+    n(m.googleImpressions) > 0 ||
+    n(m.metaClicks) > 0 ||
+    n(m.googleClicks) > 0 ||
+    n(m.metaPurchases) > 0 ||
+    n(m.googleConversions) > 0 ||
+    n(m.metaPurchaseValue) > 0
+  );
+};
+mergedShopify.adsMetrics = hasAdsSignals(derivedAds)
+  ? { ...storedAds, ...derivedAds }
+  : { ...derivedAds, ...storedAds };
+
 
   // Prefer derived skuData if available (it reconciles to header totals)
   mergedAmazon.skuData = (derivedWeek?.amazon?.skuData?.length ? derivedWeek.amazon.skuData : (storedWeek?.amazon?.skuData || []));
