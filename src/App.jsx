@@ -4138,7 +4138,7 @@ const savePeriods = async (d) => {
       const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
       const ads = parseFloat(r['Sponsored Products charge total'] || 0);
       const name = r['Product title'] || r['product-name'] || sku;
-      if (net > 0 || sold > 0) { 
+      if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
         amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += (cogsLookup[sku] || 0) * net;
         if (sku) {
           if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
@@ -4597,7 +4597,7 @@ const savePeriods = async (d) => {
       const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
       const ads = parseFloat(r['Sponsored Products charge total'] || 0);
       const name = r['Product title'] || r['product-name'] || sku;
-      if (net > 0 || sold > 0) { 
+      if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
         amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += (cogsLookup[sku] || 0) * net;
         if (sku) {
           if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
@@ -4708,7 +4708,7 @@ const savePeriods = async (d) => {
           const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
           const ads = parseFloat(r['Sponsored Products charge total'] || 0);
           const name = r['Product title'] || r['product-name'] || sku;
-          if (net > 0 || sold > 0) { 
+          if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
             amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += (cogsLookup[sku] || 0) * net;
             if (sku) {
               if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
@@ -5106,7 +5106,7 @@ const savePeriods = async (d) => {
         const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
         const ads = parseFloat(r['Sponsored Products charge total'] || 0);
         const name = r['Product title'] || r['product-name'] || sku;
-        if (net > 0 || sold > 0) { 
+        if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
           amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += (cogsLookup[sku] || 0) * net;
           if (sku) {
             if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
@@ -5230,7 +5230,7 @@ const savePeriods = async (d) => {
       const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
       const ads = parseFloat(r['Sponsored Products charge total'] || 0);
       const name = r['Product title'] || r['product-name'] || sku;
-      if (net > 0 || sold > 0) { 
+      if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
         amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += (cogsLookup[sku] || 0) * net;
         if (sku) {
           if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
@@ -10115,8 +10115,13 @@ Analyze the data and respond with ONLY this JSON:
     const has3plBreakdown = has3plData && Object.values(threeplBreakdown).some(v => v > 0);
     
     // Add calculated fields and sort
-    const skuData = useMemo(() => {
-      const withCalcs = skuDataRaw.map(item => {
+    const skuDataRawFixed = useMemo(() => {
+  if (isAmz) return skuDataRaw || [];
+  return withShippingSkuRow((skuDataRaw || []), data.shippingCollected || 0);
+}, [isAmz, skuDataRaw, data.shippingCollected]);
+
+const skuData = useMemo(() => {
+      const withCalcs = skuDataRawFixed.map(item => {
         // Amazon: netProceeds IS the profit (already has COGS, fees, and ad spend deducted)
         // Shopify: netSales already has discounts deducted, subtract COGS
         const profit = isAmz 
@@ -12247,6 +12252,14 @@ if (shopifySkuWithShipping.length > 0) {
                 dailyData[parsedDate].googleImpressions += parseNumber(cols[impressionsIdx]);
                 dailyData[parsedDate].googleCPC = parseNumber(cols[cpcIdx]); // Will take last value (daily totals)
                 dailyData[parsedDate].googleCostPerConv = parseNumber(cols[costPerConvIdx]);
+
+                // Estimate clicks from avg CPC when clicks column isn't available
+                const avgCpc = parseNumber(cols[cpcIdx]);
+                const costForClicks = parseNumber(cols[costIdx]);
+                if (avgCpc > 0) {
+                  dailyData[parsedDate].googleClicks += Math.round(costForClicks / avgCpc);
+                }
+
                 
                 // Estimate conversions from cost per conv
                 const cost = parseNumber(cols[costIdx]);
@@ -12270,8 +12283,12 @@ if (shopifySkuWithShipping.length > 0) {
               if (d.metaSpend > 0 && d.metaPurchaseValue > 0) {
                 d.metaROAS = d.metaPurchaseValue / d.metaSpend;
               }
-              if (d.googleImpressions > 0 && d.googleSpend > 0) {
-                d.googleCTR = (d.googleSpend / d.googleCPC / d.googleImpressions) * 100 || 0;
+              if (d.googleImpressions > 0) {
+                d.googleCTR = (d.googleClicks / d.googleImpressions) * 100;
+              }
+              // If we estimated clicks, compute effective CPC
+              if (d.googleClicks > 0) {
+                d.googleCPC = d.googleSpend / d.googleClicks;
               }
             });
             
@@ -12345,6 +12362,7 @@ if (shopifySkuWithShipping.length > 0) {
                 googleImpressions: adsData.googleImpressions,
                 googleClicks: adsData.googleClicks,
                 googleConversions: adsData.googleConversions,
+                googleCTR: adsData.googleCTR,
                 googleCPC: adsData.googleCPC,
                 googleCostPerConv: adsData.googleCostPerConv,
               } : {}),

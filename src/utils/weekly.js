@@ -140,6 +140,7 @@ export const deriveWeeksFromDays = (allDaysData = {}) => {
     if (day.shopify) {
       w.shopify.revenue += num(day.shopify.revenue);
       w.shopify.units += num(day.shopify.units);
+      w.shopify.orders += num(day.shopify.orders);
       w.shopify.cogs += num(day.shopify.cogs);
       
       w.shopify.shippingCollected += num(day.shopify.shippingCollected);
@@ -229,6 +230,11 @@ if (w.shopify.shippingCollected > 0) {
   }
 }
 
+
+// Derived metrics
+w.amazon.returnRate = w.amazon.units > 0 ? (num(w.amazon.returns) / num(w.amazon.units)) * 100 : 0;
+w.shopify.aov = w.shopify.orders > 0 ? (num(w.shopify.revenue) / num(w.shopify.orders)) : 0;
+w.amazon.aov = w.amazon.units > 0 ? (num(w.amazon.revenue) / num(w.amazon.units)) : 0;
 
 // Derive weekly ad KPIs from accumulated totals (prefer weighted / ratio-based metrics)
 if (w.shopify.adsMetrics) {
