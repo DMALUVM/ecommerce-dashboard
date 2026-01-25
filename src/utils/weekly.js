@@ -84,7 +84,7 @@ export const deriveWeeksFromDays = (allDaysData = {}) => {
         days: [],
         meta: { isInProgress: true, daysPresent: 0 },
         amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, skuData: [] },
-        shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, skuData: [], adsMetrics: { metaImpressions: 0, metaClicks: 0, metaPurchases: 0, metaPurchaseValue: 0, metaCTR: 0, metaCPC: 0, metaCPM: 0, metaROAS: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, googleCTR: 0, googleCPC: 0, googleCostPerConv: 0 } },
+        shopify: { revenue: 0, units: 0, cogs: 0, shippingCollected: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, skuData: [], adsMetrics: { metaImpressions: 0, metaClicks: 0, metaPurchases: 0, metaPurchaseValue: 0, metaCTR: 0, metaCPC: 0, metaCPM: 0, metaROAS: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, googleCTR: 0, googleCPC: 0, googleCostPerConv: 0 } },
         total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0, netMargin: 0, roas: 0, amazonShare: 0, shopifyShare: 0 },
       };
     }
@@ -141,7 +141,9 @@ export const deriveWeeksFromDays = (allDaysData = {}) => {
       w.shopify.revenue += num(day.shopify.revenue);
       w.shopify.units += num(day.shopify.units);
       w.shopify.cogs += num(day.shopify.cogs);
-      w.shopify.discounts += num(day.shopify.discounts);
+      
+      w.shopify.shippingCollected += num(day.shopify.shippingCollected);
+w.shopify.discounts += num(day.shopify.discounts);
       const meta = num(day.metaSpend ?? day.shopify.metaSpend);
       const google = num(day.googleSpend ?? day.shopify.googleSpend);
       w.shopify.metaSpend += meta;
@@ -206,6 +208,27 @@ w.shopify.adsMetrics.googleConversions += googleConv;
     } else {
       w.shopify.skuData = [];
     }
+
+
+// Ensure Shopify SKU totals reconcile to revenue by including shipping collected as a separate line item
+if (w.shopify.shippingCollected > 0) {
+  const hasShippingRow = Array.isArray(w.shopify.skuData) && w.shopify.skuData.some(r => r && (r.isShipping || String(r.sku || '').toLowerCase() === 'shipping'));
+  if (!hasShippingRow) {
+    w.shopify.skuData = Array.isArray(w.shopify.skuData) ? [...w.shopify.skuData] : [];
+    w.shopify.skuData.push({
+      sku: 'Shipping',
+      name: 'Shipping (collected)',
+      unitsSold: 0,
+      grossSales: w.shopify.shippingCollected,
+      discounts: 0,
+      netSales: w.shopify.shippingCollected,
+      cogs: 0,
+      profit: w.shopify.shippingCollected,
+      isShipping: true,
+    });
+  }
+}
+
 
 // Derive weekly ad KPIs from accumulated totals (prefer weighted / ratio-based metrics)
 if (w.shopify.adsMetrics) {

@@ -7,6 +7,8 @@ import { parseCSV, parseCSVLine } from './utils/csv';
 import { formatCurrency, formatPercent, formatNumber } from './utils/format';
 import { hasDailySalesData, formatDateKey, getSunday } from './utils/date';
 import { deriveWeeksFromDays, mergeWeekData } from './utils/weekly';
+import { getShopifyAdsForDay } from './utils/ads';
+import { withShippingSkuRow, sumSkuRows } from './utils/reconcile';
 import {
   STORAGE_KEY, INVENTORY_KEY, COGS_KEY, STORE_KEY, GOALS_KEY, PERIODS_KEY, SALES_TAX_KEY, PRODUCT_NAMES_KEY,
   SETTINGS_KEY, NOTES_KEY, WIDGET_KEY, THEME_KEY, INVOICES_KEY, AMAZON_FORECAST_KEY, THREEPL_LEDGER_KEY,
@@ -10648,7 +10650,18 @@ Analyze the data and respond with ONLY this JSON:
     }
     
     const amazon = dayData.amazon || {};
-    const shopify = dayData.shopify || {};
+let shopify = dayData.shopify || {};
+
+// Normalize Shopify ads metrics for this day (consistent KPIs across views)
+const shopifyAds = getShopifyAdsForDay(dayData);
+
+// Ensure Shopify SKU totals reconcile to the displayed revenue by adding shipping collected as a SKU row
+const shopifySkuWithShipping = withShippingSkuRow(shopify.skuData || [], shopify.shippingCollected || 0);
+if (shopifySkuWithShipping.length > 0) {
+  const skuSums = sumSkuRows(shopifySkuWithShipping, { units: 'unitsSold', revenue: 'netSales', cogs: 'cogs', profit: 'profit' });
+  shopify = { ...shopify, revenue: skuSums.revenue, units: skuSums.units, cogs: skuSums.cogs, skuData: shopifySkuWithShipping };
+}
+
     const total = dayData.total || {};
     const hasAmazon = dayData.amazon && (amazon.revenue > 0 || amazon.units > 0);
     const hasShopify = dayData.shopify && (shopify.revenue > 0 || shopify.units > 0);
@@ -10909,31 +10922,31 @@ Analyze the data and respond with ONLY this JSON:
           </div>
           
           {/* Google Ads data if present */}
-          {(dayData.googleAds || dayData.googleSpend || dayData.googleImpressions || shopify.googleSpend || shopify.adsMetrics?.googleImpressions) && (
+          {(shopifyAds.googleSpend || shopifyAds.googleImpressions || shopifyAds.googleClicks || shopifyAds.googleConversions) && (
             <div className="bg-red-900/20 border border-red-500/30 rounded-lg sm:rounded-xl p-3 sm:p-4 mb-4 sm:mb-6">
               <h3 className="text-base sm:text-lg font-semibold text-red-400 mb-2 sm:mb-3">Google Ads</h3>
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 sm:gap-4 text-center">
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">Spend</p><p className="text-white text-sm font-medium">{formatCurrency(shopify.googleSpend || dayData.googleSpend || 0)}</p></div>
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">Clicks</p><p className="text-white text-sm font-medium">{formatNumber(shopify.adsMetrics?.googleClicks || dayData.googleClicks || 0)}</p></div>
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">Impr</p><p className="text-white text-sm font-medium">{formatNumber(shopify.adsMetrics?.googleImpressions || dayData.googleImpressions || 0)}</p></div>
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">Conv</p><p className="text-white text-sm font-medium">{formatNumber(shopify.adsMetrics?.googleConversions || dayData.googleConversions || 0)}</p></div>
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">CPC</p><p className="text-white text-sm font-medium">{formatCurrency(shopify.adsMetrics?.googleCPC || dayData.googleCpc || 0)}</p></div>
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">CPA</p><p className="text-white text-sm font-medium">{formatCurrency(shopify.adsMetrics?.googleCostPerConv || dayData.googleCpa || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Spend</p><p className="text-white text-sm font-medium">{formatCurrency(shopifyAds.googleSpend || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Clicks</p><p className="text-white text-sm font-medium">{formatNumber(shopifyAds.googleClicks || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Impr</p><p className="text-white text-sm font-medium">{formatNumber(shopifyAds.googleImpressions || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Conv</p><p className="text-white text-sm font-medium">{formatNumber(shopifyAds.googleConversions || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">CPC</p><p className="text-white text-sm font-medium">{formatCurrency(shopifyAds.googleCPC || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">CPA</p><p className="text-white text-sm font-medium">{formatCurrency(shopifyAds.googleCostPerConv || 0)}</p></div>
               </div>
             </div>
           )}
           
           {/* Meta Ads data if present */}
-          {(dayData.metaAds || dayData.metaSpend || dayData.metaImpressions || (shopify.adsMetrics?.metaImpressions)) && (
+          {(shopifyAds.metaSpend || shopifyAds.metaImpressions || shopifyAds.metaClicks || shopifyAds.metaPurchases) && (
             <div className="bg-indigo-900/20 border border-indigo-500/30 rounded-lg sm:rounded-xl p-3 sm:p-4 mb-4 sm:mb-6">
               <h3 className="text-base sm:text-lg font-semibold text-indigo-400 mb-2 sm:mb-3">Meta Ads</h3>
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 sm:gap-4 text-center">
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">Spend</p><p className="text-white text-sm font-medium">{formatCurrency(dayData.metaSpend || shopify.metaSpend || 0)}</p></div>
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">Clicks</p><p className="text-white text-sm font-medium">{formatNumber(dayData.metaClicks || shopify.adsMetrics?.metaClicks || 0)}</p></div>
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">Impr</p><p className="text-white text-sm font-medium">{formatNumber(dayData.metaImpressions || shopify.adsMetrics?.metaImpressions || 0)}</p></div>
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">Purch</p><p className="text-white text-sm font-medium">{formatNumber(dayData.metaConversions || shopify.adsMetrics?.metaPurchases || 0)}</p></div>
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">CTR</p><p className="text-white text-sm font-medium">{(dayData.metaCtr || shopify.adsMetrics?.metaCTR || 0).toFixed(1)}%</p></div>
-                <div><p className="text-slate-400 text-[10px] sm:text-xs">CPC</p><p className="text-white text-sm font-medium">{formatCurrency(dayData.metaCpc || shopify.adsMetrics?.metaCPC || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Spend</p><p className="text-white text-sm font-medium">{formatCurrency(shopifyAds.metaSpend || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Clicks</p><p className="text-white text-sm font-medium">{formatNumber(shopifyAds.metaClicks || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Impr</p><p className="text-white text-sm font-medium">{formatNumber(shopifyAds.metaImpressions || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">Purch</p><p className="text-white text-sm font-medium">{formatNumber(shopifyAds.metaPurchases || 0)}</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">CTR</p><p className="text-white text-sm font-medium">{(shopifyAds.metaCTR || 0).toFixed(1)}%</p></div>
+                <div><p className="text-slate-400 text-[10px] sm:text-xs">CPC</p><p className="text-white text-sm font-medium">{formatCurrency(shopifyAds.metaCPC || 0)}</p></div>
               </div>
             </div>
           )}
@@ -10960,7 +10973,7 @@ Analyze the data and respond with ONLY this JSON:
                   <div>
                     <p className="text-green-400 text-xs sm:text-sm font-medium mb-1.5 sm:mb-2">Shopify</p>
                     <div className="space-y-1 max-h-32 sm:max-h-40 overflow-y-auto">
-                      {shopify.skuData.slice(0, 5).map((sku, i) => (
+                      {shopify.skuData.filter(s => !s?.isShipping && String(s?.sku || '').toLowerCase() !== 'shipping').slice(0, 5).map((sku, i) => (
                         <div key={i} className="flex justify-between text-xs sm:text-sm">
                           <span className="text-slate-300 truncate flex-1 mr-2">{savedProductNames[sku.sku] || sku.name || sku.sku}</span>
                           <span className="text-white flex-shrink-0">{formatCurrency(sku.netSales || 0)}</span>
@@ -21222,15 +21235,26 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     const idx = daysWithSales.indexOf(selectedDay);
     
     const amazon = dayData.amazon || {};
-    const shopify = dayData.shopify || {};
+let shopify = dayData.shopify || {};
+
+// Normalize Shopify ads metrics for this day (consistent KPIs across views)
+const shopifyAds = getShopifyAdsForDay(dayData);
+
+// Ensure Shopify SKU totals reconcile to the displayed revenue by adding shipping collected as a SKU row
+const shopifySkuWithShipping = withShippingSkuRow(shopify.skuData || [], shopify.shippingCollected || 0);
+if (shopifySkuWithShipping.length > 0) {
+  const skuSums = sumSkuRows(shopifySkuWithShipping, { units: 'unitsSold', revenue: 'netSales', cogs: 'cogs', profit: 'profit' });
+  shopify = { ...shopify, revenue: skuSums.revenue, units: skuSums.units, cogs: skuSums.cogs, skuData: shopifySkuWithShipping };
+}
+
     const total = dayData.total || {};
     
     // Get ads metrics from either shopify object or top-level dayData (bulk uploads store at top level)
     const googleSpend = shopify.googleSpend || dayData.googleSpend || 0;
     const metaSpend = shopify.metaSpend || dayData.metaSpend || 0;
-    const googleImpressions = shopify.adsMetrics?.googleImpressions || dayData.googleImpressions || 0;
-    const googleClicks = shopify.adsMetrics?.googleClicks || dayData.googleClicks || 0;
-    const googleConversions = shopify.adsMetrics?.googleConversions || dayData.googleConversions || 0;
+    const googleImpressions = shopifyAds.googleImpressions || 0;
+    const googleClicks = shopifyAds.googleClicks || 0;
+    const googleConversions = shopifyAds.googleConversions || 0;
     const googleCPC = dayData.googleCpc || (googleClicks > 0 ? googleSpend / googleClicks : 0);
     const googleCPA = dayData.googleCpa || dayData.googleCostPerConv || (googleConversions > 0 ? googleSpend / googleConversions : 0);
     const metaImpressions = shopify.adsMetrics?.metaImpressions || dayData.metaImpressions || 0;
