@@ -6,6 +6,7 @@ import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
 import { formatCurrency, formatPercent, formatNumber } from './utils/format';
 import { hasDailySalesData, formatDateKey, getSunday } from './utils/date';
+import { deriveWeeksFromDays, mergeWeekData } from './utils/weekly';
 import {
   STORAGE_KEY, INVENTORY_KEY, COGS_KEY, STORE_KEY, GOALS_KEY, PERIODS_KEY, SALES_TAX_KEY, PRODUCT_NAMES_KEY,
   SETTINGS_KEY, NOTES_KEY, WIDGET_KEY, THEME_KEY, INVOICES_KEY, AMAZON_FORECAST_KEY, THREEPL_LEDGER_KEY,
@@ -10110,9 +10111,13 @@ Analyze the data and respond with ONLY this JSON:
         const profit = isAmz 
           ? (item.netProceeds || 0)
           : (item.netSales || 0) - (item.cogs || 0);
-        // For $/Unit: Amazon uses proceeds (the profit), Shopify uses netSales
-        const proceedsPerUnit = item.unitsSold > 0 
-          ? (isAmz ? item.netProceeds : item.netSales) / item.unitsSold 
+        // $/Unit: Shopify shows profit per unit, Amazon prefers provided net proceeds per unit (fallback to total/units)
+        const proceedsPerUnit = item.unitsSold > 0
+          ? (isAmz
+              ? (item.netProceedsPerUnit !== null && item.netProceedsPerUnit !== undefined
+                  ? item.netProceedsPerUnit
+                  : (item.netProceeds || 0) / item.unitsSold)
+              : profit / item.unitsSold)
           : 0;
         return { ...item, profit, proceedsPerUnit };
       });
@@ -21491,8 +21496,25 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     );
   }
 
-  if (view === 'weekly' && selectedWeek && allWeeksData[selectedWeek]) {
-    const rawData = allWeeksData[selectedWeek], weeks = Object.keys(allWeeksData).sort().reverse(), idx = weeks.indexOf(selectedWeek);
+  if (view === 'weekly' && selectedWeek) {
+    const derivedWeeks = deriveWeeksFromDays(allDaysData);
+    const weeks = Array.from(new Set([...(Object.keys(allWeeksData || {})), ...(Object.keys(derivedWeeks || {}))])).sort().reverse();
+    const idx = weeks.indexOf(selectedWeek);
+    const rawData = mergeWeekData(allWeeksData[selectedWeek], derivedWeeks[selectedWeek]);
+    if (!rawData) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
+          <div className="max-w-7xl mx-auto">
+            <Toast />
+            <NavTabs />
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mt-6">
+              <h2 className="text-xl font-bold mb-2">Weekly View</h2>
+              <p className="text-slate-400">No data found for this week yet. Upload daily Amazon/Shopify files or run a sync, and this week will populate automatically.</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
     
     // Enhance Shopify data with 3PL from ledger if available
     const ledger3PL = get3PLForWeek(threeplLedger, selectedWeek);
@@ -21512,16 +21534,41 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       enhancedShopify.netMargin = enhancedShopify.revenue > 0 ? (enhancedShopify.netProfit / enhancedShopify.revenue) * 100 : 0;
     }
     
-    // Create enhanced data object
+    // Create enhanced data object (always recompute totals so Amazon + Shopify are included)
+    const amz = rawData.amazon || {};
+    const amzRev = amz.revenue || 0;
+    const amzUnits = amz.units || 0;
+    const amzCogs = amz.cogs || 0;
+    const amzAds = amz.adSpend || 0;
+    const amzProfit = (amz.netProfit || amz.netProceeds || 0);
+
+    const shopRev = enhancedShopify.revenue || 0;
+    const shopUnits = enhancedShopify.units || 0;
+    const shopCogs = enhancedShopify.cogs || 0;
+    const shopAds = enhancedShopify.adSpend || 0;
+    const shopProfit = enhancedShopify.netProfit || 0;
+
+    const totalRevenue = amzRev + shopRev;
+    const totalUnits = amzUnits + shopUnits;
+    const totalCogs = amzCogs + shopCogs;
+    const totalAdSpend = amzAds + shopAds;
+    const totalNetProfit = amzProfit + shopProfit;
+
     const data = {
       ...rawData,
       shopify: enhancedShopify,
       total: {
-        ...rawData.total,
-        netProfit: (rawData.amazon?.netProfit || rawData.amazon?.netProceeds || 0) + enhancedShopify.netProfit,
+        revenue: totalRevenue,
+        units: totalUnits,
+        cogs: totalCogs,
+        adSpend: totalAdSpend,
+        netProfit: totalNetProfit,
+        netMargin: totalRevenue > 0 ? (totalNetProfit / totalRevenue) * 100 : 0,
+        roas: totalAdSpend > 0 ? totalRevenue / totalAdSpend : 0,
+        amazonShare: totalRevenue > 0 ? (amzRev / totalRevenue) * 100 : 0,
+        shopifyShare: totalRevenue > 0 ? (shopRev / totalRevenue) * 100 : 0,
       }
     };
-    data.total.netMargin = data.total.revenue > 0 ? (data.total.netProfit / data.total.revenue) * 100 : 0;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
