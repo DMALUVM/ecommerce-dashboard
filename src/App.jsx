@@ -21773,7 +21773,64 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             <div className="flex justify-between text-sm"><div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-orange-500" /><span className="text-slate-300">Amazon</span><span className="text-white font-semibold">{formatPercent(data.total.amazonShare)}</span></div><div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-blue-500" /><span className="text-slate-300">Shopify</span><span className="text-white font-semibold">{formatPercent(data.total.shopifyShare)}</span></div></div>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz showSkuTable /><ChannelCard title="Shopify" color="blue" data={data.shopify} showSkuTable /></div>
-          
+
+
+{/* Google/Meta Ads Details (Weekly) */}
+{(() => {
+  const googleSpendW = data.shopify?.googleSpend || 0;
+  const metaSpendW = data.shopify?.metaSpend || 0;
+  const m = data.shopify?.adsMetrics || {};
+  const googleImpressionsW = m.googleImpressions || 0;
+  const googleClicksW = m.googleClicks || 0;
+  const googleConversionsW = m.googleConversions || 0;
+  const metaImpressionsW = m.metaImpressions || 0;
+  const metaClicksW = m.metaClicks || 0;
+  const metaPurchasesW = m.metaPurchases || 0;
+  const metaPurchaseValueW = m.metaPurchaseValue || 0;
+
+  const showGoogle = googleSpendW > 0 || googleImpressionsW > 0 || googleClicksW > 0 || googleConversionsW > 0;
+  const showMeta = metaSpendW > 0 || metaImpressionsW > 0 || metaClicksW > 0 || metaPurchasesW > 0;
+
+  if (!showGoogle && !showMeta) return null;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+      {/* Google Ads */}
+      {showGoogle && (
+        <div className="bg-red-900/20 border border-red-500/30 rounded-2xl p-5">
+          <h3 className="text-lg font-semibold text-red-400 mb-4">Google Ads</h3>
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div><p className="text-slate-400 text-xs mb-1">Spend</p><p className="text-white text-lg font-semibold">{formatCurrency(googleSpendW)}</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">Clicks</p><p className="text-white text-lg font-semibold">{formatNumber(googleClicksW)}</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">Impressions</p><p className="text-white text-lg font-semibold">{formatNumber(googleImpressionsW)}</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">Conversions</p><p className="text-white text-lg font-semibold">{formatNumber(googleConversionsW)}</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">CTR</p><p className="text-white text-lg font-semibold">{(m.googleCTR || 0).toFixed(2)}%</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">CPC</p><p className="text-white text-lg font-semibold">{formatCurrency(m.googleCPC || 0)}</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">CPA</p><p className="text-white text-lg font-semibold">{formatCurrency(m.googleCostPerConv || 0)}</p></div>
+          </div>
+        </div>
+      )}
+
+      {/* Meta Ads */}
+      {showMeta && (
+        <div className="bg-indigo-900/20 border border-indigo-500/30 rounded-2xl p-5">
+          <h3 className="text-lg font-semibold text-indigo-300 mb-4">Meta Ads</h3>
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div><p className="text-slate-400 text-xs mb-1">Spend</p><p className="text-white text-lg font-semibold">{formatCurrency(metaSpendW)}</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">Clicks</p><p className="text-white text-lg font-semibold">{formatNumber(metaClicksW)}</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">Impressions</p><p className="text-white text-lg font-semibold">{formatNumber(metaImpressionsW)}</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">Purchases</p><p className="text-white text-lg font-semibold">{formatNumber(metaPurchasesW)}</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">CTR</p><p className="text-white text-lg font-semibold">{(m.metaCTR || 0).toFixed(2)}%</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">CPC</p><p className="text-white text-lg font-semibold">{formatCurrency(m.metaCPC || 0)}</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">ROAS</p><p className="text-white text-lg font-semibold">{(m.metaROAS || 0).toFixed(2)}</p></div>
+            <div><p className="text-slate-400 text-xs mb-1">Purchase Value</p><p className="text-white text-lg font-semibold">{formatCurrency(metaPurchaseValueW)}</p></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+})()}
+
           {/* Week Notes */}
           <div className="mt-6 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
             <h3 className="text-sm font-semibold text-slate-400 uppercase mb-3 flex items-center gap-2"><StickyNote className="w-4 h-4" />Week Notes</h3>
