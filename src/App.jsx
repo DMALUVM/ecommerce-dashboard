@@ -6353,7 +6353,7 @@ const savePeriods = async (d) => {
     return newData;
   }, [amazonCampaigns, combinedData, queueCloudSave]);
 
-  // Parse bulk ad file (Google Ads or Meta Ads CSV)
+  // Parse bulk ad file (Google Ads or Meta Ads CSV) - Enhanced with full KPI extraction
   const parseBulkAdFile = useCallback((content, platform, filename = '') => {
     try {
       const lines = content.trim().split('\n');
@@ -6365,51 +6365,91 @@ const savePeriods = async (d) => {
       let totalImpressions = 0;
       let totalClicks = 0;
       let totalConversions = 0;
+      let totalConvValue = 0;
       
-      // Detect format based on headers - support daily (Date), monthly (Month), quarterly (Quarter), and hourly (Hour) formats
-      const hasDateCol = header.includes('date') || header.includes('month') || header.includes('day') || header.includes('quarter');
-      const hasHourCol = header.includes('hour');
-      const hasCostCol = header.includes('cost') || header.includes('spend');
-      const isGoogleAds = (hasDateCol || hasHourCol) && hasCostCol;
-      const isMetaAds = (hasDateCol || hasHourCol) && (header.includes('amount spent') || hasCostCol);
-      const isHourlyData = hasHourCol && !hasDateCol;
-      const isQuarterlyData = header.includes('quarter');
+      // Parse all headers to find columns
+      const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase());
       
-      if (!isGoogleAds && !isMetaAds) {
-        return { error: 'Could not detect file format. Expected columns: Date/Month/Quarter/Hour and Cost/Spend' };
+      // Date column detection
+      const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h === 'month' || h === 'hour' || h === 'quarter' || h.includes('date'));
+      
+      // Cost/Spend column
+      const costCol = headers.findIndex(h => h === 'cost' || h === 'spend' || h === 'amount spent' || (h.includes('cost') && !h.includes('/') && !h.includes('per')));
+      
+      // Impressions
+      const impressionsCol = headers.findIndex(h => h === 'impressions' || h === 'impr' || h.includes('impression'));
+      
+      // Clicks
+      const clicksCol = headers.findIndex(h => h === 'clicks' || h === 'link clicks' || h.includes('click'));
+      
+      // CTR
+      const ctrCol = headers.findIndex(h => h === 'ctr' || h === 'ctr (all)' || h.includes('click-through'));
+      
+      // CPC
+      const cpcCol = headers.findIndex(h => h === 'avg. cpc' || h === 'cpc' || h === 'cost per link click' || h.includes('cost per click'));
+      
+      // CPM
+      const cpmCol = headers.findIndex(h => h === 'cpm' || h.includes('cost per 1,000') || h.includes('cost per thousand'));
+      
+      // Conversions
+      const conversionsCol = headers.findIndex(h => h === 'conversions' || h === 'purchases (all)' || h === 'purchases' || (h.includes('conv') && !h.includes('value') && !h.includes('cost')));
+      
+      // Conversion Value / Revenue
+      const convValueCol = headers.findIndex(h => h === 'all conv. value' || h === 'purchases value (all)' || h === 'conv. value' || h === 'purchase value' || (h.includes('value') && (h.includes('conv') || h.includes('purchase'))));
+      
+      // ROAS
+      const roasCol = headers.findIndex(h => h === 'conv. value / cost' || h === 'purchase (roas) (all)' || h === 'roas' || h.includes('roas'));
+      
+      // CPA / Cost per Conversion
+      const cpaCol = headers.findIndex(h => h === 'cost / conv.' || h === 'cost per purchase (all)' || h === 'cpa' || h.includes('cost per purchase') || h.includes('cost per conv'));
+      
+      // Campaign name
+      const campaignCol = headers.findIndex(h => h === 'campaign' || h === 'campaign name' || h.includes('campaign'));
+      
+      // Ad name/ID
+      const adCol = headers.findIndex(h => h === 'ad name' || h === 'ad id' || h === 'ad' || h.includes('ad name'));
+      
+      // Detect format
+      const hasDateCol = dateCol >= 0;
+      const hasCostCol = costCol >= 0;
+      const hasHourCol = headers.includes('hour');
+      const isHourlyData = hasHourCol && !headers.includes('date') && !headers.includes('day');
+      const isQuarterlyData = headers.includes('quarter');
+      
+      // Detect platform from headers if not specified
+      let detectedPlatform = platform;
+      if (header.includes('purchases value') || header.includes('amount spent') || header.includes('link clicks')) {
+        detectedPlatform = 'meta';
+      } else if (header.includes('avg. cpc') || header.includes('all conv. value')) {
+        detectedPlatform = 'google';
       }
       
-      // Parse headers to find all columns
-      const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase());
-      const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h === 'month' || h === 'hour' || h === 'quarter' || h.includes('date'));
-      const costCol = headers.findIndex(h => h === 'cost' || h === 'spend' || h === 'amount spent' || (h.includes('cost') && !h.includes('/')));
-      const impressionsCol = headers.findIndex(h => h === 'impressions' || h === 'impr' || h.includes('impression'));
-      const cpcCol = headers.findIndex(h => h === 'avg. cpc' || h === 'cpc' || h.includes('cost per click'));
-      const cpaCol = headers.findIndex(h => h === 'cost / conv.' || h === 'cpa' || h.includes('cost per') || h.includes('/ conv'));
-      
-      // Detect if this is monthly or quarterly data
-      const isMonthlyData = headers[dateCol] === 'month' || isQuarterlyData;
-      
-      if (dateCol === -1 || costCol === -1) {
+      if (!hasDateCol || !hasCostCol) {
         return { error: `Could not find required columns. Found headers: ${headers.join(', ')}` };
       }
       
-      // For hourly data, we need to extract the date from the filename or use today
-      // We'll aggregate all hours into a single day entry
+      const monthNames = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+      
+      // Helper to parse CSV value
+      const parseValue = (val) => {
+        if (!val || val === 'null' || val === 'undefined' || val === '') return 0;
+        return parseFloat(val.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '').replace(/%/g, '')) || 0;
+      };
+      
+      // Campaign-level aggregation for detailed breakdowns
+      const campaignData = {};
+      const adData = {};
+      
+      // For hourly data aggregation
       if (isHourlyData) {
-        let hourlySpend = 0;
-        let hourlyImpressions = 0;
-        let hourlyCpc = 0;
-        let hourlyCpa = 0;
-        let hourCount = 0;
+        let hourlySpend = 0, hourlyImpressions = 0, hourlyClicks = 0, hourlyConversions = 0, hourlyConvValue = 0;
         
         for (let i = 1; i < lines.length; i++) {
           const line = lines[i].trim();
           if (!line) continue;
           
           const cols = [];
-          let current = '';
-          let inQuotes = false;
+          let current = '', inQuotes = false;
           for (const char of line) {
             if (char === '"') inQuotes = !inQuotes;
             else if (char === ',' && !inQuotes) { cols.push(current.trim()); current = ''; }
@@ -6417,172 +6457,196 @@ const savePeriods = async (d) => {
           }
           cols.push(current.trim());
           
-          const cost = parseFloat(cols[costCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '')) || 0;
-          const impressions = parseInt(cols[impressionsCol]?.replace(/"/g, '').replace(/,/g, '')) || 0;
-          const cpc = parseFloat(cols[cpcCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '')) || 0;
-          const cpa = parseFloat(cols[cpaCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '')) || 0;
-          
-          hourlySpend += cost;
-          hourlyImpressions += impressions;
-          if (cpc > 0) { hourlyCpc += cpc; hourCount++; }
-          if (cpa > 0) hourlyCpa += cpa;
+          hourlySpend += parseValue(cols[costCol]);
+          hourlyImpressions += parseInt(parseValue(cols[impressionsCol])) || 0;
+          hourlyClicks += parseInt(parseValue(cols[clicksCol])) || 0;
+          hourlyConversions += parseValue(cols[conversionsCol]);
+          hourlyConvValue += parseValue(cols[convValueCol]);
         }
         
-        // Try to extract date from filename like "Time_series_2025_02_28_.csv"
+        // Extract date from filename
         let dateStr;
         const filenameMatch = filename.match(/(\d{4})_(\d{2})_(\d{2})/);
         if (filenameMatch) {
           dateStr = `${filenameMatch[1]}-${filenameMatch[2]}-${filenameMatch[3]}`;
         } else {
-          // Fall back to yesterday's date
           const yesterday = new Date();
           yesterday.setDate(yesterday.getDate() - 1);
           dateStr = yesterday.toISOString().split('T')[0];
         }
         
-        const avgCpc = hourCount > 0 ? hourlyCpc / hourCount : 0;
-        const clicks = avgCpc > 0 ? Math.round(hourlySpend / avgCpc) : 0;
-        const conversions = hourlyCpa > 0 ? Math.round(hourlySpend / hourlyCpa) : 0;
-        
         dailyData.push({
           date: dateStr,
           spend: hourlySpend,
           impressions: hourlyImpressions,
-          clicks,
-          cpc: avgCpc,
-          cpa: hourlyCpa,
-          conversions,
+          clicks: hourlyClicks,
+          conversions: hourlyConversions,
+          convValue: hourlyConvValue,
+          cpc: hourlyClicks > 0 ? hourlySpend / hourlyClicks : 0,
+          cpm: hourlyImpressions > 0 ? (hourlySpend / hourlyImpressions) * 1000 : 0,
+          ctr: hourlyImpressions > 0 ? (hourlyClicks / hourlyImpressions) * 100 : 0,
+          cpa: hourlyConversions > 0 ? hourlySpend / hourlyConversions : 0,
+          roas: hourlySpend > 0 ? hourlyConvValue / hourlySpend : 0,
           isHourly: true,
         });
         
         totalSpend = hourlySpend;
         totalImpressions = hourlyImpressions;
-        totalClicks = clicks;
-        totalConversions = conversions;
-        
-        // Skip to aggregation
+        totalClicks = hourlyClicks;
+        totalConversions = hourlyConversions;
+        totalConvValue = hourlyConvValue;
       } else {
         // Parse data rows (daily or monthly)
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        
-        // Handle CSV with quoted fields
-        const cols = [];
-        let current = '';
-        let inQuotes = false;
-        for (const char of line) {
-          if (char === '"') {
-            inQuotes = !inQuotes;
-          } else if (char === ',' && !inQuotes) {
-            cols.push(current.trim());
-            current = '';
-          } else {
-            current += char;
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          
+          // Handle CSV with quoted fields
+          const cols = [];
+          let current = '', inQuotes = false;
+          for (const char of line) {
+            if (char === '"') inQuotes = !inQuotes;
+            else if (char === ',' && !inQuotes) { cols.push(current.trim()); current = ''; }
+            else current += char;
           }
-        }
-        cols.push(current.trim());
-        
-        // Parse date - handle formats like "Sun, Dec 21, 2025" or "2025-12-21" or "12/21/2025" or "Apr 2024" or "4th quarter 2023"
-        let dateStr = cols[dateCol]?.replace(/"/g, '').trim();
-        let parsedDate = null;
-        let isMonthlyRecord = false;
-        let isQuarterlyRecord = false;
-        
-        const monthNames = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
-        
-        // Try quarterly format like "4th quarter 2023" or "1st quarter 2024"
-        const quarterlyMatch = dateStr.match(/(\d)(?:st|nd|rd|th)\s+quarter\s+(\d{4})/i);
-        if (quarterlyMatch) {
-          const quarter = parseInt(quarterlyMatch[1]);
-          const year = parseInt(quarterlyMatch[2]);
-          // Use last day of the quarter
-          const quarterEndMonth = quarter * 3 - 1; // Q1=2 (Mar), Q2=5 (Jun), Q3=8 (Sep), Q4=11 (Dec)
-          parsedDate = new Date(year, quarterEndMonth + 1, 0); // Last day of quarter
-          isMonthlyRecord = true; // Treat as monthly for storage
-          isQuarterlyRecord = true;
-        }
-        
-        // Try "Mon YYYY" format (Monthly Google Ads like "Apr 2024")
-        if (!parsedDate) {
-          const monthlyMatch = dateStr.match(/^(\w{3})\s+(\d{4})$/);
-          if (monthlyMatch) {
-            const month = monthNames[monthlyMatch[1].toLowerCase()];
-            if (month !== undefined) {
-              // For monthly data, use the last day of the month
-              const year = parseInt(monthlyMatch[2]);
-              // Get last day of the month
-              parsedDate = new Date(year, month + 1, 0); // Day 0 of next month = last day of this month
-              isMonthlyRecord = true;
+          cols.push(current.trim());
+          
+          // Parse date
+          let dateStr = cols[dateCol]?.replace(/"/g, '').trim();
+          let parsedDate = null;
+          let isMonthlyRecord = false;
+          
+          // Try quarterly format
+          const quarterlyMatch = dateStr.match(/(\d)(?:st|nd|rd|th)\s+quarter\s+(\d{4})/i);
+          if (quarterlyMatch) {
+            const quarter = parseInt(quarterlyMatch[1]);
+            const year = parseInt(quarterlyMatch[2]);
+            const quarterEndMonth = quarter * 3 - 1;
+            parsedDate = new Date(year, quarterEndMonth + 1, 0);
+            isMonthlyRecord = true;
+          }
+          
+          // Try "Mon YYYY" format
+          if (!parsedDate) {
+            const monthlyMatch = dateStr.match(/^(\w{3})\s+(\d{4})$/);
+            if (monthlyMatch) {
+              const month = monthNames[monthlyMatch[1].toLowerCase()];
+              if (month !== undefined) {
+                parsedDate = new Date(parseInt(monthlyMatch[2]), month + 1, 0);
+                isMonthlyRecord = true;
+              }
             }
           }
-        }
-        
-        // Try "Day, Mon DD, YYYY" format (Daily Google Ads)
-        if (!parsedDate) {
-          const googleMatch = dateStr.match(/\w+,\s*(\w+)\s+(\d+),\s*(\d{4})/);
-          if (googleMatch) {
-            const month = monthNames[googleMatch[1].toLowerCase().substring(0, 3)];
-            if (month !== undefined) {
-              parsedDate = new Date(parseInt(googleMatch[3]), month, parseInt(googleMatch[2]));
+          
+          // Try "Mon DD, YYYY" format (Meta format like "Jan 25, 2026")
+          if (!parsedDate) {
+            const metaMatch = dateStr.match(/^(\w{3})\s+(\d+),\s*(\d{4})$/);
+            if (metaMatch) {
+              const month = monthNames[metaMatch[1].toLowerCase()];
+              if (month !== undefined) {
+                parsedDate = new Date(parseInt(metaMatch[3]), month, parseInt(metaMatch[2]));
+              }
             }
           }
-        }
-        
-        // Try ISO format "YYYY-MM-DD"
-        if (!parsedDate && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-          parsedDate = new Date(dateStr + 'T00:00:00');
-        }
-        
-        // Try US format "MM/DD/YYYY"
-        if (!parsedDate && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(dateStr)) {
-          const parts = dateStr.split('/');
-          parsedDate = new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
-        }
-        
-        if (!parsedDate || isNaN(parsedDate)) continue;
-        
-        // Parse cost - remove $, commas, quotes
-        let costStr = cols[costCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '').trim();
-        const cost = parseFloat(costStr) || 0;
-        
-        // Parse impressions
-        let impressionsStr = impressionsCol >= 0 ? cols[impressionsCol]?.replace(/"/g, '').replace(/,/g, '').trim() : '0';
-        const impressions = parseInt(impressionsStr) || 0;
-        
-        // Parse CPC
-        let cpcStr = cpcCol >= 0 ? cols[cpcCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '').trim() : '0';
-        const cpc = parseFloat(cpcStr) || 0;
-        
-        // Parse CPA (cost per conversion)
-        let cpaStr = cpaCol >= 0 ? cols[cpaCol]?.replace(/"/g, '').replace(/\$/g, '').replace(/,/g, '').trim() : '0';
-        const cpa = parseFloat(cpaStr) || 0;
-        
-        // Calculate clicks from cost/CPC
-        const clicks = cpc > 0 ? Math.round(cost / cpc) : 0;
-        
-        // Calculate conversions from cost/CPA
-        const conversions = cpa > 0 ? Math.round(cost / cpa) : 0;
-        
-        if (cost > 0 || impressions > 0) {
-          dailyData.push({
-            date: parsedDate.toISOString().split('T')[0],
-            spend: cost,
-            impressions,
-            clicks,
-            cpc,
-            cpa,
-            conversions,
-            isMonthly: isMonthlyRecord,
-            monthLabel: isMonthlyRecord ? dateStr : null, // Store original month label like "Apr 2024"
-          });
-          totalSpend += cost;
-          totalImpressions += impressions;
-          totalClicks += clicks;
-          totalConversions += conversions;
+          
+          // Try "Day, Mon DD, YYYY" format (Google format)
+          if (!parsedDate) {
+            const googleMatch = dateStr.match(/\w+,\s*(\w+)\s+(\d+),\s*(\d{4})/);
+            if (googleMatch) {
+              const month = monthNames[googleMatch[1].toLowerCase().substring(0, 3)];
+              if (month !== undefined) {
+                parsedDate = new Date(parseInt(googleMatch[3]), month, parseInt(googleMatch[2]));
+              }
+            }
+          }
+          
+          // Try ISO format
+          if (!parsedDate && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+            parsedDate = new Date(dateStr + 'T00:00:00');
+          }
+          
+          // Try US format
+          if (!parsedDate && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(dateStr)) {
+            const parts = dateStr.split('/');
+            parsedDate = new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
+          }
+          
+          if (!parsedDate || isNaN(parsedDate)) continue;
+          
+          // Parse all metrics
+          const cost = parseValue(cols[costCol]);
+          const impressions = parseInt(parseValue(cols[impressionsCol])) || 0;
+          const clicks = clicksCol >= 0 ? parseInt(parseValue(cols[clicksCol])) || 0 : 0;
+          const conversions = conversionsCol >= 0 ? parseValue(cols[conversionsCol]) : 0;
+          const convValue = convValueCol >= 0 ? parseValue(cols[convValueCol]) : 0;
+          const ctr = ctrCol >= 0 ? parseValue(cols[ctrCol]) : (impressions > 0 ? (clicks / impressions) * 100 : 0);
+          const cpc = cpcCol >= 0 ? parseValue(cols[cpcCol]) : (clicks > 0 ? cost / clicks : 0);
+          const cpm = cpmCol >= 0 ? parseValue(cols[cpmCol]) : (impressions > 0 ? (cost / impressions) * 1000 : 0);
+          const cpa = cpaCol >= 0 ? parseValue(cols[cpaCol]) : (conversions > 0 ? cost / conversions : 0);
+          const roas = roasCol >= 0 ? parseValue(cols[roasCol]) : (cost > 0 ? convValue / cost : 0);
+          
+          // Get campaign and ad info
+          const campaign = campaignCol >= 0 ? cols[campaignCol]?.replace(/"/g, '').trim() : '';
+          const adName = adCol >= 0 ? cols[adCol]?.replace(/"/g, '').trim() : '';
+          
+          // Calculate clicks from CPC if not provided
+          const finalClicks = clicks > 0 ? clicks : (cpc > 0 ? Math.round(cost / cpc) : 0);
+          
+          if (cost > 0 || impressions > 0) {
+            const dateKey = parsedDate.toISOString().split('T')[0];
+            
+            dailyData.push({
+              date: dateKey,
+              spend: cost,
+              impressions,
+              clicks: finalClicks,
+              conversions,
+              convValue,
+              ctr,
+              cpc,
+              cpm,
+              cpa,
+              roas,
+              campaign,
+              adName,
+              isMonthly: isMonthlyRecord,
+              monthLabel: isMonthlyRecord ? dateStr : null,
+            });
+            
+            totalSpend += cost;
+            totalImpressions += impressions;
+            totalClicks += finalClicks;
+            totalConversions += conversions;
+            totalConvValue += convValue;
+            
+            // Aggregate by campaign
+            if (campaign) {
+              if (!campaignData[campaign]) {
+                campaignData[campaign] = { campaign, spend: 0, impressions: 0, clicks: 0, conversions: 0, convValue: 0, days: new Set() };
+              }
+              campaignData[campaign].spend += cost;
+              campaignData[campaign].impressions += impressions;
+              campaignData[campaign].clicks += finalClicks;
+              campaignData[campaign].conversions += conversions;
+              campaignData[campaign].convValue += convValue;
+              campaignData[campaign].days.add(dateKey);
+            }
+            
+            // Aggregate by ad
+            if (adName) {
+              if (!adData[adName]) {
+                adData[adName] = { adName, campaign, spend: 0, impressions: 0, clicks: 0, conversions: 0, convValue: 0, days: new Set() };
+              }
+              adData[adName].spend += cost;
+              adData[adName].impressions += impressions;
+              adData[adName].clicks += finalClicks;
+              adData[adName].conversions += conversions;
+              adData[adName].convValue += convValue;
+              adData[adName].days.add(dateKey);
+            }
+          }
         }
       }
-      } // end else (not hourly)
       
       if (dailyData.length === 0) {
         return { error: 'No valid data rows found' };
@@ -6591,60 +6655,123 @@ const savePeriods = async (d) => {
       // Sort by date
       dailyData.sort((a, b) => a.date.localeCompare(b.date));
       
-      // Check if this is all monthly data
+      // Check if all monthly data
       const isAllMonthly = dailyData.every(d => d.isMonthly);
       
-      // For monthly data, create monthly periods instead of weekly
+      // Aggregate daily data by date (combine multiple rows per day)
+      const aggregatedByDate = {};
+      dailyData.forEach(d => {
+        if (!aggregatedByDate[d.date]) {
+          aggregatedByDate[d.date] = { ...d, campaigns: new Set(), ads: new Set() };
+        } else {
+          aggregatedByDate[d.date].spend += d.spend;
+          aggregatedByDate[d.date].impressions += d.impressions;
+          aggregatedByDate[d.date].clicks += d.clicks;
+          aggregatedByDate[d.date].conversions += d.conversions;
+          aggregatedByDate[d.date].convValue += d.convValue;
+        }
+        if (d.campaign) aggregatedByDate[d.date].campaigns.add(d.campaign);
+        if (d.adName) aggregatedByDate[d.date].ads.add(d.adName);
+      });
+      
+      // Recalculate derived metrics for aggregated daily data
+      const aggregatedDaily = Object.values(aggregatedByDate).map(d => ({
+        ...d,
+        cpc: d.clicks > 0 ? d.spend / d.clicks : 0,
+        cpm: d.impressions > 0 ? (d.spend / d.impressions) * 1000 : 0,
+        ctr: d.impressions > 0 ? (d.clicks / d.impressions) * 100 : 0,
+        cpa: d.conversions > 0 ? d.spend / d.conversions : 0,
+        roas: d.spend > 0 ? d.convValue / d.spend : 0,
+        campaignCount: d.campaigns?.size || 0,
+        adCount: d.ads?.size || 0,
+      })).sort((a, b) => a.date.localeCompare(b.date));
+      
+      // Create weekly or monthly aggregations
       let weeklyData = [];
       let monthlyData = [];
       
       if (isAllMonthly) {
-        // Store as monthly periods
-        monthlyData = dailyData.map(d => ({
-          periodLabel: d.monthLabel, // "Apr 2024"
+        monthlyData = aggregatedDaily.map(d => ({
+          periodLabel: d.monthLabel,
           date: d.date,
           spend: d.spend,
           impressions: d.impressions,
           clicks: d.clicks,
           conversions: d.conversions,
+          convValue: d.convValue,
           cpc: d.cpc,
+          cpm: d.cpm,
+          ctr: d.ctr,
           cpa: d.cpa,
-          ctr: d.impressions > 0 ? (d.clicks / d.impressions) * 100 : 0,
+          roas: d.roas,
         }));
       } else {
-        // Aggregate into weeks (Monday to Sunday, ending Sunday)
+        // Aggregate into weeks
         const weeklyMap = {};
-        dailyData.forEach(d => {
+        aggregatedDaily.forEach(d => {
           const date = new Date(d.date + 'T12:00:00');
-          const dayOfWeek = date.getDay(); // 0 = Sunday
+          const dayOfWeek = date.getDay();
           const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
           const weekEndDate = new Date(date);
           weekEndDate.setDate(weekEndDate.getDate() + daysUntilSunday);
           const weekEnding = formatDateKey(weekEndDate);
           
           if (!weeklyMap[weekEnding]) {
-            weeklyMap[weekEnding] = { 
-              weekEnding, spend: 0, impressions: 0, clicks: 0, conversions: 0, days: [] 
-            };
+            weeklyMap[weekEnding] = { weekEnding, spend: 0, impressions: 0, clicks: 0, conversions: 0, convValue: 0, days: [] };
           }
           weeklyMap[weekEnding].spend += d.spend;
           weeklyMap[weekEnding].impressions += d.impressions;
           weeklyMap[weekEnding].clicks += d.clicks;
           weeklyMap[weekEnding].conversions += d.conversions;
+          weeklyMap[weekEnding].convValue += d.convValue;
           weeklyMap[weekEnding].days.push(d.date);
         });
         
-        // Calculate averages for weekly data
+        // Calculate derived metrics
         Object.values(weeklyMap).forEach(w => {
           w.cpc = w.clicks > 0 ? w.spend / w.clicks : 0;
-          w.cpa = w.conversions > 0 ? w.spend / w.conversions : 0;
+          w.cpm = w.impressions > 0 ? (w.spend / w.impressions) * 1000 : 0;
           w.ctr = w.impressions > 0 ? (w.clicks / w.impressions) * 100 : 0;
+          w.cpa = w.conversions > 0 ? w.spend / w.conversions : 0;
+          w.roas = w.spend > 0 ? w.convValue / w.spend : 0;
         });
         
         weeklyData = Object.values(weeklyMap).sort((a, b) => a.weekEnding.localeCompare(b.weekEnding));
       }
       
-      // Count weeks/months with existing data
+      // Calculate campaign performance summaries
+      const campaignSummary = Object.values(campaignData).map(c => ({
+        campaign: c.campaign,
+        spend: c.spend,
+        impressions: c.impressions,
+        clicks: c.clicks,
+        conversions: c.conversions,
+        convValue: c.convValue,
+        cpc: c.clicks > 0 ? c.spend / c.clicks : 0,
+        cpm: c.impressions > 0 ? (c.spend / c.impressions) * 1000 : 0,
+        ctr: c.impressions > 0 ? (c.clicks / c.impressions) * 100 : 0,
+        cpa: c.conversions > 0 ? c.spend / c.conversions : 0,
+        roas: c.spend > 0 ? c.convValue / c.spend : 0,
+        daysActive: c.days.size,
+      })).sort((a, b) => b.spend - a.spend);
+      
+      // Calculate ad performance summaries
+      const adSummary = Object.values(adData).map(a => ({
+        adName: a.adName,
+        campaign: a.campaign,
+        spend: a.spend,
+        impressions: a.impressions,
+        clicks: a.clicks,
+        conversions: a.conversions,
+        convValue: a.convValue,
+        cpc: a.clicks > 0 ? a.spend / a.clicks : 0,
+        ctr: a.impressions > 0 ? (a.clicks / a.impressions) * 100 : 0,
+        cpa: a.conversions > 0 ? a.spend / a.conversions : 0,
+        roas: a.spend > 0 ? a.convValue / a.spend : 0,
+        daysActive: a.days.size,
+      })).sort((a, b) => b.spend - a.spend);
+      
+      // Check existing data
       let weeksWithExistingData = 0;
       let monthsWithExistingData = 0;
       
@@ -6658,19 +6785,22 @@ const savePeriods = async (d) => {
         });
       }
       
-      const dateRange = dailyData.length > 0 
+      const dateRange = aggregatedDaily.length > 0 
         ? isAllMonthly 
-          ? `${dailyData[0].monthLabel} - ${dailyData[dailyData.length - 1].monthLabel}`
-          : `${new Date(dailyData[0].date + 'T00:00:00').toLocaleDateString()} - ${new Date(dailyData[dailyData.length - 1].date + 'T00:00:00').toLocaleDateString()}`
+          ? `${aggregatedDaily[0].monthLabel} - ${aggregatedDaily[aggregatedDaily.length - 1].monthLabel}`
+          : `${new Date(aggregatedDaily[0].date + 'T00:00:00').toLocaleDateString()} - ${new Date(aggregatedDaily[aggregatedDaily.length - 1].date + 'T00:00:00').toLocaleDateString()}`
         : '';
       
-      // Calculate overall averages
+      // Overall averages
       const avgCpc = totalClicks > 0 ? totalSpend / totalClicks : 0;
-      const avgCpa = totalConversions > 0 ? totalSpend / totalConversions : 0;
+      const avgCpm = totalImpressions > 0 ? (totalSpend / totalImpressions) * 1000 : 0;
       const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+      const avgCpa = totalConversions > 0 ? totalSpend / totalConversions : 0;
+      const overallRoas = totalSpend > 0 ? totalConvValue / totalSpend : 0;
       
       return {
-        dailyData,
+        platform: detectedPlatform,
+        dailyData: aggregatedDaily,
         weeklyData,
         monthlyData,
         isMonthlyData: isAllMonthly,
@@ -6678,12 +6808,19 @@ const savePeriods = async (d) => {
         totalImpressions,
         totalClicks,
         totalConversions,
+        totalConvValue,
         avgCpc,
-        avgCpa,
+        avgCpm,
         avgCtr,
+        avgCpa,
+        overallRoas,
         dateRange,
         weeksWithExistingData,
         monthsWithExistingData,
+        campaignSummary,
+        adSummary,
+        daysCount: aggregatedDaily.length,
+        weeksCount: weeklyData.length,
       };
     } catch (e) {
       return { error: `Parse error: ${e.message}` };
@@ -7175,14 +7312,18 @@ const savePeriods = async (d) => {
             
             updatedDays[dayKey] = {
               ...existingDay,
-              // Top level ad data
+              // Top level ad data with full KPIs
               googleSpend: newGoogleSpend,
               googleAds: newGoogleSpend,
               googleImpressions: d.impressions,
               googleClicks: d.clicks,
               googleCpc: d.cpc,
+              googleCpm: d.cpm,
               googleCpa: d.cpa,
+              googleCtr: d.ctr,
               googleConversions: d.conversions,
+              googleConvValue: d.convValue,
+              googleRoas: d.roas,
               // Also update shopify object
               shopify: {
                 ...existingShopify,
@@ -7200,6 +7341,22 @@ const savePeriods = async (d) => {
                 adSpend: (existingAmazon.adSpend || 0) + totalAds,
                 netProfit: totalProfit,
                 netMargin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
+              },
+              // Store detailed ad KPIs by platform
+              adKPIs: {
+                ...(existingDay.adKPIs || {}),
+                google: {
+                  spend: newGoogleSpend,
+                  impressions: d.impressions,
+                  clicks: d.clicks,
+                  ctr: d.ctr,
+                  cpc: d.cpc,
+                  cpm: d.cpm,
+                  conversions: d.conversions,
+                  convValue: d.convValue,
+                  cpa: d.cpa,
+                  roas: d.roas,
+                },
               },
             };
           } else {
@@ -7220,14 +7377,18 @@ const savePeriods = async (d) => {
             
             updatedDays[dayKey] = {
               ...existingDay,
-              // Top level ad data
+              // Top level ad data with full KPIs
               metaSpend: newMetaSpend,
               metaAds: newMetaSpend,
               metaImpressions: d.impressions,
               metaClicks: d.clicks,
               metaCpc: d.cpc,
+              metaCpm: d.cpm,
               metaCpa: d.cpa,
+              metaCtr: d.ctr,
               metaConversions: d.conversions,
+              metaConvValue: d.convValue,
+              metaRoas: d.roas,
               // Also update shopify object
               shopify: {
                 ...existingShopify,
@@ -7245,6 +7406,22 @@ const savePeriods = async (d) => {
                 adSpend: (existingAmazon.adSpend || 0) + totalAds,
                 netProfit: totalProfit,
                 netMargin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
+              },
+              // Store detailed ad KPIs by platform
+              adKPIs: {
+                ...(existingDay.adKPIs || {}),
+                meta: {
+                  spend: newMetaSpend,
+                  impressions: d.impressions,
+                  clicks: d.clicks,
+                  ctr: d.ctr,
+                  cpc: d.cpc,
+                  cpm: d.cpm,
+                  conversions: d.conversions,
+                  convValue: d.convValue,
+                  cpa: d.cpa,
+                  roas: d.roas,
+                },
               },
             };
           }
@@ -7280,6 +7457,20 @@ const savePeriods = async (d) => {
           const oldShopAds = week.shopify?.adSpend || 0;
           const shopProfit = (week.shopify?.netProfit || 0) + oldShopAds - totalShopAds;
           
+          // Build KPI object for this platform
+          const platformKPIs = {
+            spend: w.spend,
+            impressions: w.impressions,
+            clicks: w.clicks,
+            ctr: w.ctr,
+            cpc: w.cpc,
+            cpm: w.cpm,
+            conversions: w.conversions,
+            convValue: w.convValue,
+            cpa: w.cpa,
+            roas: w.roas,
+          };
+          
           updated[weekKey] = {
             ...week,
             shopify: {
@@ -7300,6 +7491,11 @@ const savePeriods = async (d) => {
               netMargin: week.total?.revenue > 0 ? (((week.amazon?.netProfit || 0) + shopProfit) / week.total.revenue) * 100 : 0,
               roas: ((week.amazon?.adSpend || 0) + totalShopAds) > 0 ? week.total.revenue / ((week.amazon?.adSpend || 0) + totalShopAds) : 0,
             },
+            // Store detailed KPIs by platform for the Ads page
+            adKPIs: {
+              ...(week.adKPIs || {}),
+              [platform]: platformKPIs,
+            },
           };
           updatedCount++;
         } else {
@@ -7309,6 +7505,20 @@ const savePeriods = async (d) => {
           const googleSpend = platform === 'google' ? w.spend : 0;
           const totalAds = metaSpend + googleSpend;
           
+          // Build KPI object for this platform
+          const platformKPIs = {
+            spend: w.spend,
+            impressions: w.impressions,
+            clicks: w.clicks,
+            ctr: w.ctr,
+            cpc: w.cpc,
+            cpm: w.cpm,
+            conversions: w.conversions,
+            convValue: w.convValue,
+            cpa: w.cpa,
+            roas: w.roas,
+          };
+          
           updated[weekKey] = {
             amazon: { revenue: 0, units: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, returns: 0, skuData: [] },
             shopify: { 
@@ -7317,6 +7527,9 @@ const savePeriods = async (d) => {
               netProfit: -totalAds, netMargin: 0, roas: 0, skuData: [] 
             },
             total: { revenue: 0, units: 0, cogs: 0, adSpend: totalAds, netProfit: -totalAds, netMargin: 0, roas: 0 },
+            adKPIs: {
+              [platform]: platformKPIs,
+            },
             _adDataOnly: true, // Flag to indicate this is placeholder ad data
           };
           createdCount++;
@@ -7325,6 +7538,34 @@ const savePeriods = async (d) => {
       
       setAllWeeksData(updated);
       save(updated);
+      
+      // Store campaign and ad summaries for the Ads page (if available)
+      if (parsed.campaignSummary?.length > 0 || parsed.adSummary?.length > 0) {
+        const existingAdAnalytics = JSON.parse(localStorage.getItem('ecommerce_ad_analytics_v1') || '{}');
+        const updatedAdAnalytics = {
+          ...existingAdAnalytics,
+          lastUpdated: new Date().toISOString(),
+          [platform]: {
+            ...existingAdAnalytics[platform],
+            lastImport: new Date().toISOString(),
+            dateRange: parsed.dateRange,
+            totalSpend: parsed.totalSpend,
+            totalImpressions: parsed.totalImpressions,
+            totalClicks: parsed.totalClicks,
+            totalConversions: parsed.totalConversions,
+            totalConvValue: parsed.totalConvValue,
+            avgCpc: parsed.avgCpc,
+            avgCpm: parsed.avgCpm,
+            avgCtr: parsed.avgCtr,
+            avgCpa: parsed.avgCpa,
+            overallRoas: parsed.overallRoas,
+            campaigns: parsed.campaignSummary || [],
+            ads: parsed.adSummary || [],
+            dailyData: parsed.dailyData || [],
+          },
+        };
+        localStorage.setItem('ecommerce_ad_analytics_v1', JSON.stringify(updatedAdAnalytics));
+      }
       
       // Clear upload state
       setBulkAdFiles([]);
