@@ -5437,11 +5437,43 @@ const savePeriods = async (d) => {
     const amazonSkuVelocity = {};
     let velocityDataSource = 'none';
     
+    // DEBUG: Log data availability
+    console.log('=== VELOCITY CALCULATION DEBUG ===');
+    console.log('Weekly data weeks:', weeksCount, sortedWeeks);
+    console.log('Daily data days:', Object.keys(allDaysData).length);
+    console.log('Period data periods:', Object.keys(allPeriodsData).length);
+    
     // SOURCE 1: Weekly sales data (most accurate)
     if (weeksCount > 0) {
       velocityDataSource = 'weekly';
       sortedWeeks.forEach(w => {
         const weekData = allWeeksData[w];
+        
+        // DEBUG: Log week structure in detail
+        console.log(`Week ${w}:`);
+        console.log('  amazon exists:', !!weekData.amazon);
+        console.log('  amazon.skuData exists:', !!weekData.amazon?.skuData);
+        console.log('  amazon.skuData type:', Array.isArray(weekData.amazon?.skuData) ? 'array' : typeof weekData.amazon?.skuData);
+        console.log('  amazon.skuData length:', weekData.amazon?.skuData?.length || Object.keys(weekData.amazon?.skuData || {}).length);
+        console.log('  shopify exists:', !!weekData.shopify);
+        console.log('  shopify.skuData exists:', !!weekData.shopify?.skuData);
+        console.log('  shopify.skuData length:', weekData.shopify?.skuData?.length || Object.keys(weekData.shopify?.skuData || {}).length);
+        
+        if (weekData.amazon?.skuData) {
+          const skuArr = Array.isArray(weekData.amazon.skuData) ? weekData.amazon.skuData : Object.values(weekData.amazon.skuData);
+          if (skuArr.length > 0) {
+            console.log('  Amazon SKU sample:', JSON.stringify(skuArr[0]));
+            console.log('  Amazon total SKUs:', skuArr.length);
+            console.log('  Amazon SKU keys in first item:', Object.keys(skuArr[0]));
+          }
+        }
+        if (weekData.shopify?.skuData) {
+          const skuArr = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
+          if (skuArr.length > 0) {
+            console.log('  Shopify SKU sample:', JSON.stringify(skuArr[0]));
+            console.log('  Shopify total SKUs:', skuArr.length);
+          }
+        }
         
         // Shopify SKU velocity
         if (weekData.shopify?.skuData) {
@@ -5476,6 +5508,15 @@ const savePeriods = async (d) => {
         }
       });
       
+      // DEBUG: Log velocity totals after processing weekly data
+      console.log('After weekly processing:');
+      console.log('  amazonSkuVelocity count:', Object.keys(amazonSkuVelocity).length);
+      console.log('  shopifySkuVelocity count:', Object.keys(shopifySkuVelocity).length);
+      if (Object.keys(amazonSkuVelocity).length > 0) {
+        const sampleSku = Object.keys(amazonSkuVelocity)[0];
+        console.log('  Sample Amazon velocity:', sampleSku, '=', amazonSkuVelocity[sampleSku]);
+      }
+      
       // Convert totals to weekly averages
       Object.keys(shopifySkuVelocity).forEach(sku => {
         shopifySkuVelocity[sku] = shopifySkuVelocity[sku] / weeksCount;
@@ -5500,6 +5541,26 @@ const savePeriods = async (d) => {
       const daysCount = recentDays.length;
       const weeksEquivalent = daysCount / 7;
       
+      // DEBUG: Log daily data structure
+      console.log('Daily dates with data:', daysCount);
+      if (recentDays.length > 0) {
+        const sampleDay = allDaysData[recentDays[0]];
+        console.log('Sample day structure:', recentDays[0], {
+          hasAmazon: !!sampleDay?.amazon,
+          hasAmazonSkuData: !!sampleDay?.amazon?.skuData,
+          amazonSkuDataLength: sampleDay?.amazon?.skuData?.length,
+          hasShopify: !!sampleDay?.shopify,
+          hasShopifySkuData: !!sampleDay?.shopify?.skuData,
+          shopifySkuDataLength: sampleDay?.shopify?.skuData?.length,
+        });
+        if (sampleDay?.amazon?.skuData?.length > 0) {
+          console.log('Amazon daily SKU sample:', sampleDay.amazon.skuData[0]);
+        }
+        if (sampleDay?.shopify?.skuData?.length > 0) {
+          console.log('Shopify daily SKU sample:', sampleDay.shopify.skuData[0]);
+        }
+      }
+      
       // Temp accumulators for daily data
       const dailyAmazonVel = {};
       const dailyShopifyVel = {};
@@ -5516,8 +5577,10 @@ const savePeriods = async (d) => {
             const skuLower = item.sku.toLowerCase();
             if (!dailyAmazonVel[item.sku]) dailyAmazonVel[item.sku] = 0;
             if (!dailyAmazonVel[skuLower]) dailyAmazonVel[skuLower] = 0;
-            dailyAmazonVel[item.sku] += item.unitsSold || item.units || 0;
-            dailyAmazonVel[skuLower] += item.unitsSold || item.units || 0;
+            // Check multiple field names for units
+            const units = item.unitsSold || item.units || item.Units || item.UNITS || item.quantity || 0;
+            dailyAmazonVel[item.sku] += units;
+            dailyAmazonVel[skuLower] += units;
           });
         }
         
@@ -5530,8 +5593,10 @@ const savePeriods = async (d) => {
             const skuLower = item.sku.toLowerCase();
             if (!dailyShopifyVel[item.sku]) dailyShopifyVel[item.sku] = 0;
             if (!dailyShopifyVel[skuLower]) dailyShopifyVel[skuLower] = 0;
-            dailyShopifyVel[item.sku] += item.unitsSold || item.units || 0;
-            dailyShopifyVel[skuLower] += item.unitsSold || item.units || 0;
+            // Check multiple field names for units
+            const units = item.unitsSold || item.units || item.Units || item.UNITS || item.quantity || 0;
+            dailyShopifyVel[item.sku] += units;
+            dailyShopifyVel[skuLower] += units;
           });
         }
       });
@@ -5988,7 +6053,13 @@ const savePeriods = async (d) => {
     // Build velocity source description
     let velNote = '';
     if (velocityDataSource === 'none') {
-      velNote = 'No sales data available - using FBA t30 if present';
+      // Check if FBA inventory has t30 data
+      const hasFbaT30 = Object.values(amzInv).some(item => item.amzWeeklyVel > 0);
+      if (hasFbaT30) {
+        velNote = 'Using FBA inventory t30 shipped units (upload weekly SKU Economics for more accuracy)';
+      } else {
+        velNote = 'No velocity data - Upload Amazon SKU Economics reports or run Shopify Sync to get sales velocity';
+      }
     } else {
       const sources = [];
       if (velocityDataSource.includes('weekly')) sources.push(`${weeksCount} weeks`);
@@ -6892,7 +6963,8 @@ const savePeriods = async (d) => {
           if (revenue !== 0 || units > 0) {
             totalRevenue += revenue;
             totalUnits += units;
-            if (row['MSKU']) skuCount++;
+            // Support multiple possible SKU column names
+            if (row['MSKU'] || row['msku'] || row['Msku'] || row['SKU'] || row['sku'] || row['Seller SKU']) skuCount++;
           }
         });
         
@@ -6969,7 +7041,8 @@ const savePeriods = async (d) => {
           const ret = parseInt(r['Units returned'] || 0);
           const sales = parseFloat(r['Net sales'] || 0);
           const proceeds = parseFloat(r['Net proceeds total'] || 0);
-          const sku = r['MSKU'] || '';
+          // Support multiple possible SKU column names
+          const sku = r['MSKU'] || r['msku'] || r['Msku'] || r['SKU'] || r['sku'] || r['Seller SKU'] || r['seller-sku'] || '';
           const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0);
           const ads = parseFloat(r['Sponsored Products charge total'] || 0);
           const name = r['Product title'] || r['product-name'] || sku;
@@ -6998,6 +7071,19 @@ const savePeriods = async (d) => {
         });
         
         const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
+        
+        // DEBUG: Log what was parsed
+        console.log(`=== AMAZON BULK UPLOAD DEBUG (${fileData.name}) ===`);
+        console.log('Report type:', reportType);
+        console.log('Date range:', dateRange);
+        console.log('Rows processed:', data.length);
+        console.log('SKUs found:', Object.keys(amazonSkuData).length);
+        console.log('Total units:', amzUnits);
+        console.log('Total revenue:', amzRev);
+        if (amazonSkus.length > 0) {
+          console.log('Sample SKU:', JSON.stringify(amazonSkus[0]));
+          console.log('First few SKU names:', amazonSkus.slice(0, 5).map(s => s.sku));
+        }
         
         if (reportType === 'daily' && dateRange?.endDate) {
           // Import as daily data
@@ -13678,7 +13764,7 @@ if (shopifySkuWithShipping.length > 0) {
         const getColIdx = (names) => headers.findIndex(h => names.some(n => h === n || h.includes(n)));
         
         const colMap = {
-          date: getColIdx(['date']),
+          date: getColIdx(['date', 'day']),
           spend: getColIdx(['spend']),
           revenue: getColIdx(['revenue']),
           orders: getColIdx(['orders']),
@@ -19617,6 +19703,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
             <button onClick={() => setUploadTab('amazon-bulk')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'amazon-bulk' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Upload className="w-5 h-5" />Amazon Reports
+            </button>
+            <button onClick={() => setUploadTab('bulk-ads')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'bulk-ads' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <TrendingUp className="w-5 h-5" />Meta/Google Ads
             </button>
             <button onClick={() => setUploadTab('shopify-sync')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'shopify-sync' ? 'bg-green-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <ShoppingBag className="w-5 h-5" />Shopify Sync
