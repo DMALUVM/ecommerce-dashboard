@@ -2934,6 +2934,8 @@ const loadFromLocal = useCallback(() => {
   } catch {}
 
   // Load daily data - check both keys for backwards compatibility
+  console.log('%c=== APP VERSION 2.2 LOADED ===', 'background: red; color: white; font-size: 20px;');
+  alert('App v2.2 loaded - check console for data loading logs');
   try {
     let dailyData = null;
     const r = lsGet('ecommerce_daily_sales_v1');
