@@ -166,7 +166,11 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
     const dateParts = dateStr.split('/');
     const dateKey = `${dateParts[2]}-${dateParts[0].padStart(2, '0')}-${dateParts[1].padStart(2, '0')}`;
     
-    const txnId = `${dateKey}-${currentAccount?.slice(0,10)}-${amount}-${memo.slice(0,15)}`.replace(/[^a-zA-Z0-9-]/g, '');
+    // Create unique transaction ID using simple hash of full memo
+    const memoHash = memo.split('').reduce((hash, char) => {
+      return ((hash << 5) - hash) + char.charCodeAt(0) | 0;
+    }, 0).toString(36);
+    const txnId = `${dateKey}-${currentAccount?.slice(0,15)}-${amount.toFixed(2)}-${memoHash}`.replace(/[^a-zA-Z0-9-]/g, '');
     
     // Skip transfers and non-cash items
     if (txnType === 'Credit Card Payment') continue;
@@ -13380,10 +13384,10 @@ if (shopifySkuWithShipping.length > 0) {
             };
             
             const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/"/g, ''));
-            const dateColIdx = headers.findIndex(h => h === 'date' || h.includes('date'));
+            const dateColIdx = headers.findIndex(h => h === 'date' || h === 'day' || h.includes('date'));
             
             if (dateColIdx === -1) {
-              reject(new Error('No date column found'));
+              reject(new Error('No date column found. Expected "Date" or "Day" column.'));
               return;
             }
             
@@ -16735,9 +16739,9 @@ CAMPAIGN PERFORMANCE SUMMARY:
 - Conversion Rate: ${(amazonCampaigns.summary?.convRate || 0).toFixed(2)}%
 
 BY CAMPAIGN TYPE:
-- Sponsored Products (SP): ${amazonCampaigns.summary?.byType?.SP?.length || 0} campaigns, $${(amazonCampaigns.summary?.byType?.SP?.reduce((s,c) => s + c.spend, 0) || 0).toFixed(0)} spend, ${((amazonCampaigns.summary?.byType?.SP?.reduce((s,c) => s + c.spend, 0) || 0) > 0 ? (amazonCampaigns.summary?.byType?.SP?.reduce((s,c) => s + c.sales, 0) / amazonCampaigns.summary?.byType?.SP?.reduce((s,c) => s + c.spend, 0)).toFixed(2) : 0)}x ROAS
-- Sponsored Brands (SB): ${amazonCampaigns.summary?.byType?.SB?.length || 0} campaigns, $${(amazonCampaigns.summary?.byType?.SB?.reduce((s,c) => s + c.spend, 0) || 0).toFixed(0)} spend
-- Sponsored Display (SD): ${amazonCampaigns.summary?.byType?.SD?.length || 0} campaigns, $${(amazonCampaigns.summary?.byType?.SD?.reduce((s,c) => s + c.spend, 0) || 0).toFixed(0)} spend
+- Sponsored Products (SP): ${Array.isArray(amazonCampaigns.summary?.byType?.SP) ? amazonCampaigns.summary.byType.SP.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SP) ? amazonCampaigns.summary.byType.SP.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
+- Sponsored Brands (SB): ${Array.isArray(amazonCampaigns.summary?.byType?.SB) ? amazonCampaigns.summary.byType.SB.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SB) ? amazonCampaigns.summary.byType.SB.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
+- Sponsored Display (SD): ${Array.isArray(amazonCampaigns.summary?.byType?.SD) ? amazonCampaigns.summary.byType.SD.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SD) ? amazonCampaigns.summary.byType.SD.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
 
 TOP 10 CAMPAIGNS BY SPEND:
 ${amazonCampaigns.campaigns?.slice().sort((a,b) => (b.spend || 0) - (a.spend || 0)).slice(0,10).map(c => 
@@ -32346,23 +32350,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       
       switch (adsTimeTab) {
         case 'daily': {
-          // Yesterday only - get the most recent day with ad data
-          const yesterday = new Date(now);
-          yesterday.setDate(yesterday.getDate() - 1);
-          const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-          // Return yesterday if we have data, otherwise the most recent day with any data
-          if (sortedDays.includes(yesterdayStr)) {
-            return [yesterdayStr];
-          }
-          // Fall back to most recent day with data
-          const mostRecentWithAds = sortedDays.filter(d => {
-            const day = allDaysData[d];
-            return (day?.shopify?.googleSpend || day?.shopify?.metaSpend || day?.amazon?.adSpend || 0) > 0;
-          }).slice(-1);
-          return mostRecentWithAds.length > 0 ? mostRecentWithAds : sortedDays.slice(-1);
+          // Show all days in the selected month (controlled by adsMonth selector)
+          return daysInMonth.length > 0 ? daysInMonth : sortedDays.slice(-30);
         }
         case 'weekly': {
-          // Last 7 days
+          // Days in selected week
+          if (adsSelectedWeek) {
+            const weekEnd = new Date(adsSelectedWeek + 'T00:00:00');
+            const weekStart = new Date(weekEnd);
+            weekStart.setDate(weekStart.getDate() - 6);
+            return sortedDays.filter(d => {
+              const date = new Date(d + 'T00:00:00');
+              return date >= weekStart && date <= weekEnd;
+            });
+          }
+          // Fall back to last 7 days
           const sevenDaysAgo = new Date(now);
           sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
           return sortedDays.filter(d => {
@@ -32371,7 +32373,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           });
         }
         case 'monthly': {
-          // Last 30 days OR selected month
+          // Selected month
           return daysInMonth;
         }
         default:
@@ -33304,12 +33306,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   {/* Campaign Type Breakdown */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                     {[
-                      { type: 'SP', label: 'Sponsored Products', color: 'blue', campaigns: campaignSummary.byType?.SP || [] },
-                      { type: 'SB', label: 'Sponsored Brands', color: 'purple', campaigns: campaignSummary.byType?.SB || [] },
-                      { type: 'SD', label: 'Sponsored Display', color: 'teal', campaigns: campaignSummary.byType?.SD || [] },
+                      { type: 'SP', label: 'Sponsored Products', color: 'blue', campaigns: Array.isArray(campaignSummary.byType?.SP) ? campaignSummary.byType.SP : [] },
+                      { type: 'SB', label: 'Sponsored Brands', color: 'purple', campaigns: Array.isArray(campaignSummary.byType?.SB) ? campaignSummary.byType.SB : [] },
+                      { type: 'SD', label: 'Sponsored Display', color: 'teal', campaigns: Array.isArray(campaignSummary.byType?.SD) ? campaignSummary.byType.SD : [] },
                     ].map(({ type, label, color, campaigns: typeCampaigns }) => {
-                      const spend = typeCampaigns.reduce((s, c) => s + c.spend, 0);
-                      const sales = typeCampaigns.reduce((s, c) => s + c.sales, 0);
+                      const spend = typeCampaigns.reduce((s, c) => s + (c.spend || 0), 0);
+                      const sales = typeCampaigns.reduce((s, c) => s + (c.sales || 0), 0);
                       const roas = spend > 0 ? sales / spend : 0;
                       return (
                         <div key={type} className={`bg-slate-800/50 rounded-xl border border-slate-700 p-4`}>
@@ -33454,11 +33456,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               </select>
             </div>
             
-            {(adsTimeTab === 'monthly') && (
+            {/* Show month selector for daily and monthly tabs */}
+            {(adsTimeTab === 'daily' || adsTimeTab === 'monthly') && (
               <div className="flex items-center gap-2">
                 <span className="text-slate-400 text-sm">Month:</span>
                 <select value={adsMonth} onChange={(e) => setAdsMonth(parseInt(e.target.value))} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
                   {monthNames.map((m, i) => <option key={i} value={i} disabled={!monthsWithData.includes(i)}>{m}</option>)}
+                </select>
+              </div>
+            )}
+            
+            {/* Week selector for weekly mode */}
+            {adsTimeTab === 'weekly' && weeksInYear.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 text-sm">Week Ending:</span>
+                <select value={adsSelectedWeek || ''} onChange={(e) => setAdsSelectedWeek(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
+                  {weeksInYear.slice().reverse().map(w => (
+                    <option key={w} value={w}>
+                      {new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </option>
+                  ))}
                 </select>
               </div>
             )}
@@ -34032,7 +34049,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     return {};
   };
 
-  const getSpend = (dateKey) => Number(getMetrics(dateKey)?.spend ?? 0);
+  const getSpend = (dateKey) => {
+    // First try historicalDaily or amazonAdsMetrics
+    const histSpend = Number(getMetrics(dateKey)?.spend ?? 0);
+    if (histSpend > 0) return histSpend;
+    // Fall back to amazon.adSpend from SKU Economics
+    return Number(allDaysData?.[dateKey]?.amazon?.adSpend ?? 0);
+  };
+  
   const getRevenue = (dateKey) => {
     const m = getMetrics(dateKey) || {};
     // historicalDaily uses totalRevenue; some imports may use revenue
