@@ -11,6 +11,10 @@
     "api/packiyo/sync.js": {
       "maxDuration": 60,
       "memory": 512
+    },
+    "api/amazon/sync.js": {
+      "maxDuration": 120,
+      "memory": 1024
     }
   }
 }

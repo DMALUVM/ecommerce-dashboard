@@ -1133,6 +1133,29 @@ export default function Dashboard() {
   const [packiyoInventoryStatus, setPackiyoInventoryStatus] = useState({ loading: false, error: null, lastSync: null });
   const [packiyoInventoryData, setPackiyoInventoryData] = useState(null);
   
+  // Amazon SP-API Integration (FBA + AWD Inventory)
+  const [amazonCredentials, setAmazonCredentials] = useState({
+    clientId: '',
+    clientSecret: '',
+    refreshToken: '',
+    sellerId: '',
+    marketplaceId: 'ATVPDKIKX0DER', // US marketplace
+    connected: false,
+    lastSync: null,
+    // Ads API (optional, separate credentials)
+    adsClientId: '',
+    adsClientSecret: '',
+    adsRefreshToken: '',
+    adsProfileId: '',
+    adsConnected: false,
+    adsLastSync: null,
+  });
+  const [amazonInventoryStatus, setAmazonInventoryStatus] = useState({ loading: false, error: null, lastSync: null });
+  const [amazonInventoryData, setAmazonInventoryData] = useState(null);
+  
+  // Navigation dropdown states
+  const [navDropdown, setNavDropdown] = useState(null); // 'data' | 'analytics' | 'operations' | null
+  
   // Sales Tax Period Calculator
   const [taxPeriodType, setTaxPeriodType] = useState('month');
   const [taxPeriodValue, setTaxPeriodValue] = useState(() => {
@@ -2890,7 +2913,9 @@ const combinedData = useMemo(() => ({
   shopifyCredentials,
   // Packiyo 3PL Integration credentials
   packiyoCredentials,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials]);
+  // Amazon SP-API Integration credentials
+  amazonCredentials,
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -2969,6 +2994,12 @@ const loadFromLocal = useCallback(() => {
   try {
     const r = lsGet('ecommerce_packiyo_creds_v1');
     if (r) setPackiyoCredentials(JSON.parse(r));
+  } catch {}
+  
+  // Load Amazon credentials from localStorage
+  try {
+    const r = lsGet('ecommerce_amazon_creds_v1');
+    if (r) setAmazonCredentials(JSON.parse(r));
   } catch {}
 }, []);
 
@@ -3155,7 +3186,7 @@ useEffect(() => {
   if (!session?.user?.id || !supabase) return;
   if (isLoadingDataRef.current) return; // Don't sync during initial load
   queueCloudSave(combinedData);
-}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials]);
+}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials]);
 
 // Persist Shopify credentials to localStorage for offline backup
 useEffect(() => {
@@ -3174,6 +3205,15 @@ useEffect(() => {
     } catch {}
   }
 }, [packiyoCredentials]);
+
+// Persist Amazon credentials to localStorage for offline backup
+useEffect(() => {
+  if (amazonCredentials.refreshToken || amazonCredentials.connected) {
+    try {
+      lsSet('ecommerce_amazon_creds_v1', JSON.stringify(amazonCredentials));
+    } catch {}
+  }
+}, [amazonCredentials]);
 
 const loadFromCloud = useCallback(async (storeId = null) => {
   if (!supabase || !session?.user?.id) return { ok: false, stores: [] };
@@ -3282,6 +3322,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.confirmedRecurring) setConfirmedRecurring(cloud.confirmedRecurring);
     if (cloud.shopifyCredentials) setShopifyCredentials(cloud.shopifyCredentials);
     if (cloud.packiyoCredentials) setPackiyoCredentials(cloud.packiyoCredentials);
+    if (cloud.amazonCredentials) setAmazonCredentials(cloud.amazonCredentials);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -3319,6 +3360,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.confirmedRecurring) writeToLocal('ecommerce_recurring_v1', JSON.stringify(cloud.confirmedRecurring));
     if (cloud.shopifyCredentials) writeToLocal('ecommerce_shopify_creds_v1', JSON.stringify(cloud.shopifyCredentials));
     if (cloud.packiyoCredentials) writeToLocal('ecommerce_packiyo_creds_v1', JSON.stringify(cloud.packiyoCredentials));
+    if (cloud.amazonCredentials) writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify(cloud.amazonCredentials));
 
     setCloudStatus('');
     return { ok: true, stores: loadedStores };
@@ -3387,6 +3429,8 @@ const createStore = useCallback(async (name) => {
     shopifyCredentials: { storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null },
     // Packiyo 3PL credentials for new store
     packiyoCredentials: { apiKey: '', customerId: '134', baseUrl: 'https://excel3pl.packiyo.com/api/v1', connected: false, lastSync: null, customerName: '' },
+    // Amazon SP-API credentials for new store
+    amazonCredentials: { clientId: '', clientSecret: '', refreshToken: '', sellerId: '', marketplaceId: 'ATVPDKIKX0DER', connected: false, lastSync: null, adsClientId: '', adsClientSecret: '', adsRefreshToken: '', adsProfileId: '', adsConnected: false, adsLastSync: null },
   };
   
   // Save to cloud immediately with the new stores list
@@ -5360,9 +5404,17 @@ const savePeriods = async (d) => {
   };
 
   const processInventory = useCallback(async () => {
-    if (!invFiles.amazon || !invSnapshotDate) { 
-      alert('Upload Amazon FBA file and select date'); 
+    // File is optional if Amazon SP-API is connected
+    const hasAmazonFile = invFiles.amazon && invFiles.amazon.length > 0;
+    const hasAmazonApi = amazonCredentials.connected && amazonCredentials.refreshToken;
+    
+    if (!hasAmazonFile && !hasAmazonApi) { 
+      alert('Upload Amazon FBA file or connect Amazon SP-API, and select a date'); 
       return; 
+    }
+    if (!invSnapshotDate) {
+      alert('Please select a snapshot date');
+      return;
     }
     setIsProcessing(true);
 
@@ -5418,24 +5470,99 @@ const savePeriods = async (d) => {
     
     const hasWeeklyVelocityData = Object.keys(amazonSkuVelocity).length > 0 || Object.keys(shopifySkuVelocity).length > 0;
 
-    // Process Amazon FBA inventory
+    // ===== AMAZON FBA/AWD INVENTORY - Use SP-API if connected, otherwise fall back to file upload =====
     const amzInv = {};
     let amzTotal = 0, amzValue = 0, amzInbound = 0;
+    let amzSource = 'file-upload';
+    let awdData = {};
+    let awdTotal = 0;
 
-    invFiles.amazon.forEach(r => {
-      const sku = r['sku'] || '', avail = parseInt(r['available'] || 0), inb = parseInt(r['inbound-quantity'] || 0);
-      const res = parseInt(r['Total Reserved Quantity'] || 0), t30 = parseInt(r['units-shipped-t30'] || 0);
-      const name = r['product-name'] || '', asin = r['asin'] || '';
-      const cost = cogsLookup[sku] || 0, total = avail + res;
-      amzTotal += total; amzValue += total * cost; amzInbound += inb;
-      
-      // Use weekly data velocity if available, otherwise fall back to t30 from file
-      const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
-      const amzVelFromFile = t30 / 4.3;
-      const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : amzVelFromFile;
-      
-      if (sku) amzInv[sku] = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel };
-    });
+    // Try Amazon SP-API first if connected
+    if (amazonCredentials.connected && amazonCredentials.refreshToken) {
+      try {
+        const res = await fetch('/api/amazon/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            clientId: amazonCredentials.clientId,
+            clientSecret: amazonCredentials.clientSecret,
+            refreshToken: amazonCredentials.refreshToken,
+            sellerId: amazonCredentials.sellerId,
+            marketplaceId: amazonCredentials.marketplaceId,
+            syncType: 'all', // Get both FBA and AWD
+          }),
+        });
+        const data = await res.json();
+        
+        if (data.success && data.items) {
+          amzSource = data.source || 'amazon-sp-api';
+          data.items.forEach(item => {
+            const sku = item.sku;
+            if (!sku) return;
+            
+            // Use FBA quantities (AWD is separate distribution inventory)
+            const avail = item.fbaFulfillable || item.available || 0;
+            const reserved = item.fbaReserved || 0;
+            const inb = item.fbaInbound || item.amazonInbound || 0;
+            const total = avail + reserved;
+            
+            const cost = cogsLookup[sku] || 0;
+            amzTotal += total;
+            amzValue += total * cost;
+            amzInbound += inb;
+            
+            // Get velocity - prefer weekly data, then t30 from file if no API velocity
+            const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
+            const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : 0;
+            
+            amzInv[sku] = { 
+              sku, 
+              asin: item.asin || '', 
+              name: item.name || sku, 
+              total, 
+              inbound: inb, 
+              cost, 
+              amzWeeklyVel 
+            };
+            
+            // Track AWD separately
+            if (item.awdQuantity > 0) {
+              awdData[sku] = {
+                sku,
+                awdQuantity: item.awdQuantity,
+                awdInbound: item.awdInbound || 0,
+              };
+              awdTotal += item.awdQuantity;
+            }
+          });
+          
+          // Update Amazon last sync time
+          setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+        }
+      } catch (err) {
+        console.error('Amazon SP-API sync failed, falling back to file:', err);
+        // Fall through to file-based processing
+      }
+    }
+    
+    // Fall back to uploaded Amazon file if SP-API not connected or failed
+    if (Object.keys(amzInv).length === 0 && invFiles.amazon) {
+      amzSource = 'file-upload';
+      invFiles.amazon.forEach(r => {
+        const sku = r['sku'] || '', avail = parseInt(r['available'] || 0), inb = parseInt(r['inbound-quantity'] || 0);
+        const res = parseInt(r['Total Reserved Quantity'] || 0), t30 = parseInt(r['units-shipped-t30'] || 0);
+        const name = r['product-name'] || '', asin = r['asin'] || '';
+        const cost = cogsLookup[sku] || 0, total = avail + res;
+        amzTotal += total; amzValue += total * cost; amzInbound += inb;
+        
+        // Use weekly data velocity if available, otherwise fall back to t30 from file
+        const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
+        const amzVelFromFile = t30 / 4.3;
+        const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : amzVelFromFile;
+        
+        if (sku) amzInv[sku] = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel };
+      });
+    }
 
     // ===== 3PL INVENTORY - Use Packiyo if connected, otherwise fall back to file upload =====
     let tplInv = {};
@@ -5663,7 +5790,7 @@ const savePeriods = async (d) => {
       ? ` + AI-corrected (${forecastCorrections.confidence.toFixed(0)}% confidence)`
       : '';
     
-    const sourceNote = `3PL: ${tplSource}${homeSource !== 'none' ? `, Home: ${homeSource}` : ''}`;
+    const sourceNote = `Amazon: ${amzSource}${awdTotal > 0 ? ` (AWD: ${awdTotal} units)` : ''}, 3PL: ${tplSource}${homeSource !== 'none' ? `, Home: ${homeSource}` : ''}`;
     
     const snapshot = {
       date: invSnapshotDate, 
@@ -5675,7 +5802,8 @@ const savePeriods = async (d) => {
         totalValue: amzValue + tplValue + homeValue, 
         amazonUnits: amzTotal, 
         amazonValue: amzValue, 
-        amazonInbound: amzInbound, 
+        amazonInbound: amzInbound,
+        awdUnits: awdTotal,
         threeplUnits: tplTotal, 
         threeplValue: tplValue, 
         threeplInbound: tplInbound,
@@ -5688,9 +5816,12 @@ const savePeriods = async (d) => {
         skuCount: items.length 
       },
       items,
+      awdData, // AWD inventory breakdown
       sources: {
+        amazon: amzSource,
         threepl: tplSource,
         home: homeSource,
+        amazonConnected: amazonCredentials.connected,
         packiyoConnected: packiyoCredentials.connected,
         shopifyConnected: shopifyCredentials.connected,
       },
@@ -5716,7 +5847,7 @@ const savePeriods = async (d) => {
       message: `Inventory snapshot saved (3PL: ${tplSource}, ${items.length} SKUs)`, 
       type: 'success' 
     });
-  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, forecastCorrections, packiyoCredentials, shopifyCredentials]);
+  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, forecastCorrections, packiyoCredentials, shopifyCredentials, amazonCredentials]);
 
   const deleteWeek = (k) => { 
     const data = allWeeksData[k];
@@ -10475,62 +10606,183 @@ const skuData = useMemo(() => {
     );
   };
 
-  const NavTabs = () => (
-    <div className="flex flex-wrap gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl">
-      {/* Main Navigation */}
-      <button onClick={() => setView('dashboard')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'dashboard' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />Dashboard</button>
-      <button onClick={() => setView('upload')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Upload className="w-4 h-4 inline mr-1" />Upload</button>
+  const NavTabs = () => {
+    const dataViews = ['daily', 'weekly', 'period-view'];
+    const analyticsViews = ['trends', 'analytics', 'yoy', 'skus', 'profitability', 'ads'];
+    const operationsViews = ['inventory', '3pl', 'banking', 'sales-tax', 'forecast'];
+    
+    const isDataActive = dataViews.includes(view);
+    const isAnalyticsActive = analyticsViews.includes(view);
+    const isOperationsActive = operationsViews.includes(view);
+    
+    // Dropdown component
+    const NavDropdown = ({ label, icon: Icon, items, isActive, dropdownKey }) => {
+      const isOpen = navDropdown === dropdownKey;
       
-      <div className="w-px bg-slate-600 mx-1" />
-      
-      {/* Data Views */}
-      {appSettings.modulesEnabled?.dailyTracking !== false && (
-        <button onClick={() => { const d = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse(); if (d.length) { setSelectedDay(d[0]); setView('daily'); }}} disabled={!Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'daily' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Sun className="w-4 h-4 inline mr-1" />Days</button>
-      )}
-      {appSettings.modulesEnabled?.weeklyTracking !== false && (
-        <button onClick={() => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}} disabled={!Object.keys(allWeeksData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />Weeks</button>
-      )}
-      {appSettings.modulesEnabled?.periodTracking !== false && (
-        <button onClick={() => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }}} disabled={!Object.keys(allPeriodsData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'period-view' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><CalendarRange className="w-4 h-4 inline mr-1" />Periods</button>
-      )}
-      {appSettings.modulesEnabled?.inventory !== false && (
-        <button onClick={() => { if (Object.keys(invHistory).length) { const d = Object.keys(invHistory).sort().reverse()[0]; setSelectedInvDate(d); setView('inventory'); } else { setUploadTab('inventory'); setView('upload'); }}} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Boxes className="w-4 h-4 inline mr-1" />Inventory</button>
-      )}
-      
-      <div className="w-px bg-slate-600 mx-1" />
-      
-      {/* Analytics */}
-      {appSettings.modulesEnabled?.trends !== false && (
-        <button onClick={() => setView('trends')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'trends' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><TrendingUp className="w-4 h-4 inline mr-1" />Trends</button>
-      )}
-      <button onClick={() => setView('forecast')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'forecast' ? 'bg-purple-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Brain className="w-4 h-4 inline mr-1" />Forecast</button>
-      <button onClick={() => setView('analytics')} disabled={Object.keys(allWeeksData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'analytics' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />Analytics</button>
-      {appSettings.modulesEnabled?.yoy !== false && (
-        <button onClick={() => setView('yoy')} disabled={Object.keys(allWeeksData).length < 2 && Object.keys(allPeriodsData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'yoy' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><GitCompare className="w-4 h-4 inline mr-1" />YoY</button>
-      )}
-      {appSettings.modulesEnabled?.skus !== false && (
-        <button onClick={() => setView('skus')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'skus' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Trophy className="w-4 h-4 inline mr-1" />SKUs</button>
-      )}
-      {appSettings.modulesEnabled?.profitability !== false && (
-        <button onClick={() => setView('profitability')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'profitability' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><PieChart className="w-4 h-4 inline mr-1" />Profit</button>
-      )}
-      {appSettings.modulesEnabled?.ads !== false && (
-        <button onClick={() => setView('ads')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'ads' ? 'bg-purple-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Zap className="w-4 h-4 inline mr-1" />Ads</button>
-      )}
-      {appSettings.modulesEnabled?.threepl !== false && (
-        <button onClick={() => setView('3pl')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === '3pl' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Truck className="w-4 h-4 inline mr-1" />3PL</button>
-      )}
-      <button onClick={() => setView('banking')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'banking' ? 'bg-green-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Landmark className="w-4 h-4 inline mr-1" />Banking{bankingData.lastUpload && new Date().toDateString() !== new Date(bankingData.lastUpload).toDateString() && <span className="ml-1 w-2 h-2 bg-amber-400 rounded-full inline-block animate-pulse" title="Banking data not uploaded today" />}</button>
-      
-      <div className="w-px bg-slate-600 mx-1" />
-      
-      {/* Compliance & Settings */}
-      {appSettings.modulesEnabled?.salesTax !== false && (
-        <button onClick={() => setView('sales-tax')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'sales-tax' ? 'bg-rose-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><DollarSign className="w-4 h-4 inline mr-1" />Sales Tax</button>
-      )}
-      <button onClick={() => setView('settings')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'settings' ? 'bg-slate-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Settings className="w-4 h-4 inline mr-1" />Settings</button>
-    </div>
-  );
+      return (
+        <div className="relative">
+          <button 
+            onClick={() => setNavDropdown(isOpen ? null : dropdownKey)}
+            className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1 ${isActive ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}
+          >
+            <Icon className="w-4 h-4" />
+            {label}
+            <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {isOpen && (
+            <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl py-1 z-50 min-w-[160px]">
+              {items.map(item => (
+                <button
+                  key={item.view}
+                  onClick={() => { item.onClick(); setNavDropdown(null); }}
+                  disabled={item.disabled}
+                  className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 disabled:opacity-40 ${view === item.view ? 'bg-violet-600/30 text-violet-300' : 'text-slate-300 hover:bg-slate-700'}`}
+                >
+                  <item.icon className="w-4 h-4" />
+                  {item.label}
+                  {item.badge && <span className="ml-auto text-xs bg-amber-500/30 text-amber-300 px-1.5 rounded">{item.badge}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    };
+    
+    // Data dropdown items
+    const dataItems = [
+      ...(appSettings.modulesEnabled?.dailyTracking !== false ? [{
+        view: 'daily', label: 'Days', icon: Sun,
+        disabled: !Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).length,
+        onClick: () => { const d = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse(); if (d.length) { setSelectedDay(d[0]); setView('daily'); }},
+        badge: Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).length || null
+      }] : []),
+      ...(appSettings.modulesEnabled?.weeklyTracking !== false ? [{
+        view: 'weekly', label: 'Weeks', icon: Calendar,
+        disabled: !Object.keys(allWeeksData).length,
+        onClick: () => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }},
+        badge: Object.keys(allWeeksData).length || null
+      }] : []),
+      ...(appSettings.modulesEnabled?.periodTracking !== false ? [{
+        view: 'period-view', label: 'Periods', icon: CalendarRange,
+        disabled: !Object.keys(allPeriodsData).length,
+        onClick: () => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }},
+        badge: Object.keys(allPeriodsData).length || null
+      }] : []),
+    ];
+    
+    // Analytics dropdown items
+    const analyticsItems = [
+      ...(appSettings.modulesEnabled?.trends !== false ? [{
+        view: 'trends', label: 'Trends', icon: TrendingUp,
+        disabled: Object.keys(allWeeksData).length < 2,
+        onClick: () => setView('trends'),
+      }] : []),
+      {
+        view: 'analytics', label: 'Analytics', icon: BarChart3,
+        disabled: Object.keys(allWeeksData).length < 1,
+        onClick: () => setView('analytics'),
+      },
+      ...(appSettings.modulesEnabled?.yoy !== false ? [{
+        view: 'yoy', label: 'Year over Year', icon: GitCompare,
+        disabled: Object.keys(allWeeksData).length < 2 && Object.keys(allPeriodsData).length < 2,
+        onClick: () => setView('yoy'),
+      }] : []),
+      ...(appSettings.modulesEnabled?.skus !== false ? [{
+        view: 'skus', label: 'SKU Analysis', icon: Trophy,
+        disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
+        onClick: () => setView('skus'),
+      }] : []),
+      ...(appSettings.modulesEnabled?.profitability !== false ? [{
+        view: 'profitability', label: 'Profitability', icon: PieChart,
+        disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
+        onClick: () => setView('profitability'),
+      }] : []),
+      ...(appSettings.modulesEnabled?.ads !== false ? [{
+        view: 'ads', label: 'Ads & Marketing', icon: Zap,
+        disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
+        onClick: () => setView('ads'),
+      }] : []),
+    ];
+    
+    // Operations dropdown items
+    const operationsItems = [
+      ...(appSettings.modulesEnabled?.inventory !== false ? [{
+        view: 'inventory', label: 'Inventory', icon: Boxes,
+        disabled: false,
+        onClick: () => { if (Object.keys(invHistory).length) { const d = Object.keys(invHistory).sort().reverse()[0]; setSelectedInvDate(d); setView('inventory'); } else { setUploadTab('inventory'); setView('upload'); }},
+      }] : []),
+      {
+        view: 'forecast', label: 'Forecast', icon: Brain,
+        disabled: false,
+        onClick: () => setView('forecast'),
+      },
+      ...(appSettings.modulesEnabled?.threepl !== false ? [{
+        view: '3pl', label: '3PL / Fulfillment', icon: Truck,
+        disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
+        onClick: () => setView('3pl'),
+      }] : []),
+      {
+        view: 'banking', label: 'Banking', icon: Landmark,
+        disabled: false,
+        onClick: () => setView('banking'),
+        badge: bankingData.lastUpload && new Date().toDateString() !== new Date(bankingData.lastUpload).toDateString() ? '!' : null
+      },
+      ...(appSettings.modulesEnabled?.salesTax !== false ? [{
+        view: 'sales-tax', label: 'Sales Tax', icon: DollarSign,
+        disabled: false,
+        onClick: () => setView('sales-tax'),
+      }] : []),
+    ];
+    
+    return (
+      <div className="flex flex-wrap gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl relative" onClick={(e) => { if (e.target === e.currentTarget) setNavDropdown(null); }}>
+        {/* Core Navigation - Always visible */}
+        <button onClick={() => setView('dashboard')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'dashboard' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />Dashboard</button>
+        <button onClick={() => setView('upload')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Upload className="w-4 h-4 inline mr-1" />Upload</button>
+        
+        <div className="w-px bg-slate-600 mx-1" />
+        
+        {/* Data Views Dropdown */}
+        {dataItems.length > 0 && (
+          <NavDropdown 
+            label="Data" 
+            icon={Database} 
+            items={dataItems}
+            isActive={isDataActive}
+            dropdownKey="data"
+          />
+        )}
+        
+        {/* Analytics Dropdown */}
+        {analyticsItems.length > 0 && (
+          <NavDropdown 
+            label="Analytics" 
+            icon={TrendingUp} 
+            items={analyticsItems}
+            isActive={isAnalyticsActive}
+            dropdownKey="analytics"
+          />
+        )}
+        
+        {/* Operations Dropdown */}
+        {operationsItems.length > 0 && (
+          <NavDropdown 
+            label="Operations" 
+            icon={Boxes} 
+            items={operationsItems}
+            isActive={isOperationsActive}
+            dropdownKey="operations"
+          />
+        )}
+        
+        <div className="w-px bg-slate-600 mx-1" />
+        
+        {/* Settings - Always visible */}
+        <button onClick={() => setView('settings')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'settings' ? 'bg-slate-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Settings className="w-4 h-4 inline mr-1" />Settings</button>
+      </div>
+    );
+  };
 
   const dataBar = useMemo(() => (
     <div className="flex flex-wrap items-center gap-3 mb-6 p-4 bg-slate-800/50 rounded-xl border border-slate-700">
@@ -22610,6 +22862,20 @@ if (shopifySkuWithShipping.length > 0) {
             <MetricCard label="3PL" value={formatNumber(filteredSummary.threeplUnits)} sub={formatCurrency(filteredSummary.threeplValue)} icon={Boxes} color="violet" />
           </div>
           {data.velocitySource && <div className="bg-cyan-900/20 border border-cyan-500/30 rounded-xl p-3 mb-6"><p className="text-cyan-400 text-sm"><span className="font-semibold">Velocity:</span> {data.velocitySource}</p></div>}
+          
+          {/* Warning when no velocity data */}
+          {(!data.velocitySource || data.velocitySource.includes('no weekly data')) && (
+            <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-3 mb-6 flex items-center gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-amber-300 text-sm font-medium">Limited Velocity Data</p>
+                <p className="text-slate-400 text-xs">
+                  Stock-out dates and reorder recommendations may be inaccurate. For better predictions, sync sales data via 
+                  <button onClick={() => setView('upload')} className="text-amber-400 hover:text-amber-300 underline ml-1">Upload → Shopify Sync</button> or ensure your FBA inventory file includes the "units-shipped-t30" column.
+                </p>
+              </div>
+            </div>
+          )}
           
           {/* Learning Status Banner */}
           {data.learningStatus?.correctionsApplied && (
@@ -37849,6 +38115,198 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             )}
           </SettingSection>
           
+          {/* Amazon SP-API Connection */}
+          <SettingSection title="🛒 Amazon SP-API Connection">
+            <p className="text-slate-400 text-sm mb-4">Connect to Amazon Selling Partner API for FBA and AWD inventory sync. This does NOT overwrite your 3PL or Shopify Wormans Mill inventory.</p>
+            
+            {amazonCredentials.connected ? (
+              <div className="space-y-4">
+                <div className="bg-orange-900/30 border border-orange-500/30 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-orange-500/20 rounded-full flex items-center justify-center">
+                        <Check className="w-5 h-5 text-orange-400" />
+                      </div>
+                      <div>
+                        <p className="text-orange-400 font-medium">Connected to Amazon SP-API</p>
+                        <p className="text-slate-400 text-sm">FBA + AWD Inventory Sync</p>
+                        {amazonCredentials.lastSync && (
+                          <p className="text-slate-500 text-xs">Last sync: {new Date(amazonCredentials.lastSync).toLocaleString()}</p>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (confirm('Disconnect from Amazon SP-API? Your synced inventory will remain.')) {
+                          setAmazonCredentials({ 
+                            clientId: '', clientSecret: '', refreshToken: '', sellerId: '', 
+                            marketplaceId: 'ATVPDKIKX0DER', connected: false, lastSync: null,
+                            adsClientId: '', adsClientSecret: '', adsRefreshToken: '', adsProfileId: '',
+                            adsConnected: false, adsLastSync: null
+                          });
+                          setAmazonInventoryData(null);
+                          setToast({ message: 'Amazon SP-API disconnected', type: 'success' });
+                        }
+                      }}
+                      className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Sync Inventory Button */}
+                <SettingRow label="Sync Amazon Inventory" desc="Pull FBA and AWD inventory from Amazon">
+                  <button
+                    onClick={async () => {
+                      setAmazonInventoryStatus({ loading: true, error: null, lastSync: null });
+                      try {
+                        const res = await fetch('/api/amazon/sync', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            clientId: amazonCredentials.clientId,
+                            clientSecret: amazonCredentials.clientSecret,
+                            refreshToken: amazonCredentials.refreshToken,
+                            sellerId: amazonCredentials.sellerId,
+                            marketplaceId: amazonCredentials.marketplaceId,
+                            syncType: 'all',
+                          }),
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        
+                        setAmazonInventoryData(data);
+                        setAmazonInventoryStatus({ loading: false, error: null, lastSync: new Date().toISOString() });
+                        setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+                        
+                        const fbaUnits = data.summary?.fbaUnits || data.summary?.totalUnits || 0;
+                        const awdUnits = data.summary?.awdUnits || 0;
+                        setToast({ 
+                          message: `Synced ${fbaUnits.toLocaleString()} FBA units${awdUnits > 0 ? ` + ${awdUnits.toLocaleString()} AWD units` : ''}`, 
+                          type: 'success' 
+                        });
+                      } catch (err) {
+                        setAmazonInventoryStatus({ loading: false, error: err.message, lastSync: null });
+                        setToast({ message: 'Amazon sync failed: ' + err.message, type: 'error' });
+                      }
+                    }}
+                    disabled={amazonInventoryStatus.loading}
+                    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded-lg text-sm text-white flex items-center gap-2"
+                  >
+                    {amazonInventoryStatus.loading ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" />Syncing...</>
+                    ) : (
+                      <><RefreshCw className="w-4 h-4" />Sync Now</>
+                    )}
+                  </button>
+                </SettingRow>
+                
+                {amazonInventoryStatus.error && (
+                  <div className="bg-rose-900/30 border border-rose-500/30 rounded-lg p-3">
+                    <p className="text-rose-400 text-sm">{amazonInventoryStatus.error}</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-slate-900/50 rounded-xl p-4">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-slate-300 text-sm mb-1">LWA Client ID</label>
+                      <input
+                        type="text"
+                        value={amazonCredentials.clientId}
+                        onChange={(e) => setAmazonCredentials(p => ({ ...p, clientId: e.target.value }))}
+                        placeholder="amzn1.application-oa2-client.xxx"
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 text-sm mb-1">LWA Client Secret</label>
+                      <input
+                        type="password"
+                        value={amazonCredentials.clientSecret}
+                        onChange={(e) => setAmazonCredentials(p => ({ ...p, clientSecret: e.target.value }))}
+                        placeholder="Enter client secret"
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 text-sm mb-1">Refresh Token</label>
+                      <input
+                        type="password"
+                        value={amazonCredentials.refreshToken}
+                        onChange={(e) => setAmazonCredentials(p => ({ ...p, refreshToken: e.target.value }))}
+                        placeholder="Atzr|xxx"
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 text-sm mb-1">Seller ID (optional)</label>
+                      <input
+                        type="text"
+                        value={amazonCredentials.sellerId}
+                        onChange={(e) => setAmazonCredentials(p => ({ ...p, sellerId: e.target.value }))}
+                        placeholder="AXXXXXXXXX"
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                      />
+                    </div>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch('/api/amazon/sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              clientId: amazonCredentials.clientId,
+                              clientSecret: amazonCredentials.clientSecret,
+                              refreshToken: amazonCredentials.refreshToken,
+                              sellerId: amazonCredentials.sellerId,
+                              marketplaceId: amazonCredentials.marketplaceId,
+                              test: true,
+                            }),
+                          });
+                          const data = await res.json();
+                          if (data.error) throw new Error(data.error);
+                          if (data.success) {
+                            const updatedCreds = { ...amazonCredentials, connected: true };
+                            setAmazonCredentials(updatedCreds);
+                            if (session?.user?.id && supabase) {
+                              pushToCloudNow({ ...combinedData, amazonCredentials: updatedCreds }, true);
+                            }
+                            setToast({ message: 'Connected to Amazon SP-API!', type: 'success' });
+                          }
+                        } catch (err) {
+                          setToast({ message: 'Connection failed: ' + err.message, type: 'error' });
+                        }
+                      }}
+                      disabled={!amazonCredentials.clientId || !amazonCredentials.clientSecret || !amazonCredentials.refreshToken}
+                      className="w-full py-3 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:hover:bg-orange-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
+                    >
+                      <ShoppingCart className="w-5 h-5" />
+                      Test & Connect
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="bg-orange-900/20 border border-orange-500/30 rounded-xl p-4">
+                  <h4 className="text-orange-400 font-medium mb-2 flex items-center gap-2">
+                    <HelpCircle className="w-4 h-4" />
+                    Getting Your Amazon SP-API Credentials
+                  </h4>
+                  <div className="text-slate-300 text-sm space-y-2">
+                    <p>1. Go to <strong>Seller Central → Apps & Services → Develop Apps</strong></p>
+                    <p>2. Create or select your app and authorize it</p>
+                    <p>3. Copy your LWA Client ID, Client Secret, and Refresh Token</p>
+                    <p>4. Required permissions: <code className="bg-slate-800 px-1 rounded">Inventory</code></p>
+                  </div>
+                  <p className="text-slate-500 text-xs mt-3">This syncs FBA and AWD inventory only. 3PL (Packiyo) and Wormans Mill (Shopify) inventory are preserved separately.</p>
+                </div>
+              </div>
+            )}
+          </SettingSection>
+          
           {/* Inventory Source Configuration */}
           <SettingSection title="🏪 Inventory Sources">
             <p className="text-slate-400 text-sm mb-4">Configure which sources provide inventory for each location</p>
@@ -37891,10 +38349,29 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   )}
                 </div>
               </div>
+              
+              <div className="flex items-center justify-between bg-slate-800/50 rounded-lg p-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-orange-500/20 rounded-lg flex items-center justify-center">
+                    <ShoppingCart className="w-4 h-4 text-orange-400" />
+                  </div>
+                  <div>
+                    <p className="text-white font-medium">Amazon FBA + AWD Inventory</p>
+                    <p className="text-slate-400 text-xs">Amazon fulfillment centers</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {amazonCredentials.connected ? (
+                    <span className="px-2 py-1 bg-orange-500/20 text-orange-400 text-xs rounded-full">SP-API Direct</span>
+                  ) : (
+                    <span className="px-2 py-1 bg-slate-600/50 text-slate-400 text-xs rounded-full">File Upload</span>
+                  )}
+                </div>
+              </div>
             </div>
             
             <p className="text-slate-500 text-xs mt-4">
-              ℹ️ When both sources are connected, 3PL inventory comes from Packiyo and home inventory from Shopify. This prevents sync conflicts.
+              ℹ️ Inventory sources are additive and don't overwrite each other. Amazon FBA/AWD, 3PL (Packiyo), and Wormans Mill (Shopify) inventories are tracked separately.
             </p>
           </SettingSection>
             </>
