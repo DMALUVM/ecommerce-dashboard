@@ -6221,7 +6221,7 @@ const savePeriods = async (d) => {
     const sourceNote = `Amazon: ${amzSource}${awdTotal > 0 ? ` (AWD: ${awdTotal} units)` : ''}, 3PL: ${tplSource}${homeSource !== 'none' ? `, Home: ${homeSource}` : ''}`;
     
     const snapshot = {
-      date: invSnapshotDate, 
+      date: snapshotDate, 
       createdAt: new Date().toISOString(), 
       velocitySource: velNote + learningNote,
       inventorySources: sourceNote,
@@ -6261,10 +6261,10 @@ const savePeriods = async (d) => {
       }
     };
 
-    const updated = { ...invHistory, [invSnapshotDate]: snapshot };
+    const updated = { ...invHistory, [snapshotDate]: snapshot };
     setInvHistory(updated); 
     saveInv(updated); 
-    setSelectedInvDate(invSnapshotDate); 
+    setSelectedInvDate(snapshotDate); 
     setView('inventory'); 
     setIsProcessing(false);
     setInvFiles({ amazon: null, threepl: null, cogs: null }); 
@@ -15182,10 +15182,134 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
     
     const latestInvDate = Object.keys(invHistory).sort().reverse()[0];
     const latestInv = latestInvDate ? invHistory[latestInvDate] : null;
+    
+    // Build comprehensive inventory data for AI
+    const inventoryItems = latestInv?.items || [];
     const inventorySummary = latestInv ? {
-      asOfDate: latestInvDate, totalUnits: latestInv.totalUnits || 0, totalValue: latestInv.totalValue || 0,
-      lowStockItems: (latestInv.items || []).filter(i => i.health === 'low' || i.health === 'critical').map(i => ({ sku: i.sku, units: i.totalUnits })),
+      asOfDate: latestInvDate, 
+      totalUnits: latestInv.summary?.totalUnits || 0, 
+      totalValue: latestInv.summary?.totalValue || 0,
+      amazonUnits: latestInv.summary?.amazonUnits || 0,
+      threeplUnits: latestInv.summary?.threeplUnits || 0,
+      healthBreakdown: {
+        critical: latestInv.summary?.critical || 0,
+        low: latestInv.summary?.low || 0,
+        healthy: latestInv.summary?.healthy || 0,
+        overstock: latestInv.summary?.overstock || 0,
+      },
+      // Items needing attention
+      criticalItems: inventoryItems.filter(i => i.health === 'critical').map(i => ({
+        sku: i.sku, name: i.name, totalQty: i.totalQty, daysOfSupply: i.daysOfSupply,
+        weeklyVelocity: i.weeklyVel, stockoutDate: i.stockoutDate, reorderByDate: i.reorderByDate
+      })),
+      lowStockItems: inventoryItems.filter(i => i.health === 'low').map(i => ({
+        sku: i.sku, name: i.name, totalQty: i.totalQty, daysOfSupply: i.daysOfSupply,
+        weeklyVelocity: i.weeklyVel, stockoutDate: i.stockoutDate, reorderByDate: i.reorderByDate
+      })),
+      // Overstock items (opportunity to reduce)
+      overstockItems: inventoryItems.filter(i => i.health === 'overstock' && i.daysOfSupply > 180).map(i => ({
+        sku: i.sku, name: i.name, totalQty: i.totalQty, daysOfSupply: i.daysOfSupply,
+        weeklyVelocity: i.weeklyVel, totalValue: i.totalValue
+      })).sort((a, b) => b.totalValue - a.totalValue).slice(0, 10),
+      // Top movers by velocity
+      topMovers: inventoryItems.filter(i => i.weeklyVel > 0).sort((a, b) => b.weeklyVel - a.weeklyVel).slice(0, 10).map(i => ({
+        sku: i.sku, name: i.name, weeklyVelocity: i.weeklyVel, amazonVelocity: i.amzWeeklyVel, shopifyVelocity: i.shopWeeklyVel,
+        daysOfSupply: i.daysOfSupply, totalQty: i.totalQty
+      })),
+      // Velocity trends (comparing Amazon vs Shopify)
+      velocityByChannel: {
+        amazonTotal: inventoryItems.reduce((sum, i) => sum + (i.amzWeeklyVel || 0), 0),
+        shopifyTotal: inventoryItems.reduce((sum, i) => sum + (i.shopWeeklyVel || 0), 0),
+      },
+      // Reorder recommendations
+      needsReorderSoon: inventoryItems.filter(i => {
+        const daysUntilOrder = i.daysUntilMustOrder;
+        return daysUntilOrder !== null && daysUntilOrder <= 14 && daysUntilOrder > 0;
+      }).map(i => ({
+        sku: i.sku, name: i.name, daysUntilMustOrder: i.daysUntilMustOrder, 
+        suggestedOrderQty: i.suggestedOrderQty, currentQty: i.totalQty,
+        weeklyVelocity: i.weeklyVel, leadTimeDays: i.leadTimeDays
+      })),
+      // Already past reorder point
+      urgentReorder: inventoryItems.filter(i => {
+        const daysUntilOrder = i.daysUntilMustOrder;
+        return daysUntilOrder !== null && daysUntilOrder <= 0;
+      }).map(i => ({
+        sku: i.sku, name: i.name, daysOverdue: Math.abs(i.daysUntilMustOrder),
+        suggestedOrderQty: i.suggestedOrderQty, stockoutDate: i.stockoutDate,
+        weeklyVelocity: i.weeklyVel
+      })),
     } : null;
+    
+    // Calculate velocity trends (is velocity increasing or decreasing?)
+    // Compare last 2 weeks velocity vs prior 2 weeks
+    const velocityTrends = {};
+    const sortedWeeksForTrend = Object.keys(allWeeksData).sort().reverse();
+    const recent2Weeks = sortedWeeksForTrend.slice(0, 2);
+    const prior2Weeks = sortedWeeksForTrend.slice(2, 4);
+    
+    // Build SKU velocity by period
+    const recentVelocity = {};
+    const priorVelocity = {};
+    
+    recent2Weeks.forEach(w => {
+      const weekData = allWeeksData[w];
+      [...(weekData?.amazon?.skuData || []), ...(weekData?.shopify?.skuData || [])].forEach(s => {
+        const sku = s.sku || s.msku;
+        if (!sku) return;
+        if (!recentVelocity[sku]) recentVelocity[sku] = 0;
+        recentVelocity[sku] += s.unitsSold || s.units || 0;
+      });
+    });
+    
+    prior2Weeks.forEach(w => {
+      const weekData = allWeeksData[w];
+      [...(weekData?.amazon?.skuData || []), ...(weekData?.shopify?.skuData || [])].forEach(s => {
+        const sku = s.sku || s.msku;
+        if (!sku) return;
+        if (!priorVelocity[sku]) priorVelocity[sku] = 0;
+        priorVelocity[sku] += s.unitsSold || s.units || 0;
+      });
+    });
+    
+    // Calculate trends
+    inventoryItems.forEach(item => {
+      if (!item.sku || !item.weeklyVel) return;
+      const skuLower = item.sku.toLowerCase();
+      const recent = (recentVelocity[item.sku] || recentVelocity[skuLower] || 0) / Math.max(recent2Weeks.length, 1);
+      const prior = (priorVelocity[item.sku] || priorVelocity[skuLower] || 0) / Math.max(prior2Weeks.length, 1);
+      
+      let trend = 'stable';
+      let trendPercent = 0;
+      if (prior > 0) {
+        trendPercent = ((recent - prior) / prior) * 100;
+        if (trendPercent > 15) trend = 'accelerating';
+        else if (trendPercent > 5) trend = 'increasing';
+        else if (trendPercent < -15) trend = 'declining';
+        else if (trendPercent < -5) trend = 'slowing';
+      } else if (recent > 0) {
+        trend = 'new';
+        trendPercent = 100;
+      }
+      
+      velocityTrends[item.sku] = {
+        currentWeekly: item.weeklyVel,
+        recentAvgWeekly: recent,
+        priorAvgWeekly: prior,
+        trend,
+        trendPercent: trendPercent.toFixed(1) + '%',
+        amazonShare: item.weeklyVel > 0 ? ((item.amzWeeklyVel || 0) / item.weeklyVel * 100).toFixed(0) + '%' : '0%',
+        shopifyShare: item.weeklyVel > 0 ? ((item.shopWeeklyVel || 0) / item.weeklyVel * 100).toFixed(0) + '%' : '0%',
+      };
+    });
+    
+    // Add velocity trends to inventory summary for AI
+    if (inventorySummary) {
+      inventorySummary.velocityTrends = {
+        accelerating: Object.entries(velocityTrends).filter(([,v]) => v.trend === 'accelerating').map(([sku, v]) => ({ sku, ...v })).slice(0, 5),
+        declining: Object.entries(velocityTrends).filter(([,v]) => v.trend === 'declining').map(([sku, v]) => ({ sku, ...v })).slice(0, 5),
+      };
+    }
     
     const taxSummary = {
       nexusStates: Object.entries(salesTaxConfig.nexusStates || {}).filter(([,v]) => v.hasNexus).map(([code, config]) => ({ state: US_STATES_TAX_INFO[code]?.name || code, frequency: config.frequency })),
@@ -16332,8 +16456,80 @@ ${JSON.stringify(ctx.decliningSkus)}
 ${JSON.stringify(ctx.improvingSkus)}
 
 === INVENTORY STATUS ===
-${ctx.inventory ? `As of ${ctx.inventory.asOfDate}: ${ctx.inventory.totalUnits} total units, $${ctx.inventory.totalValue?.toFixed(2) || 0} value` : 'No inventory data'}
-${ctx.inventory?.lowStockItems?.length > 0 ? `Low stock items: ${JSON.stringify(ctx.inventory.lowStockItems)}` : ''}
+${ctx.inventory ? `As of ${ctx.inventory.asOfDate}: ${ctx.inventory.totalUnits?.toLocaleString() || 0} total units, $${ctx.inventory.totalValue?.toLocaleString() || 0} value
+Amazon: ${ctx.inventory.amazonUnits?.toLocaleString() || 0} units | 3PL: ${ctx.inventory.threeplUnits?.toLocaleString() || 0} units
+
+HEALTH BREAKDOWN:
+- Critical (will stock out soon): ${ctx.inventory.healthBreakdown?.critical || 0} SKUs
+- Low Stock: ${ctx.inventory.healthBreakdown?.low || 0} SKUs  
+- Healthy: ${ctx.inventory.healthBreakdown?.healthy || 0} SKUs
+- Overstock: ${ctx.inventory.healthBreakdown?.overstock || 0} SKUs
+` : 'No inventory data'}
+
+=== 🚨 URGENT REORDER (Past reorder date!) ===
+${ctx.inventory?.urgentReorder?.length > 0 ? ctx.inventory.urgentReorder.map(i => 
+  `- ${i.sku}: ${i.daysOverdue} days overdue! Stockout: ${i.stockoutDate}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk, Suggested Order: ${i.suggestedOrderQty} units`
+).join('\n') : 'None - all items are on schedule'}
+
+=== ⚠️ NEEDS REORDER SOON (within 14 days) ===
+${ctx.inventory?.needsReorderSoon?.length > 0 ? ctx.inventory.needsReorderSoon.map(i =>
+  `- ${i.sku}: Order in ${i.daysUntilMustOrder} days, Current: ${i.currentQty}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk, Lead Time: ${i.leadTimeDays}d, Suggested: ${i.suggestedOrderQty} units`
+).join('\n') : 'None - no immediate reorders needed'}
+
+=== 🔴 CRITICAL STOCK (will run out soon) ===
+${ctx.inventory?.criticalItems?.length > 0 ? ctx.inventory.criticalItems.map(i =>
+  `- ${i.sku} (${i.name?.slice(0,40)}...): ${i.totalQty} units, ${i.daysOfSupply} days supply, Stockout: ${i.stockoutDate}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk`
+).join('\n') : 'None'}
+
+=== 🟡 LOW STOCK ===
+${ctx.inventory?.lowStockItems?.length > 0 ? ctx.inventory.lowStockItems.slice(0, 10).map(i =>
+  `- ${i.sku}: ${i.totalQty} units, ${i.daysOfSupply} days supply, Reorder by: ${i.reorderByDate}`
+).join('\n') : 'None'}
+
+=== 📈 TOP MOVERS (Highest Velocity) ===
+${ctx.inventory?.topMovers?.length > 0 ? ctx.inventory.topMovers.map(i =>
+  `- ${i.sku}: ${i.weeklyVelocity?.toFixed(1)} units/wk (AMZ: ${i.amazonVelocity?.toFixed(1)}, Shop: ${i.shopifyVelocity?.toFixed(1)}), ${i.daysOfSupply} days supply, Stock: ${i.totalQty}`
+).join('\n') : 'No velocity data'}
+
+=== 📦 OVERSTOCK (excess inventory tying up capital) ===
+${ctx.inventory?.overstockItems?.length > 0 ? ctx.inventory.overstockItems.slice(0, 5).map(i =>
+  `- ${i.sku}: ${i.daysOfSupply} days supply (${(i.daysOfSupply/30).toFixed(1)} months!), ${i.totalQty} units, $${i.totalValue?.toFixed(0)} tied up, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk`
+).join('\n') : 'None identified'}
+
+=== VELOCITY BY CHANNEL ===
+${ctx.inventory?.velocityByChannel ? `
+- Amazon: ${ctx.inventory.velocityByChannel.amazonTotal?.toFixed(0)} units/week
+- Shopify: ${ctx.inventory.velocityByChannel.shopifyTotal?.toFixed(0)} units/week
+- Total: ${(ctx.inventory.velocityByChannel.amazonTotal + ctx.inventory.velocityByChannel.shopifyTotal)?.toFixed(0)} units/week
+` : 'No velocity data'}
+
+=== 📊 VELOCITY TRENDS (Last 2 weeks vs Prior 2 weeks) ===
+${ctx.inventory?.velocityTrends?.accelerating?.length > 0 ? `
+🚀 ACCELERATING (velocity increasing >15%):
+${ctx.inventory.velocityTrends.accelerating.map(v => 
+  `- ${v.sku}: ${v.trendPercent} increase (was ${v.priorAvgWeekly?.toFixed(1)}/wk → now ${v.recentAvgWeekly?.toFixed(1)}/wk)`
+).join('\n')}
+` : ''}
+${ctx.inventory?.velocityTrends?.declining?.length > 0 ? `
+📉 DECLINING (velocity decreasing >15%):
+${ctx.inventory.velocityTrends.declining.map(v => 
+  `- ${v.sku}: ${v.trendPercent} decrease (was ${v.priorAvgWeekly?.toFixed(1)}/wk → now ${v.recentAvgWeekly?.toFixed(1)}/wk)`
+).join('\n')}
+` : ''}
+${!ctx.inventory?.velocityTrends?.accelerating?.length && !ctx.inventory?.velocityTrends?.declining?.length ? 'All SKUs have stable velocity (±15%)' : ''}
+
+=== INVENTORY FORECASTING CAPABILITIES ===
+When user asks about inventory, you can:
+1. **Stockout Risk**: Identify which SKUs will run out and when
+2. **Reorder Recommendations**: When to order and how much based on lead times + velocity
+3. **Capital Efficiency**: Identify overstock items tying up cash
+4. **Velocity Trends**: Which products are speeding up vs slowing down
+5. **Channel Mix**: Compare Amazon vs Shopify sales velocity
+
+For reorder calculations, use:
+- Days of Supply = Current Inventory / (Weekly Velocity / 7)
+- Reorder Point = Lead Time Days + Safety Buffer
+- Suggested Order Qty = Weekly Velocity × (Lead Time + Target Days of Supply)
 
 === INVENTORY FORECASTING ===
 ${(() => {
@@ -16607,6 +16803,25 @@ Sales: $${current.totalSales.toFixed(0)} (${salesChange >= 0 ? '+' : ''}${salesC
 ROAS: ${current.roas.toFixed(2)}x (${roasChange >= 0 ? '+' : ''}${roasChange.toFixed(2)} WoW)`;
 })()}
 ` : ''}
+
+${amazonCampaigns.analytics?.dayOfWeekInsights?.length > 0 ? `
+📅 DAY-OF-WEEK PERFORMANCE (Amazon Ads):
+${amazonCampaigns.analytics.dayOfWeekInsights.map(d => 
+  `- ${d.day}: ROAS ${d.avgRoas?.toFixed(2)}x, ACOS ${d.avgAcos?.toFixed(1)}%, Avg Spend $${d.avgSpend?.toFixed(0)}, Avg Orders ${d.avgConversions?.toFixed(1)} (${d.sampleSize} samples)`
+).join('\n')}
+
+🏆 Best Day: ${amazonCampaigns.analytics.bestPerformingDay?.day} (${amazonCampaigns.analytics.bestPerformingDay?.avgRoas?.toFixed(2)}x ROAS)
+📉 Worst Day: ${amazonCampaigns.analytics.worstPerformingDay?.day} (${amazonCampaigns.analytics.worstPerformingDay?.avgRoas?.toFixed(2)}x ROAS)
+
+💡 OPTIMIZATION INSIGHT: Consider increasing ad spend on ${amazonCampaigns.analytics.bestPerformingDay?.day}s and reducing on ${amazonCampaigns.analytics.worstPerformingDay?.day}s to improve overall ROAS.
+` : ''}
+
+${amazonCampaigns.analytics?.monthlyTrends?.length > 0 ? `
+📈 MONTHLY AD TRENDS:
+${amazonCampaigns.analytics.monthlyTrends.slice(-6).map(m => 
+  `- ${m.month}: $${m.spend?.toFixed(0)} spend → $${m.revenue?.toFixed(0)} ad rev, ${m.roas?.toFixed(2)}x ROAS, ${m.acos?.toFixed(1)}% ACOS`
+).join('\n')}
+` : ''}
 ` : 'No Amazon campaign data uploaded yet. User can upload Amazon Ads campaign report CSV.'}
 
 === AI LEARNING STATUS ===
@@ -16640,14 +16855,28 @@ USE THIS LEARNING: When forecasting, apply the correction factors if confidence 
 - Explain profit margins and calculations
 - Forecast future revenue based on historical trends
 - Compare Amazon's projections vs actual performance
-- Inventory planning recommendations
+
+📦 INVENTORY & REORDER PLANNING:
+- Identify which SKUs will stock out and when
+- Recommend when to place reorders based on lead times
+- Calculate suggested order quantities
+- Identify overstock items tying up capital
+- Analyze velocity trends (which products are speeding up vs slowing down)
+- Channel mix analysis for inventory planning (Amazon vs Shopify velocity)
+
+📊 ADVERTISING OPTIMIZATION:
+- Analyze Amazon PPC performance (ROAS, ACOS, TACOS)
+- Day-of-week performance analysis (best/worst days to advertise)
+- Campaign-level recommendations (pause, increase spend, optimize)
+- Monthly and weekly ad spend trends
+- Identify high-potential campaigns to scale
+
+💰 FINANCIAL ANALYSIS:
 - Answer questions about specific products by name or SKU
-- Provide insights on advertising effectiveness (TACOS, ROAS) and how it changes over time
 - Sales tax obligations by state
 - Upcoming bills and cash flow planning
 - Production pipeline tracking and timing
 - Seasonality analysis (which months/quarters perform best)
-- Channel mix analysis (Amazon vs Shopify trends)
 - Cost structure analysis (COGS, fees, ads as % of revenue over time)
 - 3PL cost analysis (avg cost per order, storage trends, shipping cost changes)
 - Identify rising fulfillment costs that may be eroding margins
