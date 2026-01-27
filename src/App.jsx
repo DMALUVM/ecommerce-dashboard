@@ -32610,9 +32610,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       reader.readAsText(file);
     };
     
-    // Get top/bottom performers
-    const topPerformers = [...campaigns].filter(c => c.state === 'ENABLED' && c.roas > 0).sort((a, b) => b.roas - a.roas).slice(0, 5);
-    const bottomPerformers = [...campaigns].filter(c => c.state === 'ENABLED' && c.spend > 100).sort((a, b) => a.roas - b.roas).slice(0, 5);
+    // Get top/bottom performers - with safety checks
+    const topPerformers = [...campaigns].filter(c => c.state === 'ENABLED' && (c.roas || 0) > 0).sort((a, b) => (b.roas || 0) - (a.roas || 0)).slice(0, 5);
+    const bottomPerformers = [...campaigns].filter(c => c.state === 'ENABLED' && (c.spend || 0) > 100).sort((a, b) => (a.roas || 0) - (b.roas || 0)).slice(0, 5);
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
@@ -33335,14 +33335,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       <h3 className="text-lg font-semibold text-emerald-400 mb-3 flex items-center gap-2"><Trophy className="w-5 h-5" />Top Performers (by ROAS)</h3>
                       <div className="space-y-2">
                         {topPerformers.map((c, i) => (
-                          <div key={c.id} className="flex items-center justify-between p-2 bg-slate-900/50 rounded-lg">
+                          <div key={c.id || i} className="flex items-center justify-between p-2 bg-slate-900/50 rounded-lg">
                             <div className="flex-1 min-w-0">
                               <p className="text-white text-sm truncate">{c.name}</p>
-                              <p className="text-slate-500 text-xs">{formatCurrency(c.spend)} spent</p>
+                              <p className="text-slate-500 text-xs">{formatCurrency(c.spend || 0)} spent</p>
                             </div>
                             <div className="text-right ml-2">
-                              <p className="text-emerald-400 font-bold">{c.roas.toFixed(2)}x</p>
-                              <p className="text-slate-500 text-xs">{formatCurrency(c.sales)}</p>
+                              <p className="text-emerald-400 font-bold">{(c.roas || 0).toFixed(2)}x</p>
+                              <p className="text-slate-500 text-xs">{formatCurrency(c.sales || 0)}</p>
                             </div>
                           </div>
                         ))}
@@ -33354,14 +33354,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       <h3 className="text-lg font-semibold text-rose-400 mb-3 flex items-center gap-2"><AlertTriangle className="w-5 h-5" />Needs Attention (Low ROAS)</h3>
                       <div className="space-y-2">
                         {bottomPerformers.map((c, i) => (
-                          <div key={c.id} className="flex items-center justify-between p-2 bg-slate-900/50 rounded-lg">
+                          <div key={c.id || i} className="flex items-center justify-between p-2 bg-slate-900/50 rounded-lg">
                             <div className="flex-1 min-w-0">
                               <p className="text-white text-sm truncate">{c.name}</p>
-                              <p className="text-slate-500 text-xs">{formatCurrency(c.spend)} spent</p>
+                              <p className="text-slate-500 text-xs">{formatCurrency(c.spend || 0)} spent</p>
                             </div>
                             <div className="text-right ml-2">
-                              <p className="text-rose-400 font-bold">{c.roas.toFixed(2)}x</p>
-                              <p className="text-slate-500 text-xs">ACOS: {c.acos.toFixed(0)}%</p>
+                              <p className="text-rose-400 font-bold">{(c.roas || 0).toFixed(2)}x</p>
+                              <p className="text-slate-500 text-xs">ACOS: {(c.acos || 0).toFixed(0)}%</p>
                             </div>
                           </div>
                         ))}
@@ -33415,11 +33415,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               <td className="py-2 px-2 text-white max-w-xs truncate" title={c.name}>{c.name}</td>
                               <td className="py-2 px-2 text-right"><span className={`px-1.5 py-0.5 rounded text-xs ${c.type === 'SP' ? 'bg-blue-500/20 text-blue-400' : c.type === 'SD' ? 'bg-teal-500/20 text-teal-400' : 'bg-purple-500/20 text-purple-400'}`}>{c.type}</span></td>
                               <td className="py-2 px-2 text-right"><span className={`px-1.5 py-0.5 rounded text-xs ${c.state === 'ENABLED' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'}`}>{c.state === 'ENABLED' ? 'Active' : 'Paused'}</span></td>
-                              <td className="py-2 px-2 text-right text-white">{formatCurrency(c.spend)}</td>
-                              <td className="py-2 px-2 text-right text-emerald-400">{formatCurrency(c.sales)}</td>
-                              <td className="py-2 px-2 text-right text-white">{c.orders.toLocaleString()}</td>
-                              <td className={`py-2 px-2 text-right font-medium ${c.roas >= 3 ? 'text-emerald-400' : c.roas >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{c.roas.toFixed(2)}x</td>
-                              <td className={`py-2 px-2 text-right ${c.acos <= 25 ? 'text-emerald-400' : c.acos <= 35 ? 'text-amber-400' : 'text-rose-400'}`}>{c.acos.toFixed(1)}%</td>
+                              <td className="py-2 px-2 text-right text-white">{formatCurrency(c.spend || 0)}</td>
+                              <td className="py-2 px-2 text-right text-emerald-400">{formatCurrency(c.sales || 0)}</td>
+                              <td className="py-2 px-2 text-right text-white">{(c.orders || 0).toLocaleString()}</td>
+                              <td className={`py-2 px-2 text-right font-medium ${(c.roas || 0) >= 3 ? 'text-emerald-400' : (c.roas || 0) >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{(c.roas || 0).toFixed(2)}x</td>
+                              <td className={`py-2 px-2 text-right ${(c.acos || 0) <= 25 ? 'text-emerald-400' : (c.acos || 0) <= 35 ? 'text-amber-400' : 'text-rose-400'}`}>{(c.acos || 0).toFixed(1)}%</td>
                             </tr>
                           ))}
                         </tbody>
