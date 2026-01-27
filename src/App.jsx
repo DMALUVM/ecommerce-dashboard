@@ -2934,8 +2934,6 @@ const loadFromLocal = useCallback(() => {
   } catch {}
 
   // Load daily data - check both keys for backwards compatibility
-  console.log('%c=== APP VERSION 2.2 LOADED ===', 'background: red; color: white; font-size: 20px;');
-  alert('App v2.2 loaded - check console for data loading logs');
   try {
     let dailyData = null;
     const r = lsGet('ecommerce_daily_sales_v1');
@@ -5461,10 +5459,21 @@ const savePeriods = async (d) => {
   };
 
   const processInventory = useCallback(async () => {
-    console.log('=== PROCESS INVENTORY v2.1 - DEBUG ENABLED ===');
-    console.log('invSnapshotDate:', invSnapshotDate);
-    console.log('amazonCredentials.connected:', amazonCredentials.connected);
-    console.log('invFiles.amazon:', invFiles.amazon?.length || 0, 'files');
+    console.log('=== PROCESS INVENTORY v3.0 - DIRECT LOCALSTORAGE READ ===');
+    
+    // DIRECT READ from localStorage to get Amazon SKU velocity data
+    // This bypasses any state loading issues
+    let legacyDailyData = {};
+    try {
+      const legacyRaw = localStorage.getItem('dailySales');
+      if (legacyRaw) {
+        legacyDailyData = JSON.parse(legacyRaw);
+        const datesWithAmazonSku = Object.keys(legacyDailyData).filter(d => legacyDailyData[d]?.amazon?.skuData?.length > 0);
+        console.log('DIRECT localStorage read - dailySales:', Object.keys(legacyDailyData).length, 'days,', datesWithAmazonSku.length, 'with Amazon skuData');
+      }
+    } catch (e) {
+      console.error('Failed to read dailySales from localStorage:', e);
+    }
     
     // File is optional if Amazon SP-API is connected
     const hasAmazonFile = invFiles.amazon && invFiles.amazon.length > 0;
@@ -5494,12 +5503,57 @@ const savePeriods = async (d) => {
     const amazonSkuVelocity = {};
     let velocityDataSource = 'none';
     
+    // FIRST: Calculate velocity from DIRECT localStorage read (most reliable)
+    const legacyDates = Object.keys(legacyDailyData).sort().reverse();
+    const datesWithAmazonSku = legacyDates.filter(d => legacyDailyData[d]?.amazon?.skuData?.length > 0);
+    if (datesWithAmazonSku.length > 0) {
+      console.log('=== CALCULATING VELOCITY FROM DIRECT LOCALSTORAGE ===');
+      console.log('Dates with Amazon skuData:', datesWithAmazonSku.length);
+      console.log('Sample dates:', datesWithAmazonSku.slice(0, 5));
+      
+      const last28 = datesWithAmazonSku.slice(0, 28);
+      const weeksEquiv = last28.length / 7;
+      
+      last28.forEach(d => {
+        const dayData = legacyDailyData[d];
+        // Amazon SKU data
+        (dayData?.amazon?.skuData || []).forEach(sku => {
+          if (!sku.sku) return;
+          const skuLower = sku.sku.toLowerCase();
+          if (!amazonSkuVelocity[sku.sku]) amazonSkuVelocity[sku.sku] = 0;
+          if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = 0;
+          const units = sku.unitsSold || sku.units || 0;
+          amazonSkuVelocity[sku.sku] += units / weeksEquiv;
+          amazonSkuVelocity[skuLower] += units / weeksEquiv;
+        });
+        // Shopify SKU data
+        (dayData?.shopify?.skuData || []).forEach(sku => {
+          if (!sku.sku) return;
+          const skuLower = sku.sku.toLowerCase();
+          if (!shopifySkuVelocity[sku.sku]) shopifySkuVelocity[sku.sku] = 0;
+          if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = 0;
+          const units = sku.unitsSold || sku.units || 0;
+          shopifySkuVelocity[sku.sku] += units / weeksEquiv;
+          shopifySkuVelocity[skuLower] += units / weeksEquiv;
+        });
+      });
+      
+      velocityDataSource = 'direct-localStorage';
+      console.log('Amazon SKU velocity calculated for', Object.keys(amazonSkuVelocity).length / 2, 'SKUs');
+      console.log('Sample velocities:', Object.entries(amazonSkuVelocity).slice(0, 6).map(([k,v]) => `${k}: ${v.toFixed(1)}/wk`));
+    }
+    
     // DEBUG: Log data availability
     console.log('=== VELOCITY CALCULATION DEBUG ===');
     console.log('Weekly data weeks:', weeksCount, sortedWeeks);
-    console.log('Daily data days:', Object.keys(allDaysData).length);
+    console.log('Daily data days (from state):', Object.keys(allDaysData).length);
     console.log('Period data periods:', Object.keys(allPeriodsData).length);
+    console.log('Velocity source:', velocityDataSource);
+    console.log('Amazon velocity SKUs:', Object.keys(amazonSkuVelocity).length);
+    console.log('Shopify velocity SKUs:', Object.keys(shopifySkuVelocity).length);
     
+    // SKIP weekly/daily state processing if we already have velocity from direct read
+    if (velocityDataSource !== 'direct-localStorage') {
     // SOURCE 1: Weekly sales data (most accurate)
     if (weeksCount > 0) {
       velocityDataSource = 'weekly';
@@ -5758,6 +5812,7 @@ const savePeriods = async (d) => {
       
       console.log(`Added velocity from ${periodsCount} monthly periods (${Object.keys(periodAmazonVel).length} Amazon SKUs, ${Object.keys(periodShopifyVel).length} Shopify SKUs)`);
     }
+    } // End of: if (velocityDataSource !== 'direct-localStorage')
     
     console.log(`Final velocity data: ${Object.keys(amazonSkuVelocity).length} Amazon SKUs, ${Object.keys(shopifySkuVelocity).length} Shopify SKUs (source: ${velocityDataSource})`);
     
