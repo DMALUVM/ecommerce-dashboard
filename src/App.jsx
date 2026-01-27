@@ -6065,10 +6065,22 @@ const savePeriods = async (d) => {
     });
     
     const allSkus = new Set([...Object.keys(amzInv), ...Object.keys(tplInv), ...Object.keys(homeInv)]);
+    
+    // Deduplicate SKUs - keep only one version of each SKU (prefer original case)
+    const seenSkusLower = new Set();
+    const uniqueSkus = [];
+    allSkus.forEach(sku => {
+      const skuLower = sku.toLowerCase();
+      if (!seenSkusLower.has(skuLower)) {
+        seenSkusLower.add(skuLower);
+        uniqueSkus.push(sku);
+      }
+    });
+    
     const items = [];
     let critical = 0, low = 0, healthy = 0, overstock = 0;
 
-    allSkus.forEach(sku => {
+    uniqueSkus.forEach(sku => {
       const skuLower = sku.toLowerCase();
       
       // Case-insensitive lookups for all inventory sources
@@ -20975,59 +20987,49 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 </div>
               </div>
               
-              {/* Sync All Button */}
-              {(amazonCredentials.connected || packiyoCredentials.connected || shopifyCredentials.connected) && (
-                <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-white font-medium">Sync All Inventory</p>
-                      <p className="text-slate-400 text-xs">Pull latest data from all connected sources</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button 
-                        onClick={() => {
-                          console.log('=== DEBUG v2.1: WEEKLY DATA STRUCTURE ===');
-                          const weeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
-                          console.log('Recent weeks:', weeks);
-                          weeks.forEach(w => {
-                            const wd = allWeeksData[w];
-                            console.log(`\nWeek ${w}:`);
-                            console.log('  amazon:', wd.amazon ? {
-                              revenue: wd.amazon.revenue,
-                              units: wd.amazon.units,
-                              skuDataExists: !!wd.amazon.skuData,
-                              skuDataType: Array.isArray(wd.amazon.skuData) ? 'array' : typeof wd.amazon.skuData,
-                              skuDataLength: wd.amazon.skuData?.length || Object.keys(wd.amazon.skuData || {}).length,
-                              sampleSku: wd.amazon.skuData?.[0] || Object.values(wd.amazon.skuData || {})[0],
-                            } : 'NO AMAZON DATA');
-                            console.log('  shopify:', wd.shopify ? {
-                              revenue: wd.shopify.revenue,
-                              units: wd.shopify.units,
-                              skuDataExists: !!wd.shopify.skuData,
-                              skuDataLength: wd.shopify.skuData?.length || Object.keys(wd.shopify.skuData || {}).length,
-                            } : 'NO SHOPIFY DATA');
-                          });
-                          alert('Check browser console (F12) for data dump');
-                        }}
-                        className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-white text-sm flex items-center gap-2"
-                      >
-                        <Database className="w-4 h-4" />Debug Data
-                      </button>
-                      <button 
-                        onClick={async () => {
-                          setToast({ message: 'Syncing inventory from all sources...', type: 'success' });
-                          // This will trigger processInventory which now uses APIs
-                          if (!invSnapshotDate) setInvSnapshotDate(new Date().toISOString().split('T')[0]);
-                          processInventory();
-                        }}
-                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-2"
-                      >
-                        <RefreshCw className="w-4 h-4" />Sync Now
-                      </button>
-                    </div>
+              {/* Sync All Button - Always show */}
+              <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-white font-medium">Sync All Inventory</p>
+                    <p className="text-slate-400 text-xs">Pull latest data from all connected sources + calculate velocity</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => {
+                        console.log('=== DEBUG v3.0: CHECKING LOCALSTORAGE ===');
+                        // Direct localStorage check
+                        const legacyRaw = localStorage.getItem('dailySales');
+                        if (legacyRaw) {
+                          const legacy = JSON.parse(legacyRaw);
+                          const dates = Object.keys(legacy).sort().reverse();
+                          const withAmazonSku = dates.filter(d => legacy[d]?.amazon?.skuData?.length > 0);
+                          console.log('dailySales:', dates.length, 'days,', withAmazonSku.length, 'with Amazon skuData');
+                          if (withAmazonSku.length > 0) {
+                            console.log('Sample:', withAmazonSku[0], legacy[withAmazonSku[0]]?.amazon?.skuData?.[0]);
+                          }
+                        } else {
+                          console.log('dailySales: NOT FOUND');
+                        }
+                        alert('Check console (F12) for localStorage data');
+                      }}
+                      className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-white text-sm flex items-center gap-2"
+                    >
+                      <Database className="w-4 h-4" />Debug Data
+                    </button>
+                    <button 
+                      onClick={async () => {
+                        setToast({ message: 'Syncing inventory from all sources...', type: 'success' });
+                        if (!invSnapshotDate) setInvSnapshotDate(new Date().toISOString().split('T')[0]);
+                        processInventory();
+                      }}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-2"
+                    >
+                      <RefreshCw className="w-4 h-4" />Sync Now
+                    </button>
                   </div>
                 </div>
-              )}
+              </div>
               
               {/* Fallback File Upload (collapsed by default) */}
               <details className="bg-slate-900/50 rounded-xl border border-slate-700/50">
