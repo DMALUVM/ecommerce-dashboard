@@ -5523,30 +5523,24 @@ const savePeriods = async (d) => {
       
       last28.forEach(d => {
         const dayData = legacyDailyData[d];
-        // Amazon SKU data
-        (dayData?.amazon?.skuData || []).forEach(sku => {
-          if (!sku.sku) return;
-          const skuLower = sku.sku.toLowerCase();
-          if (!amazonSkuVelocity[sku.sku]) amazonSkuVelocity[sku.sku] = 0;
-          if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = 0;
-          const units = sku.unitsSold || sku.units || 0;
-          amazonSkuVelocity[sku.sku] += units / weeksEquiv;
-          amazonSkuVelocity[skuLower] += units / weeksEquiv;
+        // Amazon SKU data - store only under original SKU
+        (dayData?.amazon?.skuData || []).forEach(item => {
+          if (!item.sku) return;
+          if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
+          const units = item.unitsSold || item.units || 0;
+          amazonSkuVelocity[item.sku] += units / weeksEquiv;
         });
-        // Shopify SKU data
-        (dayData?.shopify?.skuData || []).forEach(sku => {
-          if (!sku.sku) return;
-          const skuLower = sku.sku.toLowerCase();
-          if (!shopifySkuVelocity[sku.sku]) shopifySkuVelocity[sku.sku] = 0;
-          if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = 0;
-          const units = sku.unitsSold || sku.units || 0;
-          shopifySkuVelocity[sku.sku] += units / weeksEquiv;
-          shopifySkuVelocity[skuLower] += units / weeksEquiv;
+        // Shopify SKU data - store only under original SKU
+        (dayData?.shopify?.skuData || []).forEach(item => {
+          if (!item.sku) return;
+          if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
+          const units = item.unitsSold || item.units || 0;
+          shopifySkuVelocity[item.sku] += units / weeksEquiv;
         });
       });
       
       velocityDataSource = 'direct-localStorage';
-      console.log('Amazon SKU velocity calculated for', Object.keys(amazonSkuVelocity).length / 2, 'SKUs');
+      console.log('Amazon SKU velocity calculated for', Object.keys(amazonSkuVelocity).length, 'SKUs');
       console.log('Sample velocities:', Object.entries(amazonSkuVelocity).slice(0, 6).map(([k,v]) => `${k}: ${v.toFixed(1)}/wk`));
     }
     
@@ -5593,35 +5587,29 @@ const savePeriods = async (d) => {
           }
         }
         
-        // Shopify SKU velocity
+        // Shopify SKU velocity - store only under original SKU
         if (weekData.shopify?.skuData) {
           const skuData = Array.isArray(weekData.shopify.skuData) 
             ? weekData.shopify.skuData 
             : Object.values(weekData.shopify.skuData);
           skuData.forEach(item => {
             if (!item.sku) return;
-            const skuLower = item.sku.toLowerCase();
             if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
-            if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = 0;
             const units = item.unitsSold || item.units || 0;
             shopifySkuVelocity[item.sku] += units;
-            shopifySkuVelocity[skuLower] += units;
           });
         }
         
-        // Amazon SKU velocity from weekly data (better than t30 from inventory file)
+        // Amazon SKU velocity from weekly data - store only under original SKU
         if (weekData.amazon?.skuData) {
           const skuData = Array.isArray(weekData.amazon.skuData)
             ? weekData.amazon.skuData
             : Object.values(weekData.amazon.skuData);
           skuData.forEach(item => {
             if (!item.sku) return;
-            const skuLower = item.sku.toLowerCase();
             if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
-            if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = 0;
             const units = item.unitsSold || item.units || 0;
             amazonSkuVelocity[item.sku] += units;
-            amazonSkuVelocity[skuLower] += units;
           });
         }
       });
@@ -5705,13 +5693,10 @@ const savePeriods = async (d) => {
             : Object.values(dayData.amazon.skuData);
           skuData.forEach(item => {
             if (!item.sku) return;
-            const skuLower = item.sku.toLowerCase();
             if (!dailyAmazonVel[item.sku]) dailyAmazonVel[item.sku] = 0;
-            if (!dailyAmazonVel[skuLower]) dailyAmazonVel[skuLower] = 0;
             // Check multiple field names for units
             const units = item.unitsSold || item.units || item.Units || item.UNITS || item.quantity || 0;
             dailyAmazonVel[item.sku] += units;
-            dailyAmazonVel[skuLower] += units;
           });
         }
         
@@ -5721,13 +5706,10 @@ const savePeriods = async (d) => {
             : Object.values(dayData.shopify.skuData);
           skuData.forEach(item => {
             if (!item.sku) return;
-            const skuLower = item.sku.toLowerCase();
             if (!dailyShopifyVel[item.sku]) dailyShopifyVel[item.sku] = 0;
-            if (!dailyShopifyVel[skuLower]) dailyShopifyVel[skuLower] = 0;
             // Check multiple field names for units
             const units = item.unitsSold || item.units || item.Units || item.UNITS || item.quantity || 0;
             dailyShopifyVel[item.sku] += units;
-            dailyShopifyVel[skuLower] += units;
           });
         }
       });
@@ -5774,13 +5756,10 @@ const savePeriods = async (d) => {
             : Object.values(periodData.amazon.skuData);
           skuData.forEach(item => {
             if (!item.sku) return;
-            const skuLower = item.sku.toLowerCase();
             // Divide monthly units by weeks per month to get weekly rate
             const weeklyUnits = (item.unitsSold || item.units || 0) / WEEKS_PER_MONTH;
             if (!periodAmazonVel[item.sku]) periodAmazonVel[item.sku] = 0;
-            if (!periodAmazonVel[skuLower]) periodAmazonVel[skuLower] = 0;
             periodAmazonVel[item.sku] += weeklyUnits;
-            periodAmazonVel[skuLower] += weeklyUnits;
           });
         }
         
@@ -5791,12 +5770,9 @@ const savePeriods = async (d) => {
             : Object.values(periodData.shopify.skuData);
           skuData.forEach(item => {
             if (!item.sku) return;
-            const skuLower = item.sku.toLowerCase();
             const weeklyUnits = (item.unitsSold || item.units || 0) / WEEKS_PER_MONTH;
             if (!periodShopifyVel[item.sku]) periodShopifyVel[item.sku] = 0;
-            if (!periodShopifyVel[skuLower]) periodShopifyVel[skuLower] = 0;
             periodShopifyVel[item.sku] += weeklyUnits;
-            periodShopifyVel[skuLower] += weeklyUnits;
           });
         }
       });
