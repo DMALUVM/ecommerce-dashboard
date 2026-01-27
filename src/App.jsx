@@ -5881,10 +5881,9 @@ const savePeriods = async (d) => {
               amzWeeklyVel 
             };
             
-            // Index by multiple case variants for matching
+            // Store only under original SKU (not multiple case variants)
+            // We'll build case-insensitive lookup later
             amzInv[sku] = itemData;
-            amzInv[skuLower] = itemData;
-            amzInv[sku.toUpperCase()] = itemData;
             
             // Track AWD separately
             if (item.awdQuantity > 0) {
@@ -5925,8 +5924,6 @@ const savePeriods = async (d) => {
         const itemData = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel };
         if (sku) {
           amzInv[sku] = itemData;
-          amzInv[skuLower] = itemData;
-          amzInv[sku.toUpperCase()] = itemData;
         }
       });
     }
@@ -5970,18 +5967,8 @@ const savePeriods = async (d) => {
             
             const itemData = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
             
-            // Index by original SKU
+            // Store only under original SKU
             tplInv[sku] = itemData;
-            // Also index by uppercase and lowercase versions for matching
-            tplInv[sku.toUpperCase()] = itemData;
-            tplInv[sku.toLowerCase()] = itemData;
-            // Also index by normalized SKU (without "Shop" suffix) for matching with Amazon
-            if (sku.toLowerCase().endsWith('shop')) {
-              const normalizedSku = sku.replace(/shop$/i, '');
-              tplInv[normalizedSku] = itemData;
-              tplInv[normalizedSku.toUpperCase()] = itemData;
-              tplInv[normalizedSku.toLowerCase()] = itemData;
-            }
           });
           
           // Update Packiyo last sync time
@@ -6005,8 +5992,6 @@ const savePeriods = async (d) => {
         const itemData = { sku, name, total: qty, inbound: inb, cost };
         if (sku) {
           tplInv[sku] = itemData;
-          tplInv[sku.toUpperCase()] = itemData;
-          tplInv[sku.toLowerCase()] = itemData;
         }
       });
     }
@@ -6062,6 +6047,10 @@ const savePeriods = async (d) => {
     Object.entries(homeInv).forEach(([sku, data]) => {
       homeInvLower[sku.toLowerCase()] = data;
     });
+    const amzInvLower = {};
+    Object.entries(amzInv).forEach(([sku, data]) => {
+      amzInvLower[sku.toLowerCase()] = data;
+    });
     const amzVelLower = {};
     Object.entries(amazonSkuVelocity).forEach(([sku, vel]) => {
       amzVelLower[sku.toLowerCase()] = vel;
@@ -6093,7 +6082,7 @@ const savePeriods = async (d) => {
       const skuLower = sku.toLowerCase();
       
       // Case-insensitive lookups for all inventory sources
-      const a = amzInv[sku] || {};
+      const a = amzInv[sku] || amzInvLower[skuLower] || {};
       const t = tplInv[sku] || tplInvLower[skuLower] || {};
       const h = homeInv[sku] || homeInvLower[skuLower] || {};
       
