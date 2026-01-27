@@ -5429,13 +5429,17 @@ const savePeriods = async (d) => {
       if (s) cogsLookup[s] = parseFloat(r['Cost Per Unit'] || 0); 
     });
 
-    // Build velocity from ACTUAL weekly sales data (more accurate than FBA t30)
+    // Build velocity from ALL available sales data sources
+    // Priority: Weekly > Daily > Monthly (but we'll use all available)
     const sortedWeeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
     const weeksCount = sortedWeeks.length;
     const shopifySkuVelocity = {};
     const amazonSkuVelocity = {};
+    let velocityDataSource = 'none';
     
+    // SOURCE 1: Weekly sales data (most accurate)
     if (weeksCount > 0) {
+      velocityDataSource = 'weekly';
       sortedWeeks.forEach(w => {
         const weekData = allWeeksData[w];
         
@@ -5481,13 +5485,88 @@ const savePeriods = async (d) => {
       });
     }
     
-    // FALLBACK: If no weekly data, estimate from monthly/period data
-    // Monthly data divided by ~4.3 gives weekly estimate
+    // SOURCE 2: Daily sales data - use if we have it and weekly didn't cover these SKUs
+    const dailyDates = Object.keys(allDaysData).filter(d => {
+      const dayData = allDaysData[d];
+      return dayData && (dayData.amazon?.units > 0 || dayData.shopify?.units > 0);
+    }).sort().reverse();
+    
+    if (dailyDates.length > 0) {
+      if (velocityDataSource === 'none') velocityDataSource = 'daily';
+      else velocityDataSource += '+daily';
+      
+      // Group last 28 days of daily data
+      const recentDays = dailyDates.slice(0, 28);
+      const daysCount = recentDays.length;
+      const weeksEquivalent = daysCount / 7;
+      
+      // Temp accumulators for daily data
+      const dailyAmazonVel = {};
+      const dailyShopifyVel = {};
+      
+      recentDays.forEach(dayKey => {
+        const dayData = allDaysData[dayKey];
+        
+        if (dayData.amazon?.skuData) {
+          const skuData = Array.isArray(dayData.amazon.skuData)
+            ? dayData.amazon.skuData
+            : Object.values(dayData.amazon.skuData);
+          skuData.forEach(item => {
+            if (!item.sku) return;
+            const skuLower = item.sku.toLowerCase();
+            if (!dailyAmazonVel[item.sku]) dailyAmazonVel[item.sku] = 0;
+            if (!dailyAmazonVel[skuLower]) dailyAmazonVel[skuLower] = 0;
+            dailyAmazonVel[item.sku] += item.unitsSold || item.units || 0;
+            dailyAmazonVel[skuLower] += item.unitsSold || item.units || 0;
+          });
+        }
+        
+        if (dayData.shopify?.skuData) {
+          const skuData = Array.isArray(dayData.shopify.skuData)
+            ? dayData.shopify.skuData
+            : Object.values(dayData.shopify.skuData);
+          skuData.forEach(item => {
+            if (!item.sku) return;
+            const skuLower = item.sku.toLowerCase();
+            if (!dailyShopifyVel[item.sku]) dailyShopifyVel[item.sku] = 0;
+            if (!dailyShopifyVel[skuLower]) dailyShopifyVel[skuLower] = 0;
+            dailyShopifyVel[item.sku] += item.unitsSold || item.units || 0;
+            dailyShopifyVel[skuLower] += item.unitsSold || item.units || 0;
+          });
+        }
+      });
+      
+      // Convert to weekly and merge (only add if not already in weekly data)
+      if (weeksEquivalent > 0) {
+        Object.keys(dailyAmazonVel).forEach(sku => {
+          const weeklyRate = dailyAmazonVel[sku] / weeksEquivalent;
+          if (!amazonSkuVelocity[sku] || amazonSkuVelocity[sku] === 0) {
+            amazonSkuVelocity[sku] = weeklyRate;
+          }
+        });
+        Object.keys(dailyShopifyVel).forEach(sku => {
+          const weeklyRate = dailyShopifyVel[sku] / weeksEquivalent;
+          if (!shopifySkuVelocity[sku] || shopifySkuVelocity[sku] === 0) {
+            shopifySkuVelocity[sku] = weeklyRate;
+          }
+        });
+      }
+      
+      console.log(`Added velocity from ${daysCount} days of daily data (${Object.keys(dailyAmazonVel).length} Amazon SKUs, ${Object.keys(dailyShopifyVel).length} Shopify SKUs)`);
+    }
+    
+    // SOURCE 3: Monthly/Period data - use for SKUs not covered by weekly or daily
     const WEEKS_PER_MONTH = 4.33;
-    if (Object.keys(amazonSkuVelocity).length === 0 && Object.keys(allPeriodsData).length > 0) {
-      // Get most recent periods (up to 3 months)
-      const sortedPeriods = Object.keys(allPeriodsData).sort().reverse().slice(0, 3);
-      const periodsCount = sortedPeriods.length;
+    const sortedPeriods = Object.keys(allPeriodsData).sort().reverse().slice(0, 3);
+    const periodsCount = sortedPeriods.length;
+    
+    if (periodsCount > 0) {
+      if (velocityDataSource === 'none') velocityDataSource = 'monthly';
+      else velocityDataSource += '+monthly';
+      
+      // Temp accumulators for period data
+      const periodAmazonVel = {};
+      const periodShopifyVel = {};
       
       sortedPeriods.forEach(periodKey => {
         const periodData = allPeriodsData[periodKey];
@@ -5502,10 +5581,10 @@ const savePeriods = async (d) => {
             const skuLower = item.sku.toLowerCase();
             // Divide monthly units by weeks per month to get weekly rate
             const weeklyUnits = (item.unitsSold || item.units || 0) / WEEKS_PER_MONTH;
-            if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
-            if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = 0;
-            amazonSkuVelocity[item.sku] += weeklyUnits;
-            amazonSkuVelocity[skuLower] += weeklyUnits;
+            if (!periodAmazonVel[item.sku]) periodAmazonVel[item.sku] = 0;
+            if (!periodAmazonVel[skuLower]) periodAmazonVel[skuLower] = 0;
+            periodAmazonVel[item.sku] += weeklyUnits;
+            periodAmazonVel[skuLower] += weeklyUnits;
           });
         }
         
@@ -5518,84 +5597,34 @@ const savePeriods = async (d) => {
             if (!item.sku) return;
             const skuLower = item.sku.toLowerCase();
             const weeklyUnits = (item.unitsSold || item.units || 0) / WEEKS_PER_MONTH;
-            if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
-            if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = 0;
-            shopifySkuVelocity[item.sku] += weeklyUnits;
-            shopifySkuVelocity[skuLower] += weeklyUnits;
+            if (!periodShopifyVel[item.sku]) periodShopifyVel[item.sku] = 0;
+            if (!periodShopifyVel[skuLower]) periodShopifyVel[skuLower] = 0;
+            periodShopifyVel[item.sku] += weeklyUnits;
+            periodShopifyVel[skuLower] += weeklyUnits;
           });
         }
       });
       
-      // Average across periods
+      // Average across periods and merge (only add if not already covered)
       if (periodsCount > 0) {
-        Object.keys(amazonSkuVelocity).forEach(sku => {
-          amazonSkuVelocity[sku] = amazonSkuVelocity[sku] / periodsCount;
+        Object.keys(periodAmazonVel).forEach(sku => {
+          const avgWeeklyRate = periodAmazonVel[sku] / periodsCount;
+          if (!amazonSkuVelocity[sku] || amazonSkuVelocity[sku] === 0) {
+            amazonSkuVelocity[sku] = avgWeeklyRate;
+          }
         });
-        Object.keys(shopifySkuVelocity).forEach(sku => {
-          shopifySkuVelocity[sku] = shopifySkuVelocity[sku] / periodsCount;
-        });
-      }
-      
-      console.log(`Velocity estimated from ${periodsCount} monthly periods (no weekly data available)`);
-    }
-    
-    // ALSO: Aggregate daily data to weekly if we have unaggregated daily data
-    // This ensures recent daily data contributes to velocity even before manual aggregation
-    const dailyDates = Object.keys(allDaysData).filter(d => {
-      const dayData = allDaysData[d];
-      return dayData && (dayData.amazon?.units > 0 || dayData.shopify?.units > 0);
-    }).sort().reverse();
-    
-    if (dailyDates.length > 0 && Object.keys(amazonSkuVelocity).length === 0) {
-      // Group last 28 days of daily data
-      const recentDays = dailyDates.slice(0, 28);
-      const daysCount = recentDays.length;
-      
-      recentDays.forEach(dayKey => {
-        const dayData = allDaysData[dayKey];
-        
-        if (dayData.amazon?.skuData) {
-          const skuData = Array.isArray(dayData.amazon.skuData)
-            ? dayData.amazon.skuData
-            : Object.values(dayData.amazon.skuData);
-          skuData.forEach(item => {
-            if (!item.sku) return;
-            const skuLower = item.sku.toLowerCase();
-            if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
-            if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = 0;
-            amazonSkuVelocity[item.sku] += item.unitsSold || item.units || 0;
-            amazonSkuVelocity[skuLower] += item.unitsSold || item.units || 0;
-          });
-        }
-        
-        if (dayData.shopify?.skuData) {
-          const skuData = Array.isArray(dayData.shopify.skuData)
-            ? dayData.shopify.skuData
-            : Object.values(dayData.shopify.skuData);
-          skuData.forEach(item => {
-            if (!item.sku) return;
-            const skuLower = item.sku.toLowerCase();
-            if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
-            if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = 0;
-            shopifySkuVelocity[item.sku] += item.unitsSold || item.units || 0;
-            shopifySkuVelocity[skuLower] += item.unitsSold || item.units || 0;
-          });
-        }
-      });
-      
-      // Convert to weekly average (days / 7)
-      const weeksEquivalent = daysCount / 7;
-      if (weeksEquivalent > 0) {
-        Object.keys(amazonSkuVelocity).forEach(sku => {
-          amazonSkuVelocity[sku] = amazonSkuVelocity[sku] / weeksEquivalent;
-        });
-        Object.keys(shopifySkuVelocity).forEach(sku => {
-          shopifySkuVelocity[sku] = shopifySkuVelocity[sku] / weeksEquivalent;
+        Object.keys(periodShopifyVel).forEach(sku => {
+          const avgWeeklyRate = periodShopifyVel[sku] / periodsCount;
+          if (!shopifySkuVelocity[sku] || shopifySkuVelocity[sku] === 0) {
+            shopifySkuVelocity[sku] = avgWeeklyRate;
+          }
         });
       }
       
-      console.log(`Velocity calculated from ${daysCount} days of daily data`);
+      console.log(`Added velocity from ${periodsCount} monthly periods (${Object.keys(periodAmazonVel).length} Amazon SKUs, ${Object.keys(periodShopifyVel).length} Shopify SKUs)`);
     }
+    
+    console.log(`Final velocity data: ${Object.keys(amazonSkuVelocity).length} Amazon SKUs, ${Object.keys(shopifySkuVelocity).length} Shopify SKUs (source: ${velocityDataSource})`);
     
     const hasWeeklyVelocityData = Object.keys(amazonSkuVelocity).length > 0 || Object.keys(shopifySkuVelocity).length > 0;
 
@@ -5956,31 +5985,16 @@ const savePeriods = async (d) => {
     const hasAmazonWeeklyData = Object.keys(amazonSkuVelocity).length > 0;
     const hasShopifyWeeklyData = Object.keys(shopifySkuVelocity).length > 0;
     
-    // Determine velocity source for display
+    // Build velocity source description
     let velNote = '';
-    const sortedPeriods = Object.keys(allPeriodsData).length;
-    const dailyDatesWithData = Object.keys(allDaysData).filter(d => {
-      const dayData = allDaysData[d];
-      return dayData && (dayData.amazon?.units > 0 || dayData.shopify?.units > 0);
-    }).length;
-    
-    if (weeksCount > 0) {
-      // We have actual weekly data
-      if (hasAmazonWeeklyData && hasShopifyWeeklyData) {
-        velNote = `Amazon + Shopify weekly sales (${weeksCount}wk avg)`;
-      } else if (hasAmazonWeeklyData) {
-        velNote = `Amazon weekly sales (${weeksCount}wk avg)`;
-      } else if (hasShopifyWeeklyData) {
-        velNote = `Shopify weekly sales (${weeksCount}wk avg), Amazon from FBA file`;
-      }
-    } else if (dailyDatesWithData > 0 && hasAmazonWeeklyData) {
-      // Velocity came from daily data
-      velNote = `Estimated from ${dailyDatesWithData} days of daily data`;
-    } else if (sortedPeriods > 0 && hasAmazonWeeklyData) {
-      // Velocity came from monthly/period data
-      velNote = `Estimated from ${Math.min(sortedPeriods, 3)} monthly period(s)`;
+    if (velocityDataSource === 'none') {
+      velNote = 'No sales data available - using FBA t30 if present';
     } else {
-      velNote = 'No weekly/monthly sales data - using FBA t30 if available';
+      const sources = [];
+      if (velocityDataSource.includes('weekly')) sources.push(`${weeksCount} weeks`);
+      if (velocityDataSource.includes('daily')) sources.push(`${dailyDates.length} days`);
+      if (velocityDataSource.includes('monthly')) sources.push(`${periodsCount} months`);
+      velNote = `Velocity from: ${sources.join(' + ')} (${Object.keys(amazonSkuVelocity).length} Amazon SKUs, ${Object.keys(shopifySkuVelocity).length} Shopify SKUs)`;
     }
     
     const learningNote = forecastCorrections.confidence >= 30 
