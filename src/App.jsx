@@ -7191,6 +7191,7 @@ const savePeriods = async (d) => {
         console.log(`=== AMAZON BULK UPLOAD DEBUG (${fileData.name}) ===`);
         console.log('Report type:', reportType);
         console.log('Date range:', dateRange);
+        console.log('Date range endDate:', dateRange?.endDate);
         console.log('Rows processed:', data.length);
         console.log('SKUs found:', Object.keys(amazonSkuData).length);
         console.log('Total units:', amzUnits);
@@ -7200,7 +7201,13 @@ const savePeriods = async (d) => {
           console.log('First few SKU names:', amazonSkus.slice(0, 5).map(s => s.sku));
         }
         
-        if (reportType === 'daily' && dateRange?.endDate) {
+        // Validate dateRange before using
+        if (!dateRange || !dateRange.endDate) {
+          console.error('Missing dateRange or endDate for file:', fileData.name);
+          continue;
+        }
+        
+        if (reportType === 'daily') {
           // Import as daily data
           const dateKey = dateRange.endDate.toISOString().split('T')[0];
           
@@ -7221,7 +7228,7 @@ const savePeriods = async (d) => {
             },
           };
           dailyImported++;
-        } else if (reportType === 'weekly' && dateRange?.endDate) {
+        } else if (reportType === 'weekly') {
           // Import as weekly data
           const weekKey = dateRange.endDate.toISOString().split('T')[0];
           
@@ -7257,7 +7264,7 @@ const savePeriods = async (d) => {
             },
           };
           weeklyImported++;
-        } else if (reportType === 'monthly' && dateRange?.startDate) {
+        } else if (reportType === 'monthly') {
           // Import as period data
           const monthLabel = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
           
@@ -7278,6 +7285,8 @@ const savePeriods = async (d) => {
             },
           };
           monthlyImported++;
+        } else {
+          console.warn('Unknown report type:', reportType, 'for file:', fileData.name);
         }
       }
       
@@ -7304,10 +7313,17 @@ const savePeriods = async (d) => {
       if (weeklyImported > 0) messages.push(`${weeklyImported} weekly`);
       if (monthlyImported > 0) messages.push(`${monthlyImported} monthly`);
       
-      setToast({ 
-        message: `Imported ${messages.join(', ')} report${dailyImported + weeklyImported + monthlyImported > 1 ? 's' : ''}!`, 
-        type: 'success' 
-      });
+      if (messages.length > 0) {
+        setToast({ 
+          message: `Imported ${messages.join(', ')} report${dailyImported + weeklyImported + monthlyImported > 1 ? 's' : ''}!`, 
+          type: 'success' 
+        });
+      } else {
+        setToast({ 
+          message: 'No data was imported. Check console for details.', 
+          type: 'warning' 
+        });
+      }
       
       // Navigate to appropriate view
       if (weeklyImported > 0) {
