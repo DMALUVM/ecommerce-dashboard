@@ -13754,7 +13754,62 @@ if (shopifySkuWithShipping.length > 0) {
       let updatedDays = { ...allDaysData };
       let daysUpdated = 0;
       
-      Object.entries(amazonAdsResults.dailyData).forEach(([date, adsData]) => {
+      // Calculate advanced analytics from the data
+      const dailyEntries = Object.entries(amazonAdsResults.dailyData);
+      const sortedEntries = dailyEntries.sort((a, b) => a[0].localeCompare(b[0]));
+      
+      // Calculate week-over-week and day-of-week patterns
+      const dayOfWeekStats = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] }; // Sun-Sat
+      const monthlyStats = {};
+      const weeklyStats = {};
+      
+      sortedEntries.forEach(([date, adsData]) => {
+        const d = new Date(date + 'T12:00:00');
+        const dow = d.getDay();
+        const monthKey = date.substring(0, 7);
+        
+        // Get week ending (Sunday)
+        const dayOfWeek = d.getDay();
+        const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+        const weekEnd = new Date(d);
+        weekEnd.setDate(weekEnd.getDate() + daysUntilSunday);
+        const weekKey = weekEnd.toISOString().split('T')[0];
+        
+        // Aggregate day of week stats
+        dayOfWeekStats[dow].push({
+          roas: adsData.roas || 0,
+          acos: adsData.acos || 0,
+          spend: adsData.spend || 0,
+          conversions: adsData.conversions || 0,
+        });
+        
+        // Aggregate monthly stats
+        if (!monthlyStats[monthKey]) {
+          monthlyStats[monthKey] = { spend: 0, revenue: 0, totalRevenue: 0, orders: 0, conversions: 0, clicks: 0, impressions: 0, days: 0 };
+        }
+        monthlyStats[monthKey].spend += adsData.spend || 0;
+        monthlyStats[monthKey].revenue += adsData.adRevenue || adsData.revenue || 0;
+        monthlyStats[monthKey].totalRevenue += adsData.totalRevenue || 0;
+        monthlyStats[monthKey].orders += adsData.orders || 0;
+        monthlyStats[monthKey].conversions += adsData.conversions || 0;
+        monthlyStats[monthKey].clicks += adsData.clicks || 0;
+        monthlyStats[monthKey].impressions += adsData.impressions || 0;
+        monthlyStats[monthKey].days++;
+        
+        // Aggregate weekly stats
+        if (!weeklyStats[weekKey]) {
+          weeklyStats[weekKey] = { spend: 0, revenue: 0, totalRevenue: 0, orders: 0, conversions: 0, clicks: 0, impressions: 0, days: 0 };
+        }
+        weeklyStats[weekKey].spend += adsData.spend || 0;
+        weeklyStats[weekKey].revenue += adsData.adRevenue || adsData.revenue || 0;
+        weeklyStats[weekKey].totalRevenue += adsData.totalRevenue || 0;
+        weeklyStats[weekKey].orders += adsData.orders || 0;
+        weeklyStats[weekKey].conversions += adsData.conversions || 0;
+        weeklyStats[weekKey].clicks += adsData.clicks || 0;
+        weeklyStats[weekKey].impressions += adsData.impressions || 0;
+        weeklyStats[weekKey].days++;
+        
+        // Store in daily data
         const existingDay = updatedDays[date] || {
           total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
           amazon: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
@@ -13774,10 +13829,46 @@ if (shopifySkuWithShipping.length > 0) {
         daysUpdated++;
       });
       
+      // Calculate day-of-week insights
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const dowInsights = Object.entries(dayOfWeekStats).map(([dow, stats]) => {
+        if (stats.length === 0) return null;
+        const avgRoas = stats.reduce((s, d) => s + d.roas, 0) / stats.length;
+        const avgAcos = stats.reduce((s, d) => s + d.acos, 0) / stats.length;
+        const avgSpend = stats.reduce((s, d) => s + d.spend, 0) / stats.length;
+        const avgConv = stats.reduce((s, d) => s + d.conversions, 0) / stats.length;
+        return { day: dayNames[dow], avgRoas, avgAcos, avgSpend, avgConversions: avgConv, sampleSize: stats.length };
+      }).filter(Boolean);
+      
+      // Find best/worst days
+      const bestDay = dowInsights.reduce((best, d) => d.avgRoas > best.avgRoas ? d : best, dowInsights[0]);
+      const worstDay = dowInsights.reduce((worst, d) => d.avgRoas < worst.avgRoas ? d : worst, dowInsights[0]);
+      
+      // Calculate monthly trends with derived metrics
+      const monthlyTrends = Object.entries(monthlyStats).map(([month, stats]) => ({
+        month,
+        ...stats,
+        roas: stats.spend > 0 ? stats.revenue / stats.spend : 0,
+        acos: stats.revenue > 0 ? (stats.spend / stats.revenue) * 100 : 0,
+        tacos: stats.totalRevenue > 0 ? (stats.spend / stats.totalRevenue) * 100 : 0,
+        ctr: stats.impressions > 0 ? (stats.clicks / stats.impressions) * 100 : 0,
+        cpc: stats.clicks > 0 ? stats.spend / stats.clicks : 0,
+        convRate: stats.clicks > 0 ? (stats.conversions / stats.clicks) * 100 : 0,
+      })).sort((a, b) => a.month.localeCompare(b.month));
+      
+      // Calculate weekly trends with derived metrics
+      const weeklyTrends = Object.entries(weeklyStats).map(([week, stats]) => ({
+        weekEnding: week,
+        ...stats,
+        roas: stats.spend > 0 ? stats.revenue / stats.spend : 0,
+        acos: stats.revenue > 0 ? (stats.spend / stats.revenue) * 100 : 0,
+        tacos: stats.totalRevenue > 0 ? (stats.spend / stats.totalRevenue) * 100 : 0,
+      })).sort((a, b) => a.weekEnding.localeCompare(b.weekEnding));
+      
       setAllDaysData(updatedDays);
       lsSet('dailySales', JSON.stringify(updatedDays));
       
-      // ALSO save to amazonCampaigns.historicalDaily for AI analysis
+      // Save comprehensive analytics to amazonCampaigns for AI analysis
       const updatedCampaigns = {
         ...amazonCampaigns,
         historicalDaily: {
@@ -13786,6 +13877,17 @@ if (shopifySkuWithShipping.length > 0) {
         },
         historicalLastUpdated: new Date().toISOString(),
         historicalDateRange: amazonAdsResults.dateRange,
+        // Add computed analytics for AI
+        analytics: {
+          dayOfWeekInsights: dowInsights,
+          bestPerformingDay: bestDay,
+          worstPerformingDay: worstDay,
+          monthlyTrends,
+          weeklyTrends,
+          totals: amazonAdsResults.totals,
+          dateRange: amazonAdsResults.dateRange,
+          daysAnalyzed: daysUpdated,
+        },
       };
       setAmazonCampaigns(updatedCampaigns);
       lsSet('ecommerce_amazon_campaigns_v1', JSON.stringify(updatedCampaigns));
@@ -13794,7 +13896,7 @@ if (shopifySkuWithShipping.length > 0) {
       
       setAmazonAdsResults({ status: 'success', daysImported: daysUpdated, dateRange: amazonAdsResults.dateRange });
       setAmazonAdsProcessing(false);
-      setToast({ message: `Imported ${daysUpdated} days of Amazon Ads history for AI analysis!`, type: 'success' });
+      setToast({ message: `Imported ${daysUpdated} days of Amazon Ads history with analytics for AI analysis!`, type: 'success' });
     };
     
     return (
@@ -16559,6 +16661,21 @@ TREND: ${trendDirection.toUpperCase()}
 MONTHLY PERFORMANCE (Last 6 months):
 ${monthlyTrend.join('\n')}
 `;
+        
+        // Add pre-computed analytics if available
+        const analytics = amazonCampaigns?.analytics;
+        if (analytics?.dayOfWeekInsights?.length > 0) {
+          const dowLines = analytics.dayOfWeekInsights
+            .sort((a, b) => b.avgRoas - a.avgRoas)
+            .map(d => `  ${d.day}: Avg ROAS ${d.avgRoas.toFixed(2)} | Avg ACOS ${d.avgAcos.toFixed(1)}% | Avg Spend $${d.avgSpend.toFixed(0)} | Avg Conv ${d.avgConversions.toFixed(1)}`);
+          
+          historicalContext += `
+DAY OF WEEK PERFORMANCE (Best to Worst by ROAS):
+${dowLines.join('\n')}
+BEST DAY: ${analytics.bestPerformingDay?.day || 'N/A'} (ROAS: ${analytics.bestPerformingDay?.avgRoas?.toFixed(2) || 'N/A'})
+WORST DAY: ${analytics.worstPerformingDay?.day || 'N/A'} (ROAS: ${analytics.worstPerformingDay?.avgRoas?.toFixed(2) || 'N/A'})
+`;
+        }
       }
       
       const systemPrompt = `You are an expert Amazon PPC advertising analyst. Analyze the data provided and give specific, actionable recommendations.
