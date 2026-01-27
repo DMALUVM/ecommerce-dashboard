@@ -5483,7 +5483,14 @@ const savePeriods = async (d) => {
       alert('Upload Amazon FBA file or connect Amazon SP-API, and select a date'); 
       return; 
     }
-    if (!invSnapshotDate) {
+    
+    // Auto-set snapshot date to today if using API and no date selected
+    let snapshotDate = invSnapshotDate;
+    if (!snapshotDate && hasAmazonApi) {
+      snapshotDate = new Date().toISOString().split('T')[0];
+      setInvSnapshotDate(snapshotDate);
+    }
+    if (!snapshotDate) {
       alert('Please select a snapshot date');
       return;
     }
@@ -6076,6 +6083,8 @@ const savePeriods = async (d) => {
         uniqueSkus.push(sku);
       }
     });
+    
+    console.log('SKU deduplication: allSkus =', allSkus.size, ', uniqueSkus =', uniqueSkus.length);
     
     const items = [];
     let critical = 0, low = 0, healthy = 0, overstock = 0;
