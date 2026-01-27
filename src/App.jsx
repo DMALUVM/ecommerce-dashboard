@@ -1375,6 +1375,11 @@ const handleLogout = async () => {
   const [bulkAdParsed, setBulkAdParsed] = useState(null); // Combined: { dailyData, weeklyData, totalSpend, error, dateRange }
   const [bulkAdProcessing, setBulkAdProcessing] = useState(false); // Processing multiple files
   
+  // Amazon Bulk SKU Economics Upload state
+  const [amazonBulkFiles, setAmazonBulkFiles] = useState([]); // Array of { file, name, parsed, reportType, dateRange }
+  const [amazonBulkParsed, setAmazonBulkParsed] = useState(null); // Combined results after parsing
+  const [amazonBulkProcessing, setAmazonBulkProcessing] = useState(false);
+  
   const [showReprocess, setShowReprocess] = useState(false);
   const [reprocessFiles, setReprocessFiles] = useState({ amazon: null, shopify: null, threepl: null });
   const [reprocessFileNames, setReprocessFileNames] = useState({ amazon: '', shopify: '', threepl: '' });
@@ -5441,8 +5446,12 @@ const savePeriods = async (d) => {
             : Object.values(weekData.shopify.skuData);
           skuData.forEach(item => {
             if (!item.sku) return;
+            const skuLower = item.sku.toLowerCase();
             if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
-            shopifySkuVelocity[item.sku] += item.unitsSold || item.units || 0;
+            if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = 0;
+            const units = item.unitsSold || item.units || 0;
+            shopifySkuVelocity[item.sku] += units;
+            shopifySkuVelocity[skuLower] += units;
           });
         }
         
@@ -5453,8 +5462,12 @@ const savePeriods = async (d) => {
             : Object.values(weekData.amazon.skuData);
           skuData.forEach(item => {
             if (!item.sku) return;
+            const skuLower = item.sku.toLowerCase();
             if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
-            amazonSkuVelocity[item.sku] += item.unitsSold || item.units || 0;
+            if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = 0;
+            const units = item.unitsSold || item.units || 0;
+            amazonSkuVelocity[item.sku] += units;
+            amazonSkuVelocity[skuLower] += units;
           });
         }
       });
@@ -5466,6 +5479,122 @@ const savePeriods = async (d) => {
       Object.keys(amazonSkuVelocity).forEach(sku => {
         amazonSkuVelocity[sku] = amazonSkuVelocity[sku] / weeksCount;
       });
+    }
+    
+    // FALLBACK: If no weekly data, estimate from monthly/period data
+    // Monthly data divided by ~4.3 gives weekly estimate
+    const WEEKS_PER_MONTH = 4.33;
+    if (Object.keys(amazonSkuVelocity).length === 0 && Object.keys(allPeriodsData).length > 0) {
+      // Get most recent periods (up to 3 months)
+      const sortedPeriods = Object.keys(allPeriodsData).sort().reverse().slice(0, 3);
+      const periodsCount = sortedPeriods.length;
+      
+      sortedPeriods.forEach(periodKey => {
+        const periodData = allPeriodsData[periodKey];
+        
+        // Amazon SKU velocity from period data
+        if (periodData.amazon?.skuData) {
+          const skuData = Array.isArray(periodData.amazon.skuData)
+            ? periodData.amazon.skuData
+            : Object.values(periodData.amazon.skuData);
+          skuData.forEach(item => {
+            if (!item.sku) return;
+            const skuLower = item.sku.toLowerCase();
+            // Divide monthly units by weeks per month to get weekly rate
+            const weeklyUnits = (item.unitsSold || item.units || 0) / WEEKS_PER_MONTH;
+            if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
+            if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = 0;
+            amazonSkuVelocity[item.sku] += weeklyUnits;
+            amazonSkuVelocity[skuLower] += weeklyUnits;
+          });
+        }
+        
+        // Shopify SKU velocity from period data
+        if (periodData.shopify?.skuData) {
+          const skuData = Array.isArray(periodData.shopify.skuData)
+            ? periodData.shopify.skuData
+            : Object.values(periodData.shopify.skuData);
+          skuData.forEach(item => {
+            if (!item.sku) return;
+            const skuLower = item.sku.toLowerCase();
+            const weeklyUnits = (item.unitsSold || item.units || 0) / WEEKS_PER_MONTH;
+            if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
+            if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = 0;
+            shopifySkuVelocity[item.sku] += weeklyUnits;
+            shopifySkuVelocity[skuLower] += weeklyUnits;
+          });
+        }
+      });
+      
+      // Average across periods
+      if (periodsCount > 0) {
+        Object.keys(amazonSkuVelocity).forEach(sku => {
+          amazonSkuVelocity[sku] = amazonSkuVelocity[sku] / periodsCount;
+        });
+        Object.keys(shopifySkuVelocity).forEach(sku => {
+          shopifySkuVelocity[sku] = shopifySkuVelocity[sku] / periodsCount;
+        });
+      }
+      
+      console.log(`Velocity estimated from ${periodsCount} monthly periods (no weekly data available)`);
+    }
+    
+    // ALSO: Aggregate daily data to weekly if we have unaggregated daily data
+    // This ensures recent daily data contributes to velocity even before manual aggregation
+    const dailyDates = Object.keys(allDaysData).filter(d => {
+      const dayData = allDaysData[d];
+      return dayData && (dayData.amazon?.units > 0 || dayData.shopify?.units > 0);
+    }).sort().reverse();
+    
+    if (dailyDates.length > 0 && Object.keys(amazonSkuVelocity).length === 0) {
+      // Group last 28 days of daily data
+      const recentDays = dailyDates.slice(0, 28);
+      const daysCount = recentDays.length;
+      
+      recentDays.forEach(dayKey => {
+        const dayData = allDaysData[dayKey];
+        
+        if (dayData.amazon?.skuData) {
+          const skuData = Array.isArray(dayData.amazon.skuData)
+            ? dayData.amazon.skuData
+            : Object.values(dayData.amazon.skuData);
+          skuData.forEach(item => {
+            if (!item.sku) return;
+            const skuLower = item.sku.toLowerCase();
+            if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
+            if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = 0;
+            amazonSkuVelocity[item.sku] += item.unitsSold || item.units || 0;
+            amazonSkuVelocity[skuLower] += item.unitsSold || item.units || 0;
+          });
+        }
+        
+        if (dayData.shopify?.skuData) {
+          const skuData = Array.isArray(dayData.shopify.skuData)
+            ? dayData.shopify.skuData
+            : Object.values(dayData.shopify.skuData);
+          skuData.forEach(item => {
+            if (!item.sku) return;
+            const skuLower = item.sku.toLowerCase();
+            if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
+            if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = 0;
+            shopifySkuVelocity[item.sku] += item.unitsSold || item.units || 0;
+            shopifySkuVelocity[skuLower] += item.unitsSold || item.units || 0;
+          });
+        }
+      });
+      
+      // Convert to weekly average (days / 7)
+      const weeksEquivalent = daysCount / 7;
+      if (weeksEquivalent > 0) {
+        Object.keys(amazonSkuVelocity).forEach(sku => {
+          amazonSkuVelocity[sku] = amazonSkuVelocity[sku] / weeksEquivalent;
+        });
+        Object.keys(shopifySkuVelocity).forEach(sku => {
+          shopifySkuVelocity[sku] = shopifySkuVelocity[sku] / weeksEquivalent;
+        });
+      }
+      
+      console.log(`Velocity calculated from ${daysCount} days of daily data`);
     }
     
     const hasWeeklyVelocityData = Object.keys(amazonSkuVelocity).length > 0 || Object.keys(shopifySkuVelocity).length > 0;
@@ -5506,16 +5635,17 @@ const savePeriods = async (d) => {
             const inb = item.fbaInbound || item.amazonInbound || 0;
             const total = avail + reserved;
             
-            const cost = cogsLookup[sku] || 0;
+            const cost = cogsLookup[sku] || cogsLookup[sku.toLowerCase()] || cogsLookup[sku.toUpperCase()] || 0;
             amzTotal += total;
             amzValue += total * cost;
             amzInbound += inb;
             
-            // Get velocity - prefer weekly data, then t30 from file if no API velocity
-            const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
+            // Get velocity - try multiple case variants
+            const skuLower = sku.toLowerCase();
+            const amzVelFromWeekly = amazonSkuVelocity[sku] || amazonSkuVelocity[skuLower] || amazonSkuVelocity[sku.toUpperCase()] || 0;
             const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : 0;
             
-            amzInv[sku] = { 
+            const itemData = { 
               sku, 
               asin: item.asin || '', 
               name: item.name || sku, 
@@ -5524,6 +5654,11 @@ const savePeriods = async (d) => {
               cost, 
               amzWeeklyVel 
             };
+            
+            // Index by multiple case variants for matching
+            amzInv[sku] = itemData;
+            amzInv[skuLower] = itemData;
+            amzInv[sku.toUpperCase()] = itemData;
             
             // Track AWD separately
             if (item.awdQuantity > 0) {
@@ -5552,15 +5687,21 @@ const savePeriods = async (d) => {
         const sku = r['sku'] || '', avail = parseInt(r['available'] || 0), inb = parseInt(r['inbound-quantity'] || 0);
         const res = parseInt(r['Total Reserved Quantity'] || 0), t30 = parseInt(r['units-shipped-t30'] || 0);
         const name = r['product-name'] || '', asin = r['asin'] || '';
-        const cost = cogsLookup[sku] || 0, total = avail + res;
+        const skuLower = sku.toLowerCase();
+        const cost = cogsLookup[sku] || cogsLookup[skuLower] || 0, total = avail + res;
         amzTotal += total; amzValue += total * cost; amzInbound += inb;
         
         // Use weekly data velocity if available, otherwise fall back to t30 from file
-        const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
+        const amzVelFromWeekly = amazonSkuVelocity[sku] || amazonSkuVelocity[skuLower] || 0;
         const amzVelFromFile = t30 / 4.3;
         const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : amzVelFromFile;
         
-        if (sku) amzInv[sku] = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel };
+        const itemData = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel };
+        if (sku) {
+          amzInv[sku] = itemData;
+          amzInv[skuLower] = itemData;
+          amzInv[sku.toUpperCase()] = itemData;
+        }
       });
     }
 
@@ -5593,7 +5734,7 @@ const savePeriods = async (d) => {
             const qty = item.quantity_on_hand || 0;
             const inb = item.quantity_inbound || 0;
             // Try COGS with and without "Shop" suffix
-            const cost = item.cost || cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/, '')] || 0;
+            const cost = item.cost || cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/i, '')] || 0;
             
             if (qty === 0 && inb === 0) return;
             
@@ -5601,12 +5742,19 @@ const savePeriods = async (d) => {
             tplValue += qty * cost;
             tplInbound += inb;
             
+            const itemData = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
+            
             // Index by original SKU
-            tplInv[sku] = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
+            tplInv[sku] = itemData;
+            // Also index by uppercase and lowercase versions for matching
+            tplInv[sku.toUpperCase()] = itemData;
+            tplInv[sku.toLowerCase()] = itemData;
             // Also index by normalized SKU (without "Shop" suffix) for matching with Amazon
-            if (sku.endsWith('Shop')) {
-              const normalizedSku = sku.replace(/Shop$/, '');
-              tplInv[normalizedSku] = { sku: normalizedSku, name: item.name || sku, total: qty, inbound: inb, cost };
+            if (sku.toLowerCase().endsWith('shop')) {
+              const normalizedSku = sku.replace(/shop$/i, '');
+              tplInv[normalizedSku] = itemData;
+              tplInv[normalizedSku.toUpperCase()] = itemData;
+              tplInv[normalizedSku.toLowerCase()] = itemData;
             }
           });
           
@@ -5627,7 +5775,13 @@ const savePeriods = async (d) => {
         const inb = parseInt(r['quantity_inbound'] || 0), cost = parseFloat(r['cost'] || 0) || cogsLookup[sku] || 0;
         if (sku.includes('Bundle') || name.includes('Gift Card') || name.includes('FREE') || qty === 0) return;
         tplTotal += qty; tplValue += qty * cost; tplInbound += inb;
-        if (sku) tplInv[sku] = { sku, name, total: qty, inbound: inb, cost };
+        
+        const itemData = { sku, name, total: qty, inbound: inb, cost };
+        if (sku) {
+          tplInv[sku] = itemData;
+          tplInv[sku.toUpperCase()] = itemData;
+          tplInv[sku.toLowerCase()] = itemData;
+        }
       });
     }
 
@@ -5673,23 +5827,50 @@ const savePeriods = async (d) => {
     }
 
     // ===== COMBINE ALL INVENTORY SOURCES =====
+    // Build case-insensitive lookup maps for matching
+    const tplInvLower = {};
+    Object.entries(tplInv).forEach(([sku, data]) => {
+      tplInvLower[sku.toLowerCase()] = data;
+    });
+    const homeInvLower = {};
+    Object.entries(homeInv).forEach(([sku, data]) => {
+      homeInvLower[sku.toLowerCase()] = data;
+    });
+    const amzVelLower = {};
+    Object.entries(amazonSkuVelocity).forEach(([sku, vel]) => {
+      amzVelLower[sku.toLowerCase()] = vel;
+    });
+    const shopVelLower = {};
+    Object.entries(shopifySkuVelocity).forEach(([sku, vel]) => {
+      shopVelLower[sku.toLowerCase()] = vel;
+    });
+    
     const allSkus = new Set([...Object.keys(amzInv), ...Object.keys(tplInv), ...Object.keys(homeInv)]);
     const items = [];
     let critical = 0, low = 0, healthy = 0, overstock = 0;
 
     allSkus.forEach(sku => {
+      const skuLower = sku.toLowerCase();
+      
+      // Case-insensitive lookups for all inventory sources
       const a = amzInv[sku] || {};
-      const t = tplInv[sku] || {};
-      const h = homeInv[sku] || {};
+      const t = tplInv[sku] || tplInvLower[skuLower] || {};
+      const h = homeInv[sku] || homeInvLower[skuLower] || {};
       
       const aQty = a.total || 0;
       const tQty = t.total || 0;
       const hQty = h.total || 0;
       const totalQty = aQty + tQty + hQty;
       
-      const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || 0;
-      const amzVel = a.amzWeeklyVel || 0;
-      const shopVel = shopifySkuVelocity[sku] || 0;
+      const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || cogsLookup[skuLower] || 0;
+      
+      // Get velocity from both weekly data AND Amazon inventory file
+      // Priority: weekly sales data > t30 from inventory file
+      const amzVelFromWeekly = amazonSkuVelocity[sku] || amzVelLower[skuLower] || 0;
+      const amzVelFromInv = a.amzWeeklyVel || 0; // This comes from t30 in inventory file
+      const amzVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : amzVelFromInv;
+      
+      const shopVel = shopifySkuVelocity[sku] || shopVelLower[skuLower] || 0;
       const totalVel = amzVel + shopVel;
       
       // Apply learned corrections
@@ -5775,15 +5956,31 @@ const savePeriods = async (d) => {
     const hasAmazonWeeklyData = Object.keys(amazonSkuVelocity).length > 0;
     const hasShopifyWeeklyData = Object.keys(shopifySkuVelocity).length > 0;
     
+    // Determine velocity source for display
     let velNote = '';
-    if (hasAmazonWeeklyData && hasShopifyWeeklyData) {
-      velNote = `Amazon + Shopify weekly sales (${weeksCount}wk avg)`;
-    } else if (hasAmazonWeeklyData) {
-      velNote = `Amazon weekly sales (${weeksCount}wk avg)`;
-    } else if (hasShopifyWeeklyData) {
-      velNote = `Shopify weekly sales (${weeksCount}wk avg), Amazon from FBA file`;
+    const sortedPeriods = Object.keys(allPeriodsData).length;
+    const dailyDatesWithData = Object.keys(allDaysData).filter(d => {
+      const dayData = allDaysData[d];
+      return dayData && (dayData.amazon?.units > 0 || dayData.shopify?.units > 0);
+    }).length;
+    
+    if (weeksCount > 0) {
+      // We have actual weekly data
+      if (hasAmazonWeeklyData && hasShopifyWeeklyData) {
+        velNote = `Amazon + Shopify weekly sales (${weeksCount}wk avg)`;
+      } else if (hasAmazonWeeklyData) {
+        velNote = `Amazon weekly sales (${weeksCount}wk avg)`;
+      } else if (hasShopifyWeeklyData) {
+        velNote = `Shopify weekly sales (${weeksCount}wk avg), Amazon from FBA file`;
+      }
+    } else if (dailyDatesWithData > 0 && hasAmazonWeeklyData) {
+      // Velocity came from daily data
+      velNote = `Estimated from ${dailyDatesWithData} days of daily data`;
+    } else if (sortedPeriods > 0 && hasAmazonWeeklyData) {
+      // Velocity came from monthly/period data
+      velNote = `Estimated from ${Math.min(sortedPeriods, 3)} monthly period(s)`;
     } else {
-      velNote = 'Amazon from FBA file (t30), no weekly data';
+      velNote = 'No weekly/monthly sales data - using FBA t30 if available';
     }
     
     const learningNote = forecastCorrections.confidence >= 30 
@@ -5847,7 +6044,7 @@ const savePeriods = async (d) => {
       message: `Inventory snapshot saved (3PL: ${tplSource}, ${items.length} SKUs)`, 
       type: 'success' 
     });
-  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, forecastCorrections, packiyoCredentials, shopifyCredentials, amazonCredentials]);
+  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, allPeriodsData, allDaysData, forecastCorrections, packiyoCredentials, shopifyCredentials, amazonCredentials, leadTimeSettings]);
 
   const deleteWeek = (k) => { 
     const data = allWeeksData[k];
@@ -6478,6 +6675,305 @@ const savePeriods = async (d) => {
       return { error: `Parse error: ${e.message}` };
     }
   }, [allWeeksData, allPeriodsData]);
+  
+  // ============ AMAZON BULK UPLOAD HANDLERS ============
+  // Handle Amazon SKU Economics file selection
+  const handleAmazonBulkFiles = useCallback(async (files) => {
+    setAmazonBulkProcessing(true);
+    const parsedFiles = [];
+    
+    for (const file of files) {
+      try {
+        const text = await file.text();
+        const data = parseCSV(text);
+        
+        if (!data || data.length === 0) {
+          parsedFiles.push({ name: file.name, error: 'Empty file', reportType: null });
+          continue;
+        }
+        
+        // Detect report type from date range
+        const firstRow = data[0];
+        const startDateStr = firstRow['Start date'] || '';
+        const endDateStr = firstRow['End date'] || '';
+        
+        if (!startDateStr || !endDateStr) {
+          parsedFiles.push({ name: file.name, error: 'Missing date columns', reportType: null, data });
+          continue;
+        }
+        
+        // Parse dates (format: MM/DD/YYYY)
+        const parseDate = (str) => {
+          const parts = str.split('/');
+          if (parts.length === 3) {
+            return new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
+          }
+          return null;
+        };
+        
+        const startDate = parseDate(startDateStr);
+        const endDate = parseDate(endDateStr);
+        
+        if (!startDate || !endDate) {
+          parsedFiles.push({ name: file.name, error: 'Invalid date format', reportType: null, data });
+          continue;
+        }
+        
+        // Calculate days difference to determine report type
+        const daysDiff = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+        
+        let reportType;
+        if (daysDiff === 1) {
+          reportType = 'daily';
+        } else if (daysDiff >= 6 && daysDiff <= 8) {
+          reportType = 'weekly';
+        } else if (daysDiff >= 28 && daysDiff <= 31) {
+          reportType = 'monthly';
+        } else {
+          reportType = daysDiff <= 14 ? 'daily' : daysDiff <= 40 ? 'monthly' : 'period';
+        }
+        
+        // Calculate summary metrics
+        let totalRevenue = 0, totalUnits = 0, skuCount = 0;
+        data.forEach(row => {
+          const revenue = parseFloat(row['Net sales'] || 0);
+          const units = parseInt(row['Units sold'] || 0);
+          if (revenue !== 0 || units > 0) {
+            totalRevenue += revenue;
+            totalUnits += units;
+            if (row['MSKU']) skuCount++;
+          }
+        });
+        
+        parsedFiles.push({
+          name: file.name,
+          file,
+          data,
+          reportType,
+          dateRange: {
+            start: startDateStr,
+            end: endDateStr,
+            startDate,
+            endDate,
+            daysDiff,
+          },
+          revenue: totalRevenue,
+          units: totalUnits,
+          skuCount,
+        });
+      } catch (err) {
+        parsedFiles.push({ name: file.name, error: err.message, reportType: null });
+      }
+    }
+    
+    // Sort by date
+    parsedFiles.sort((a, b) => {
+      if (!a.dateRange?.startDate) return 1;
+      if (!b.dateRange?.startDate) return -1;
+      return a.dateRange.startDate - b.dateRange.startDate;
+    });
+    
+    // Calculate combined summary
+    const summary = {
+      dailyCount: parsedFiles.filter(f => f.reportType === 'daily').length,
+      weeklyCount: parsedFiles.filter(f => f.reportType === 'weekly').length,
+      monthlyCount: parsedFiles.filter(f => f.reportType === 'monthly').length,
+      totalRevenue: parsedFiles.reduce((sum, f) => sum + (f.revenue || 0), 0),
+      dateRange: parsedFiles.length > 0 ? {
+        start: parsedFiles[0]?.dateRange?.start,
+        end: parsedFiles[parsedFiles.length - 1]?.dateRange?.end,
+      } : null,
+    };
+    
+    setAmazonBulkFiles(parsedFiles);
+    setAmazonBulkParsed(summary);
+    setAmazonBulkProcessing(false);
+  }, []);
+  
+  // Process Amazon bulk upload - import into appropriate data structures
+  const processAmazonBulkUpload = useCallback(async () => {
+    if (amazonBulkFiles.length === 0) return;
+    
+    setAmazonBulkProcessing(true);
+    const cogsLookup = getCogsLookup();
+    
+    let dailyImported = 0, weeklyImported = 0, monthlyImported = 0;
+    const updatedDailyData = { ...allDaysData };
+    const updatedWeeklyData = { ...allWeeksData };
+    const updatedPeriodsData = { ...allPeriodsData };
+    
+    try {
+      for (const fileData of amazonBulkFiles) {
+        if (!fileData.data || fileData.error) continue;
+        
+        const { reportType, dateRange, data } = fileData;
+        
+        // Calculate Amazon totals from this file
+        let amzRev = 0, amzUnits = 0, amzRet = 0, amzProfit = 0, amzCogs = 0, amzFees = 0, amzAds = 0;
+        const amazonSkuData = {};
+        
+        data.forEach(r => {
+          const net = parseInt(r['Net units sold'] || 0);
+          const sold = parseInt(r['Units sold'] || 0);
+          const ret = parseInt(r['Units returned'] || 0);
+          const sales = parseFloat(r['Net sales'] || 0);
+          const proceeds = parseFloat(r['Net proceeds total'] || 0);
+          const sku = r['MSKU'] || '';
+          const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0);
+          const ads = parseFloat(r['Sponsored Products charge total'] || 0);
+          const name = r['Product title'] || r['product-name'] || sku;
+          
+          if (net !== 0 || sold > 0 || ret > 0 || sales !== 0) {
+            amzRev += sales;
+            amzUnits += sold;
+            amzRet += ret;
+            amzProfit += proceeds;
+            amzFees += fees;
+            amzAds += ads;
+            amzCogs += (cogsLookup[sku] || 0) * net;
+            
+            if (sku) {
+              if (!amazonSkuData[sku]) {
+                amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+              }
+              amazonSkuData[sku].unitsSold += sold;
+              amazonSkuData[sku].returns += ret;
+              amazonSkuData[sku].netSales += sales;
+              amazonSkuData[sku].netProceeds += proceeds;
+              amazonSkuData[sku].adSpend += ads;
+              amazonSkuData[sku].cogs += (cogsLookup[sku] || 0) * net;
+            }
+          }
+        });
+        
+        const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
+        
+        if (reportType === 'daily' && dateRange?.endDate) {
+          // Import as daily data
+          const dateKey = dateRange.endDate.toISOString().split('T')[0];
+          
+          updatedDailyData[dateKey] = {
+            date: dateKey,
+            createdAt: new Date().toISOString(),
+            amazon: {
+              revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs,
+              fees: amzFees, adSpend: amzAds, netProfit: amzProfit,
+              margin: amzRev > 0 ? (amzProfit / amzRev) * 100 : 0,
+              skuData: amazonSkus,
+            },
+            shopify: updatedDailyData[dateKey]?.shopify || { revenue: 0, units: 0, cogs: 0, netProfit: 0, skuData: [] },
+            total: {
+              revenue: amzRev + (updatedDailyData[dateKey]?.shopify?.revenue || 0),
+              units: amzUnits + (updatedDailyData[dateKey]?.shopify?.units || 0),
+              netProfit: amzProfit + (updatedDailyData[dateKey]?.shopify?.netProfit || 0),
+            },
+          };
+          dailyImported++;
+        } else if (reportType === 'weekly' && dateRange?.endDate) {
+          // Import as weekly data
+          const weekKey = dateRange.endDate.toISOString().split('T')[0];
+          
+          // Get existing Shopify data if available (from Shopify sync)
+          const existingWeek = updatedWeeklyData[weekKey];
+          const shopifyData = existingWeek?.shopify || { revenue: 0, units: 0, cogs: 0, netProfit: 0, skuData: [] };
+          
+          const totalRev = amzRev + shopifyData.revenue;
+          const totalProfit = amzProfit + shopifyData.netProfit;
+          
+          updatedWeeklyData[weekKey] = {
+            weekEnding: weekKey,
+            createdAt: new Date().toISOString(),
+            amazon: {
+              revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs,
+              fees: amzFees, adSpend: amzAds, netProfit: amzProfit,
+              margin: amzRev > 0 ? (amzProfit / amzRev) * 100 : 0,
+              aov: amzUnits > 0 ? amzRev / amzUnits : 0,
+              roas: amzAds > 0 ? amzRev / amzAds : 0,
+              returnRate: amzUnits > 0 ? (amzRet / amzUnits) * 100 : 0,
+              skuData: amazonSkus,
+            },
+            shopify: shopifyData,
+            total: {
+              revenue: totalRev,
+              units: amzUnits + shopifyData.units,
+              cogs: amzCogs + shopifyData.cogs,
+              adSpend: amzAds + (shopifyData.adSpend || 0),
+              netProfit: totalProfit,
+              netMargin: totalRev > 0 ? (totalProfit / totalRev) * 100 : 0,
+              amazonShare: totalRev > 0 ? (amzRev / totalRev) * 100 : 100,
+              shopifyShare: totalRev > 0 ? (shopifyData.revenue / totalRev) * 100 : 0,
+            },
+          };
+          weeklyImported++;
+        } else if (reportType === 'monthly' && dateRange?.startDate) {
+          // Import as period data
+          const monthLabel = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+          
+          updatedPeriodsData[monthLabel] = {
+            label: monthLabel,
+            createdAt: new Date().toISOString(),
+            amazon: {
+              revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs,
+              fees: amzFees, adSpend: amzAds, netProfit: amzProfit,
+              margin: amzRev > 0 ? (amzProfit / amzRev) * 100 : 0,
+              skuData: amazonSkus,
+            },
+            shopify: updatedPeriodsData[monthLabel]?.shopify || { revenue: 0, units: 0, cogs: 0, netProfit: 0, skuData: [] },
+            total: {
+              revenue: amzRev + (updatedPeriodsData[monthLabel]?.shopify?.revenue || 0),
+              units: amzUnits + (updatedPeriodsData[monthLabel]?.shopify?.units || 0),
+              netProfit: amzProfit + (updatedPeriodsData[monthLabel]?.shopify?.netProfit || 0),
+            },
+          };
+          monthlyImported++;
+        }
+      }
+      
+      // Save all updated data
+      if (dailyImported > 0) {
+        setAllDaysData(updatedDailyData);
+        try { localStorage.setItem('ecommerce_daily_data_v1', JSON.stringify(updatedDailyData)); } catch(e) {}
+      }
+      if (weeklyImported > 0) {
+        setAllWeeksData(updatedWeeklyData);
+        save(updatedWeeklyData);
+      }
+      if (monthlyImported > 0) {
+        setAllPeriodsData(updatedPeriodsData);
+        try { localStorage.setItem('ecommerce_periods_data_v1', JSON.stringify(updatedPeriodsData)); } catch(e) {}
+      }
+      
+      // Clear upload state
+      setAmazonBulkFiles([]);
+      setAmazonBulkParsed(null);
+      
+      const messages = [];
+      if (dailyImported > 0) messages.push(`${dailyImported} daily`);
+      if (weeklyImported > 0) messages.push(`${weeklyImported} weekly`);
+      if (monthlyImported > 0) messages.push(`${monthlyImported} monthly`);
+      
+      setToast({ 
+        message: `Imported ${messages.join(', ')} report${dailyImported + weeklyImported + monthlyImported > 1 ? 's' : ''}!`, 
+        type: 'success' 
+      });
+      
+      // Navigate to appropriate view
+      if (weeklyImported > 0) {
+        const latestWeek = Object.keys(updatedWeeklyData).sort().reverse()[0];
+        setSelectedWeek(latestWeek);
+        setView('weekly');
+      } else if (dailyImported > 0) {
+        setView('days');
+      } else if (monthlyImported > 0) {
+        setView('periods');
+      }
+    } catch (err) {
+      console.error('Bulk upload error:', err);
+      setToast({ message: 'Error processing files: ' + err.message, type: 'error' });
+    } finally {
+      setAmazonBulkProcessing(false);
+    }
+  }, [amazonBulkFiles, getCogsLookup, allDaysData, allWeeksData, allPeriodsData, save]);
   
   // Process bulk ad upload - update weeks or periods with ad spend
   const processBulkAdUpload = useCallback((parsed, platform) => {
@@ -18747,26 +19243,20 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           
           {/* Upload Type Tabs */}
           <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
-            <button onClick={() => setUploadTab('daily')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'daily' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <Clock className="w-5 h-5" />Daily
+            <button onClick={() => setUploadTab('amazon-bulk')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'amazon-bulk' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Upload className="w-5 h-5" />Amazon Reports
             </button>
-            <button onClick={() => setUploadTab('weekly')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <Calendar className="w-5 h-5" />Weekly
-            </button>
-            <button onClick={() => setUploadTab('period')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'period' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <CalendarRange className="w-5 h-5" />Period
-            </button>
-            <button onClick={() => setUploadTab('bulk-ads')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'bulk-ads' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <DollarSign className="w-5 h-5" />Bulk Ads
+            <button onClick={() => setUploadTab('shopify-sync')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'shopify-sync' ? 'bg-green-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <ShoppingBag className="w-5 h-5" />Shopify Sync
             </button>
             <button onClick={() => setUploadTab('inventory')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Boxes className="w-5 h-5" />Inventory
             </button>
             <button onClick={() => setUploadTab('forecast')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'forecast' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <TrendingUp className="w-5 h-5" />Forecast
+              <TrendingUp className="w-5 h-5" />Amazon Forecast
             </button>
-            <button onClick={() => setUploadTab('shopify-sync')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'shopify-sync' ? 'bg-green-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <ShoppingBag className="w-5 h-5" />Shopify Sync
+            <button onClick={() => setUploadTab('cogs')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'cogs' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <DollarSign className="w-5 h-5" />COGS
             </button>
           </div>
           
@@ -19821,20 +20311,134 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           {/* Inventory Upload */}
           {uploadTab === 'inventory' && (
             <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
-              <h2 className="text-lg font-semibold text-white mb-1">Inventory Upload</h2>
-              <p className="text-slate-400 text-sm mb-6">Track stock levels and get reorder alerts</p>
+              <h2 className="text-lg font-semibold text-white mb-1">Inventory Sources</h2>
+              <p className="text-slate-400 text-sm mb-6">Your inventory is synced from connected APIs. File upload is only needed as a fallback.</p>
               
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-slate-300 mb-2">Snapshot Date <span className="text-rose-400">*</span></label>
-                <input type="date" value={invSnapshotDate} onChange={(e) => setInvSnapshotDate(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+              {/* API Status Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                {/* Amazon FBA/AWD */}
+                <div className={`rounded-xl p-4 border ${amazonCredentials.connected ? 'bg-orange-900/20 border-orange-500/30' : 'bg-slate-700/30 border-slate-600/50'}`}>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${amazonCredentials.connected ? 'bg-orange-500/20' : 'bg-slate-600/50'}`}>
+                      <ShoppingCart className={`w-5 h-5 ${amazonCredentials.connected ? 'text-orange-400' : 'text-slate-400'}`} />
+                    </div>
+                    <div>
+                      <p className="text-white font-medium">Amazon FBA + AWD</p>
+                      <p className={`text-xs ${amazonCredentials.connected ? 'text-orange-400' : 'text-slate-500'}`}>
+                        {amazonCredentials.connected ? 'Connected via SP-API' : 'Not connected'}
+                      </p>
+                    </div>
+                  </div>
+                  {amazonCredentials.connected ? (
+                    <div className="text-xs text-slate-400">
+                      {amazonCredentials.lastSync ? `Last sync: ${new Date(amazonCredentials.lastSync).toLocaleString()}` : 'Not synced yet'}
+                    </div>
+                  ) : (
+                    <button onClick={() => setView('settings')} className="text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1">
+                      <Settings className="w-3 h-3" />Connect in Settings
+                    </button>
+                  )}
+                </div>
+                
+                {/* 3PL / Packiyo */}
+                <div className={`rounded-xl p-4 border ${packiyoCredentials.connected ? 'bg-violet-900/20 border-violet-500/30' : 'bg-slate-700/30 border-slate-600/50'}`}>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${packiyoCredentials.connected ? 'bg-violet-500/20' : 'bg-slate-600/50'}`}>
+                      <Truck className={`w-5 h-5 ${packiyoCredentials.connected ? 'text-violet-400' : 'text-slate-400'}`} />
+                    </div>
+                    <div>
+                      <p className="text-white font-medium">3PL (Packiyo)</p>
+                      <p className={`text-xs ${packiyoCredentials.connected ? 'text-violet-400' : 'text-slate-500'}`}>
+                        {packiyoCredentials.connected ? 'Connected' : 'Not connected'}
+                      </p>
+                    </div>
+                  </div>
+                  {packiyoCredentials.connected ? (
+                    <div className="text-xs text-slate-400">
+                      {packiyoCredentials.lastSync ? `Last sync: ${new Date(packiyoCredentials.lastSync).toLocaleString()}` : 'Not synced yet'}
+                    </div>
+                  ) : (
+                    <button onClick={() => setView('settings')} className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1">
+                      <Settings className="w-3 h-3" />Connect in Settings
+                    </button>
+                  )}
+                </div>
+                
+                {/* Shopify / Wormans Mill */}
+                <div className={`rounded-xl p-4 border ${shopifyCredentials.connected ? 'bg-green-900/20 border-green-500/30' : 'bg-slate-700/30 border-slate-600/50'}`}>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${shopifyCredentials.connected ? 'bg-green-500/20' : 'bg-slate-600/50'}`}>
+                      <Store className={`w-5 h-5 ${shopifyCredentials.connected ? 'text-green-400' : 'text-slate-400'}`} />
+                    </div>
+                    <div>
+                      <p className="text-white font-medium">Wormans Mill (Shopify)</p>
+                      <p className={`text-xs ${shopifyCredentials.connected ? 'text-green-400' : 'text-slate-500'}`}>
+                        {shopifyCredentials.connected ? 'Connected' : 'Not connected'}
+                      </p>
+                    </div>
+                  </div>
+                  {shopifyCredentials.connected ? (
+                    <div className="text-xs text-slate-400">
+                      {shopifyCredentials.lastInventorySync ? `Last sync: ${new Date(shopifyCredentials.lastInventorySync).toLocaleString()}` : 'Not synced yet'}
+                    </div>
+                  ) : (
+                    <button onClick={() => setUploadTab('shopify-sync')} className="text-xs text-green-400 hover:text-green-300 flex items-center gap-1">
+                      <ShoppingBag className="w-3 h-3" />Connect Shopify
+                    </button>
+                  )}
+                </div>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <FileBox type="amazon" label="Amazon FBA Inventory" desc="Inventory health report" req isInv />
-                <FileBox type="threepl" label="3PL Inventory" desc="Products export (optional - use Shopify Sync instead)" isInv />
-              </div>
+              {/* Sync All Button */}
+              {(amazonCredentials.connected || packiyoCredentials.connected || shopifyCredentials.connected) && (
+                <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-white font-medium">Sync All Inventory</p>
+                      <p className="text-slate-400 text-xs">Pull latest data from all connected sources</p>
+                    </div>
+                    <button 
+                      onClick={async () => {
+                        setToast({ message: 'Syncing inventory from all sources...', type: 'success' });
+                        // This will trigger processInventory which now uses APIs
+                        if (!invSnapshotDate) setInvSnapshotDate(new Date().toISOString().split('T')[0]);
+                        processInventory();
+                      }}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-2"
+                    >
+                      <RefreshCw className="w-4 h-4" />Sync Now
+                    </button>
+                  </div>
+                </div>
+              )}
               
-              <button onClick={processInventory} disabled={isProcessing || !invFiles.amazon || !invSnapshotDate} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Process Inventory'}</button>
+              {/* Fallback File Upload (collapsed by default) */}
+              <details className="bg-slate-900/50 rounded-xl border border-slate-700/50">
+                <summary className="p-4 cursor-pointer text-slate-300 hover:text-white flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <Upload className="w-4 h-4" />
+                    Manual File Upload (Fallback)
+                  </span>
+                  <ChevronDown className="w-4 h-4" />
+                </summary>
+                <div className="p-4 pt-0 space-y-4">
+                  <p className="text-slate-500 text-xs">Use file upload only if APIs are not connected or you need to upload historical data.</p>
+                  
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-slate-300 mb-2">Snapshot Date <span className="text-rose-400">*</span></label>
+                    <input type="date" value={invSnapshotDate} onChange={(e) => setInvSnapshotDate(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 text-white" />
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FileBox type="amazon" label="Amazon FBA Inventory" desc="FBA Manage Inventory report" req isInv />
+                    <FileBox type="threepl" label="3PL Inventory" desc="Products export (if Packiyo not connected)" isInv />
+                  </div>
+                  
+                  <button onClick={processInventory} disabled={isProcessing || !invFiles.amazon || !invSnapshotDate} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-3 rounded-xl">
+                    {isProcessing ? 'Processing...' : 'Process Inventory Files'}
+                  </button>
+                </div>
+              </details>
             </div>
           )}
           
@@ -20234,6 +20838,231 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       </tbody>
                     </table>
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* ============ AMAZON BULK UPLOAD TAB ============ */}
+          {uploadTab === 'amazon-bulk' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+                <ShoppingCart className="w-5 h-5 text-orange-400" />
+                Amazon SKU Economics Reports
+              </h2>
+              <p className="text-slate-400 text-sm mb-6">
+                Upload one or more SKU Economics reports. The system auto-detects if they're daily, weekly, or monthly based on date range.
+              </p>
+              
+              {/* How to get reports */}
+              <div className="bg-orange-900/20 border border-orange-500/30 rounded-xl p-4 mb-6">
+                <h3 className="text-orange-300 font-medium mb-2 flex items-center gap-2">
+                  <HelpCircle className="w-4 h-4" />
+                  How to Download SKU Economics Reports
+                </h3>
+                <ol className="text-slate-300 text-sm space-y-1 list-decimal list-inside">
+                  <li>Go to <strong>Seller Central → Reports → Business Reports</strong></li>
+                  <li>Click <strong>SKU Economics</strong> in the left sidebar</li>
+                  <li>Select your date range (daily, weekly, or monthly)</li>
+                  <li>Click <strong>Download</strong> to get the CSV</li>
+                </ol>
+                <p className="text-slate-400 text-xs mt-2">You can upload multiple files at once - they'll be sorted by date automatically.</p>
+              </div>
+              
+              {/* File Upload Zone */}
+              <div 
+                className={`border-2 border-dashed rounded-xl p-8 mb-6 text-center transition-all ${
+                  amazonBulkFiles.length > 0 ? 'border-orange-500/50 bg-orange-900/10' : 'border-slate-600 hover:border-slate-500'
+                }`}
+                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const files = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.csv'));
+                  if (files.length > 0) {
+                    handleAmazonBulkFiles(files);
+                  }
+                }}
+              >
+                <input 
+                  type="file" 
+                  accept=".csv" 
+                  multiple
+                  className="hidden"
+                  id="amazon-bulk-input"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files);
+                    if (files.length > 0) {
+                      handleAmazonBulkFiles(files);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+                <label htmlFor="amazon-bulk-input" className="cursor-pointer">
+                  <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" />
+                  <p className="text-white font-medium mb-1">Drop CSV files here or click to browse</p>
+                  <p className="text-slate-400 text-sm">Supports multiple files • Auto-detects report type</p>
+                </label>
+              </div>
+              
+              {/* Uploaded Files List */}
+              {amazonBulkFiles.length > 0 && (
+                <div className="space-y-4 mb-6">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-white font-medium">{amazonBulkFiles.length} File{amazonBulkFiles.length > 1 ? 's' : ''} Ready</h3>
+                    <button 
+                      onClick={() => setAmazonBulkFiles([])}
+                      className="text-xs text-rose-400 hover:text-rose-300"
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                  
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {amazonBulkFiles.map((file, idx) => (
+                      <div key={idx} className="flex items-center gap-3 bg-slate-900/50 rounded-lg p-3">
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                          file.reportType === 'daily' ? 'bg-cyan-500/20' :
+                          file.reportType === 'weekly' ? 'bg-violet-500/20' :
+                          file.reportType === 'monthly' ? 'bg-teal-500/20' :
+                          'bg-slate-600/50'
+                        }`}>
+                          {file.reportType === 'daily' ? <Clock className="w-5 h-5 text-cyan-400" /> :
+                           file.reportType === 'weekly' ? <Calendar className="w-5 h-5 text-violet-400" /> :
+                           file.reportType === 'monthly' ? <CalendarRange className="w-5 h-5 text-teal-400" /> :
+                           <FileSpreadsheet className="w-5 h-5 text-slate-400" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white text-sm truncate">{file.name}</p>
+                          <p className="text-slate-400 text-xs">
+                            {file.reportType ? (
+                              <span className={`${
+                                file.reportType === 'daily' ? 'text-cyan-400' :
+                                file.reportType === 'weekly' ? 'text-violet-400' :
+                                'text-teal-400'
+                              }`}>
+                                {file.reportType.charAt(0).toUpperCase() + file.reportType.slice(1)}
+                              </span>
+                            ) : 'Parsing...'}{' '}
+                            {file.dateRange && `• ${file.dateRange.start} to ${file.dateRange.end}`}
+                            {file.skuCount && ` • ${file.skuCount} SKUs`}
+                            {file.revenue && ` • ${formatCurrency(file.revenue)}`}
+                          </p>
+                        </div>
+                        <button 
+                          onClick={() => setAmazonBulkFiles(prev => prev.filter((_, i) => i !== idx))}
+                          className="p-1 text-slate-400 hover:text-rose-400"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Summary */}
+                  {amazonBulkParsed && (
+                    <div className="bg-slate-900/50 rounded-xl p-4 space-y-3">
+                      <h4 className="text-white font-medium">Import Summary</h4>
+                      <div className="grid grid-cols-3 gap-4 text-center">
+                        <div>
+                          <p className="text-2xl font-bold text-cyan-400">{amazonBulkParsed.dailyCount || 0}</p>
+                          <p className="text-xs text-slate-400">Daily Reports</p>
+                        </div>
+                        <div>
+                          <p className="text-2xl font-bold text-violet-400">{amazonBulkParsed.weeklyCount || 0}</p>
+                          <p className="text-xs text-slate-400">Weekly Reports</p>
+                        </div>
+                        <div>
+                          <p className="text-2xl font-bold text-teal-400">{amazonBulkParsed.monthlyCount || 0}</p>
+                          <p className="text-xs text-slate-400">Monthly Reports</p>
+                        </div>
+                      </div>
+                      <div className="pt-3 border-t border-slate-700 text-sm text-slate-300">
+                        <p>Total Revenue: <span className="text-white font-medium">{formatCurrency(amazonBulkParsed.totalRevenue || 0)}</span></p>
+                        <p>Date Range: <span className="text-white">{amazonBulkParsed.dateRange?.start} to {amazonBulkParsed.dateRange?.end}</span></p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Process Button */}
+              <button 
+                onClick={processAmazonBulkUpload}
+                disabled={amazonBulkProcessing || amazonBulkFiles.length === 0}
+                className="w-full bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl flex items-center justify-center gap-2"
+              >
+                {amazonBulkProcessing ? (
+                  <><Loader2 className="w-5 h-5 animate-spin" />Processing...</>
+                ) : (
+                  <><Upload className="w-5 h-5" />Import {amazonBulkFiles.length} Report{amazonBulkFiles.length !== 1 ? 's' : ''}</>
+                )}
+              </button>
+              
+              <p className="text-slate-500 text-xs text-center mt-3">
+                Shopify sales data will be pulled from Shopify Sync if connected. If not, only Amazon data will be imported.
+              </p>
+            </div>
+          )}
+          
+          {/* ============ COGS UPLOAD TAB ============ */}
+          {uploadTab === 'cogs' && (
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-pink-400" />
+                Cost of Goods Sold (COGS)
+              </h2>
+              <p className="text-slate-400 text-sm mb-6">
+                Upload a CSV with SKU and cost per unit to calculate profit margins accurately.
+              </p>
+              
+              {/* Current COGS Status */}
+              <div className={`rounded-xl p-4 mb-6 ${Object.keys(savedCogs).length > 0 ? 'bg-emerald-900/20 border border-emerald-500/30' : 'bg-amber-900/20 border border-amber-500/30'}`}>
+                <div className="flex items-center gap-3">
+                  {Object.keys(savedCogs).length > 0 ? (
+                    <>
+                      <Check className="w-5 h-5 text-emerald-400" />
+                      <div>
+                        <p className="text-emerald-300 font-medium">{Object.keys(savedCogs).length} SKUs with COGS configured</p>
+                        <p className="text-slate-400 text-xs">Profit calculations are accurate</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="w-5 h-5 text-amber-400" />
+                      <div>
+                        <p className="text-amber-300 font-medium">No COGS configured</p>
+                        <p className="text-slate-400 text-xs">Profit calculations will be incomplete without cost data</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+              
+              {/* Upload COGS File */}
+              <div className="mb-6">
+                <h3 className="text-white font-medium mb-3">Upload COGS File</h3>
+                <FileBox type="cogs" label="COGS File" desc="CSV with SKU and Cost Per Unit columns" />
+              </div>
+              
+              {files.cogs && (
+                <button 
+                  onClick={processAndSaveCogs}
+                  className="w-full bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white font-semibold py-4 rounded-xl"
+                >
+                  Save COGS Data
+                </button>
+              )}
+              
+              {/* View/Edit COGS */}
+              {Object.keys(savedCogs).length > 0 && (
+                <div className="mt-6">
+                  <button 
+                    onClick={() => setShowCogsManager(true)}
+                    className="w-full py-3 bg-slate-700 hover:bg-slate-600 rounded-xl text-white flex items-center justify-center gap-2"
+                  >
+                    <Settings className="w-4 h-4" />View & Edit COGS
+                  </button>
                 </div>
               )}
             </div>

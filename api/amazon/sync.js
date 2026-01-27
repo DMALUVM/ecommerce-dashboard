@@ -60,6 +60,9 @@ export default async function handler(req, res) {
   // ============ HELPER: Get LWA Access Token ============
   const getAccessToken = async (clientId, clientSecret, refreshToken) => {
     try {
+      console.log('Attempting LWA token exchange...');
+      console.log('Client ID prefix:', clientId?.substring(0, 20) + '...');
+      
       const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
         method: 'POST',
         headers: {
@@ -73,13 +76,24 @@ export default async function handler(req, res) {
         }).toString(),
       });
 
+      const responseText = await tokenResponse.text();
+      console.log('LWA response status:', tokenResponse.status);
+      
       if (!tokenResponse.ok) {
-        const errorText = await tokenResponse.text();
-        console.error('LWA token error:', tokenResponse.status, errorText);
-        throw new Error(`Failed to get access token: ${tokenResponse.status}`);
+        console.error('LWA token error:', tokenResponse.status, responseText);
+        let errorDetail = responseText;
+        try {
+          const errorJson = JSON.parse(responseText);
+          errorDetail = errorJson.error_description || errorJson.error || responseText;
+        } catch (e) {}
+        throw new Error(`LWA authentication failed (${tokenResponse.status}): ${errorDetail}`);
       }
 
-      const tokenData = await tokenResponse.json();
+      const tokenData = JSON.parse(responseText);
+      if (!tokenData.access_token) {
+        throw new Error('No access token in response');
+      }
+      console.log('LWA token exchange successful');
       return tokenData.access_token;
     } catch (err) {
       console.error('LWA error:', err);
