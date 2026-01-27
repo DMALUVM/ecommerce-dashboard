@@ -2933,10 +2933,37 @@ const loadFromLocal = useCallback(() => {
     }
   } catch {}
 
-  // Load daily data
+  // Load daily data - check both keys for backwards compatibility
   try {
+    let dailyData = null;
     const r = lsGet('ecommerce_daily_sales_v1');
-    if (r) setAllDaysData(JSON.parse(r));
+    if (r) dailyData = JSON.parse(r);
+    
+    // Also check legacy 'dailySales' key and merge if it has more data
+    const legacyData = lsGet('dailySales');
+    if (legacyData) {
+      const legacy = JSON.parse(legacyData);
+      const legacyDates = Object.keys(legacy);
+      if (legacyDates.length > 0) {
+        // Merge legacy data, preferring legacy if it has skuData
+        dailyData = dailyData || {};
+        legacyDates.forEach(date => {
+          const legacyDay = legacy[date];
+          const existingDay = dailyData[date];
+          // Use legacy if it has Amazon skuData and existing doesn't
+          if (legacyDay?.amazon?.skuData?.length > 0 && !existingDay?.amazon?.skuData?.length) {
+            dailyData[date] = { ...existingDay, ...legacyDay };
+          } else if (!existingDay) {
+            dailyData[date] = legacyDay;
+          }
+        });
+        console.log('Merged legacy dailySales data:', legacyDates.length, 'days');
+      }
+    }
+    
+    if (dailyData && Object.keys(dailyData).length > 0) {
+      setAllDaysData(dailyData);
+    }
   } catch {}
 
   try {
@@ -5409,6 +5436,11 @@ const savePeriods = async (d) => {
   };
 
   const processInventory = useCallback(async () => {
+    console.log('=== PROCESS INVENTORY v2.1 - DEBUG ENABLED ===');
+    console.log('invSnapshotDate:', invSnapshotDate);
+    console.log('amazonCredentials.connected:', amazonCredentials.connected);
+    console.log('invFiles.amazon:', invFiles.amazon?.length || 0, 'files');
+    
     // File is optional if Amazon SP-API is connected
     const hasAmazonFile = invFiles.amazon && invFiles.amazon.length > 0;
     const hasAmazonApi = amazonCredentials.connected && amazonCredentials.refreshToken;
@@ -5543,6 +5575,19 @@ const savePeriods = async (d) => {
       
       // DEBUG: Log daily data structure
       console.log('Daily dates with data:', daysCount);
+      console.log('Recent days being checked:', recentDays.slice(0, 5));
+      
+      // Check a few days for skuData
+      let amazonSkuDataFound = 0;
+      let shopifySkuDataFound = 0;
+      recentDays.slice(0, 5).forEach(d => {
+        const day = allDaysData[d];
+        if (day?.amazon?.skuData?.length > 0) amazonSkuDataFound++;
+        if (day?.shopify?.skuData?.length > 0) shopifySkuDataFound++;
+      });
+      console.log('Days with Amazon skuData (of first 5):', amazonSkuDataFound);
+      console.log('Days with Shopify skuData (of first 5):', shopifySkuDataFound);
+      
       if (recentDays.length > 0) {
         const sampleDay = allDaysData[recentDays[0]];
         console.log('Sample day structure:', recentDays[0], {
@@ -20858,17 +20903,48 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       <p className="text-white font-medium">Sync All Inventory</p>
                       <p className="text-slate-400 text-xs">Pull latest data from all connected sources</p>
                     </div>
-                    <button 
-                      onClick={async () => {
-                        setToast({ message: 'Syncing inventory from all sources...', type: 'success' });
-                        // This will trigger processInventory which now uses APIs
-                        if (!invSnapshotDate) setInvSnapshotDate(new Date().toISOString().split('T')[0]);
-                        processInventory();
-                      }}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-2"
-                    >
-                      <RefreshCw className="w-4 h-4" />Sync Now
-                    </button>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => {
+                          console.log('=== DEBUG v2.1: WEEKLY DATA STRUCTURE ===');
+                          const weeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
+                          console.log('Recent weeks:', weeks);
+                          weeks.forEach(w => {
+                            const wd = allWeeksData[w];
+                            console.log(`\nWeek ${w}:`);
+                            console.log('  amazon:', wd.amazon ? {
+                              revenue: wd.amazon.revenue,
+                              units: wd.amazon.units,
+                              skuDataExists: !!wd.amazon.skuData,
+                              skuDataType: Array.isArray(wd.amazon.skuData) ? 'array' : typeof wd.amazon.skuData,
+                              skuDataLength: wd.amazon.skuData?.length || Object.keys(wd.amazon.skuData || {}).length,
+                              sampleSku: wd.amazon.skuData?.[0] || Object.values(wd.amazon.skuData || {})[0],
+                            } : 'NO AMAZON DATA');
+                            console.log('  shopify:', wd.shopify ? {
+                              revenue: wd.shopify.revenue,
+                              units: wd.shopify.units,
+                              skuDataExists: !!wd.shopify.skuData,
+                              skuDataLength: wd.shopify.skuData?.length || Object.keys(wd.shopify.skuData || {}).length,
+                            } : 'NO SHOPIFY DATA');
+                          });
+                          alert('Check browser console (F12) for data dump');
+                        }}
+                        className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-white text-sm flex items-center gap-2"
+                      >
+                        <Database className="w-4 h-4" />Debug Data
+                      </button>
+                      <button 
+                        onClick={async () => {
+                          setToast({ message: 'Syncing inventory from all sources...', type: 'success' });
+                          // This will trigger processInventory which now uses APIs
+                          if (!invSnapshotDate) setInvSnapshotDate(new Date().toISOString().split('T')[0]);
+                          processInventory();
+                        }}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-2"
+                      >
+                        <RefreshCw className="w-4 h-4" />Sync Now
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
