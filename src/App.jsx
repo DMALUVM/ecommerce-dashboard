@@ -2937,34 +2937,57 @@ const loadFromLocal = useCallback(() => {
   try {
     let dailyData = null;
     const r = lsGet('ecommerce_daily_sales_v1');
-    if (r) dailyData = JSON.parse(r);
+    console.log('Loading ecommerce_daily_sales_v1:', r ? 'found' : 'empty', r?.length || 0, 'chars');
+    if (r) {
+      try {
+        dailyData = JSON.parse(r);
+        console.log('Parsed ecommerce_daily_sales_v1:', Object.keys(dailyData).length, 'days');
+      } catch (parseErr) {
+        console.error('Failed to parse ecommerce_daily_sales_v1:', parseErr.message);
+      }
+    }
     
     // Also check legacy 'dailySales' key and merge if it has more data
-    const legacyData = lsGet('dailySales');
-    if (legacyData) {
-      const legacy = JSON.parse(legacyData);
-      const legacyDates = Object.keys(legacy);
-      if (legacyDates.length > 0) {
-        // Merge legacy data, preferring legacy if it has skuData
-        dailyData = dailyData || {};
-        legacyDates.forEach(date => {
-          const legacyDay = legacy[date];
-          const existingDay = dailyData[date];
-          // Use legacy if it has Amazon skuData and existing doesn't
-          if (legacyDay?.amazon?.skuData?.length > 0 && !existingDay?.amazon?.skuData?.length) {
-            dailyData[date] = { ...existingDay, ...legacyDay };
-          } else if (!existingDay) {
-            dailyData[date] = legacyDay;
-          }
-        });
-        console.log('Merged legacy dailySales data:', legacyDates.length, 'days');
+    const legacyRaw = localStorage.getItem('dailySales'); // Direct access, no lsGet
+    console.log('Loading legacy dailySales:', legacyRaw ? 'found' : 'empty', legacyRaw?.length || 0, 'chars');
+    if (legacyRaw) {
+      try {
+        const legacy = JSON.parse(legacyRaw);
+        const legacyDates = Object.keys(legacy);
+        const datesWithAmazonSku = legacyDates.filter(d => legacy[d]?.amazon?.skuData?.length > 0);
+        console.log('Legacy dailySales has', legacyDates.length, 'days,', datesWithAmazonSku.length, 'with Amazon skuData');
+        
+        if (legacyDates.length > 0) {
+          // Merge legacy data, preferring legacy if it has skuData
+          dailyData = dailyData || {};
+          let merged = 0;
+          legacyDates.forEach(date => {
+            const legacyDay = legacy[date];
+            const existingDay = dailyData[date];
+            // Use legacy if it has Amazon skuData and existing doesn't
+            if (legacyDay?.amazon?.skuData?.length > 0 && !existingDay?.amazon?.skuData?.length) {
+              dailyData[date] = { ...existingDay, ...legacyDay };
+              merged++;
+            } else if (!existingDay) {
+              dailyData[date] = legacyDay;
+              merged++;
+            }
+          });
+          console.log('Merged', merged, 'days from legacy dailySales');
+        }
+      } catch (legacyErr) {
+        console.error('Failed to parse legacy dailySales:', legacyErr.message);
       }
     }
     
     if (dailyData && Object.keys(dailyData).length > 0) {
+      const daysWithAmazonSku = Object.keys(dailyData).filter(d => dailyData[d]?.amazon?.skuData?.length > 0);
+      console.log('Final dailyData:', Object.keys(dailyData).length, 'days,', daysWithAmazonSku.length, 'with Amazon skuData');
       setAllDaysData(dailyData);
     }
-  } catch {}
+  } catch (err) {
+    console.error('Error loading daily data:', err);
+  }
 
   try {
     const r = lsGet(INVENTORY_KEY);
