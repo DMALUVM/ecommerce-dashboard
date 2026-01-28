@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart } from 'lucide-react';
 // Extracted utilities (keep App.jsx lean)
 import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
@@ -22,14 +22,18 @@ const DEFAULT_DASHBOARD_WIDGETS = {
     { id: 'alerts', name: 'Alerts & Notifications', enabled: true, order: 0 },
     { id: 'todayPerformance', name: 'Last Week & MTD Performance', enabled: true, order: 1 },
     { id: 'weekProgress', name: 'This Week\'s Goal', enabled: true, order: 2 },
-    { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 3 },
-    { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 4 },
-    { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 5 },
-    { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 6 },
-    { id: 'summaryMetrics', name: 'Summary Metrics (Time Range)', enabled: false, order: 7 },
-    { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 8 },
-    { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 9 },
-    { id: 'dataHub', name: 'Data Hub', enabled: false, order: 10 },
+    { id: 'topSellers14d', name: 'Top Sellers (14 Days)', enabled: true, order: 3 },
+    { id: 'worstSellers14d', name: 'Needs Attention (14 Days)', enabled: true, order: 4 },
+    { id: 'topSellersYTD', name: 'Top Sellers (YTD)', enabled: false, order: 5 },
+    { id: 'worstSellersYTD', name: 'Needs Attention (YTD)', enabled: false, order: 6 },
+    { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 7 },
+    { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 8 },
+    { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 9 },
+    { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 10 },
+    { id: 'summaryMetrics', name: 'Summary Metrics (Time Range)', enabled: false, order: 11 },
+    { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 12 },
+    { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 13 },
+    { id: 'dataHub', name: 'Data Hub', enabled: false, order: 14 },
   ],
   layout: 'auto',
 };
@@ -5226,6 +5230,295 @@ const savePeriods = async (d) => {
     }
     setToast({ message, type: 'success' });
   }, [allDaysData, allWeeksData, save]);
+
+  // Auto-sync daily data into weekly summaries - COMPREHENSIVE aggregation
+  // This ensures weekly data always reflects the latest daily uploads
+  useEffect(() => {
+    if (Object.keys(allDaysData).length === 0) return;
+    
+    // Group ALL daily data by week
+    const dailyByWeek = {};
+    Object.entries(allDaysData).forEach(([dayKey, dayData]) => {
+      if (!dayData) return;
+      const date = new Date(dayKey + 'T12:00:00');
+      const dayOfWeek = date.getDay();
+      const weekEnd = new Date(date);
+      weekEnd.setDate(date.getDate() + (dayOfWeek === 0 ? 0 : 7 - dayOfWeek));
+      const weekKey = weekEnd.toISOString().split('T')[0];
+      
+      if (!dailyByWeek[weekKey]) {
+        dailyByWeek[weekKey] = {
+          days: [],
+          amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, skuData: {} },
+          shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, threeplCosts: 0, skuData: {} },
+        };
+      }
+      dailyByWeek[weekKey].days.push(dayKey);
+      
+      // Aggregate Amazon
+      if (dayData.amazon) {
+        dailyByWeek[weekKey].amazon.revenue += dayData.amazon.revenue || 0;
+        dailyByWeek[weekKey].amazon.units += dayData.amazon.units || 0;
+        dailyByWeek[weekKey].amazon.returns += dayData.amazon.returns || 0;
+        dailyByWeek[weekKey].amazon.cogs += dayData.amazon.cogs || 0;
+        dailyByWeek[weekKey].amazon.fees += dayData.amazon.fees || 0;
+        dailyByWeek[weekKey].amazon.adSpend += dayData.amazon.adSpend || 0;
+        dailyByWeek[weekKey].amazon.netProfit += dayData.amazon.netProfit || 0;
+        
+        // Aggregate SKU data
+        (dayData.amazon.skuData || []).forEach(sku => {
+          const skuKey = sku.sku || sku.msku;
+          if (!skuKey) return;
+          if (!dailyByWeek[weekKey].amazon.skuData[skuKey]) {
+            dailyByWeek[weekKey].amazon.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+          }
+          dailyByWeek[weekKey].amazon.skuData[skuKey].unitsSold += sku.unitsSold || sku.units || 0;
+          dailyByWeek[weekKey].amazon.skuData[skuKey].returns += sku.returns || 0;
+          dailyByWeek[weekKey].amazon.skuData[skuKey].netSales += sku.netSales || sku.revenue || 0;
+          dailyByWeek[weekKey].amazon.skuData[skuKey].netProceeds += sku.netProceeds || 0;
+          dailyByWeek[weekKey].amazon.skuData[skuKey].adSpend += sku.adSpend || 0;
+          dailyByWeek[weekKey].amazon.skuData[skuKey].cogs += sku.cogs || 0;
+        });
+      }
+      
+      // Aggregate Shopify
+      if (dayData.shopify) {
+        dailyByWeek[weekKey].shopify.revenue += dayData.shopify.revenue || 0;
+        dailyByWeek[weekKey].shopify.units += dayData.shopify.units || 0;
+        dailyByWeek[weekKey].shopify.cogs += dayData.shopify.cogs || 0;
+        dailyByWeek[weekKey].shopify.discounts += dayData.shopify.discounts || 0;
+        dailyByWeek[weekKey].shopify.netProfit += dayData.shopify.netProfit || 0;
+        dailyByWeek[weekKey].shopify.threeplCosts += dayData.shopify.threeplCosts || 0;
+        
+        // Aggregate SKU data  
+        (dayData.shopify.skuData || []).forEach(sku => {
+          const skuKey = sku.sku;
+          if (!skuKey) return;
+          if (!dailyByWeek[weekKey].shopify.skuData[skuKey]) {
+            dailyByWeek[weekKey].shopify.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+          }
+          dailyByWeek[weekKey].shopify.skuData[skuKey].unitsSold += sku.unitsSold || sku.units || 0;
+          dailyByWeek[weekKey].shopify.skuData[skuKey].netSales += sku.netSales || sku.revenue || 0;
+          dailyByWeek[weekKey].shopify.skuData[skuKey].discounts += sku.discounts || 0;
+          dailyByWeek[weekKey].shopify.skuData[skuKey].cogs += sku.cogs || 0;
+        });
+      }
+      
+      // Aggregate ads from both top-level and shopify object
+      const metaSpend = dayData.metaSpend || dayData.shopify?.metaSpend || 0;
+      const googleSpend = dayData.googleSpend || dayData.shopify?.googleSpend || 0;
+      dailyByWeek[weekKey].shopify.metaSpend += metaSpend;
+      dailyByWeek[weekKey].shopify.googleSpend += googleSpend;
+      dailyByWeek[weekKey].shopify.adSpend += metaSpend + googleSpend;
+    });
+    
+    // Merge with existing weekly data - daily aggregates fill gaps in weekly data
+    let needsUpdate = false;
+    const updatedWeeks = { ...allWeeksData };
+    
+    Object.entries(dailyByWeek).forEach(([weekKey, dailyAgg]) => {
+      const existingWeek = updatedWeeks[weekKey];
+      
+      // If no existing week or existing week is missing data, update it
+      const shouldUpdate = !existingWeek || 
+        // Update if daily has ads but weekly doesn't
+        ((dailyAgg.shopify.metaSpend > 0 || dailyAgg.shopify.googleSpend > 0) && 
+         !(existingWeek?.shopify?.metaSpend > 0 || existingWeek?.shopify?.googleSpend > 0)) ||
+        // Update if daily has Amazon SKU data but weekly doesn't
+        (Object.keys(dailyAgg.amazon.skuData).length > 0 && 
+         !(existingWeek?.amazon?.skuData?.length > 0)) ||
+        // Update if daily has more days than what was aggregated before
+        (dailyAgg.days.length > (existingWeek?.aggregatedFrom?.length || 0));
+      
+      if (shouldUpdate) {
+        needsUpdate = true;
+        
+        // Merge - prefer daily aggregates for fields that are populated
+        const amz = dailyAgg.amazon;
+        const shop = dailyAgg.shopify;
+        const existAmz = existingWeek?.amazon || {};
+        const existShop = existingWeek?.shopify || {};
+        
+        // Use daily data if it has values, otherwise use existing
+        const mergedAmz = {
+          revenue: amz.revenue > 0 ? amz.revenue : (existAmz.revenue || 0),
+          units: amz.units > 0 ? amz.units : (existAmz.units || 0),
+          returns: amz.returns > 0 ? amz.returns : (existAmz.returns || 0),
+          cogs: amz.cogs > 0 ? amz.cogs : (existAmz.cogs || 0),
+          fees: amz.fees > 0 ? amz.fees : (existAmz.fees || 0),
+          adSpend: amz.adSpend > 0 ? amz.adSpend : (existAmz.adSpend || 0),
+          netProfit: amz.netProfit !== 0 ? amz.netProfit : (existAmz.netProfit || 0),
+          skuData: Object.keys(amz.skuData).length > 0 
+            ? Object.values(amz.skuData).sort((a, b) => (b.netSales || 0) - (a.netSales || 0))
+            : (existAmz.skuData || []),
+        };
+        
+        const mergedShop = {
+          revenue: shop.revenue > 0 ? shop.revenue : (existShop.revenue || 0),
+          units: shop.units > 0 ? shop.units : (existShop.units || 0),
+          cogs: shop.cogs > 0 ? shop.cogs : (existShop.cogs || 0),
+          adSpend: shop.adSpend > 0 ? shop.adSpend : (existShop.adSpend || 0),
+          metaSpend: shop.metaSpend > 0 ? shop.metaSpend : (existShop.metaSpend || 0),
+          googleSpend: shop.googleSpend > 0 ? shop.googleSpend : (existShop.googleSpend || 0),
+          discounts: shop.discounts > 0 ? shop.discounts : (existShop.discounts || 0),
+          netProfit: shop.netProfit !== 0 ? shop.netProfit : (existShop.netProfit || 0),
+          threeplCosts: shop.threeplCosts > 0 ? shop.threeplCosts : (existShop.threeplCosts || 0),
+          skuData: Object.keys(shop.skuData).length > 0
+            ? Object.values(shop.skuData).sort((a, b) => (b.netSales || 0) - (a.netSales || 0))
+            : (existShop.skuData || []),
+        };
+        
+        const totalRev = mergedAmz.revenue + mergedShop.revenue;
+        const totalProfit = mergedAmz.netProfit + mergedShop.netProfit;
+        const totalAds = mergedAmz.adSpend + mergedShop.adSpend;
+        
+        updatedWeeks[weekKey] = {
+          weekEnding: weekKey,
+          createdAt: existingWeek?.createdAt || new Date().toISOString(),
+          aggregatedFrom: dailyAgg.days,
+          amazon: {
+            ...mergedAmz,
+            margin: mergedAmz.revenue > 0 ? (mergedAmz.netProfit / mergedAmz.revenue * 100) : 0,
+            aov: mergedAmz.units > 0 ? mergedAmz.revenue / mergedAmz.units : 0,
+            roas: mergedAmz.adSpend > 0 ? mergedAmz.revenue / mergedAmz.adSpend : 0,
+          },
+          shopify: {
+            ...mergedShop,
+            netMargin: mergedShop.revenue > 0 ? (mergedShop.netProfit / mergedShop.revenue * 100) : 0,
+            aov: mergedShop.units > 0 ? mergedShop.revenue / mergedShop.units : 0,
+            roas: mergedShop.adSpend > 0 ? mergedShop.revenue / mergedShop.adSpend : 0,
+          },
+          total: {
+            revenue: totalRev,
+            units: mergedAmz.units + mergedShop.units,
+            cogs: mergedAmz.cogs + mergedShop.cogs,
+            adSpend: totalAds,
+            netProfit: totalProfit,
+            netMargin: totalRev > 0 ? (totalProfit / totalRev * 100) : 0,
+            roas: totalAds > 0 ? totalRev / totalAds : 0,
+            amazonShare: totalRev > 0 ? (mergedAmz.revenue / totalRev * 100) : 0,
+            shopifyShare: totalRev > 0 ? (mergedShop.revenue / totalRev * 100) : 0,
+          },
+        };
+      }
+    });
+    
+    if (needsUpdate) {
+      setAllWeeksData(updatedWeeks);
+      save(updatedWeeks);
+      console.log('Auto-synced daily data into weekly summaries');
+    }
+  }, [allDaysData]); // Only depend on allDaysData to avoid loops
+
+  // Auto-aggregate weekly data into monthly periods
+  // This ensures period data is always up-to-date for AI queries
+  useEffect(() => {
+    if (Object.keys(allWeeksData).length === 0) return;
+    
+    // Group weekly data by month
+    const monthlyAgg = {};
+    Object.entries(allWeeksData).forEach(([weekKey, weekData]) => {
+      if (!weekData) return;
+      
+      // Use the week ending date to determine the month
+      const monthKey = weekKey.slice(0, 7); // YYYY-MM
+      const monthName = new Date(weekKey + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      
+      if (!monthlyAgg[monthKey]) {
+        monthlyAgg[monthKey] = {
+          monthKey,
+          monthName,
+          weeks: [],
+          amazon: { revenue: 0, units: 0, profit: 0, adSpend: 0 },
+          shopify: { revenue: 0, units: 0, profit: 0, adSpend: 0, metaSpend: 0, googleSpend: 0 },
+          total: { revenue: 0, units: 0, profit: 0, adSpend: 0 },
+        };
+      }
+      
+      monthlyAgg[monthKey].weeks.push(weekKey);
+      
+      // Aggregate Amazon
+      monthlyAgg[monthKey].amazon.revenue += weekData.amazon?.revenue || 0;
+      monthlyAgg[monthKey].amazon.units += weekData.amazon?.units || 0;
+      monthlyAgg[monthKey].amazon.profit += weekData.amazon?.netProfit || 0;
+      monthlyAgg[monthKey].amazon.adSpend += weekData.amazon?.adSpend || 0;
+      
+      // Aggregate Shopify
+      monthlyAgg[monthKey].shopify.revenue += weekData.shopify?.revenue || 0;
+      monthlyAgg[monthKey].shopify.units += weekData.shopify?.units || 0;
+      monthlyAgg[monthKey].shopify.profit += weekData.shopify?.netProfit || 0;
+      monthlyAgg[monthKey].shopify.adSpend += weekData.shopify?.adSpend || 0;
+      monthlyAgg[monthKey].shopify.metaSpend += weekData.shopify?.metaSpend || 0;
+      monthlyAgg[monthKey].shopify.googleSpend += weekData.shopify?.googleSpend || 0;
+      
+      // Aggregate totals
+      monthlyAgg[monthKey].total.revenue += weekData.total?.revenue || 0;
+      monthlyAgg[monthKey].total.units += weekData.total?.units || 0;
+      monthlyAgg[monthKey].total.profit += weekData.total?.netProfit || 0;
+      monthlyAgg[monthKey].total.adSpend += weekData.total?.adSpend || 0;
+    });
+    
+    // Check if any monthly periods need updating
+    let needsUpdate = false;
+    const updatedPeriods = { ...allPeriodsData };
+    
+    // Only update months in 2025 and 2026 (recent data)
+    Object.entries(monthlyAgg).forEach(([monthKey, monthData]) => {
+      const year = parseInt(monthKey.slice(0, 4));
+      if (year < 2025) return; // Skip older data - it's already in period data
+      
+      const monthNum = parseInt(monthKey.slice(5, 7));
+      const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+      const periodKey = `${monthNames[monthNum - 1]}-${year}`;
+      
+      const existingPeriod = updatedPeriods[periodKey];
+      
+      // Update if weekly aggregates have more data than existing period
+      const weeklyTotal = monthData.total.revenue;
+      const existingTotal = existingPeriod?.total?.revenue || 0;
+      
+      if (weeklyTotal > existingTotal * 1.01 || !existingPeriod) { // Allow 1% variance
+        needsUpdate = true;
+        
+        updatedPeriods[periodKey] = {
+          ...existingPeriod,
+          period: periodKey,
+          periodType: 'month',
+          displayName: monthData.monthName,
+          weeksIncluded: monthData.weeks,
+          amazon: {
+            revenue: monthData.amazon.revenue,
+            units: monthData.amazon.units,
+            profit: monthData.amazon.profit,
+            adSpend: monthData.amazon.adSpend,
+          },
+          shopify: {
+            revenue: monthData.shopify.revenue,
+            units: monthData.shopify.units,
+            profit: monthData.shopify.profit,
+            adSpend: monthData.shopify.adSpend,
+            metaSpend: monthData.shopify.metaSpend,
+            googleSpend: monthData.shopify.googleSpend,
+          },
+          total: {
+            revenue: monthData.total.revenue,
+            units: monthData.total.units,
+            profit: monthData.total.profit,
+            adSpend: monthData.total.adSpend,
+            margin: monthData.total.revenue > 0 ? (monthData.total.profit / monthData.total.revenue * 100) : 0,
+          },
+          aggregatedFromWeekly: true,
+          lastUpdated: new Date().toISOString(),
+        };
+      }
+    });
+    
+    if (needsUpdate) {
+      setAllPeriodsData(updatedPeriods);
+      try { localStorage.setItem('ecommerce_periods_v1', JSON.stringify(updatedPeriods)); } catch {}
+      console.log('Auto-synced weekly data into monthly periods');
+    }
+  }, [allWeeksData]); // Only depend on allWeeksData to avoid loops
 
   const processBulkImport = useCallback(() => {
     const cogsLookup = getCogsLookup();
@@ -16560,6 +16853,85 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
 - For 2026: Use weekly/daily data (most current)
 `,
       },
+      // ========= DAILY ADS DATA - AGGREGATED FROM DAILY UPLOADS =========
+      dailyAdsData: (() => {
+        const last30Days = sortedDays.slice(-30);
+        const last7Days = sortedDays.slice(-7);
+        
+        const aggregateAds = (days) => {
+          let metaSpend = 0, googleSpend = 0, metaImpressions = 0, googleImpressions = 0;
+          let metaClicks = 0, googleClicks = 0, metaConversions = 0, googleConversions = 0;
+          let daysWithData = 0;
+          
+          days.forEach(dayKey => {
+            const dayData = allDaysData[dayKey];
+            if (!dayData) return;
+            
+            const meta = dayData.metaSpend || dayData.shopify?.metaSpend || 0;
+            const google = dayData.googleSpend || dayData.shopify?.googleSpend || 0;
+            
+            if (meta > 0 || google > 0) daysWithData++;
+            metaSpend += meta;
+            googleSpend += google;
+            metaImpressions += dayData.metaImpressions || 0;
+            googleImpressions += dayData.googleImpressions || 0;
+            metaClicks += dayData.metaClicks || 0;
+            googleClicks += dayData.googleClicks || 0;
+            metaConversions += dayData.metaConversions || 0;
+            googleConversions += dayData.googleConversions || 0;
+          });
+          
+          const totalSpend = metaSpend + googleSpend;
+          const totalClicks = metaClicks + googleClicks;
+          const totalImpressions = metaImpressions + googleImpressions;
+          
+          return {
+            metaSpend, googleSpend, totalSpend,
+            metaImpressions, googleImpressions, totalImpressions,
+            metaClicks, googleClicks, totalClicks,
+            metaConversions, googleConversions,
+            daysWithData,
+            avgDailySpend: daysWithData > 0 ? totalSpend / daysWithData : 0,
+            ctr: totalImpressions > 0 ? (totalClicks / totalImpressions * 100).toFixed(2) : 0,
+            cpc: totalClicks > 0 ? (totalSpend / totalClicks).toFixed(2) : 0,
+          };
+        };
+        
+        return {
+          last7Days: aggregateAds(last7Days),
+          last30Days: aggregateAds(last30Days),
+          byWeek: (() => {
+            // Group ads by week
+            const weeklyAds = {};
+            sortedDays.forEach(dayKey => {
+              const dayData = allDaysData[dayKey];
+              if (!dayData) return;
+              
+              const date = new Date(dayKey + 'T12:00:00');
+              const dayOfWeek = date.getDay();
+              const weekEnd = new Date(date);
+              weekEnd.setDate(date.getDate() + (dayOfWeek === 0 ? 0 : 7 - dayOfWeek));
+              const weekKey = weekEnd.toISOString().split('T')[0];
+              
+              if (!weeklyAds[weekKey]) weeklyAds[weekKey] = { metaSpend: 0, googleSpend: 0, days: 0 };
+              weeklyAds[weekKey].metaSpend += dayData.metaSpend || dayData.shopify?.metaSpend || 0;
+              weeklyAds[weekKey].googleSpend += dayData.googleSpend || dayData.shopify?.googleSpend || 0;
+              weeklyAds[weekKey].days++;
+            });
+            
+            return Object.entries(weeklyAds)
+              .filter(([_, d]) => d.metaSpend > 0 || d.googleSpend > 0)
+              .slice(-8)
+              .map(([week, data]) => ({
+                week,
+                metaSpend: data.metaSpend,
+                googleSpend: data.googleSpend,
+                totalSpend: data.metaSpend + data.googleSpend,
+                daysWithData: data.days,
+              }));
+          })(),
+        };
+      })(),
     };
   };
   
@@ -17482,6 +17854,32 @@ ${amazonCampaigns.analytics.monthlyTrends.slice(-6).map(m =>
 ).join('\n')}
 ` : ''}
 ` : 'No Amazon campaign data uploaded yet. User can upload Amazon Ads campaign report CSV.'}
+
+=== DTC ADVERTISING (Meta + Google) ===
+${ctx.dailyAdsData ? `
+**LAST 7 DAYS:**
+- Meta Spend: $${ctx.dailyAdsData.last7Days.metaSpend?.toFixed(2) || 0}
+- Google Spend: $${ctx.dailyAdsData.last7Days.googleSpend?.toFixed(2) || 0}
+- Total DTC Ads: $${ctx.dailyAdsData.last7Days.totalSpend?.toFixed(2) || 0}
+- Avg Daily Spend: $${ctx.dailyAdsData.last7Days.avgDailySpend?.toFixed(2) || 0}
+- Days with Data: ${ctx.dailyAdsData.last7Days.daysWithData || 0}
+
+**LAST 30 DAYS:**
+- Meta Spend: $${ctx.dailyAdsData.last30Days.metaSpend?.toFixed(2) || 0}
+- Google Spend: $${ctx.dailyAdsData.last30Days.googleSpend?.toFixed(2) || 0}
+- Total DTC Ads: $${ctx.dailyAdsData.last30Days.totalSpend?.toFixed(2) || 0}
+- Avg Daily Spend: $${ctx.dailyAdsData.last30Days.avgDailySpend?.toFixed(2) || 0}
+- Days with Data: ${ctx.dailyAdsData.last30Days.daysWithData || 0}
+${ctx.dailyAdsData.last30Days.ctr > 0 ? `- CTR: ${ctx.dailyAdsData.last30Days.ctr}%
+- Avg CPC: $${ctx.dailyAdsData.last30Days.cpc}` : ''}
+
+**WEEKLY BREAKDOWN:**
+${ctx.dailyAdsData.byWeek?.length > 0 ? ctx.dailyAdsData.byWeek.map(w => 
+  `- ${w.week}: Meta $${w.metaSpend?.toFixed(0)}, Google $${w.googleSpend?.toFixed(0)}, Total $${w.totalSpend?.toFixed(0)}`
+).join('\n') : 'No weekly ad data available'}
+
+💡 NOTE: DTC ads data comes from daily uploads. If a week shows missing ads in alerts, it means no ads CSV was uploaded for those days.
+` : 'No DTC (Meta/Google) ads data uploaded yet. User can upload Meta/Google ads reports via Upload tab → Bulk Ads Upload.'}
 
 === AI LEARNING STATUS ===
 ${ctx.aiLearning ? `
@@ -18835,23 +19233,45 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       }
     }
     
-    // Check for weeks with missing 3PL or Ads data - only 2026 weeks
+    // Check for weeks with missing 3PL or Ads data - only PAST 2026 weeks
+    const today = new Date();
+    const todayKey = formatDateKey(today);
+    
     const recentWeeks = Object.entries(allWeeksData)
-      .filter(([key]) => key.startsWith('2026-')) // Only 2026 weeks
+      .filter(([key]) => key.startsWith('2026-') && key <= todayKey) // Only PAST 2026 weeks
       .sort((a, b) => b[0].localeCompare(a[0]))
-      .slice(0, 4); // Last 4 weeks of 2026
+      .slice(0, 4); // Last 4 past weeks of 2026
     
     const weeksMissing3PL = recentWeeks.filter(([key, data]) => {
-      const weeklyHas3PL = data.shopify?.threeplCosts > 0;
-      const ledgerHas3PL = (() => {
-        const ledgerData = get3PLForWeek(threeplLedger, key);
-        return ledgerData && ledgerData.metrics?.totalCost > 0;
-      })();
+      // Check weekly shopify.threeplCosts
+      const weeklyHas3PL = (data.shopify?.threeplCosts || 0) > 0;
+      // Check ledger
+      const ledgerData = get3PLForWeek(threeplLedger, key);
+      const ledgerHas3PL = ledgerData && (ledgerData.metrics?.totalCost || 0) > 0;
+      // Return true if BOTH sources are missing
       return !weeklyHas3PL && !ledgerHas3PL;
     });
     
     const weeksMissingAds = recentWeeks.filter(([key, data]) => {
-      return !data.shopify?.metaSpend && !data.shopify?.googleSpend;
+      // Check weekly data
+      const weeklyHasAds = (data.shopify?.metaSpend > 0) || (data.shopify?.googleSpend > 0);
+      if (weeklyHasAds) return false;
+      
+      // Also check if daily data has ads for this week
+      const weekEndDate = new Date(key + 'T12:00:00');
+      let dailyAdsTotal = 0;
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(weekEndDate);
+        d.setDate(weekEndDate.getDate() - i);
+        const dayKey = d.toISOString().split('T')[0];
+        const dayData = allDaysData[dayKey];
+        if (dayData) {
+          dailyAdsTotal += (dayData.metaSpend || dayData.shopify?.metaSpend || 0);
+          dailyAdsTotal += (dayData.googleSpend || dayData.shopify?.googleSpend || 0);
+        }
+      }
+      
+      return dailyAdsTotal === 0; // Only missing if BOTH weekly and daily have no ads
     });
     
     // Helper to format week dates
@@ -19160,6 +19580,169 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       const defaultWidget = DEFAULT_DASHBOARD_WIDGETS.widgets.find(w => w.id === widgetId);
       return defaultWidget?.enabled ?? true;
     };
+    
+    // Get sorted widgets for dashboard rendering
+    const getSortedWidgets = () => {
+      const widgets = widgetConfig?.widgets || DEFAULT_DASHBOARD_WIDGETS.widgets;
+      return [...widgets].filter(w => w.enabled).sort((a, b) => (a.order || 0) - (b.order || 0));
+    };
+    
+    // Hide widget from dashboard
+    const hideWidget = (widgetId) => {
+      const widgets = widgetConfig?.widgets || DEFAULT_DASHBOARD_WIDGETS.widgets;
+      const newWidgets = widgets.map(w => 
+        w.id === widgetId ? { ...w, enabled: false } : { ...w }
+      );
+      setWidgetConfig({ widgets: newWidgets, layout: 'auto' });
+    };
+    
+    // Dashboard drag handlers
+    const handleDashboardDragStart = (e, widgetId) => {
+      setDraggedWidgetId(widgetId);
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', widgetId);
+    };
+    
+    const handleDashboardDragOver = (e, widgetId) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (widgetId !== draggedWidgetId) {
+        setDragOverWidgetId(widgetId);
+      }
+    };
+    
+    const handleDashboardDrop = (e, targetWidgetId) => {
+      e.preventDefault();
+      if (!draggedWidgetId || draggedWidgetId === targetWidgetId) {
+        setDraggedWidgetId(null);
+        setDragOverWidgetId(null);
+        return;
+      }
+      
+      const widgets = widgetConfig?.widgets || DEFAULT_DASHBOARD_WIDGETS.widgets;
+      const sortedWidgets = [...widgets].sort((a, b) => (a.order || 0) - (b.order || 0));
+      const draggedIdx = sortedWidgets.findIndex(w => w.id === draggedWidgetId);
+      const targetIdx = sortedWidgets.findIndex(w => w.id === targetWidgetId);
+      
+      if (draggedIdx !== -1 && targetIdx !== -1) {
+        const [removed] = sortedWidgets.splice(draggedIdx, 1);
+        sortedWidgets.splice(targetIdx, 0, removed);
+        const reorderedWidgets = sortedWidgets.map((w, i) => ({ ...w, order: i }));
+        setWidgetConfig({ widgets: reorderedWidgets, layout: 'auto' });
+      }
+      
+      setDraggedWidgetId(null);
+      setDragOverWidgetId(null);
+    };
+    
+    const handleDashboardDragEnd = () => {
+      setDraggedWidgetId(null);
+      setDragOverWidgetId(null);
+    };
+    
+    // DashboardWidget wrapper component with drag/drop and hide
+    const DashboardWidget = ({ id, title, icon: Icon, children, className = '', noPadding = false }) => {
+      const isDragging = draggedWidgetId === id;
+      const isDragOver = dragOverWidgetId === id;
+      
+      return (
+        <div
+          draggable
+          onDragStart={(e) => handleDashboardDragStart(e, id)}
+          onDragOver={(e) => handleDashboardDragOver(e, id)}
+          onDragLeave={() => setDragOverWidgetId(null)}
+          onDrop={(e) => handleDashboardDrop(e, id)}
+          onDragEnd={handleDashboardDragEnd}
+          className={`relative group bg-gradient-to-br from-slate-800/80 to-slate-900/80 rounded-2xl border transition-all cursor-grab active:cursor-grabbing ${
+            isDragging ? 'opacity-50 border-violet-500 scale-[0.98]' : 
+            isDragOver ? 'border-violet-500 bg-violet-500/10 scale-[1.01]' : 
+            'border-slate-700 hover:border-slate-600'
+          } ${className}`}
+        >
+          {/* Drag handle and hide button - visible on hover */}
+          <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+            <div className="p-1.5 bg-slate-700/80 rounded-lg cursor-grab">
+              <Move className="w-3.5 h-3.5 text-slate-400" />
+            </div>
+            <button
+              onClick={(e) => { e.stopPropagation(); hideWidget(id); }}
+              className="p-1.5 bg-slate-700/80 hover:bg-rose-600/80 rounded-lg transition-colors"
+              title="Hide widget"
+            >
+              <EyeOff className="w-3.5 h-3.5 text-slate-400 hover:text-white" />
+            </button>
+          </div>
+          
+          {/* Widget content */}
+          <div className={noPadding ? '' : 'p-5'}>
+            {title && (
+              <div className="flex items-center gap-3 mb-4">
+                {Icon && (
+                  <div className="p-2 rounded-xl bg-gradient-to-br from-violet-500/20 to-cyan-500/20">
+                    <Icon className="w-5 h-5 text-violet-400" />
+                  </div>
+                )}
+                <h3 className="text-lg font-bold text-white">{title}</h3>
+              </div>
+            )}
+            {children}
+          </div>
+        </div>
+      );
+    };
+    
+    // Compute Top/Worst Sellers
+    const getProductPerformance = (days) => {
+      const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - days);
+      const cutoffKey = cutoffDate.toISOString().split('T')[0];
+      
+      const relevantDays = days === 'ytd' 
+        ? sortedDays.filter(d => d.startsWith(String(new Date().getFullYear())))
+        : sortedDays.filter(d => d >= cutoffKey);
+      
+      if (relevantDays.length === 0) return { top: [], worst: [] };
+      
+      // Aggregate by SKU
+      const skuData = {};
+      relevantDays.forEach(dayKey => {
+        const dayData = allDaysData[dayKey];
+        if (!dayData) return;
+        
+        // Amazon
+        (dayData.amazon?.skuData || []).forEach(s => {
+          const sku = s.sku || s.msku || '';
+          if (!sku) return;
+          if (!skuData[sku]) skuData[sku] = { sku, name: savedProductNames[sku] || s.name || sku, units: 0, revenue: 0, profit: 0, channel: 'Amazon' };
+          skuData[sku].units += s.unitsSold || s.units || 0;
+          skuData[sku].revenue += s.netSales || s.revenue || 0;
+          skuData[sku].profit += s.netProceeds || 0;
+        });
+        
+        // Shopify  
+        (dayData.shopify?.skuData || []).forEach(s => {
+          const sku = s.sku || '';
+          if (!sku) return;
+          if (!skuData[sku]) skuData[sku] = { sku, name: savedProductNames[sku] || s.name || sku, units: 0, revenue: 0, profit: 0, channel: 'Shopify' };
+          skuData[sku].units += s.unitsSold || s.units || 0;
+          skuData[sku].revenue += s.netSales || s.revenue || 0;
+        });
+      });
+      
+      const products = Object.values(skuData).filter(p => p.units > 0 || p.revenue > 0);
+      const sortedByRevenue = [...products].sort((a, b) => b.revenue - a.revenue);
+      
+      return {
+        top: sortedByRevenue.slice(0, 5),
+        worst: sortedByRevenue.filter(p => p.revenue > 100).slice(-5).reverse(), // Only show products with >$100 revenue
+        period: days === 'ytd' ? 'Year to Date' : `Last ${days} Days`,
+        daysAnalyzed: relevantDays.length,
+      };
+    };
+    
+    const performance14d = getProductPerformance(14);
+    const performanceYTD = getProductPerformance('ytd');
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
@@ -19639,6 +20222,113 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     </div>
                   )}
                 </div>
+              )}
+              
+              {/* Top Sellers (14 Days) */}
+              {isWidgetEnabled('topSellers14d') && performance14d.top.length > 0 && (
+                <DashboardWidget id="topSellers14d" title={`Top Sellers (${performance14d.daysAnalyzed} Days)`} icon={TrendingUp} className="mb-6">
+                  <div className="space-y-2">
+                    {performance14d.top.map((p, i) => (
+                      <div key={p.sku} className="flex items-center gap-3 bg-slate-900/50 rounded-lg p-3">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${
+                          i === 0 ? 'bg-amber-500/20 text-amber-400' : 
+                          i === 1 ? 'bg-slate-400/20 text-slate-300' : 
+                          i === 2 ? 'bg-orange-600/20 text-orange-400' : 
+                          'bg-slate-700/50 text-slate-400'
+                        }`}>
+                          #{i + 1}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white font-medium truncate text-sm">{p.name || p.sku}</p>
+                          <p className="text-slate-500 text-xs">{p.sku}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-emerald-400 font-semibold">{formatCurrency(p.revenue)}</p>
+                          <p className="text-slate-500 text-xs">{p.units} units</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={() => setView('skus')} className="mt-3 w-full text-center text-sm text-cyan-400 hover:text-cyan-300 py-2">
+                    View All Products →
+                  </button>
+                </DashboardWidget>
+              )}
+              
+              {/* Worst Sellers / Needs Attention (14 Days) */}
+              {isWidgetEnabled('worstSellers14d') && performance14d.worst.length > 0 && (
+                <DashboardWidget id="worstSellers14d" title={`Needs Attention (${performance14d.daysAnalyzed} Days)`} icon={AlertTriangle} className="mb-6">
+                  <p className="text-slate-400 text-xs mb-3">Products with lowest revenue (min $100)</p>
+                  <div className="space-y-2">
+                    {performance14d.worst.map((p, i) => (
+                      <div key={p.sku} className="flex items-center gap-3 bg-rose-900/20 rounded-lg p-3 border border-rose-500/20">
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-rose-500/20">
+                          <TrendingDown className="w-4 h-4 text-rose-400" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white font-medium truncate text-sm">{p.name || p.sku}</p>
+                          <p className="text-slate-500 text-xs">{p.sku}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-rose-400 font-semibold">{formatCurrency(p.revenue)}</p>
+                          <p className="text-slate-500 text-xs">{p.units} units</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </DashboardWidget>
+              )}
+              
+              {/* Top Sellers YTD */}
+              {isWidgetEnabled('topSellersYTD') && performanceYTD.top.length > 0 && (
+                <DashboardWidget id="topSellersYTD" title="Top Sellers (YTD)" icon={Award} className="mb-6">
+                  <div className="space-y-2">
+                    {performanceYTD.top.map((p, i) => (
+                      <div key={p.sku} className="flex items-center gap-3 bg-slate-900/50 rounded-lg p-3">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${
+                          i === 0 ? 'bg-amber-500/20 text-amber-400' : 
+                          i === 1 ? 'bg-slate-400/20 text-slate-300' : 
+                          i === 2 ? 'bg-orange-600/20 text-orange-400' : 
+                          'bg-slate-700/50 text-slate-400'
+                        }`}>
+                          #{i + 1}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white font-medium truncate text-sm">{p.name || p.sku}</p>
+                          <p className="text-slate-500 text-xs">{p.sku}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-emerald-400 font-semibold">{formatCurrency(p.revenue)}</p>
+                          <p className="text-slate-500 text-xs">{p.units} units</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </DashboardWidget>
+              )}
+              
+              {/* Worst Sellers YTD */}
+              {isWidgetEnabled('worstSellersYTD') && performanceYTD.worst.length > 0 && (
+                <DashboardWidget id="worstSellersYTD" title="Needs Attention (YTD)" icon={AlertTriangle} className="mb-6">
+                  <p className="text-slate-400 text-xs mb-3">Lowest performing products year-to-date</p>
+                  <div className="space-y-2">
+                    {performanceYTD.worst.map((p, i) => (
+                      <div key={p.sku} className="flex items-center gap-3 bg-rose-900/20 rounded-lg p-3 border border-rose-500/20">
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-rose-500/20">
+                          <TrendingDown className="w-4 h-4 text-rose-400" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white font-medium truncate text-sm">{p.name || p.sku}</p>
+                          <p className="text-slate-500 text-xs">{p.sku}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-rose-400 font-semibold">{formatCurrency(p.revenue)}</p>
+                          <p className="text-slate-500 text-xs">{p.units} units</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </DashboardWidget>
               )}
               
               {/* Quick Action Widgets */}
@@ -20644,30 +21334,39 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           
           <NavTabs />
           
-          {/* Upload Type Tabs */}
+          {/* Upload Type Tabs - Streamlined */}
           <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
             <button onClick={() => setUploadTab('amazon-bulk')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'amazon-bulk' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <Upload className="w-5 h-5" />Amazon
+              <Package className="w-5 h-5" />Sales Data
             </button>
             <button onClick={() => setUploadTab('bulk-ads')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'bulk-ads' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <TrendingUp className="w-5 h-5" />Meta/Google Ads
-            </button>
-            <button onClick={() => setUploadTab('shopify-sync')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'shopify-sync' ? 'bg-green-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <ShoppingBag className="w-5 h-5" />Shopify
+              <TrendingUp className="w-5 h-5" />Ads
             </button>
             <button onClick={() => setUploadTab('inventory')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Boxes className="w-5 h-5" />Inventory
             </button>
-            <button onClick={() => setUploadTab('forecast')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'forecast' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <TrendingUp className="w-5 h-5" />Forecast
-            </button>
-            <button onClick={() => setUploadTab('period')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'period' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <CalendarRange className="w-5 h-5" />Annual
-            </button>
             <button onClick={() => setUploadTab('cogs')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'cogs' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <DollarSign className="w-5 h-5" />COGS
             </button>
+            <button onClick={() => setUploadTab('more')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${['forecast', 'period', 'shopify-sync'].includes(uploadTab) || uploadTab === 'more' ? 'bg-slate-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <MoreHorizontal className="w-5 h-5" />More
+            </button>
           </div>
+          
+          {/* More options sub-tabs */}
+          {['forecast', 'period', 'shopify-sync', 'more'].includes(uploadTab) && (
+            <div className="flex gap-2 mb-4 p-1 bg-slate-700/30 rounded-lg">
+              <button onClick={() => setUploadTab('forecast')} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${uploadTab === 'forecast' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+                <LineChart className="w-4 h-4" />Amazon Forecast
+              </button>
+              <button onClick={() => setUploadTab('period')} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${uploadTab === 'period' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+                <CalendarRange className="w-4 h-4" />Annual/Period
+              </button>
+              <button onClick={() => setUploadTab('shopify-sync')} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${uploadTab === 'shopify-sync' ? 'bg-green-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+                <ShoppingBag className="w-4 h-4" />Shopify Sync
+              </button>
+            </div>
+          )}
           
           {/* ============ DATA STATUS DASHBOARD ============ */}
           <div className="mb-6 bg-gradient-to-r from-slate-800/80 to-slate-900/80 rounded-2xl border border-slate-700 p-4">
