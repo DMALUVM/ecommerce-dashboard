@@ -1520,10 +1520,35 @@ const handleLogout = async () => {
   
   // NEW FEATURES STATE
   // 1. Dashboard Widget Customization
+  const DEFAULT_DASHBOARD_WIDGETS = {
+    widgets: [
+      { id: 'alerts', name: 'Alerts & Notifications', enabled: true, order: 0 },
+      { id: 'weekProgress', name: 'Weekly Goal Progress', enabled: true, order: 1 },
+      { id: 'todayPerformance', name: "Today's Performance", enabled: true, order: 2 },
+      { id: 'channelSplit', name: 'Channel Performance', enabled: true, order: 3 },
+      { id: 'revenueChart', name: 'Revenue Trend (7 Days)', enabled: true, order: 4 },
+      { id: 'topSkus', name: 'Top SKUs Today', enabled: true, order: 5 },
+      { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 6 },
+      { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 7 },
+      { id: 'inventoryAlerts', name: 'Inventory Alerts', enabled: true, order: 8 },
+      { id: 'adPerformance', name: 'Ad Performance Summary', enabled: true, order: 9 },
+      { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 10 },
+      { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 11 },
+      { id: 'dataHub', name: 'Data Hub', enabled: false, order: 12 },
+      { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 13 },
+      { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 14 },
+    ],
+    layout: 'auto', // 'auto' | 'compact' | 'expanded'
+  };
   const [widgetConfig, setWidgetConfig] = useState(() => {
-    try { return safeLocalStorageGet(WIDGET_KEY, null); } catch { return null; }
+    try { 
+      const stored = safeLocalStorageGet(WIDGET_KEY, null);
+      if (stored && stored.widgets) return stored;
+      return DEFAULT_DASHBOARD_WIDGETS;
+    } catch { return DEFAULT_DASHBOARD_WIDGETS; }
   });
   const [editingWidgets, setEditingWidgets] = useState(false);
+  const [draggedWidget, setDraggedWidget] = useState(null);
   
   // Production Pipeline
   const PRODUCTION_KEY = 'ecommerce_production_v1';
@@ -14459,6 +14484,146 @@ if (shopifySkuWithShipping.length > 0) {
     );
   };
 
+  // DASHBOARD WIDGET CONFIGURATION MODAL
+  const WidgetConfigModal = () => {
+    if (!editingWidgets) return null;
+    
+    const enabledWidgets = (widgetConfig?.widgets || []).filter(w => w.enabled).sort((a, b) => a.order - b.order);
+    const disabledWidgets = (widgetConfig?.widgets || []).filter(w => !w.enabled).sort((a, b) => a.order - b.order);
+    
+    const toggleWidget = (widgetId) => {
+      setWidgetConfig(prev => ({
+        ...prev,
+        widgets: prev.widgets.map(w => 
+          w.id === widgetId ? { ...w, enabled: !w.enabled } : w
+        )
+      }));
+    };
+    
+    const moveWidget = (widgetId, direction) => {
+      setWidgetConfig(prev => {
+        const widgets = [...prev.widgets].sort((a, b) => a.order - b.order);
+        const idx = widgets.findIndex(w => w.id === widgetId);
+        if (idx === -1) return prev;
+        
+        const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+        if (newIdx < 0 || newIdx >= widgets.length) return prev;
+        
+        // Swap orders
+        const temp = widgets[idx].order;
+        widgets[idx].order = widgets[newIdx].order;
+        widgets[newIdx].order = temp;
+        
+        return { ...prev, widgets };
+      });
+    };
+    
+    const resetToDefaults = () => {
+      if (confirm('Reset dashboard to default layout?')) {
+        setWidgetConfig(DEFAULT_DASHBOARD_WIDGETS);
+      }
+    };
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden shadow-2xl">
+          <div className="p-6 border-b border-slate-700 flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <Layers className="w-5 h-5 text-violet-400" />
+                Customize Dashboard
+              </h2>
+              <p className="text-slate-400 text-sm mt-1">Show, hide, and reorder dashboard widgets</p>
+            </div>
+            <button onClick={() => setEditingWidgets(false)} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          <div className="p-6 overflow-y-auto max-h-[60vh]">
+            {/* Active Widgets */}
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wide mb-3 flex items-center gap-2">
+                <Eye className="w-4 h-4" />
+                Active Widgets ({enabledWidgets.length})
+              </h3>
+              <div className="space-y-2">
+                {enabledWidgets.map((widget, idx) => (
+                  <div key={widget.id} className="flex items-center gap-3 bg-slate-800/50 border border-slate-700 rounded-xl p-3">
+                    <div className="flex flex-col gap-0.5">
+                      <button 
+                        onClick={() => moveWidget(widget.id, 'up')} 
+                        disabled={idx === 0}
+                        className="p-1 hover:bg-slate-700 rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <ArrowUp className="w-3 h-3 text-slate-400" />
+                      </button>
+                      <button 
+                        onClick={() => moveWidget(widget.id, 'down')} 
+                        disabled={idx === enabledWidgets.length - 1}
+                        className="p-1 hover:bg-slate-700 rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <ArrowDown className="w-3 h-3 text-slate-400" />
+                      </button>
+                    </div>
+                    <div className="flex-1">
+                      <span className="text-white font-medium">{widget.name}</span>
+                    </div>
+                    <button 
+                      onClick={() => toggleWidget(widget.id)}
+                      className="p-2 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/30 rounded-lg text-rose-400"
+                      title="Hide widget"
+                    >
+                      <EyeOff className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+                {enabledWidgets.length === 0 && (
+                  <p className="text-slate-500 text-sm italic">No widgets enabled. Add some from below!</p>
+                )}
+              </div>
+            </div>
+            
+            {/* Hidden Widgets */}
+            {disabledWidgets.length > 0 && (
+              <div>
+                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-2">
+                  <EyeOff className="w-4 h-4" />
+                  Hidden Widgets ({disabledWidgets.length})
+                </h3>
+                <div className="space-y-2">
+                  {disabledWidgets.map(widget => (
+                    <div key={widget.id} className="flex items-center gap-3 bg-slate-800/30 border border-slate-700/50 rounded-xl p-3 opacity-60 hover:opacity-100 transition-opacity">
+                      <div className="flex-1">
+                        <span className="text-slate-300">{widget.name}</span>
+                      </div>
+                      <button 
+                        onClick={() => toggleWidget(widget.id)}
+                        className="p-2 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 rounded-lg text-emerald-400"
+                        title="Show widget"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          
+          <div className="p-4 border-t border-slate-700 bg-slate-800/50 flex justify-between">
+            <button onClick={resetToDefaults} className="px-4 py-2 text-slate-400 hover:text-white text-sm">
+              Reset to Defaults
+            </button>
+            <button onClick={() => setEditingWidgets(false)} className="px-6 py-2 bg-violet-600 hover:bg-violet-500 rounded-xl text-white font-medium">
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // INVOICE/BILLS MODAL
   const InvoiceModal = () => {
     if (!showInvoiceModal) return null;
@@ -18407,9 +18572,96 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     
     const salesTaxDueThisMonth = getSalesTaxDueThisMonth();
     
+    // Calculate Today's Performance metrics
+    const getTodayMetrics = () => {
+      const today = new Date();
+      const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const yesterdayDate = new Date(today);
+      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+      const yesterdayKey = `${yesterdayDate.getFullYear()}-${String(yesterdayDate.getMonth() + 1).padStart(2, '0')}-${String(yesterdayDate.getDate()).padStart(2, '0')}`;
+      
+      const todayData = allDaysData[todayKey];
+      const yesterdayData = allDaysData[yesterdayKey];
+      
+      // Find most recent day with data
+      const sortedDays = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse();
+      const latestDayKey = sortedDays[0];
+      const latestDay = latestDayKey ? allDaysData[latestDayKey] : null;
+      const prevDayKey = sortedDays[1];
+      const prevDay = prevDayKey ? allDaysData[prevDayKey] : null;
+      
+      // Use today's data if available, otherwise most recent day
+      const useToday = todayData && hasDailySalesData(todayData);
+      const currentDay = useToday ? todayData : latestDay;
+      const comparisonDay = useToday ? yesterdayData : prevDay;
+      const displayDate = useToday ? todayKey : latestDayKey;
+      const isToday = useToday;
+      
+      if (!currentDay) return null;
+      
+      const amazon = currentDay.amazon || {};
+      const shopify = currentDay.shopify || {};
+      
+      // Compute COGS from SKU data if needed
+      let amazonCogs = amazon.cogs || 0;
+      if (!amazonCogs && amazon.skuData && Array.isArray(amazon.skuData)) {
+        amazonCogs = amazon.skuData.reduce((sum, sku) => sum + (sku.cogs || 0), 0);
+      }
+      let shopifyCogs = shopify.cogs || 0;
+      if (!shopifyCogs && shopify.skuData && Array.isArray(shopify.skuData)) {
+        shopifyCogs = shopify.skuData.reduce((sum, sku) => sum + (sku.cogs || 0), 0);
+      }
+      
+      const revenue = (amazon.revenue || 0) + (shopify.revenue || 0);
+      const units = (amazon.units || 0) + (shopify.units || 0);
+      const cogs = amazonCogs + shopifyCogs;
+      const netProfit = (amazon.netProfit || amazon.netProceeds || 0) + (shopify.netProfit || 0);
+      const adSpend = (amazon.adSpend || 0) + (shopify.metaSpend || currentDay.metaSpend || 0) + (shopify.googleSpend || currentDay.googleSpend || 0);
+      const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
+      
+      // Yesterday's comparison
+      let prevRevenue = 0, prevProfit = 0, prevUnits = 0;
+      if (comparisonDay) {
+        const prevAmazon = comparisonDay.amazon || {};
+        const prevShopify = comparisonDay.shopify || {};
+        prevRevenue = (prevAmazon.revenue || 0) + (prevShopify.revenue || 0);
+        prevProfit = (prevAmazon.netProfit || prevAmazon.netProceeds || 0) + (prevShopify.netProfit || 0);
+        prevUnits = (prevAmazon.units || 0) + (prevShopify.units || 0);
+      }
+      
+      const revenueChange = prevRevenue > 0 ? ((revenue - prevRevenue) / prevRevenue) * 100 : null;
+      const profitChange = prevProfit !== 0 ? ((netProfit - prevProfit) / Math.abs(prevProfit)) * 100 : null;
+      const unitsChange = prevUnits > 0 ? ((units - prevUnits) / prevUnits) * 100 : null;
+      
+      return {
+        date: displayDate,
+        isToday,
+        revenue,
+        units,
+        cogs,
+        netProfit,
+        adSpend,
+        margin,
+        amazonRevenue: amazon.revenue || 0,
+        shopifyRevenue: shopify.revenue || 0,
+        revenueChange,
+        profitChange,
+        unitsChange,
+        tacos: revenue > 0 ? (adSpend / revenue) * 100 : 0,
+      };
+    };
+    
+    const todayMetrics = getTodayMetrics();
+    
+    // Helper to check if a widget is enabled
+    const isWidgetEnabled = (widgetId) => {
+      const widget = widgetConfig?.widgets?.find(w => w.id === widgetId);
+      return widget?.enabled ?? true;
+    };
+    
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal /><WidgetConfigModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -18505,6 +18757,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               </button>
               {/* Quick action buttons */}
               <div className="flex items-center gap-1 bg-slate-800/50 rounded-lg p-1">
+                <button onClick={() => setEditingWidgets(true)} className="p-2 hover:bg-slate-700 rounded text-cyan-400" title="Customize Dashboard"><Layers className="w-4 h-4" /></button>
                 {generateForecast ? (
                   <button onClick={() => setShowForecast(true)} className="p-2 hover:bg-slate-700 rounded text-emerald-400" title="View Forecast"><TrendingUp className="w-4 h-4" /></button>
                 ) : (
@@ -18637,7 +18890,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           ) : (
             <>
               {/* Alerts */}
-              {alerts.length > 0 && (
+              {isWidgetEnabled('alerts') && alerts.length > 0 && (
                 <div className="mb-6 space-y-2">
                   {alerts.map((alert, i) => (
                     <div 
@@ -18660,8 +18913,91 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 </div>
               )}
               
+              {/* Today's Performance Hero Card */}
+              {isWidgetEnabled('todayPerformance') && todayMetrics && (
+                <div className="mb-6 bg-gradient-to-br from-slate-800/80 to-slate-900/80 rounded-2xl border border-slate-700 overflow-hidden">
+                  <div className="p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-xl ${todayMetrics.isToday ? 'bg-emerald-500/20' : 'bg-slate-700'}`}>
+                          <Zap className={`w-5 h-5 ${todayMetrics.isToday ? 'text-emerald-400' : 'text-slate-400'}`} />
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-bold text-white">
+                            {todayMetrics.isToday ? "Today's Performance" : 'Latest Day'}
+                          </h3>
+                          <p className="text-slate-400 text-sm">
+                            {new Date(todayMetrics.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                          </p>
+                        </div>
+                      </div>
+                      <button onClick={() => { setSelectedDay(todayMetrics.date); setView('daily'); }} className="text-sm text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
+                        View Details <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                    
+                    {/* Main KPIs Grid */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                      <div className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
+                        <p className="text-slate-400 text-xs uppercase mb-1">Revenue</p>
+                        <p className="text-2xl font-bold text-white">{formatCurrency(todayMetrics.revenue)}</p>
+                        {todayMetrics.revenueChange !== null && (
+                          <p className={`text-xs flex items-center gap-1 ${todayMetrics.revenueChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {todayMetrics.revenueChange >= 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
+                            {Math.abs(todayMetrics.revenueChange).toFixed(1)}% vs prior day
+                          </p>
+                        )}
+                      </div>
+                      
+                      <div className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
+                        <p className="text-slate-400 text-xs uppercase mb-1">Net Profit</p>
+                        <p className={`text-2xl font-bold ${todayMetrics.netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {formatCurrency(todayMetrics.netProfit)}
+                        </p>
+                        <p className="text-xs text-slate-500">{todayMetrics.margin.toFixed(1)}% margin</p>
+                      </div>
+                      
+                      <div className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
+                        <p className="text-slate-400 text-xs uppercase mb-1">Units Sold</p>
+                        <p className="text-2xl font-bold text-white">{formatNumber(todayMetrics.units)}</p>
+                        {todayMetrics.unitsChange !== null && (
+                          <p className={`text-xs flex items-center gap-1 ${todayMetrics.unitsChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {todayMetrics.unitsChange >= 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
+                            {Math.abs(todayMetrics.unitsChange).toFixed(1)}% vs prior day
+                          </p>
+                        )}
+                      </div>
+                      
+                      <div className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
+                        <p className="text-slate-400 text-xs uppercase mb-1">Ad Spend</p>
+                        <p className="text-2xl font-bold text-violet-400">{formatCurrency(todayMetrics.adSpend)}</p>
+                        <p className={`text-xs ${todayMetrics.tacos <= 15 ? 'text-emerald-400' : todayMetrics.tacos <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>
+                          {todayMetrics.tacos.toFixed(1)}% TACOS
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {/* Channel Split Bar */}
+                    <div className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
+                      <div className="flex justify-between text-xs text-slate-400 mb-2">
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500" />Amazon: {formatCurrency(todayMetrics.amazonRevenue)}</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />Shopify: {formatCurrency(todayMetrics.shopifyRevenue)}</span>
+                      </div>
+                      <div className="h-2 bg-slate-800 rounded-full overflow-hidden flex">
+                        {todayMetrics.revenue > 0 && (
+                          <>
+                            <div className="bg-orange-500 h-full" style={{ width: `${(todayMetrics.amazonRevenue / todayMetrics.revenue) * 100}%` }} />
+                            <div className="bg-blue-500 h-full" style={{ width: `${(todayMetrics.shopifyRevenue / todayMetrics.revenue) * 100}%` }} />
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
               {/* Weekly Progress Bar */}
-              {weeklyProgress && (
+              {isWidgetEnabled('weekProgress') && weeklyProgress && (
                 <div className={`mb-6 rounded-2xl border p-4 ${
                   weeklyProgress.onTrack 
                     ? 'bg-gradient-to-r from-emerald-900/30 to-teal-900/20 border-emerald-500/30' 
@@ -18745,8 +19081,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               )}
               
               {/* Quick Action Widgets */}
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 {/* Sales Tax Due This Month Card */}
+                {isWidgetEnabled('salesTax') && (
                 <div 
                   className={`rounded-2xl border p-4 cursor-pointer hover:opacity-90 ${
                     salesTaxDueThisMonth.some(s => s.isOverdue) 
@@ -18791,9 +19128,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     </>
                   )}
                 </div>
+                )}
                 
                 {/* AI Forecast Widget - Unified Predictions */}
-                {aiForecasts && !aiForecasts.error && aiForecasts.salesForecast ? (
+                {isWidgetEnabled('aiForecast') && aiForecasts && !aiForecasts.error && aiForecasts.salesForecast ? (
                   <div className="bg-gradient-to-br from-purple-900/30 to-indigo-900/20 rounded-2xl border border-purple-500/30 p-4">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-purple-400 text-sm font-semibold flex items-center gap-2">
@@ -18851,7 +19189,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 )}
                 
                 {/* Upcoming Bills Widget */}
-                {upcomingBills.length > 0 ? (
+                {isWidgetEnabled('billsDue') && (upcomingBills.length > 0 ? (
                   <div className="bg-gradient-to-br from-rose-900/30 to-pink-900/20 rounded-2xl border border-rose-500/30 p-4 cursor-pointer hover:border-rose-400/50" onClick={() => setShowInvoiceModal(true)}>
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-rose-400 text-sm font-semibold flex items-center gap-2">
@@ -18885,9 +19223,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       <Plus className="w-3 h-3" />Add a bill
                     </button>
                   </div>
-                )}
+                ))}
                 
                 {/* Sync & Backup Status Widget */}
+                {isWidgetEnabled('syncStatus') && (
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
@@ -18975,9 +19314,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     </div>
                   </div>
                 </div>
+                )}
               </div>
               
               {/* Quick Uploads Shortcuts */}
+              {isWidgetEnabled('quickUpload') && (
               <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-4 mb-6">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
@@ -19020,6 +19361,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   </button>
                 </div>
               </div>
+              )}
               
               {/* Quick Upload - Show if most recent week is missing */}
               {(() => {
@@ -19063,6 +19405,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               })()}
               
               {/* ============ DATA HUB - Complete Data Status ============ */}
+              {isWidgetEnabled('dataHub') && (
               <div className="bg-gradient-to-r from-slate-800/70 to-slate-900/70 rounded-2xl border border-purple-500/30 p-5 mb-6">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-white font-semibold flex items-center gap-2">
@@ -19285,10 +19628,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   </div>
                 </div>
               </div>
+              )}
               {/* ============ END DATA HUB ============ */}
               
               {/* ============ DAILY CALENDAR ============ */}
-              {Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length > 0 && (
+              {isWidgetEnabled('calendar') && Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length > 0 && (
                 <div className="bg-gradient-to-br from-slate-800 to-slate-800/50 rounded-2xl border border-slate-700 p-6 shadow-lg">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -23277,8 +23621,14 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     const daysWithSales = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse();
     const idx = daysWithSales.indexOf(selectedDay);
     
-    const amazon = dayData.amazon || {};
+    let amazon = dayData.amazon || {};
 let shopify = dayData.shopify || {};
+
+// Calculate Amazon COGS from SKU data if not already set
+if (!amazon.cogs && amazon.skuData && Array.isArray(amazon.skuData)) {
+  const amazonSkuCogs = amazon.skuData.reduce((sum, sku) => sum + (sku.cogs || 0), 0);
+  amazon = { ...amazon, cogs: amazonSkuCogs };
+}
 
 // Normalize Shopify ads metrics for this day (consistent KPIs across views)
 const shopifyAds = getShopifyAdsForDay(dayData);
@@ -23290,7 +23640,20 @@ if (shopifySkuWithShipping.length > 0) {
   shopify = { ...shopify, revenue: skuSums.revenue, units: skuSums.units, cogs: skuSums.cogs, skuData: shopifySkuWithShipping };
 }
 
-    const total = dayData.total || {};
+    // Compute totals from channel data (more reliable than stored total which may be incomplete)
+    const storedTotal = dayData.total || {};
+    const total = {
+      revenue: (amazon.revenue || 0) + (shopify.revenue || 0),
+      units: (amazon.units || 0) + (shopify.units || 0),
+      cogs: (amazon.cogs || 0) + (shopify.cogs || 0),
+      netProfit: (amazon.netProfit || amazon.netProceeds || 0) + (shopify.netProfit || 0),
+      adSpend: (amazon.adSpend || 0) + (shopify.metaSpend || dayData.metaSpend || 0) + (shopify.googleSpend || dayData.googleSpend || 0),
+    };
+    // Recalculate derived metrics
+    total.netMargin = total.revenue > 0 ? (total.netProfit / total.revenue) * 100 : 0;
+    total.roas = total.adSpend > 0 ? total.revenue / total.adSpend : 0;
+    total.amazonShare = total.revenue > 0 ? ((amazon.revenue || 0) / total.revenue) * 100 : 0;
+    total.shopifyShare = total.revenue > 0 ? ((shopify.revenue || 0) / total.revenue) * 100 : 0;
     
     // Get ads metrics from either shopify object or top-level dayData (bulk uploads store at top level)
     const googleSpend = shopify.googleSpend || dayData.googleSpend || 0;
