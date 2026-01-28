@@ -102,8 +102,8 @@ const SkuSettingsModal = ({
                 <th className="text-right text-slate-400 py-2 px-2" style={{width: '80px'}}>3PL</th>
                 <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>Lead Time</th>
                 <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>Reorder Qty</th>
-                <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>3PL Alert Qty</th>
-                <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>AMZ Alert Days</th>
+                <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>3PL Alert</th>
+                <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>AMZ Alert</th>
                 <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>Target Days</th>
                 <th className="text-center text-slate-400 py-2 px-2" style={{width: '120px'}}>Actions</th>
               </tr>
@@ -112,18 +112,32 @@ const SkuSettingsModal = ({
               {skuSettingsFilteredSkus.map(item => {
                 const settings = getSkuSettings(item.sku);
                 const isEditing = skuSettingsEditItem === item.sku;
+                const hasCustomSettings = settings.leadTime || settings.reorderPoint || settings.threeplAlertQty || settings.amazonAlertDays || settings.targetDays;
                 
                 if (isEditing) {
                   return (
                     <tr key={item.sku} className="border-b border-slate-700/50 bg-emerald-900/20">
-                      <td className="py-3 px-2"><p className="text-white font-medium">{item.sku}</p><p className="text-slate-500 text-xs truncate max-w-[180px]">{item.name}</p></td>
+                      <td className="py-3 px-2">
+                        <p className="text-white font-medium">{item.sku}</p>
+                        <p className="text-slate-500 text-xs truncate max-w-[180px]">{item.name}</p>
+                      </td>
                       <td className="text-right py-3 px-2 text-orange-400 font-medium">{formatNumber(item.amazonQty || 0)}</td>
                       <td className="text-right py-3 px-2 text-violet-400 font-medium">{formatNumber(item.threeplQty || 0)}</td>
-                      <td className="py-3 px-2 text-center"><input type="number" value={skuSettingsEditForm.leadTime || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, leadTime: e.target.value}))} placeholder={String(leadTimeSettings.defaultLeadTimeDays)} className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" /></td>
-                      <td className="py-3 px-2 text-center"><input type="number" value={skuSettingsEditForm.reorderPoint || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, reorderPoint: e.target.value}))} placeholder="—" className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" /></td>
-                      <td className="py-3 px-2 text-center"><input type="number" value={skuSettingsEditForm.threeplAlertQty || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, threeplAlertQty: e.target.value}))} placeholder="50" className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" /></td>
-                      <td className="py-3 px-2 text-center"><input type="number" value={skuSettingsEditForm.amazonAlertDays || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, amazonAlertDays: e.target.value}))} placeholder="60" className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" /></td>
-                      <td className="py-3 px-2 text-center"><input type="number" value={skuSettingsEditForm.targetDays || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, targetDays: e.target.value}))} placeholder="90" className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" /></td>
+                      <td className="py-3 px-2 text-center">
+                        <input type="number" value={skuSettingsEditForm.leadTime || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, leadTime: e.target.value}))} placeholder={String(leadTimeSettings.defaultLeadTimeDays)} className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" />
+                      </td>
+                      <td className="py-3 px-2 text-center">
+                        <input type="number" value={skuSettingsEditForm.reorderPoint || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, reorderPoint: e.target.value}))} placeholder="—" className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" />
+                      </td>
+                      <td className="py-3 px-2 text-center">
+                        <input type="number" value={skuSettingsEditForm.threeplAlertQty || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, threeplAlertQty: e.target.value}))} placeholder="50" className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" />
+                      </td>
+                      <td className="py-3 px-2 text-center">
+                        <input type="number" value={skuSettingsEditForm.amazonAlertDays || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, amazonAlertDays: e.target.value}))} placeholder="60" className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" />
+                      </td>
+                      <td className="py-3 px-2 text-center">
+                        <input type="number" value={skuSettingsEditForm.targetDays || ''} onChange={(e) => setSkuSettingsEditForm(f => ({...f, targetDays: e.target.value}))} placeholder="90" className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" />
+                      </td>
                       <td className="py-3 px-2 text-center whitespace-nowrap">
                         <button onClick={() => saveSkuSettingsHandler(item.sku, { leadTime: skuSettingsEditForm.leadTime ? parseInt(skuSettingsEditForm.leadTime) : undefined, reorderPoint: skuSettingsEditForm.reorderPoint ? parseInt(skuSettingsEditForm.reorderPoint) : undefined, threeplAlertQty: skuSettingsEditForm.threeplAlertQty ? parseInt(skuSettingsEditForm.threeplAlertQty) : undefined, amazonAlertDays: skuSettingsEditForm.amazonAlertDays ? parseInt(skuSettingsEditForm.amazonAlertDays) : undefined, targetDays: skuSettingsEditForm.targetDays ? parseInt(skuSettingsEditForm.targetDays) : undefined, alertEnabled: true })} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-white text-xs mr-2">Save</button>
                         <button onClick={() => { setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); }} className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded text-white text-xs">Cancel</button>
@@ -132,11 +146,17 @@ const SkuSettingsModal = ({
                   );
                 }
                 
-                const hasCustomSettings = settings.leadTime || settings.reorderPoint || settings.threeplAlertQty || settings.amazonAlertDays || settings.targetDays;
-                
                 return (
                   <tr key={item.sku} className={`border-b border-slate-700/50 hover:bg-slate-800/30 ${hasCustomSettings ? 'bg-emerald-900/10' : ''}`}>
-                    <td className="py-2 px-2"><div className="flex items-center gap-2">{hasCustomSettings && <span className="w-2 h-2 bg-emerald-500 rounded-full flex-shrink-0" title="Custom settings" />}<div><p className="text-white font-medium">{item.sku}</p><p className="text-slate-500 text-xs truncate max-w-[160px]">{item.name}</p></div></div></td>
+                    <td className="py-2 px-2">
+                      <div className="flex items-center gap-2">
+                        {hasCustomSettings && <span className="w-2 h-2 bg-emerald-500 rounded-full flex-shrink-0" title="Custom settings" />}
+                        <div>
+                          <p className="text-white font-medium">{item.sku}</p>
+                          <p className="text-slate-500 text-xs truncate max-w-[160px]">{item.name}</p>
+                        </div>
+                      </div>
+                    </td>
                     <td className="text-right py-2 px-2 text-orange-400">{formatNumber(item.amazonQty || 0)}</td>
                     <td className="text-right py-2 px-2 text-violet-400">{formatNumber(item.threeplQty || 0)}</td>
                     <td className="text-center py-2 px-2">{settings.leadTime ? <span className="text-emerald-400">{settings.leadTime}d</span> : <span className="text-slate-500">{leadTimeSettings.defaultLeadTimeDays}d</span>}</td>
@@ -144,18 +164,24 @@ const SkuSettingsModal = ({
                     <td className="text-center py-2 px-2">{settings.threeplAlertQty ? <span className="text-amber-400">{formatNumber(settings.threeplAlertQty)}</span> : <span className="text-slate-500">—</span>}</td>
                     <td className="text-center py-2 px-2">{settings.amazonAlertDays ? <span className="text-amber-400">{settings.amazonAlertDays}d</span> : <span className="text-slate-500">—</span>}</td>
                     <td className="text-center py-2 px-2">{settings.targetDays ? <span className="text-cyan-400">{settings.targetDays}d</span> : <span className="text-slate-500">90d</span>}</td>
-                    <td className="py-2 px-2 text-center"><button onClick={() => { setSkuSettingsEditItem(item.sku); setSkuSettingsEditForm(settings); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs">Edit</button></td>
+                    <td className="py-2 px-2 text-center">
+                      <button onClick={() => { setSkuSettingsEditItem(item.sku); setSkuSettingsEditForm(settings); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs">Edit</button>
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-          {skuSettingsFilteredSkus.length === 0 && (<div className="text-center py-8 text-slate-400">No SKUs found matching your search</div>)}
+          {skuSettingsFilteredSkus.length === 0 && (
+            <div className="text-center py-8 text-slate-400">No SKUs found matching your search</div>
+          )}
         </div>
         
         {/* Footer */}
         <div className="p-4 border-t border-slate-700 bg-slate-800/50 flex items-center justify-between">
-          <div className="text-slate-400 text-sm"><span className="text-white font-medium">{Object.keys(leadTimeSettings.skuSettings || {}).length}</span> SKUs with custom settings</div>
+          <div className="text-slate-400 text-sm">
+            <span className="text-white font-medium">{Object.keys(leadTimeSettings.skuSettings || {}).length}</span> SKUs with custom settings
+          </div>
           <button onClick={handleClose} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white">Close</button>
         </div>
       </div>

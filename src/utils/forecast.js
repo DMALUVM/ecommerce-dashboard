@@ -35,7 +35,11 @@ export const processAmazonForecast = (csvData) => {
       totalAds += ads;
       
       if (sku) {
-        skuForecasts[sku] = { sku, units, sales, proceeds, ads, cogsPerUnit: cogs, profitPerUnit: units > 0 ? proceeds / units : 0 };
+        skuForecasts[sku] = {
+          sku, units, sales, proceeds, ads,
+          cogsPerUnit: cogs,
+          profitPerUnit: units > 0 ? proceeds / units : 0,
+        };
       }
     }
   });
@@ -56,13 +60,23 @@ export const processAmazonForecast = (csvData) => {
       const weekKey = getSunday(weekStart);
       
       weeklyForecasts[weekKey] = {
-        weekEnding: weekKey, startDate: startDateStr, endDate: endDateStr,
-        uploadedAt: new Date().toISOString(), sourceType: '30-day-split',
-        weekNumber: i + 1, totalWeeks: weeksInForecast,
-        totals: { units: weeklyUnits, sales: weeklySales, proceeds: weeklyProceeds, ads: weeklyAds, profitPerUnit: weeklyUnits > 0 ? weeklyProceeds / weeklyUnits : 0 },
+        weekEnding: weekKey,
+        startDate: startDateStr,
+        endDate: endDateStr,
+        uploadedAt: new Date().toISOString(),
+        sourceType: '30-day-split',
+        weekNumber: i + 1,
+        totalWeeks: weeksInForecast,
+        totals: {
+          units: weeklyUnits, sales: weeklySales, proceeds: weeklyProceeds, ads: weeklyAds,
+          profitPerUnit: weeklyUnits > 0 ? weeklyProceeds / weeklyUnits : 0,
+        },
         skus: Object.fromEntries(Object.entries(skuForecasts).map(([sku, data]) => [sku, {
-          ...data, units: Math.round(data.units / weeksInForecast), sales: data.sales / weeksInForecast,
-          proceeds: data.proceeds / weeksInForecast, ads: data.ads / weeksInForecast,
+          ...data,
+          units: Math.round(data.units / weeksInForecast),
+          sales: data.sales / weeksInForecast,
+          proceeds: data.proceeds / weeksInForecast,
+          ads: data.ads / weeksInForecast,
         }])),
         skuCount: Object.keys(skuForecasts).length,
         monthlyTotal: { units: totalUnits, sales: totalSales, proceeds: totalProceeds, ads: totalAds },
@@ -70,7 +84,8 @@ export const processAmazonForecast = (csvData) => {
     }
     
     return {
-      type: 'monthly', forecasts: weeklyForecasts,
+      type: 'monthly',
+      forecasts: weeklyForecasts,
       period: { startDate: startDateStr, endDate: endDateStr, days: daysDiff },
       monthlyTotal: { units: totalUnits, sales: totalSales, proceeds: totalProceeds, ads: totalAds },
     };
@@ -80,10 +95,17 @@ export const processAmazonForecast = (csvData) => {
   return {
     type: 'weekly',
     forecast: {
-      weekEnding: weekKey, startDate: startDateStr, endDate: endDateStr,
-      uploadedAt: new Date().toISOString(), sourceType: 'weekly',
-      totals: { units: totalUnits, sales: totalSales, proceeds: totalProceeds, ads: totalAds, profitPerUnit: totalUnits > 0 ? totalProceeds / totalUnits : 0 },
-      skus: skuForecasts, skuCount: Object.keys(skuForecasts).length,
+      weekEnding: weekKey,
+      startDate: startDateStr,
+      endDate: endDateStr,
+      uploadedAt: new Date().toISOString(),
+      sourceType: 'weekly',
+      totals: {
+        units: totalUnits, sales: totalSales, proceeds: totalProceeds, ads: totalAds,
+        profitPerUnit: totalUnits > 0 ? totalProceeds / totalUnits : 0,
+      },
+      skus: skuForecasts,
+      skuCount: Object.keys(skuForecasts).length,
     },
   };
 };

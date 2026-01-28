@@ -55,8 +55,11 @@ import { DEFAULT_DASHBOARD_WIDGETS } from './utils/config';
 import { calculateBreakEven } from './utils/calculations';
 import { exportToCSV } from './utils/export';
 import { AI_CONFIG, callAI } from './utils/ai';
+import { processAmazonForecast } from './utils/forecast';
+import { getMonths as getMonthsUtil, getYears as getYearsUtil, getMonthlyData as getMonthlyDataUtil, getYearlyData as getYearlyDataUtil } from './utils/aggregation';
 import WeeklyReportModal from './components/ui/WeeklyReportModal';
 import AIChatPanel from './components/ui/AIChatPanel';
+import SkuSettingsModal from './components/ui/SkuSettingsModal';
 
 
 // DEFAULT_DASHBOARD_WIDGETS extracted to utils/config.js
@@ -6612,116 +6615,11 @@ const savePeriods = async (d) => {
       setIsProcessing(false);
     }
   }, [allWeeksData, allDaysData, allPeriodsData, save, combinedData]);
-
-  const getMonths = () => { const m = new Set(); Object.keys(allWeeksData).forEach(w => { const d = new Date(w+'T00:00:00'); m.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`); }); return Array.from(m).sort().reverse(); };
-  const getYears = () => { const y = new Set(); Object.keys(allWeeksData).forEach(w => { y.add(new Date(w+'T00:00:00').getFullYear()); }); return Array.from(y).sort().reverse(); };
-
-  const getMonthlyData = (ym) => {
-    const [y, m] = ym.split('-').map(Number);
-    const weeks = Object.entries(allWeeksData).filter(([w]) => { const d = new Date(w+'T00:00:00'); return d.getFullYear() === y && d.getMonth()+1 === m; });
-    if (!weeks.length) return null;
-    const agg = { weeks: weeks.map(([w]) => w), 
-      amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0 }, 
-      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, threeplBreakdown: { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 }, threeplMetrics: { orderCount: 0, totalUnits: 0 } }, 
-      total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 }};
-    weeks.forEach(([w, d]) => {
-      // Get ledger 3PL for this week
-      const ledger3PL = get3PLForWeek(threeplLedger, w);
-      const weekThreeplCost = ledger3PL?.metrics?.totalCost || d.shopify?.threeplCosts || 0;
-      const weekThreeplBreakdown = ledger3PL?.breakdown || d.shopify?.threeplBreakdown || {};
-      const weekThreeplMetrics = ledger3PL?.metrics || d.shopify?.threeplMetrics || {};
-      
-      agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.returns += d.amazon?.returns || 0;
-      agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += d.amazon?.netProfit || 0;
-      agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0;
-      agg.shopify.threeplCosts += weekThreeplCost; agg.shopify.adSpend += d.shopify?.adSpend || 0; 
-      agg.shopify.metaSpend += d.shopify?.metaSpend || 0; agg.shopify.googleSpend += d.shopify?.googleSpend || 0;
-      agg.shopify.discounts += d.shopify?.discounts || 0;
-      // Recalculate shopify profit with ledger 3PL
-      const shopProfit = (d.shopify?.revenue || 0) - (d.shopify?.cogs || 0) - weekThreeplCost - (d.shopify?.adSpend || 0);
-      agg.shopify.netProfit += shopProfit;
-      // Aggregate 3PL breakdown
-      agg.shopify.threeplBreakdown.storage += weekThreeplBreakdown.storage || 0;
-      agg.shopify.threeplBreakdown.shipping += weekThreeplBreakdown.shipping || 0;
-      agg.shopify.threeplBreakdown.pickFees += weekThreeplBreakdown.pickFees || 0;
-      agg.shopify.threeplBreakdown.boxCharges += weekThreeplBreakdown.boxCharges || 0;
-      agg.shopify.threeplBreakdown.receiving += weekThreeplBreakdown.receiving || 0;
-      agg.shopify.threeplBreakdown.other += weekThreeplBreakdown.other || 0;
-      agg.shopify.threeplMetrics.orderCount += weekThreeplMetrics.orderCount || 0;
-      agg.shopify.threeplMetrics.totalUnits += weekThreeplMetrics.totalUnits || 0;
-      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0; 
-      agg.total.netProfit += (d.amazon?.netProfit || 0) + shopProfit;
-    });
-    // Calculate metrics
-    agg.shopify.threeplMetrics.avgCostPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? (agg.shopify.threeplCosts - agg.shopify.threeplBreakdown.storage) / agg.shopify.threeplMetrics.orderCount : 0;
-    agg.shopify.threeplMetrics.avgUnitsPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? agg.shopify.threeplMetrics.totalUnits / agg.shopify.threeplMetrics.orderCount : 0;
-    agg.amazon.margin = agg.amazon.revenue > 0 ? (agg.amazon.netProfit/agg.amazon.revenue)*100 : 0;
-    agg.amazon.aov = agg.amazon.units > 0 ? agg.amazon.revenue/agg.amazon.units : 0;
-    agg.amazon.roas = agg.amazon.adSpend > 0 ? agg.amazon.revenue/agg.amazon.adSpend : 0;
-    agg.amazon.returnRate = agg.amazon.units > 0 ? (agg.amazon.returns/agg.amazon.units)*100 : 0;
-    agg.shopify.netMargin = agg.shopify.revenue > 0 ? (agg.shopify.netProfit/agg.shopify.revenue)*100 : 0;
-    agg.shopify.aov = agg.shopify.units > 0 ? agg.shopify.revenue/agg.shopify.units : 0;
-    agg.shopify.roas = agg.shopify.adSpend > 0 ? agg.shopify.revenue/agg.shopify.adSpend : 0;
-    agg.total.netMargin = agg.total.revenue > 0 ? (agg.total.netProfit/agg.total.revenue)*100 : 0;
-    agg.total.amazonShare = agg.total.revenue > 0 ? (agg.amazon.revenue/agg.total.revenue)*100 : 0;
-    agg.total.shopifyShare = agg.total.revenue > 0 ? (agg.shopify.revenue/agg.total.revenue)*100 : 0;
-    return agg;
-  };
-
-  const getYearlyData = (year) => {
-    const weeks = Object.entries(allWeeksData).filter(([w]) => new Date(w+'T00:00:00').getFullYear() === year);
-    if (!weeks.length) return null;
-    const agg = { weeks: weeks.map(([w]) => w), 
-      amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0 }, 
-      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, threeplBreakdown: { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 }, threeplMetrics: { orderCount: 0, totalUnits: 0 } }, 
-      total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 }, monthlyBreakdown: {}};
-    weeks.forEach(([w, d]) => {
-      const dt = new Date(w+'T00:00:00'); const mk = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
-      if (!agg.monthlyBreakdown[mk]) agg.monthlyBreakdown[mk] = { revenue: 0, netProfit: 0 };
-      
-      // Get ledger 3PL for this week
-      const ledger3PL = get3PLForWeek(threeplLedger, w);
-      const weekThreeplCost = ledger3PL?.metrics?.totalCost || d.shopify?.threeplCosts || 0;
-      const weekThreeplBreakdown = ledger3PL?.breakdown || d.shopify?.threeplBreakdown || {};
-      const weekThreeplMetrics = ledger3PL?.metrics || d.shopify?.threeplMetrics || {};
-      
-      agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.returns += d.amazon?.returns || 0;
-      agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += d.amazon?.netProfit || 0;
-      agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0;
-      agg.shopify.threeplCosts += weekThreeplCost; agg.shopify.adSpend += d.shopify?.adSpend || 0;
-      agg.shopify.metaSpend += d.shopify?.metaSpend || 0; agg.shopify.googleSpend += d.shopify?.googleSpend || 0;
-      agg.shopify.discounts += d.shopify?.discounts || 0;
-      // Recalculate shopify profit with ledger 3PL
-      const shopProfit = (d.shopify?.revenue || 0) - (d.shopify?.cogs || 0) - weekThreeplCost - (d.shopify?.adSpend || 0);
-      agg.shopify.netProfit += shopProfit;
-      // Aggregate 3PL breakdown
-      agg.shopify.threeplBreakdown.storage += weekThreeplBreakdown.storage || 0;
-      agg.shopify.threeplBreakdown.shipping += weekThreeplBreakdown.shipping || 0;
-      agg.shopify.threeplBreakdown.pickFees += weekThreeplBreakdown.pickFees || 0;
-      agg.shopify.threeplBreakdown.boxCharges += weekThreeplBreakdown.boxCharges || 0;
-      agg.shopify.threeplBreakdown.receiving += weekThreeplBreakdown.receiving || 0;
-      agg.shopify.threeplBreakdown.other += weekThreeplBreakdown.other || 0;
-      agg.shopify.threeplMetrics.orderCount += weekThreeplMetrics.orderCount || 0;
-      agg.shopify.threeplMetrics.totalUnits += weekThreeplMetrics.totalUnits || 0;
-      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0;
-      agg.total.netProfit += (d.amazon?.netProfit || 0) + shopProfit;
-      agg.monthlyBreakdown[mk].revenue += d.total?.revenue || 0; agg.monthlyBreakdown[mk].netProfit += (d.amazon?.netProfit || 0) + shopProfit;
-    });
-    // Calculate metrics
-    agg.shopify.threeplMetrics.avgCostPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? (agg.shopify.threeplCosts - agg.shopify.threeplBreakdown.storage) / agg.shopify.threeplMetrics.orderCount : 0;
-    agg.shopify.threeplMetrics.avgUnitsPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? agg.shopify.threeplMetrics.totalUnits / agg.shopify.threeplMetrics.orderCount : 0;
-    agg.amazon.margin = agg.amazon.revenue > 0 ? (agg.amazon.netProfit/agg.amazon.revenue)*100 : 0;
-    agg.amazon.aov = agg.amazon.units > 0 ? agg.amazon.revenue/agg.amazon.units : 0;
-    agg.amazon.roas = agg.amazon.adSpend > 0 ? agg.amazon.revenue/agg.amazon.adSpend : 0;
-    agg.amazon.returnRate = agg.amazon.units > 0 ? (agg.amazon.returns/agg.amazon.units)*100 : 0;
-    agg.shopify.netMargin = agg.shopify.revenue > 0 ? (agg.shopify.netProfit/agg.shopify.revenue)*100 : 0;
-    agg.shopify.aov = agg.shopify.units > 0 ? agg.shopify.revenue/agg.shopify.units : 0;
-    agg.shopify.roas = agg.shopify.adSpend > 0 ? agg.shopify.revenue/agg.shopify.adSpend : 0;
-    agg.total.netMargin = agg.total.revenue > 0 ? (agg.total.netProfit/agg.total.revenue)*100 : 0;
-    agg.total.amazonShare = agg.total.revenue > 0 ? (agg.amazon.revenue/agg.total.revenue)*100 : 0;
-    agg.total.shopifyShare = agg.total.revenue > 0 ? (agg.shopify.revenue/agg.total.revenue)*100 : 0;
-    return agg;
-  };
+  // Aggregation functions - using utilities from utils/aggregation.js
+  const getMonths = () => getMonthsUtil(allWeeksData);
+  const getYears = () => getYearsUtil(allWeeksData);
+  const getMonthlyData = (ym) => getMonthlyDataUtil(ym, allWeeksData, threeplLedger, get3PLForWeek);
+  const getYearlyData = (year) => getYearlyDataUtil(year, allWeeksData, threeplLedger, get3PLForWeek);
 
   // COMPLETE BACKUP - includes ALL dashboard data
   const exportAll = () => { 
@@ -7381,134 +7279,9 @@ const savePeriods = async (d) => {
   // ============ END ENHANCED FORECAST ============
 
   // AMAZON FORECAST - Parse and store Amazon's forecast data
-  const processAmazonForecast = (csvData) => {
-    if (!csvData || csvData.length === 0) return null;
-    
-    // Get date range from first row
-    const startDateStr = csvData[0]['Start date'];
-    const endDateStr = csvData[0]['End date'];
-    
-    if (!startDateStr || !endDateStr) return null;
-    
-    const startDate = new Date(startDateStr);
-    const endDate = new Date(endDateStr);
-    const daysDiff = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24));
-    
-    // Aggregate forecast data
-    let totalUnits = 0, totalSales = 0, totalProceeds = 0, totalAds = 0;
-    const skuForecasts = {};
-    
-    csvData.forEach(r => {
-      const sku = r['MSKU'] || '';
-      const units = parseInt(r['Net units sold'] || r['Units sold'] || 0);
-      const sales = parseFloat(r['Net sales'] || r['Sales'] || 0);
-      const proceeds = parseFloat(r['Net proceeds total'] || 0);
-      const ads = parseFloat(r['Sponsored Products charge total'] || 0);
-      const cogs = parseFloat(r['Cost of goods sold per unit'] || 0);
-      
-      if (units > 0 || sales > 0) {
-        totalUnits += units;
-        totalSales += sales;
-        totalProceeds += proceeds;
-        totalAds += ads;
-        
-        if (sku) {
-          skuForecasts[sku] = {
-            sku,
-            units,
-            sales,
-            proceeds,
-            ads,
-            cogsPerUnit: cogs,
-            profitPerUnit: units > 0 ? proceeds / units : 0,
-          };
-        }
-      }
-    });
-    
-    // If this is a 30-day forecast (28-31 days), break it into weekly forecasts
-    const isMontlyForecast = daysDiff >= 25 && daysDiff <= 35;
-    const weeksInForecast = Math.ceil(daysDiff / 7);
-    
-    if (isMontlyForecast) {
-      // Return multiple weekly forecasts
-      const weeklyForecasts = {};
-      const weeklyUnits = Math.round(totalUnits / weeksInForecast);
-      const weeklySales = totalSales / weeksInForecast;
-      const weeklyProceeds = totalProceeds / weeksInForecast;
-      const weeklyAds = totalAds / weeksInForecast;
-      
-      // Generate a forecast for each week in the period
-      for (let i = 0; i < weeksInForecast; i++) {
-        const weekStart = new Date(startDate);
-        weekStart.setDate(weekStart.getDate() + (i * 7));
-        const weekKey = getSunday(weekStart);
-        
-        weeklyForecasts[weekKey] = {
-          weekEnding: weekKey,
-          startDate: startDateStr,
-          endDate: endDateStr,
-          uploadedAt: new Date().toISOString(),
-          sourceType: '30-day-split',
-          weekNumber: i + 1,
-          totalWeeks: weeksInForecast,
-          totals: {
-            units: weeklyUnits,
-            sales: weeklySales,
-            proceeds: weeklyProceeds,
-            ads: weeklyAds,
-            profitPerUnit: weeklyUnits > 0 ? weeklyProceeds / weeklyUnits : 0,
-          },
-          skus: Object.fromEntries(Object.entries(skuForecasts).map(([sku, data]) => [sku, {
-            ...data,
-            units: Math.round(data.units / weeksInForecast),
-            sales: data.sales / weeksInForecast,
-            proceeds: data.proceeds / weeksInForecast,
-            ads: data.ads / weeksInForecast,
-          }])),
-          skuCount: Object.keys(skuForecasts).length,
-          // Also store the monthly total for reference
-          monthlyTotal: {
-            units: totalUnits,
-            sales: totalSales,
-            proceeds: totalProceeds,
-            ads: totalAds,
-          },
-        };
-      }
-      
-      return {
-        type: 'monthly',
-        forecasts: weeklyForecasts,
-        period: { startDate: startDateStr, endDate: endDateStr, days: daysDiff },
-        monthlyTotal: { units: totalUnits, sales: totalSales, proceeds: totalProceeds, ads: totalAds },
-      };
-    }
-    
-    // Standard weekly forecast
-    const weekKey = getSunday(endDate);
-    return {
-      type: 'weekly',
-      forecast: {
-        weekEnding: weekKey,
-        startDate: startDateStr,
-        endDate: endDateStr,
-        uploadedAt: new Date().toISOString(),
-        sourceType: 'weekly',
-        totals: {
-          units: totalUnits,
-          sales: totalSales,
-          proceeds: totalProceeds,
-          ads: totalAds,
-          profitPerUnit: totalUnits > 0 ? totalProceeds / totalUnits : 0,
-        },
-        skus: skuForecasts,
-        skuCount: Object.keys(skuForecasts).length,
-      },
-    };
-  };
 
-  // Compare Amazon forecast vs actual results - comprehensive analysis with fuzzy matching
+  // processAmazonForecast extracted to utils/forecast.js
+
   const getAmazonForecastComparison = useMemo(() => {
     const comparisons = [];
     
@@ -19513,245 +19286,27 @@ if (shopifySkuWithShipping.length > 0) {
       setToast({ message: `Settings saved for ${sku}`, type: 'success' });
     };
     
-    const SkuSettingsModalJSX = showSkuSettings ? (
-      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div className="bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
-          <div className="bg-gradient-to-r from-emerald-600 to-teal-600 p-6 flex items-center justify-between">
-            <div>
-              <h2 className="text-white text-xl font-bold">⚙️ SKU Inventory Settings</h2>
-              <p className="text-white/70 text-sm">Configure lead times, reorder points, and alerts per SKU</p>
-            </div>
-            <button onClick={() => { setShowSkuSettings(false); setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); setSkuSettingsSearch(''); }} className="p-2 hover:bg-white/20 rounded-lg text-white">
-              <X className="w-6 h-6" />
-            </button>
-          </div>
-          
-          {/* Global Defaults */}
-          <div className="p-4 bg-slate-800/50 border-b border-slate-700">
-            <h3 className="text-white font-semibold mb-3">🌐 Global Defaults</h3>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-              <div>
-                <label className="text-slate-400 text-xs block mb-1">Default Lead Time</label>
-                <div className="flex items-center gap-2">
-                  <input 
-                    type="number" 
-                    value={leadTimeSettings.defaultLeadTimeDays} 
-                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, defaultLeadTimeDays: parseInt(e.target.value) || 14 }))}
-                    className="w-20 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
-                  />
-                  <span className="text-slate-500 text-xs">days</span>
-                </div>
-              </div>
-              <div>
-                <label className="text-slate-400 text-xs block mb-1">Reorder Trigger</label>
-                <div className="flex items-center gap-2">
-                  <input 
-                    type="number" 
-                    value={leadTimeSettings.reorderTriggerDays} 
-                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, reorderTriggerDays: parseInt(e.target.value) || 60 }))}
-                    className="w-20 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
-                  />
-                  <span className="text-slate-500 text-xs">days</span>
-                </div>
-              </div>
-              <div>
-                <label className="text-slate-400 text-xs block mb-1">Amazon Min Supply</label>
-                <div className="flex items-center gap-2">
-                  <input 
-                    type="number" 
-                    value={leadTimeSettings.channelRules?.amazon?.minDaysOfSupply || 60} 
-                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, channelRules: { ...prev.channelRules, amazon: { ...prev.channelRules?.amazon, minDaysOfSupply: parseInt(e.target.value) || 60 }}}))}
-                    className="w-20 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
-                  />
-                  <span className="text-slate-500 text-xs">days</span>
-                </div>
-              </div>
-              <div>
-                <label className="text-slate-400 text-xs block mb-1">3PL Default Alert</label>
-                <div className="flex items-center gap-2">
-                  <input 
-                    type="number" 
-                    value={leadTimeSettings.channelRules?.threepl?.defaultQtyThreshold || 50} 
-                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, channelRules: { ...prev.channelRules, threepl: { ...prev.channelRules?.threepl, defaultQtyThreshold: parseInt(e.target.value) || 50 }}}))}
-                    className="w-20 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
-                  />
-                  <span className="text-slate-500 text-xs">units</span>
-                </div>
-              </div>
-              <div>
-                <label className="text-slate-400 text-xs block mb-1">Reorder Buffer</label>
-                <div className="flex items-center gap-2">
-                  <input 
-                    type="number" 
-                    value={leadTimeSettings.reorderBuffer || 7} 
-                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, reorderBuffer: parseInt(e.target.value) || 7 }))}
-                    className="w-20 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
-                  />
-                  <span className="text-slate-500 text-xs">days</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          {/* Search and Filter */}
-          <div className="p-4 border-b border-slate-700 flex gap-4 items-center">
-            <input 
-              type="text"
-              placeholder="🔍 Search SKUs..."
-              value={skuSettingsSearch}
-              onChange={(e) => setSkuSettingsSearch(e.target.value)}
-              className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white"
-            />
-            <label className="flex items-center gap-2 text-sm text-slate-400 whitespace-nowrap">
-              <input 
-                type="checkbox" 
-                checked={invShowZeroStock} 
-                onChange={(e) => setInvShowZeroStock(e.target.checked)}
-                className="rounded bg-slate-700 border-slate-600"
-              />
-              Show zero stock
-            </label>
-          </div>
-          
-          {/* SKU List */}
-          <div className="flex-1 overflow-y-auto p-4">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-slate-900 z-10">
-                <tr className="border-b border-slate-700">
-                  <th className="text-left text-slate-400 py-2 px-2" style={{width: '200px'}}>SKU / Product</th>
-                  <th className="text-right text-slate-400 py-2 px-2" style={{width: '80px'}}>Amazon</th>
-                  <th className="text-right text-slate-400 py-2 px-2" style={{width: '80px'}}>3PL</th>
-                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>Lead Time</th>
-                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>Reorder Qty</th>
-                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>3PL Alert Qty</th>
-                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>AMZ Alert Days</th>
-                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>Target Days</th>
-                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '120px'}}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {skuSettingsFilteredSkus.map(item => {
-                  const settings = getSkuSettings(item.sku);
-                  const isEditing = skuSettingsEditItem === item.sku;
-                  
-                  if (isEditing) {
-                    return (
-                      <tr key={item.sku} className="border-b border-slate-700/50 bg-emerald-900/20">
-                        <td className="py-3 px-2">
-                          <p className="text-white font-medium">{item.sku}</p>
-                          <p className="text-slate-500 text-xs truncate max-w-[180px]">{item.name}</p>
-                        </td>
-                        <td className="text-right py-3 px-2 text-orange-400 font-medium">{formatNumber(item.amazonQty || 0)}</td>
-                        <td className="text-right py-3 px-2 text-violet-400 font-medium">{formatNumber(item.threeplQty || 0)}</td>
-                        <td className="py-3 px-2 text-center">
-                          <input 
-                            type="number" 
-                            value={skuSettingsEditForm.leadTime || ''} 
-                            onChange={(e) => setSkuSettingsEditForm(f => ({...f, leadTime: e.target.value}))} 
-                            placeholder={String(leadTimeSettings.defaultLeadTimeDays)} 
-                            className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" 
-                          />
-                        </td>
-                        <td className="py-3 px-2 text-center">
-                          <input 
-                            type="number" 
-                            value={skuSettingsEditForm.reorderPoint || ''} 
-                            onChange={(e) => setSkuSettingsEditForm(f => ({...f, reorderPoint: e.target.value}))} 
-                            placeholder="—" 
-                            className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" 
-                          />
-                        </td>
-                        <td className="py-3 px-2 text-center">
-                          <input 
-                            type="number" 
-                            value={skuSettingsEditForm.threeplAlertQty || ''} 
-                            onChange={(e) => setSkuSettingsEditForm(f => ({...f, threeplAlertQty: e.target.value}))} 
-                            placeholder="50" 
-                            className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" 
-                          />
-                        </td>
-                        <td className="py-3 px-2 text-center">
-                          <input 
-                            type="number" 
-                            value={skuSettingsEditForm.amazonAlertDays || ''} 
-                            onChange={(e) => setSkuSettingsEditForm(f => ({...f, amazonAlertDays: e.target.value}))} 
-                            placeholder="60" 
-                            className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" 
-                          />
-                        </td>
-                        <td className="py-3 px-2 text-center">
-                          <input 
-                            type="number" 
-                            value={skuSettingsEditForm.targetDays || ''} 
-                            onChange={(e) => setSkuSettingsEditForm(f => ({...f, targetDays: e.target.value}))} 
-                            placeholder="90" 
-                            className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" 
-                          />
-                        </td>
-                        <td className="py-3 px-2 text-center whitespace-nowrap">
-                          <button onClick={() => saveSkuSettingsHandler(item.sku, { 
-                            leadTime: skuSettingsEditForm.leadTime ? parseInt(skuSettingsEditForm.leadTime) : undefined,
-                            reorderPoint: skuSettingsEditForm.reorderPoint ? parseInt(skuSettingsEditForm.reorderPoint) : undefined,
-                            threeplAlertQty: skuSettingsEditForm.threeplAlertQty ? parseInt(skuSettingsEditForm.threeplAlertQty) : undefined,
-                            amazonAlertDays: skuSettingsEditForm.amazonAlertDays ? parseInt(skuSettingsEditForm.amazonAlertDays) : undefined,
-                            targetDays: skuSettingsEditForm.targetDays ? parseInt(skuSettingsEditForm.targetDays) : undefined,
-                            alertEnabled: true,
-                          })} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-white text-xs mr-2">Save</button>
-                          <button onClick={() => { setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); }} className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded text-white text-xs">Cancel</button>
-                        </td>
-                      </tr>
-                    );
-                  }
-                  
-                  const hasCustomSettings = settings.leadTime || settings.reorderPoint || settings.threeplAlertQty || settings.amazonAlertDays || settings.targetDays;
-                  
-                  return (
-                    <tr key={item.sku} className={`border-b border-slate-700/50 hover:bg-slate-800/30 ${hasCustomSettings ? 'bg-emerald-900/10' : ''}`}>
-                      <td className="py-2 px-2">
-                        <div className="flex items-center gap-2">
-                          {hasCustomSettings && <span className="w-2 h-2 bg-emerald-500 rounded-full flex-shrink-0" title="Custom settings" />}
-                          <div>
-                            <p className="text-white font-medium">{item.sku}</p>
-                            <p className="text-slate-500 text-xs truncate max-w-[160px]">{item.name}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="text-right py-2 px-2 text-orange-400">{formatNumber(item.amazonQty || 0)}</td>
-                      <td className="text-right py-2 px-2 text-violet-400">{formatNumber(item.threeplQty || 0)}</td>
-                      <td className="text-center py-2 px-2">{settings.leadTime ? <span className="text-emerald-400">{settings.leadTime}d</span> : <span className="text-slate-500">{leadTimeSettings.defaultLeadTimeDays}d</span>}</td>
-                      <td className="text-center py-2 px-2">{settings.reorderPoint ? <span className="text-emerald-400">{formatNumber(settings.reorderPoint)}</span> : <span className="text-slate-500">—</span>}</td>
-                      <td className="text-center py-2 px-2">
-                        {settings.threeplAlertQty ? <span className="text-amber-400">{formatNumber(settings.threeplAlertQty)}</span> : <span className="text-slate-500">—</span>}
-                      </td>
-                      <td className="text-center py-2 px-2">
-                        {settings.amazonAlertDays ? <span className="text-amber-400">{settings.amazonAlertDays}d</span> : <span className="text-slate-500">—</span>}
-                      </td>
-                      <td className="text-center py-2 px-2">
-                        {settings.targetDays ? <span className="text-cyan-400">{settings.targetDays}d</span> : <span className="text-slate-500">90d</span>}
-                      </td>
-                      <td className="py-2 px-2 text-center">
-                        <button onClick={() => { setSkuSettingsEditItem(item.sku); setSkuSettingsEditForm(settings); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs">Edit</button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {skuSettingsFilteredSkus.length === 0 && (
-              <div className="text-center py-8 text-slate-400">No SKUs found matching your search</div>
-            )}
-          </div>
-          
-          {/* Footer with summary */}
-          <div className="p-4 border-t border-slate-700 bg-slate-800/50 flex items-center justify-between">
-            <div className="text-slate-400 text-sm">
-              <span className="text-white font-medium">{Object.keys(leadTimeSettings.skuSettings || {}).length}</span> SKUs with custom settings
-            </div>
-            <button onClick={() => { setShowSkuSettings(false); setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); setSkuSettingsSearch(''); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white">Close</button>
-          </div>
-        </div>
-      </div>
-    ) : null;
+    // SkuSettingsModal extracted to separate component
+    const SkuSettingsModalJSX = (
+      <SkuSettingsModal
+        showSkuSettings={showSkuSettings}
+        setShowSkuSettings={setShowSkuSettings}
+        skuSettingsEditItem={skuSettingsEditItem}
+        setSkuSettingsEditItem={setSkuSettingsEditItem}
+        skuSettingsEditForm={skuSettingsEditForm}
+        setSkuSettingsEditForm={setSkuSettingsEditForm}
+        skuSettingsSearch={skuSettingsSearch}
+        setSkuSettingsSearch={setSkuSettingsSearch}
+        leadTimeSettings={leadTimeSettings}
+        setLeadTimeSettings={setLeadTimeSettings}
+        invShowZeroStock={invShowZeroStock}
+        setInvShowZeroStock={setInvShowZeroStock}
+        skuSettingsFilteredSkus={skuSettingsFilteredSkus}
+        getSkuSettings={getSkuSettings}
+        saveSkuSettingsHandler={saveSkuSettingsHandler}
+        formatNumber={formatNumber}
+      />
+    );
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
