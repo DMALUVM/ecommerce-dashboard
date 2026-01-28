@@ -7306,18 +7306,44 @@ const savePeriods = async (d) => {
       if (dailyImported > 0) {
         console.log('Saving daily data...');
         setAllDaysData(updatedDailyData);
+        
+        // Limit daily data to last 90 days to prevent quota issues
+        const sortedDays = Object.keys(updatedDailyData).sort();
+        const daysToKeep = sortedDays.slice(-90);
+        const trimmedDailyData = {};
+        daysToKeep.forEach(d => { trimmedDailyData[d] = updatedDailyData[d]; });
+        
         try { 
-          localStorage.setItem('ecommerce_daily_data_v1', JSON.stringify(updatedDailyData)); 
-          console.log('Daily data saved to localStorage');
+          localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(trimmedDailyData)); 
+          console.log('Daily data saved to localStorage (' + daysToKeep.length + ' days)');
         } catch(e) {
           console.error('Failed to save daily data to localStorage:', e.message);
-          // Try saving to LZ1 key instead
+          // Try with even fewer days
           try {
-            const compressed = JSON.stringify(updatedDailyData);
-            localStorage.setItem('ecommerce_daily_sales_v1', compressed);
-            console.log('Saved to LZ1 key instead');
+            const last30 = sortedDays.slice(-30);
+            const minimal = {};
+            last30.forEach(d => { minimal[d] = updatedDailyData[d]; });
+            localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(minimal));
+            console.log('Saved last 30 days only due to quota');
           } catch(e2) {
-            console.error('Also failed LZ1 save:', e2.message);
+            console.error('Also failed with 30 days:', e2.message);
+            // Last resort - just save without skuData to reduce size
+            try {
+              const last30 = sortedDays.slice(-30);
+              const compact = {};
+              last30.forEach(d => { 
+                const day = updatedDailyData[d];
+                compact[d] = {
+                  ...day,
+                  amazon: day.amazon ? { ...day.amazon, skuData: [] } : day.amazon,
+                  shopify: day.shopify ? { ...day.shopify, skuData: [] } : day.shopify,
+                };
+              });
+              localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(compact));
+              console.log('Saved compact version (no SKU data) due to quota');
+            } catch(e3) {
+              console.error('Cannot save daily data - localStorage full');
+            }
           }
         }
       }
