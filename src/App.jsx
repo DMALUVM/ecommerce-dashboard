@@ -5,7 +5,7 @@ import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, Ba
 import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
 import { formatCurrency, formatPercent, formatNumber } from './utils/format';
-import { hasDailySalesData, formatDateKey, getSunday } from './utils/date';
+import { hasDailySalesData, formatDateKey, getSunday, migrateWeekKeys } from './utils/date';
 import { deriveWeeksFromDays, mergeWeekData } from './utils/weekly';
 import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from './utils/ads';
 import { withShippingSkuRow, sumSkuRows } from './utils/reconcile';
@@ -1509,8 +1509,14 @@ const loadFromLocal = useCallback(() => {
     const r = lsGet(STORAGE_KEY);
     if (r) {
       const d = JSON.parse(r);
-      setAllWeeksData(d);
-      const w = Object.keys(d).sort().reverse();
+      // Migrate any week keys that aren't Sundays (timezone bug fix)
+      const { migratedData, migrations } = migrateWeekKeys(d);
+      if (migrations.length > 0) {
+        console.log('Migrated week keys:', migrations);
+        lsSet(STORAGE_KEY, JSON.stringify(migratedData));
+      }
+      setAllWeeksData(migratedData);
+      const w = Object.keys(migratedData).sort().reverse();
       if (w.length) { setSelectedWeek(w[0]); }
     }
   } catch {}
@@ -1904,9 +1910,11 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     // Apply cloud data to state
     isLoadingDataRef.current = true;
     
-    setAllWeeksData(cloud.sales || {});
+    // Migrate any week keys that aren't Sundays (timezone bug fix)
+    const { migratedData: migratedSales } = migrateWeekKeys(cloud.sales || {});
+    setAllWeeksData(migratedSales);
     setAllDaysData(cloud.dailySales || {}); // Load daily data
-    const w = Object.keys(cloud.sales || {}).sort().reverse();
+    const w = Object.keys(migratedSales).sort().reverse();
     if (w.length) { setSelectedWeek(w[0]); }
     setInvHistory(cloud.inventory || {});
     setSavedCogs(cloud.cogs?.lookup || {});
@@ -1941,7 +1949,17 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.theme) setTheme(cloud.theme);
     if (cloud.widgetConfig) setWidgetConfig(cloud.widgetConfig);
     if (cloud.productionPipeline) setProductionPipeline(cloud.productionPipeline);
-    if (cloud.threeplLedger) setThreeplLedger(cloud.threeplLedger);
+    // Merge 3PL data - prefer source with more orders to avoid losing local uploads
+    if (cloud.threeplLedger) {
+      const cloudOrders = Object.keys(cloud.threeplLedger.orders || {}).length;
+      const localOrders = Object.keys(threeplLedger?.orders || {}).length;
+      if (cloudOrders >= localOrders) {
+        setThreeplLedger(cloud.threeplLedger);
+      } else {
+        // Keep local 3PL data - it has more orders
+        console.log('Keeping local 3PL data with', localOrders, 'orders (cloud has', cloudOrders, ')');
+      }
+    }
     if (cloud.amazonCampaigns) setAmazonCampaigns(cloud.amazonCampaigns);
     
     // Load self-learning forecast data
@@ -27705,8 +27723,39 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           
           {/* Shopify Ads (Meta/Google) View */}
           {adsViewMode === 'shopify' && (() => {
-            // Aggregate Shopify ads data from daily data
+            // Get date range based on current selection
+            const getDateRange = () => {
+              const now = new Date();
+              switch (adsTimeTab) {
+                case 'daily':
+                  return adsSelectedDay ? { start: adsSelectedDay, end: adsSelectedDay } : { start: sortedDays[sortedDays.length - 1], end: sortedDays[sortedDays.length - 1] };
+                case 'weekly':
+                  if (!adsSelectedWeek) return null;
+                  const weekEnd = new Date(adsSelectedWeek + 'T12:00:00');
+                  const weekStart = new Date(weekEnd);
+                  weekStart.setDate(weekEnd.getDate() - 6);
+                  return { start: weekStart.toISOString().split('T')[0], end: adsSelectedWeek };
+                case 'monthly':
+                  const monthStart = `${adsYear}-${String(adsMonth + 1).padStart(2, '0')}-01`;
+                  const monthEnd = new Date(adsYear, adsMonth + 1, 0);
+                  return { start: monthStart, end: monthEnd.toISOString().split('T')[0] };
+                case 'quarterly':
+                  const qStart = `${adsYear}-${String((adsQuarter - 1) * 3 + 1).padStart(2, '0')}-01`;
+                  const qEnd = new Date(adsYear, adsQuarter * 3, 0);
+                  return { start: qStart, end: qEnd.toISOString().split('T')[0] };
+                case 'yearly':
+                  return { start: `${adsYear}-01-01`, end: `${adsYear}-12-31` };
+                default:
+                  return null;
+              }
+            };
+            
+            const dateRange = getDateRange();
+            
+            // Aggregate Shopify ads data from daily data - filtered by date range
             const daysWithShopifyAds = sortedDays.filter(d => {
+              // Apply date filter
+              if (dateRange && (d < dateRange.start || d > dateRange.end)) return false;
               const day = allDaysData[d];
               const meta = day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
               const google = day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
@@ -27779,6 +27828,41 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   </div>
                 ) : (
                   <>
+                    {/* Date Range Selector */}
+                    <div className="flex flex-wrap items-center gap-3 mb-4 p-3 bg-slate-800/50 rounded-xl">
+                      <div className="flex gap-1">
+                        {['daily', 'weekly', 'monthly', 'quarterly', 'yearly'].map(tab => (
+                          <button key={tab} onClick={() => setAdsTimeTab(tab)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all capitalize ${adsTimeTab === tab ? 'bg-gradient-to-r from-blue-600 to-red-600 text-white' : 'text-slate-400 hover:bg-slate-700'}`}>
+                            {tab}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-2 ml-auto">
+                        <select value={adsYear} onChange={(e) => setAdsYear(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                          {[...new Set(sortedDays.map(d => parseInt(d.substring(0, 4))))].sort((a, b) => b - a).map(y => <option key={y} value={y}>{y}</option>)}
+                        </select>
+                        {adsTimeTab === 'monthly' && (
+                          <select value={adsMonth} onChange={(e) => setAdsMonth(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                            {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, i) => <option key={i} value={i}>{m}</option>)}
+                          </select>
+                        )}
+                        {adsTimeTab === 'quarterly' && (
+                          <select value={adsQuarter} onChange={(e) => setAdsQuarter(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                            {[1, 2, 3, 4].map(q => <option key={q} value={q}>Q{q}</option>)}
+                          </select>
+                        )}
+                        {adsTimeTab === 'weekly' && (
+                          <select value={adsSelectedWeek || ''} onChange={(e) => setAdsSelectedWeek(e.target.value)} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                            {sortedWeeks.filter(w => w.startsWith(String(adsYear))).slice().reverse().map(w => <option key={w} value={w}>{new Date(w + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</option>)}
+                          </select>
+                        )}
+                        {adsTimeTab === 'daily' && (
+                          <select value={adsSelectedDay || ''} onChange={(e) => setAdsSelectedDay(e.target.value)} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                            {sortedDays.filter(d => d.startsWith(String(adsYear))).slice().reverse().slice(0, 60).map(d => <option key={d} value={d}>{new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</option>)}
+                          </select>
+                        )}
+                      </div>
+                    </div>
                     {/* Summary Cards */}
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
                       <div className="bg-gradient-to-br from-violet-900/30 to-slate-800/50 rounded-xl border border-violet-500/30 p-4">
@@ -27906,8 +27990,64 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           })()}
           
           {/* Historical Trends View */}
-          {adsViewMode === 'trends' && (
+          {adsViewMode === 'trends' && (() => {
+            // Get date range based on current selection
+            const getDateRange = () => {
+              switch (adsTimeTab) {
+                case 'daily':
+                  return adsSelectedDay ? { start: adsSelectedDay, end: adsSelectedDay } : null;
+                case 'weekly':
+                  if (!adsSelectedWeek) return null;
+                  const weekEnd = new Date(adsSelectedWeek + 'T12:00:00');
+                  const weekStart = new Date(weekEnd);
+                  weekStart.setDate(weekEnd.getDate() - 6);
+                  return { start: weekStart.toISOString().split('T')[0], end: adsSelectedWeek };
+                case 'monthly':
+                  const monthStart = `${adsYear}-${String(adsMonth + 1).padStart(2, '0')}-01`;
+                  const monthEnd = new Date(adsYear, adsMonth + 1, 0);
+                  return { start: monthStart, end: monthEnd.toISOString().split('T')[0] };
+                case 'quarterly':
+                  const qStart = `${adsYear}-${String((adsQuarter - 1) * 3 + 1).padStart(2, '0')}-01`;
+                  const qEnd = new Date(adsYear, adsQuarter * 3, 0);
+                  return { start: qStart, end: qEnd.toISOString().split('T')[0] };
+                case 'yearly':
+                  return { start: `${adsYear}-01-01`, end: `${adsYear}-12-31` };
+                default:
+                  return null;
+              }
+            };
+            
+            const dateRange = getDateRange();
+            
+            return (
             <div>
+              {/* Date Range Selector */}
+              <div className="flex flex-wrap items-center gap-3 mb-4 p-3 bg-slate-800/50 rounded-xl">
+                <div className="flex gap-1">
+                  {['daily', 'weekly', 'monthly', 'quarterly', 'yearly'].map(tab => (
+                    <button key={tab} onClick={() => setAdsTimeTab(tab)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all capitalize ${adsTimeTab === tab ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white' : 'text-slate-400 hover:bg-slate-700'}`}>
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 ml-auto">
+                  <select value={adsYear} onChange={(e) => setAdsYear(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                    {[...new Set(Object.keys(amazonCampaigns?.historicalDaily || {}).map(d => parseInt(d.substring(0, 4))))].sort((a, b) => b - a).map(y => <option key={y} value={y}>{y}</option>)}
+                    {![...new Set(Object.keys(amazonCampaigns?.historicalDaily || {}).map(d => parseInt(d.substring(0, 4))))].includes(adsYear) && <option value={adsYear}>{adsYear}</option>}
+                  </select>
+                  {adsTimeTab === 'monthly' && (
+                    <select value={adsMonth} onChange={(e) => setAdsMonth(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                      {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, i) => <option key={i} value={i}>{m}</option>)}
+                    </select>
+                  )}
+                  {adsTimeTab === 'quarterly' && (
+                    <select value={adsQuarter} onChange={(e) => setAdsQuarter(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                      {[1, 2, 3, 4].map(q => <option key={q} value={q}>Q{q}</option>)}
+                    </select>
+                  )}
+                </div>
+              </div>
+              
               {!hasHistoricalData ? (
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-8 text-center">
                   <div className="w-16 h-16 bg-violet-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -27920,8 +28060,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   </button>
                 </div>
               ) : (() => {
-                // Calculate historical metrics
-                const histDates = Object.keys(historicalDaily).sort();
+                // Calculate historical metrics - filtered by date range
+                const allDates = Object.keys(historicalDaily).sort();
+                const histDates = dateRange 
+                  ? allDates.filter(d => d >= dateRange.start && d <= dateRange.end)
+                  : allDates;
                 const dateRange = { start: histDates[0], end: histDates[histDates.length - 1] };
                 
                 // Monthly aggregation
@@ -28071,7 +28214,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 );
               })()}
             </div>
-          )}
+          );
+        })()}
           
           {/* Amazon Campaigns View */}
           {adsViewMode === 'campaigns' && (
