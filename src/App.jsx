@@ -20,8 +20,8 @@ import {
 const DEFAULT_DASHBOARD_WIDGETS = {
   widgets: [
     { id: 'alerts', name: 'Alerts & Notifications', enabled: true, order: 0 },
-    { id: 'todayPerformance', name: 'WTD / MTD Performance', enabled: true, order: 1 },
-    { id: 'weekProgress', name: 'Weekly Goal Progress', enabled: true, order: 2 },
+    { id: 'todayPerformance', name: 'Last Week & MTD Performance', enabled: true, order: 1 },
+    { id: 'weekProgress', name: 'This Week\'s Goal', enabled: true, order: 2 },
     { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 3 },
     { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 4 },
     { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 5 },
@@ -18794,8 +18794,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       
       if (wtd.daysCount === 0 && mtd.daysCount === 0) return null;
       
-      // Format week label
-      const weekLabel = `Week of ${weekStartDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+      // Format week label - show full date range for clarity
+      const weekLabel = `${weekStartDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
       
       return {
         wtd: {
@@ -19132,7 +19132,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                         <div className="flex items-center justify-between mb-3">
                           <h4 className="text-sm font-semibold text-violet-400 flex items-center gap-2">
                             <Calendar className="w-4 h-4" />
-                            {periodMetrics.wtd.weekLabel || 'Last Week'}
+                            Last Week: {periodMetrics.wtd.weekLabel || ''}
                           </h4>
                           <span className="text-xs text-slate-500">{periodMetrics.wtd.daysCount} days</span>
                         </div>
@@ -19173,7 +19173,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                         <div className="flex items-center justify-between mb-3">
                           <h4 className="text-sm font-semibold text-cyan-400 flex items-center gap-2">
                             <CalendarRange className="w-4 h-4" />
-                            {periodMetrics.monthName} MTD
+                            {periodMetrics.monthName} 1-{periodMetrics.latestDay ? new Date(periodMetrics.latestDay + 'T12:00:00').getDate() : ''}
                           </h4>
                           <span className="text-xs text-slate-500">{periodMetrics.mtd.daysCount} days</span>
                         </div>
@@ -19243,7 +19243,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       weeklyProgress.onTrack ? 'text-emerald-400' : weeklyProgress.projectedPct >= 80 ? 'text-amber-400' : 'text-rose-400'
                     }`}>
                       <Target className="w-4 h-4" />
-                      Weekly Goal Progress
+                      This Week's Goal
                     </h3>
                     <span className="text-white font-bold">
                       {formatCurrency(weeklyProgress.currentRevenue)} / {formatCurrency(weeklyProgress.goal)}
