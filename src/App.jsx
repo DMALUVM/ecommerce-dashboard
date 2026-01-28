@@ -16,6 +16,23 @@ import {
   LZCompress, COMPRESSED_KEYS, lsGet, lsSet
 } from './utils/storage';
 
+// Dashboard widget configuration - defined at module level for consistent access
+const DEFAULT_DASHBOARD_WIDGETS = {
+  widgets: [
+    { id: 'alerts', name: 'Alerts & Notifications', enabled: true, order: 0 },
+    { id: 'todayPerformance', name: 'WTD / MTD Performance', enabled: true, order: 1 },
+    { id: 'weekProgress', name: 'Weekly Goal Progress', enabled: true, order: 2 },
+    { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 3 },
+    { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 4 },
+    { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 5 },
+    { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 6 },
+    { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 7 },
+    { id: 'dataHub', name: 'Data Hub', enabled: false, order: 8 },
+    { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 9 },
+  ],
+  layout: 'auto',
+};
+
 
 // Parse QBO Transaction Detail CSV
 const parseQBOTransactions = (content, categoryOverrides = {}) => {
@@ -1069,7 +1086,7 @@ export default function Dashboard() {
   const [threeplDateRange, setThreeplDateRange] = useState('all'); // 'week' | '4weeks' | 'month' | 'quarter' | 'year' | 'all' | 'custom'
   const [threeplCustomStart, setThreeplCustomStart] = useState('');
   const [threeplCustomEnd, setThreeplCustomEnd] = useState('');
-  const [uploadTab, setUploadTab] = useState('weekly'); // For upload view tabs: 'daily' | 'weekly' | 'period'
+  const [uploadTab, setUploadTab] = useState('amazon-bulk'); // For upload view tabs
   const [dashboardRange, setDashboardRange] = useState('month'); // 'yesterday' | 'week' | 'month' | 'quarter' | 'year'
   const [trendsTab, setTrendsTab] = useState('daily'); // 'daily' | 'weekly' | 'monthly' | 'yearly' for trends view
   const [trendsChannel, setTrendsChannel] = useState('combined'); // 'amazon' | 'shopify' | 'combined' for trends filtering
@@ -1519,36 +1536,23 @@ const handleLogout = async () => {
   const [showUploadHelp, setShowUploadHelp] = useState(false);
   
   // NEW FEATURES STATE
-  // 1. Dashboard Widget Customization
-  const DEFAULT_DASHBOARD_WIDGETS = {
-    widgets: [
-      { id: 'alerts', name: 'Alerts & Notifications', enabled: true, order: 0 },
-      { id: 'weekProgress', name: 'Weekly Goal Progress', enabled: true, order: 1 },
-      { id: 'todayPerformance', name: "Today's Performance", enabled: true, order: 2 },
-      { id: 'channelSplit', name: 'Channel Performance', enabled: true, order: 3 },
-      { id: 'revenueChart', name: 'Revenue Trend (7 Days)', enabled: true, order: 4 },
-      { id: 'topSkus', name: 'Top SKUs Today', enabled: true, order: 5 },
-      { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 6 },
-      { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 7 },
-      { id: 'inventoryAlerts', name: 'Inventory Alerts', enabled: true, order: 8 },
-      { id: 'adPerformance', name: 'Ad Performance Summary', enabled: true, order: 9 },
-      { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 10 },
-      { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 11 },
-      { id: 'dataHub', name: 'Data Hub', enabled: false, order: 12 },
-      { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 13 },
-      { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 14 },
-    ],
-    layout: 'auto', // 'auto' | 'compact' | 'expanded'
-  };
+  // 1. Dashboard Widget Customization (DEFAULT_DASHBOARD_WIDGETS defined at module level)
   const [widgetConfig, setWidgetConfig] = useState(() => {
     try { 
       const stored = safeLocalStorageGet(WIDGET_KEY, null);
-      if (stored && stored.widgets) return stored;
-      return DEFAULT_DASHBOARD_WIDGETS;
-    } catch { return DEFAULT_DASHBOARD_WIDGETS; }
+      // Must have widgets array with at least some items - validate each widget has required fields
+      if (stored && Array.isArray(stored.widgets) && stored.widgets.length > 0) {
+        // Validate structure
+        const isValid = stored.widgets.every(w => w.id && typeof w.enabled === 'boolean');
+        if (isValid) return stored;
+      }
+      // Invalid or missing - use defaults
+      return JSON.parse(JSON.stringify(DEFAULT_DASHBOARD_WIDGETS));
+    } catch { 
+      return JSON.parse(JSON.stringify(DEFAULT_DASHBOARD_WIDGETS)); 
+    }
   });
   const [editingWidgets, setEditingWidgets] = useState(false);
-  const [draggedWidget, setDraggedWidget] = useState(null);
   
   // Production Pipeline
   const PRODUCTION_KEY = 'ecommerce_production_v1';
@@ -2283,9 +2287,11 @@ allWeekKeys.forEach((weekKey) => {
     localStorage.setItem('ecommerce_production_v1', JSON.stringify(productionPipeline));
   }, [productionPipeline]);
   
-  // Save widget config to localStorage
+  // Save widget config to localStorage (only if valid)
   useEffect(() => {
-    if (widgetConfig) localStorage.setItem(WIDGET_KEY, JSON.stringify(widgetConfig));
+    if (widgetConfig && Array.isArray(widgetConfig.widgets) && widgetConfig.widgets.length > 0) {
+      localStorage.setItem(WIDGET_KEY, JSON.stringify(widgetConfig));
+    }
   }, [widgetConfig]);
   
   // Save theme to localStorage
@@ -14488,40 +14494,40 @@ if (shopifySkuWithShipping.length > 0) {
   const WidgetConfigModal = () => {
     if (!editingWidgets) return null;
     
-    const enabledWidgets = (widgetConfig?.widgets || []).filter(w => w.enabled).sort((a, b) => a.order - b.order);
-    const disabledWidgets = (widgetConfig?.widgets || []).filter(w => !w.enabled).sort((a, b) => a.order - b.order);
+    // Get widgets from state, falling back to defaults if needed
+    const widgets = (widgetConfig?.widgets && widgetConfig.widgets.length > 0) 
+      ? widgetConfig.widgets 
+      : DEFAULT_DASHBOARD_WIDGETS.widgets;
+    
+    const enabledWidgets = widgets.filter(w => w.enabled).sort((a, b) => (a.order || 0) - (b.order || 0));
+    const disabledWidgets = widgets.filter(w => !w.enabled).sort((a, b) => (a.order || 0) - (b.order || 0));
     
     const toggleWidget = (widgetId) => {
-      setWidgetConfig(prev => ({
-        ...prev,
-        widgets: prev.widgets.map(w => 
-          w.id === widgetId ? { ...w, enabled: !w.enabled } : w
-        )
-      }));
+      const newWidgets = widgets.map(w => 
+        w.id === widgetId ? { ...w, enabled: !w.enabled } : { ...w }
+      );
+      setWidgetConfig({ widgets: newWidgets, layout: 'auto' });
     };
     
     const moveWidget = (widgetId, direction) => {
-      setWidgetConfig(prev => {
-        const widgets = [...prev.widgets].sort((a, b) => a.order - b.order);
-        const idx = widgets.findIndex(w => w.id === widgetId);
-        if (idx === -1) return prev;
-        
-        const newIdx = direction === 'up' ? idx - 1 : idx + 1;
-        if (newIdx < 0 || newIdx >= widgets.length) return prev;
-        
-        // Swap orders
-        const temp = widgets[idx].order;
-        widgets[idx].order = widgets[newIdx].order;
-        widgets[newIdx].order = temp;
-        
-        return { ...prev, widgets };
-      });
+      const sortedWidgets = [...widgets].sort((a, b) => (a.order || 0) - (b.order || 0));
+      const idx = sortedWidgets.findIndex(w => w.id === widgetId);
+      if (idx === -1) return;
+      
+      const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (newIdx < 0 || newIdx >= sortedWidgets.length) return;
+      
+      // Swap orders
+      const tempOrder = sortedWidgets[idx].order;
+      sortedWidgets[idx] = { ...sortedWidgets[idx], order: sortedWidgets[newIdx].order };
+      sortedWidgets[newIdx] = { ...sortedWidgets[newIdx], order: tempOrder };
+      
+      setWidgetConfig({ widgets: sortedWidgets, layout: 'auto' });
     };
     
     const resetToDefaults = () => {
-      if (confirm('Reset dashboard to default layout?')) {
-        setWidgetConfig(DEFAULT_DASHBOARD_WIDGETS);
-      }
+      localStorage.removeItem(WIDGET_KEY);
+      setWidgetConfig(JSON.parse(JSON.stringify(DEFAULT_DASHBOARD_WIDGETS)));
     };
     
     return (
@@ -14585,12 +14591,12 @@ if (shopifySkuWithShipping.length > 0) {
             </div>
             
             {/* Hidden Widgets */}
-            {disabledWidgets.length > 0 && (
-              <div>
-                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-2">
-                  <EyeOff className="w-4 h-4" />
-                  Hidden Widgets ({disabledWidgets.length})
-                </h3>
+            <div>
+              <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-2">
+                <EyeOff className="w-4 h-4" />
+                Hidden Widgets ({disabledWidgets.length})
+              </h3>
+              {disabledWidgets.length > 0 ? (
                 <div className="space-y-2">
                   {disabledWidgets.map(widget => (
                     <div key={widget.id} className="flex items-center gap-3 bg-slate-800/30 border border-slate-700/50 rounded-xl p-3 opacity-60 hover:opacity-100 transition-opacity">
@@ -14607,12 +14613,17 @@ if (shopifySkuWithShipping.length > 0) {
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
+              ) : (
+                <p className="text-slate-500 text-sm italic">All widgets are currently visible</p>
+              )}
+            </div>
           </div>
           
-          <div className="p-4 border-t border-slate-700 bg-slate-800/50 flex justify-between">
-            <button onClick={resetToDefaults} className="px-4 py-2 text-slate-400 hover:text-white text-sm">
+          <div className="p-4 border-t border-slate-700 bg-slate-800/50 flex justify-between items-center">
+            <button 
+              onClick={resetToDefaults}
+              className="px-4 py-2 bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/30 rounded-lg text-rose-400 text-sm"
+            >
               Reset to Defaults
             </button>
             <button onClick={() => setEditingWidgets(false)} className="px-6 py-2 bg-violet-600 hover:bg-violet-500 rounded-xl text-white font-medium">
@@ -18572,91 +18583,115 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     
     const salesTaxDueThisMonth = getSalesTaxDueThisMonth();
     
-    // Calculate Today's Performance metrics
-    const getTodayMetrics = () => {
+    // Calculate Week-to-Date and Month-to-Date Performance metrics
+    const getPeriodMetrics = () => {
       const today = new Date();
       const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-      const yesterdayDate = new Date(today);
-      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-      const yesterdayKey = `${yesterdayDate.getFullYear()}-${String(yesterdayDate.getMonth() + 1).padStart(2, '0')}-${String(yesterdayDate.getDate()).padStart(2, '0')}`;
       
-      const todayData = allDaysData[todayKey];
-      const yesterdayData = allDaysData[yesterdayKey];
+      // Get start of current week (Monday)
+      const weekStart = new Date(today);
+      const dayOfWeek = today.getDay();
+      const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      weekStart.setDate(today.getDate() - daysToMonday);
+      const weekStartKey = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, '0')}-${String(weekStart.getDate()).padStart(2, '0')}`;
       
-      // Find most recent day with data
-      const sortedDays = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse();
+      // Get start of current month
+      const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+      const monthStartKey = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-01`;
+      
+      // Get start of last week (for comparison)
+      const lastWeekStart = new Date(weekStart);
+      lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+      const lastWeekStartKey = `${lastWeekStart.getFullYear()}-${String(lastWeekStart.getMonth() + 1).padStart(2, '0')}-${String(lastWeekStart.getDate()).padStart(2, '0')}`;
+      
+      // Get start of last month (for comparison)
+      const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const lastMonthStartKey = `${lastMonthStart.getFullYear()}-${String(lastMonthStart.getMonth() + 1).padStart(2, '0')}-01`;
+      
+      // Helper to aggregate days in a range
+      const aggregateDays = (startKey, endKey) => {
+        const days = Object.keys(allDaysData).filter(k => k >= startKey && k <= endKey && allDaysData[k]?.amazon?.revenue > 0);
+        let revenue = 0, units = 0, netProfit = 0, adSpend = 0, amazonRev = 0, shopifyRev = 0, cogs = 0;
+        
+        days.forEach(k => {
+          const d = allDaysData[k];
+          const amazon = d.amazon || {};
+          const shopify = d.shopify || {};
+          
+          // Compute COGS from SKU data
+          let aCogs = amazon.cogs || 0;
+          if (!aCogs && amazon.skuData) aCogs = amazon.skuData.reduce((s, sku) => s + (sku.cogs || 0), 0);
+          let sCogs = shopify.cogs || 0;
+          if (!sCogs && shopify.skuData) sCogs = shopify.skuData.reduce((s, sku) => s + (sku.cogs || 0), 0);
+          
+          revenue += (amazon.revenue || 0) + (shopify.revenue || 0);
+          units += (amazon.units || 0) + (shopify.units || 0);
+          netProfit += (amazon.netProfit || amazon.netProceeds || 0) + (shopify.netProfit || 0);
+          adSpend += (amazon.adSpend || 0) + (shopify.metaSpend || d.metaSpend || 0) + (shopify.googleSpend || d.googleSpend || 0);
+          amazonRev += amazon.revenue || 0;
+          shopifyRev += shopify.revenue || 0;
+          cogs += aCogs + sCogs;
+        });
+        
+        return { revenue, units, netProfit, adSpend, amazonRev, shopifyRev, cogs, daysCount: days.length };
+      };
+      
+      // Current periods
+      const wtd = aggregateDays(weekStartKey, todayKey);
+      const mtd = aggregateDays(monthStartKey, todayKey);
+      
+      // Calculate same period last week (same number of days)
+      const lastWeekEndDate = new Date(lastWeekStart);
+      lastWeekEndDate.setDate(lastWeekEndDate.getDate() + wtd.daysCount - 1);
+      const lastWeekEndKey = `${lastWeekEndDate.getFullYear()}-${String(lastWeekEndDate.getMonth() + 1).padStart(2, '0')}-${String(lastWeekEndDate.getDate()).padStart(2, '0')}`;
+      const lastWtd = aggregateDays(lastWeekStartKey, lastWeekEndKey);
+      
+      // Calculate same period last month (same day of month)
+      const lastMonthEndDate = new Date(lastMonthStart);
+      lastMonthEndDate.setDate(Math.min(today.getDate(), new Date(lastMonthStart.getFullYear(), lastMonthStart.getMonth() + 1, 0).getDate()));
+      const lastMonthEndKey = `${lastMonthEndDate.getFullYear()}-${String(lastMonthEndDate.getMonth() + 1).padStart(2, '0')}-${String(lastMonthEndDate.getDate()).padStart(2, '0')}`;
+      const lastMtd = aggregateDays(lastMonthStartKey, lastMonthEndKey);
+      
+      // Find latest day with data for freshness indicator
+      const sortedDays = Object.keys(allDaysData).filter(k => allDaysData[k]?.amazon?.revenue > 0).sort().reverse();
       const latestDayKey = sortedDays[0];
-      const latestDay = latestDayKey ? allDaysData[latestDayKey] : null;
-      const prevDayKey = sortedDays[1];
-      const prevDay = prevDayKey ? allDaysData[prevDayKey] : null;
+      const latestDate = latestDayKey ? new Date(latestDayKey + 'T12:00:00') : null;
+      const dataFreshness = latestDate ? Math.floor((today - latestDate) / (1000 * 60 * 60 * 24)) : null;
       
-      // Use today's data if available, otherwise most recent day
-      const useToday = todayData && hasDailySalesData(todayData);
-      const currentDay = useToday ? todayData : latestDay;
-      const comparisonDay = useToday ? yesterdayData : prevDay;
-      const displayDate = useToday ? todayKey : latestDayKey;
-      const isToday = useToday;
-      
-      if (!currentDay) return null;
-      
-      const amazon = currentDay.amazon || {};
-      const shopify = currentDay.shopify || {};
-      
-      // Compute COGS from SKU data if needed
-      let amazonCogs = amazon.cogs || 0;
-      if (!amazonCogs && amazon.skuData && Array.isArray(amazon.skuData)) {
-        amazonCogs = amazon.skuData.reduce((sum, sku) => sum + (sku.cogs || 0), 0);
-      }
-      let shopifyCogs = shopify.cogs || 0;
-      if (!shopifyCogs && shopify.skuData && Array.isArray(shopify.skuData)) {
-        shopifyCogs = shopify.skuData.reduce((sum, sku) => sum + (sku.cogs || 0), 0);
-      }
-      
-      const revenue = (amazon.revenue || 0) + (shopify.revenue || 0);
-      const units = (amazon.units || 0) + (shopify.units || 0);
-      const cogs = amazonCogs + shopifyCogs;
-      const netProfit = (amazon.netProfit || amazon.netProceeds || 0) + (shopify.netProfit || 0);
-      const adSpend = (amazon.adSpend || 0) + (shopify.metaSpend || currentDay.metaSpend || 0) + (shopify.googleSpend || currentDay.googleSpend || 0);
-      const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
-      
-      // Yesterday's comparison
-      let prevRevenue = 0, prevProfit = 0, prevUnits = 0;
-      if (comparisonDay) {
-        const prevAmazon = comparisonDay.amazon || {};
-        const prevShopify = comparisonDay.shopify || {};
-        prevRevenue = (prevAmazon.revenue || 0) + (prevShopify.revenue || 0);
-        prevProfit = (prevAmazon.netProfit || prevAmazon.netProceeds || 0) + (prevShopify.netProfit || 0);
-        prevUnits = (prevAmazon.units || 0) + (prevShopify.units || 0);
-      }
-      
-      const revenueChange = prevRevenue > 0 ? ((revenue - prevRevenue) / prevRevenue) * 100 : null;
-      const profitChange = prevProfit !== 0 ? ((netProfit - prevProfit) / Math.abs(prevProfit)) * 100 : null;
-      const unitsChange = prevUnits > 0 ? ((units - prevUnits) / prevUnits) * 100 : null;
+      if (wtd.daysCount === 0 && mtd.daysCount === 0) return null;
       
       return {
-        date: displayDate,
-        isToday,
-        revenue,
-        units,
-        cogs,
-        netProfit,
-        adSpend,
-        margin,
-        amazonRevenue: amazon.revenue || 0,
-        shopifyRevenue: shopify.revenue || 0,
-        revenueChange,
-        profitChange,
-        unitsChange,
-        tacos: revenue > 0 ? (adSpend / revenue) * 100 : 0,
+        wtd: {
+          ...wtd,
+          margin: wtd.revenue > 0 ? (wtd.netProfit / wtd.revenue) * 100 : 0,
+          tacos: wtd.revenue > 0 ? (wtd.adSpend / wtd.revenue) * 100 : 0,
+          revenueChange: lastWtd.revenue > 0 ? ((wtd.revenue - lastWtd.revenue) / lastWtd.revenue) * 100 : null,
+          profitChange: lastWtd.netProfit !== 0 ? ((wtd.netProfit - lastWtd.netProfit) / Math.abs(lastWtd.netProfit)) * 100 : null,
+        },
+        mtd: {
+          ...mtd,
+          margin: mtd.revenue > 0 ? (mtd.netProfit / mtd.revenue) * 100 : 0,
+          tacos: mtd.revenue > 0 ? (mtd.adSpend / mtd.revenue) * 100 : 0,
+          revenueChange: lastMtd.revenue > 0 ? ((mtd.revenue - lastMtd.revenue) / lastMtd.revenue) * 100 : null,
+          profitChange: lastMtd.netProfit !== 0 ? ((mtd.netProfit - lastMtd.netProfit) / Math.abs(lastMtd.netProfit)) * 100 : null,
+        },
+        latestDay: latestDayKey,
+        dataFreshness,
+        weekStartKey,
+        monthName: today.toLocaleDateString('en-US', { month: 'long' }),
       };
     };
     
-    const todayMetrics = getTodayMetrics();
+    const periodMetrics = getPeriodMetrics();
     
     // Helper to check if a widget is enabled
     const isWidgetEnabled = (widgetId) => {
-      const widget = widgetConfig?.widgets?.find(w => w.id === widgetId);
-      return widget?.enabled ?? true;
+      const widgets = widgetConfig?.widgets || DEFAULT_DASHBOARD_WIDGETS.widgets;
+      const widget = widgets.find(w => w.id === widgetId);
+      if (widget) return widget.enabled;
+      // Fallback to default
+      const defaultWidget = DEFAULT_DASHBOARD_WIDGETS.widgets.find(w => w.id === widgetId);
+      return defaultWidget?.enabled ?? true;
     };
     
     return (
@@ -18789,7 +18824,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     Getting Started Checklist
                   </h3>
                   <button 
-                    onClick={() => { setUploadTab('weekly'); setView('upload'); }}
+                    onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }}
                     className="text-xs text-slate-400 hover:text-white px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg"
                   >
                     Skip for now →
@@ -18848,7 +18883,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   <div className="flex items-center gap-3">
                     {Object.keys(allWeeksData).length > 0 ? <Check className="w-5 h-5 text-emerald-400" /> : <div className="w-5 h-5 rounded-full border-2 border-slate-600" />}
                     <span className={Object.keys(allWeeksData).length > 0 ? 'text-emerald-400' : 'text-slate-300'}>Upload your first weekly report</span>
-                    {Object.keys(allWeeksData).length === 0 && <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="text-xs text-violet-400 hover:text-violet-300 ml-auto">Upload →</button>}
+                    {Object.keys(allWeeksData).length === 0 && <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="text-xs text-violet-400 hover:text-violet-300 ml-auto">Upload →</button>}
                   </div>
                   <div className="flex items-center gap-3">
                     {goals.weeklyRevenue > 0 || goals.monthlyRevenue > 0 ? <Check className="w-5 h-5 text-emerald-400" /> : <div className="w-5 h-5 rounded-full border-2 border-slate-600" />}
@@ -18859,8 +18894,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               </div>
               
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="px-6 py-3 bg-violet-600 hover:bg-violet-500 rounded-xl font-semibold flex items-center justify-center gap-2">
-                  <Upload className="w-5 h-5" />Upload Weekly Data
+                <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="px-6 py-3 bg-violet-600 hover:bg-violet-500 rounded-xl font-semibold flex items-center justify-center gap-2">
+                  <Upload className="w-5 h-5" />Upload Amazon Data
                 </button>
                 <button onClick={() => { setUploadTab('period'); setView('upload'); }} className="px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-semibold flex items-center justify-center gap-2">
                   <CalendarRange className="w-5 h-5" />Upload Period Data
@@ -18913,81 +18948,129 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 </div>
               )}
               
-              {/* Today's Performance Hero Card */}
-              {isWidgetEnabled('todayPerformance') && todayMetrics && (
+              {/* Week-to-Date & Month-to-Date Performance */}
+              {isWidgetEnabled('todayPerformance') && periodMetrics && (
                 <div className="mb-6 bg-gradient-to-br from-slate-800/80 to-slate-900/80 rounded-2xl border border-slate-700 overflow-hidden">
                   <div className="p-5">
+                    {/* Header with data freshness */}
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
-                        <div className={`p-2 rounded-xl ${todayMetrics.isToday ? 'bg-emerald-500/20' : 'bg-slate-700'}`}>
-                          <Zap className={`w-5 h-5 ${todayMetrics.isToday ? 'text-emerald-400' : 'text-slate-400'}`} />
+                        <div className="p-2 rounded-xl bg-gradient-to-br from-violet-500/20 to-cyan-500/20">
+                          <TrendingUp className="w-5 h-5 text-violet-400" />
                         </div>
                         <div>
-                          <h3 className="text-lg font-bold text-white">
-                            {todayMetrics.isToday ? "Today's Performance" : 'Latest Day'}
-                          </h3>
-                          <p className="text-slate-400 text-sm">
-                            {new Date(todayMetrics.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                          <h3 className="text-lg font-bold text-white">Performance Overview</h3>
+                          <p className="text-slate-400 text-sm flex items-center gap-2">
+                            Data through {periodMetrics.latestDay ? new Date(periodMetrics.latestDay + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'N/A'}
+                            {periodMetrics.dataFreshness > 0 && (
+                              <span className={`text-xs px-1.5 py-0.5 rounded ${periodMetrics.dataFreshness <= 2 ? 'bg-cyan-500/20 text-cyan-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                                {periodMetrics.dataFreshness === 1 ? '1 day ago' : `${periodMetrics.dataFreshness} days ago`}
+                              </span>
+                            )}
                           </p>
                         </div>
                       </div>
-                      <button onClick={() => { setSelectedDay(todayMetrics.date); setView('daily'); }} className="text-sm text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
-                        View Details <ChevronRight className="w-4 h-4" />
+                      <button onClick={() => setView('daily')} className="text-sm text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
+                        Daily View <ChevronRight className="w-4 h-4" />
                       </button>
                     </div>
                     
-                    {/* Main KPIs Grid */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                      <div className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
-                        <p className="text-slate-400 text-xs uppercase mb-1">Revenue</p>
-                        <p className="text-2xl font-bold text-white">{formatCurrency(todayMetrics.revenue)}</p>
-                        {todayMetrics.revenueChange !== null && (
-                          <p className={`text-xs flex items-center gap-1 ${todayMetrics.revenueChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {todayMetrics.revenueChange >= 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
-                            {Math.abs(todayMetrics.revenueChange).toFixed(1)}% vs prior day
-                          </p>
-                        )}
+                    {/* WTD and MTD Side by Side */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {/* Week to Date */}
+                      <div className="bg-slate-900/50 rounded-xl p-4 border border-violet-500/20">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-sm font-semibold text-violet-400 flex items-center gap-2">
+                            <Calendar className="w-4 h-4" />
+                            Week to Date
+                          </h4>
+                          <span className="text-xs text-slate-500">{periodMetrics.wtd.daysCount} days</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <p className="text-slate-500 text-xs">Revenue</p>
+                            <p className="text-xl font-bold text-white">{formatCurrency(periodMetrics.wtd.revenue)}</p>
+                            {periodMetrics.wtd.revenueChange !== null && (
+                              <p className={`text-xs flex items-center gap-1 ${periodMetrics.wtd.revenueChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {periodMetrics.wtd.revenueChange >= 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
+                                {Math.abs(periodMetrics.wtd.revenueChange).toFixed(1)}% vs last wk
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-slate-500 text-xs">Net Profit</p>
+                            <p className={`text-xl font-bold ${periodMetrics.wtd.netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {formatCurrency(periodMetrics.wtd.netProfit)}
+                            </p>
+                            <p className="text-xs text-slate-500">{periodMetrics.wtd.margin.toFixed(1)}% margin</p>
+                          </div>
+                          <div>
+                            <p className="text-slate-500 text-xs">Units</p>
+                            <p className="text-lg font-semibold text-white">{formatNumber(periodMetrics.wtd.units)}</p>
+                          </div>
+                          <div>
+                            <p className="text-slate-500 text-xs">Ad Spend</p>
+                            <p className="text-lg font-semibold text-violet-400">{formatCurrency(periodMetrics.wtd.adSpend)}</p>
+                            <p className={`text-xs ${periodMetrics.wtd.tacos <= 15 ? 'text-emerald-400' : periodMetrics.wtd.tacos <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {periodMetrics.wtd.tacos.toFixed(1)}% TACOS
+                            </p>
+                          </div>
+                        </div>
                       </div>
                       
-                      <div className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
-                        <p className="text-slate-400 text-xs uppercase mb-1">Net Profit</p>
-                        <p className={`text-2xl font-bold ${todayMetrics.netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {formatCurrency(todayMetrics.netProfit)}
-                        </p>
-                        <p className="text-xs text-slate-500">{todayMetrics.margin.toFixed(1)}% margin</p>
-                      </div>
-                      
-                      <div className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
-                        <p className="text-slate-400 text-xs uppercase mb-1">Units Sold</p>
-                        <p className="text-2xl font-bold text-white">{formatNumber(todayMetrics.units)}</p>
-                        {todayMetrics.unitsChange !== null && (
-                          <p className={`text-xs flex items-center gap-1 ${todayMetrics.unitsChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {todayMetrics.unitsChange >= 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
-                            {Math.abs(todayMetrics.unitsChange).toFixed(1)}% vs prior day
-                          </p>
-                        )}
-                      </div>
-                      
-                      <div className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
-                        <p className="text-slate-400 text-xs uppercase mb-1">Ad Spend</p>
-                        <p className="text-2xl font-bold text-violet-400">{formatCurrency(todayMetrics.adSpend)}</p>
-                        <p className={`text-xs ${todayMetrics.tacos <= 15 ? 'text-emerald-400' : todayMetrics.tacos <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>
-                          {todayMetrics.tacos.toFixed(1)}% TACOS
-                        </p>
+                      {/* Month to Date */}
+                      <div className="bg-slate-900/50 rounded-xl p-4 border border-cyan-500/20">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-sm font-semibold text-cyan-400 flex items-center gap-2">
+                            <CalendarRange className="w-4 h-4" />
+                            {periodMetrics.monthName} MTD
+                          </h4>
+                          <span className="text-xs text-slate-500">{periodMetrics.mtd.daysCount} days</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <p className="text-slate-500 text-xs">Revenue</p>
+                            <p className="text-xl font-bold text-white">{formatCurrency(periodMetrics.mtd.revenue)}</p>
+                            {periodMetrics.mtd.revenueChange !== null && (
+                              <p className={`text-xs flex items-center gap-1 ${periodMetrics.mtd.revenueChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {periodMetrics.mtd.revenueChange >= 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
+                                {Math.abs(periodMetrics.mtd.revenueChange).toFixed(1)}% vs last mo
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-slate-500 text-xs">Net Profit</p>
+                            <p className={`text-xl font-bold ${periodMetrics.mtd.netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {formatCurrency(periodMetrics.mtd.netProfit)}
+                            </p>
+                            <p className="text-xs text-slate-500">{periodMetrics.mtd.margin.toFixed(1)}% margin</p>
+                          </div>
+                          <div>
+                            <p className="text-slate-500 text-xs">Units</p>
+                            <p className="text-lg font-semibold text-white">{formatNumber(periodMetrics.mtd.units)}</p>
+                          </div>
+                          <div>
+                            <p className="text-slate-500 text-xs">Ad Spend</p>
+                            <p className="text-lg font-semibold text-violet-400">{formatCurrency(periodMetrics.mtd.adSpend)}</p>
+                            <p className={`text-xs ${periodMetrics.mtd.tacos <= 15 ? 'text-emerald-400' : periodMetrics.mtd.tacos <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {periodMetrics.mtd.tacos.toFixed(1)}% TACOS
+                            </p>
+                          </div>
+                        </div>
                       </div>
                     </div>
                     
-                    {/* Channel Split Bar */}
-                    <div className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
+                    {/* Channel Split Bar (MTD) */}
+                    <div className="mt-4 bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
                       <div className="flex justify-between text-xs text-slate-400 mb-2">
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500" />Amazon: {formatCurrency(todayMetrics.amazonRevenue)}</span>
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />Shopify: {formatCurrency(todayMetrics.shopifyRevenue)}</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500" />Amazon MTD: {formatCurrency(periodMetrics.mtd.amazonRev)}</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />Shopify MTD: {formatCurrency(periodMetrics.mtd.shopifyRev)}</span>
                       </div>
                       <div className="h-2 bg-slate-800 rounded-full overflow-hidden flex">
-                        {todayMetrics.revenue > 0 && (
+                        {periodMetrics.mtd.revenue > 0 && (
                           <>
-                            <div className="bg-orange-500 h-full" style={{ width: `${(todayMetrics.amazonRevenue / todayMetrics.revenue) * 100}%` }} />
-                            <div className="bg-blue-500 h-full" style={{ width: `${(todayMetrics.shopifyRevenue / todayMetrics.revenue) * 100}%` }} />
+                            <div className="bg-orange-500 h-full" style={{ width: `${(periodMetrics.mtd.amazonRev / periodMetrics.mtd.revenue) * 100}%` }} />
+                            <div className="bg-blue-500 h-full" style={{ width: `${(periodMetrics.mtd.shopifyRev / periodMetrics.mtd.revenue) * 100}%` }} />
                           </>
                         )}
                       </div>
@@ -19328,19 +19411,19 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   <button 
-                    onClick={() => { setUploadTab('weekly'); setView('upload'); }}
-                    className="p-3 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 rounded-xl text-left transition-all"
+                    onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }}
+                    className="p-3 bg-orange-600/20 hover:bg-orange-600/30 border border-orange-500/30 rounded-xl text-left transition-all"
                   >
-                    <Calendar className="w-5 h-5 text-violet-400 mb-1" />
-                    <p className="text-violet-300 text-sm font-medium">Weekly Data</p>
-                    <p className="text-slate-500 text-xs">Amazon + Shopify</p>
+                    <Upload className="w-5 h-5 text-orange-400 mb-1" />
+                    <p className="text-orange-300 text-sm font-medium">Amazon</p>
+                    <p className="text-slate-500 text-xs">SKU Economics</p>
                   </button>
                   <button 
                     onClick={() => { setUploadTab('bulk-ads'); setView('upload'); }}
                     className="p-3 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 rounded-xl text-left transition-all"
                   >
-                    <DollarSign className="w-5 h-5 text-blue-400 mb-1" />
-                    <p className="text-blue-300 text-sm font-medium">Bulk Ads</p>
+                    <TrendingUp className="w-5 h-5 text-blue-400 mb-1" />
+                    <p className="text-blue-300 text-sm font-medium">Ads</p>
                     <p className="text-slate-500 text-xs">Google / Meta</p>
                   </button>
                   <button 
@@ -19395,7 +19478,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           <p className="text-slate-400 text-sm">Week ending {new Date(expectedWeekEnd + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} (last data: {daysSinceLast} days ago)</p>
                         </div>
                       </div>
-                      <button onClick={() => { setWeekEnding(expectedWeekEnd); setUploadTab('weekly'); setView('upload'); }} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white flex items-center gap-2">
+                      <button onClick={() => { setWeekEnding(expectedWeekEnd); setUploadTab('amazon-bulk'); setView('upload'); }} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white flex items-center gap-2">
                         <Upload className="w-4 h-4" />Upload This Week
                       </button>
                     </div>
@@ -19439,8 +19522,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                         <button 
                           onClick={() => {
                             if (action.action === 'upload-forecast') { setUploadTab('forecast'); setView('upload'); }
-                            else if (action.action === 'upload-weekly') { setUploadTab('weekly'); setView('upload'); }
-                            else if (action.action === 'upload-daily') { setUploadTab('daily'); setView('upload'); }
+                            else if (action.action === 'upload-weekly') { setUploadTab('amazon-bulk'); setView('upload'); }
+                            else if (action.action === 'upload-daily') { setUploadTab('amazon-bulk'); setView('upload'); }
                             else if (action.action === 'aggregate-daily') aggregateDailyToWeekly();
                           }}
                           className="px-3 py-1 bg-slate-600/50 hover:bg-slate-500/50 rounded text-xs text-white"
@@ -19505,7 +19588,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       ) : 'No data yet'}
                     </p>
                     <button 
-                      onClick={() => { setUploadTab('daily'); setView('upload'); }}
+                      onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }}
                       className="w-full py-1.5 bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/50 rounded-lg text-xs text-cyan-300 flex items-center justify-center gap-1"
                     >
                       <Upload className="w-3 h-3" /> Upload
@@ -19525,7 +19608,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       ) : 'No data yet'}
                     </p>
                     <button 
-                      onClick={() => { setUploadTab('weekly'); setView('upload'); }}
+                      onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }}
                       className="w-full py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-xs text-violet-300 flex items-center justify-center gap-1"
                     >
                       <Upload className="w-3 h-3" /> Upload
@@ -19846,7 +19929,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                     setViewingDayDetails(dateKey);
                                   } else if (hasAdsOnly) {
                                     setSelectedDay(dateKey);
-                                    setUploadTab('daily');
+                                    setUploadTab('amazon-bulk');
                                     setView('upload');
                                   }
                                 }}
@@ -20057,7 +20140,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   <h3 className="text-lg font-semibold text-white mb-2">No Daily Data Available</h3>
                   <p className="text-slate-400 mb-4">Upload yesterday's sales data to see daily metrics</p>
                   <button 
-                    onClick={() => { setUploadTab('daily'); setView('upload'); }}
+                    onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }}
                     className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-medium"
                   >
                     Upload Daily Data
@@ -20272,7 +20355,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       ) : (
                         <button onClick={() => setCompareMode(true)} className="text-xs text-slate-400 hover:text-violet-300 flex items-center gap-1"><GitCompareArrows className="w-3 h-3" />Compare</button>
                       )}
-                      <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"><Upload className="w-3 h-3" />Add Week</button>
+                      <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"><Upload className="w-3 h-3" />Add Week</button>
                     </div>
                   </div>
                   {sortedWeeks.length > 0 ? (
@@ -20338,7 +20421,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
                     <h3 className="text-sm font-semibold text-slate-300 uppercase mb-3">Quick Actions</h3>
                     <div className="space-y-2">
-                      <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="w-full p-2 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 rounded-lg text-violet-300 text-sm text-left flex items-center gap-2"><Upload className="w-4 h-4" />Upload Weekly Data</button>
+                      <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="w-full p-2 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 rounded-lg text-violet-300 text-sm text-left flex items-center gap-2"><Upload className="w-4 h-4" />Upload Amazon Data</button>
                       <button onClick={() => { setUploadTab('period'); setView('upload'); }} className="w-full p-2 bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/30 rounded-lg text-teal-300 text-sm text-left flex items-center gap-2"><CalendarRange className="w-4 h-4" />Upload Period Data</button>
                       <button onClick={() => { setUploadTab('inventory'); setView('upload'); }} className="w-full p-2 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg text-emerald-300 text-sm text-left flex items-center gap-2"><Boxes className="w-4 h-4" />Upload Inventory</button>
                       <button onClick={exportAll} className="w-full p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 text-sm text-left flex items-center gap-2"><Download className="w-4 h-4" />Export All Data</button>
@@ -20499,19 +20582,22 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           {/* Upload Type Tabs */}
           <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
             <button onClick={() => setUploadTab('amazon-bulk')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'amazon-bulk' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <Upload className="w-5 h-5" />Amazon Reports
+              <Upload className="w-5 h-5" />Amazon
             </button>
             <button onClick={() => setUploadTab('bulk-ads')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'bulk-ads' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <TrendingUp className="w-5 h-5" />Meta/Google Ads
             </button>
             <button onClick={() => setUploadTab('shopify-sync')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'shopify-sync' ? 'bg-green-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <ShoppingBag className="w-5 h-5" />Shopify Sync
+              <ShoppingBag className="w-5 h-5" />Shopify
             </button>
             <button onClick={() => setUploadTab('inventory')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Boxes className="w-5 h-5" />Inventory
             </button>
             <button onClick={() => setUploadTab('forecast')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'forecast' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <TrendingUp className="w-5 h-5" />Amazon Forecast
+              <TrendingUp className="w-5 h-5" />Forecast
+            </button>
+            <button onClick={() => setUploadTab('period')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'period' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <CalendarRange className="w-5 h-5" />Annual
             </button>
             <button onClick={() => setUploadTab('cogs')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'cogs' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <DollarSign className="w-5 h-5" />COGS
@@ -20558,10 +20644,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="text-xs px-2 py-1 bg-amber-600 hover:bg-amber-500 rounded text-white">Upload</button>
                     )}
                     {action.action === 'upload-daily' && (
-                      <button onClick={() => { setUploadTab('daily'); setView('upload'); }} className="text-xs px-2 py-1 bg-cyan-600 hover:bg-cyan-500 rounded text-white">Upload</button>
+                      <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="text-xs px-2 py-1 bg-cyan-600 hover:bg-cyan-500 rounded text-white">Upload</button>
                     )}
                     {action.action === 'upload-weekly' && (
-                      <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="text-xs px-2 py-1 bg-violet-600 hover:bg-violet-500 rounded text-white">Upload</button>
+                      <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="text-xs px-2 py-1 bg-violet-600 hover:bg-violet-500 rounded text-white">Upload</button>
                     )}
                     {action.action === 'aggregate-daily' && (
                       <button onClick={aggregateDailyToWeekly} className="text-xs px-2 py-1 bg-teal-600 hover:bg-teal-500 rounded text-white">Aggregate</button>
@@ -20684,453 +20770,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             </div>
           </div>
           {/* ============ END DATA STATUS DASHBOARD ============ */}
-          
-          {/* Daily Upload */}
-          {uploadTab === 'daily' && (
-            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
-              <h2 className="text-lg font-semibold text-white mb-1">📅 Daily Sales Upload</h2>
-              <p className="text-slate-400 text-sm mb-4">Upload yesterday's Amazon, Shopify, and ad data for daily tracking</p>
-              
-              {/* Already uploaded days indicator */}
-              <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm font-medium text-slate-300">Days Already Uploaded (Last 14 Days)</span>
-                  <span className="text-xs text-slate-500">{dataStatus.dailyStatus.last14Days.filter(d => d.hasData).length}/14 days</span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {dataStatus.dailyStatus.last14Days.map((day, idx) => (
-                    <div 
-                      key={idx}
-                      onClick={() => !day.hasData && setSelectedDay(day.date)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
-                        day.hasData 
-                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' 
-                          : day.hasAdsOnly
-                            ? 'bg-amber-500/10 text-amber-400/70 border border-amber-500/20 hover:bg-amber-500/20'
-                            : selectedDay === day.date
-                              ? 'bg-violet-500/30 text-violet-300 border border-violet-500/50'
-                              : 'bg-slate-700/50 text-slate-400 border border-slate-600/30 hover:bg-slate-600/50'
-                      }`}
-                      title={day.hasData ? `${day.date} - Data uploaded ✓` : day.hasAdsOnly ? `${day.date} - Only Google Ads data (click to add sales)` : `${day.date} - Click to select`}
-                    >
-                      {day.dayOfWeek} {new Date(day.date + 'T12:00:00').getDate()}
-                      {day.hasData && <Check className="w-3 h-3 ml-1 inline" />}
-                      {day.hasAdsOnly && !day.hasData && <span className="ml-1 text-amber-400/50">●</span>}
-                    </div>
-                  ))}
-                </div>
-                {dataStatus.dailyStatus.last14Days.filter(d => !d.hasData).length > 0 && (
-                  <p className="text-xs text-slate-500 mt-2">
-                    💡 Click a day without ✓ to select it for upload {dataStatus.dailyStatus.last14Days.some(d => d.hasAdsOnly && !d.hasData) && <span className="text-amber-400/70">(● = has Google Ads data only)</span>}
-                  </p>
-                )}
-              </div>
-              
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-slate-300 mb-2">Date <span className="text-rose-400">*</span></label>
-                <input 
-                  type="date" 
-                  value={selectedDay || ''} 
-                  onChange={(e) => setSelectedDay(e.target.value)} 
-                  max={new Date().toISOString().split('T')[0]}
-                  className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" 
-                />
-                {selectedDay && (
-                  <div className="mt-2">
-                    <p className="text-slate-500 text-sm">
-                      Uploading data for: {new Date(selectedDay + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
-                    </p>
-                    {hasDailySalesData(allDaysData[selectedDay]) && (
-                      <p className="text-amber-400 text-sm flex items-center gap-1 mt-1">
-                        <AlertTriangle className="w-4 h-4" />
-                        Sales data already exists for this date - uploading will replace it
-                      </p>
-                    )}
-                    {allDaysData[selectedDay] && !hasDailySalesData(allDaysData[selectedDay]) && (
-                      <p className="text-cyan-400 text-sm flex items-center gap-1 mt-1">
-                        <Check className="w-4 h-4" />
-                        Google Ads data exists - sales data will be added
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-              
-              {/* File uploads for daily data */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <div className={`relative border-2 border-dashed rounded-xl p-4 transition-all ${dailyFiles.amazon ? 'border-orange-500/50 bg-orange-950/20' : 'border-slate-600 hover:border-slate-500 bg-slate-800/30'}`}>
-                  <input type="file" accept=".csv" onChange={(e) => setDailyFiles(prev => ({ ...prev, amazon: e.target.files[0] }))} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                  <div className="flex items-start gap-3">
-                    {dailyFiles.amazon ? <Check className="w-5 h-5 text-orange-400 mt-0.5" /> : <FileSpreadsheet className="w-5 h-5 text-slate-400 mt-0.5" />}
-                    <div className="flex-1 min-w-0">
-                      <p className={`font-medium ${dailyFiles.amazon ? 'text-orange-400' : 'text-white'}`}>Amazon Daily Report</p>
-                      <p className="text-slate-500 text-sm truncate">{dailyFiles.amazon ? dailyFiles.amazon.name : 'SKU Economics for single day'}</p>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className={`relative border-2 border-dashed rounded-xl p-4 transition-all ${dailyFiles.shopify ? 'border-blue-500/50 bg-blue-950/20' : 'border-slate-600 hover:border-slate-500 bg-slate-800/30'}`}>
-                  <input type="file" accept=".csv" onChange={(e) => setDailyFiles(prev => ({ ...prev, shopify: e.target.files[0] }))} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                  <div className="flex items-start gap-3">
-                    {dailyFiles.shopify ? <Check className="w-5 h-5 text-blue-400 mt-0.5" /> : <FileSpreadsheet className="w-5 h-5 text-slate-400 mt-0.5" />}
-                    <div className="flex-1 min-w-0">
-                      <p className={`font-medium ${dailyFiles.shopify ? 'text-blue-400' : 'text-white'}`}>Shopify Daily Report</p>
-                      <p className="text-slate-500 text-sm truncate">{dailyFiles.shopify ? dailyFiles.shopify.name : 'Sales by product for single day'}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Ad Spend Inputs */}
-              <div className="grid grid-cols-2 gap-4 mb-6">
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">Meta Ad Spend ($)</label>
-                  <input 
-                    type="number" 
-                    step="0.01" 
-                    id="daily-meta-ad"
-                    defaultValue={dailyAdSpend.meta} 
-                    onBlur={(e) => setDailyAdSpend(prev => ({ ...prev, meta: e.target.value }))} 
-                    placeholder="0.00" 
-                    className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-cyan-500" 
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">Google Ad Spend ($)</label>
-                  <input 
-                    type="number" 
-                    step="0.01" 
-                    id="daily-google-ad"
-                    defaultValue={dailyAdSpend.google} 
-                    onBlur={(e) => setDailyAdSpend(prev => ({ ...prev, google: e.target.value }))} 
-                    placeholder="0.00" 
-                    className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-cyan-500" 
-                  />
-                </div>
-              </div>
-              
-              {/* Process Button */}
-              <button 
-                onClick={processDailyUpload} 
-                disabled={!selectedDay || (!dailyFiles.amazon && !dailyFiles.shopify) || isProcessing}
-                className="w-full py-4 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:from-slate-700 disabled:to-slate-700 disabled:cursor-not-allowed rounded-xl font-semibold text-lg flex items-center justify-center gap-2"
-              >
-                {isProcessing ? <><Loader2 className="w-5 h-5 animate-spin" />Processing...</> : <><Upload className="w-5 h-5" />Process Daily Data</>}
-              </button>
-              
-              {/* Existing Days */}
-              {Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length > 0 && (
-                <div className="mt-6 pt-6 border-t border-slate-700">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-medium text-slate-300">Recent Daily Data ({Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length} days with sales)</h3>
-                    <button 
-                      onClick={aggregateDailyToWeekly}
-                      disabled={dataStatus.aggregationStatus.completeWeeks === 0}
-                      className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 ${
-                        dataStatus.aggregationStatus.completeWeeks > 0 
-                          ? 'bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 text-violet-300'
-                          : 'bg-slate-700/50 border border-slate-600/50 text-slate-500 cursor-not-allowed'
-                      }`}
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                      Aggregate to Weekly {dataStatus.aggregationStatus.completeWeeks > 0 && `(${dataStatus.aggregationStatus.completeWeeks} ready)`}
-                    </button>
-                  </div>
-                  
-                  {/* Week completion status */}
-                  {dataStatus.aggregationStatus.weekDetails.length > 0 && (
-                    <div className="mb-4 space-y-2">
-                      {dataStatus.aggregationStatus.weekDetails.slice(0, 3).map(week => (
-                        <div key={week.weekEnding} className={`p-3 rounded-lg border ${
-                          week.isComplete 
-                            ? allWeeksData[week.weekEnding] 
-                              ? 'bg-slate-700/30 border-slate-600/30'
-                              : 'bg-emerald-900/20 border-emerald-500/30'
-                            : 'bg-amber-900/20 border-amber-500/30'
-                        }`}>
-                          <div className="flex items-center justify-between">
-                            <span className={`text-sm font-medium ${
-                              week.isComplete 
-                                ? allWeeksData[week.weekEnding] ? 'text-slate-400' : 'text-emerald-300'
-                                : 'text-amber-300'
-                            }`}>
-                              Week ending {new Date(week.weekEnding + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                            </span>
-                            <span className={`text-xs px-2 py-0.5 rounded ${
-                              week.isComplete 
-                                ? allWeeksData[week.weekEnding]
-                                  ? 'bg-slate-600/50 text-slate-400'
-                                  : 'bg-emerald-500/20 text-emerald-300'
-                                : 'bg-amber-500/20 text-amber-300'
-                            }`}>
-                              {week.isComplete 
-                                ? allWeeksData[week.weekEnding] ? 'Already aggregated' : `✓ Complete (${week.days.length}/7 days)`
-                                : `${week.days.length}/7 days`
-                              }
-                            </span>
-                          </div>
-                          {!week.isComplete && week.missingDays.length > 0 && (
-                            <p className="text-xs text-amber-400/80 mt-1">
-                              Missing: {week.missingDays.map(d => d.display).join(', ')}
-                            </p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  
-                  <div className="flex flex-wrap gap-2 mb-3">
-                    {Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort().reverse().slice(0, 14).map(day => (
-                      <div key={day} className="px-3 py-1.5 bg-slate-700/50 rounded-lg text-sm text-slate-300 flex items-center gap-2">
-                        <span>{new Date(day + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                        <span className="text-emerald-400 text-xs">{formatCurrency(allDaysData[day].total?.revenue || 0)}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-slate-500 text-xs">💡 Weeks require all 7 days (Mon-Sun) to aggregate</p>
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* Weekly Upload */}
-          {uploadTab === 'weekly' && (
-            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
-              <h2 className="text-lg font-semibold text-white mb-1">Weekly Sales Upload</h2>
-              <p className="text-slate-400 text-sm mb-4">Upload your Amazon and Shopify weekly reports</p>
-              
-              {/* Weeks with forecasts needing actuals */}
-              {dataStatus.learningStatus.pendingComparisons > 0 && (
-                <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6">
-                  <h3 className="text-amber-300 font-medium mb-2 flex items-center gap-2">
-                    <Brain className="w-4 h-4" />
-                    Learning System Needs Your Data!
-                  </h3>
-                  <p className="text-slate-300 text-sm mb-3">
-                    These weeks have forecast data but no actuals. Upload actuals to help improve predictions:
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {Object.keys(amazonForecasts)
-                      .filter(w => new Date(w + 'T00:00:00') < new Date() && !allWeeksData[w])
-                      .sort()
-                      .slice(0, 5)
-                      .map(w => (
-                        <button 
-                          key={w}
-                          onClick={() => setWeekEnding(w)}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                            weekEnding === w 
-                              ? 'bg-amber-500/40 text-amber-200 border border-amber-500/50' 
-                              : 'bg-slate-700/50 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20'
-                          }`}
-                        >
-                          Week ending {new Date(w + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                        </button>
-                      ))
-                    }
-                  </div>
-                </div>
-              )}
-              
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-slate-300 mb-2">Week Ending Date <span className="text-rose-400">*</span></label>
-                <input type="date" value={weekEnding} onChange={(e) => setWeekEnding(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white" />
-                {weekEnding && (
-                  <div className="mt-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {amazonForecasts[weekEnding] && (
-                        <span className="text-xs px-2 py-1 rounded bg-amber-500/20 text-amber-300 flex items-center gap-1">
-                          <TrendingUp className="w-3 h-3" />Has forecast data
-                        </span>
-                      )}
-                      {allWeeksData[weekEnding] && (
-                        <span className="text-xs px-2 py-1 rounded bg-cyan-500/20 text-cyan-300 flex items-center gap-1">
-                          <Check className="w-3 h-3" />Has actual data (will update)
-                        </span>
-                      )}
-                      {amazonForecasts[weekEnding] && !allWeeksData[weekEnding] && (
-                        <span className="text-xs px-2 py-1 rounded bg-green-500/20 text-green-300 flex items-center gap-1">
-                          <Brain className="w-3 h-3" />Will create learning sample!
-                        </span>
-                      )}
-                    </div>
-                    {/* Detailed warning for existing data */}
-                    {allWeeksData[weekEnding] && (
-                      <div className="mt-2 p-3 bg-amber-900/30 border border-amber-500/30 rounded-lg">
-                        <div className="flex items-start gap-2">
-                          <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
-                          <div>
-                            <p className="text-amber-300 text-sm font-medium">Data already exists for this week</p>
-                            <p className="text-amber-400/70 text-xs mt-1">
-                              Existing: {formatCurrency(allWeeksData[weekEnding].total?.revenue || 0)} revenue • {allWeeksData[weekEnding].total?.units || 0} units • {formatCurrency(allWeeksData[weekEnding].total?.netProfit || 0)} profit
-                            </p>
-                            <p className="text-slate-400 text-xs mt-1">Uploading new data will replace all existing data for this week.</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-              
-              {/* Date Range Guide - Collapsible */}
-              {weekEnding && (() => {
-                const endDate = new Date(weekEnding + 'T00:00:00');
-                const startDate = new Date(endDate);
-                startDate.setDate(startDate.getDate() - 6);
-                const formatDate = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                const formatShort = (d) => d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
-                return (
-                  <details className="bg-indigo-900/20 border border-indigo-500/30 rounded-xl mb-6 group">
-                    <summary className="p-4 cursor-pointer flex items-center justify-between text-indigo-300 font-semibold">
-                      <span className="flex items-center gap-2">
-                        <Calendar className="w-4 h-4" />
-                        Date Range: {formatDate(startDate)} – {formatDate(endDate)}
-                      </span>
-                      <ChevronDown className="w-4 h-4 transition-transform group-open:rotate-180" />
-                    </summary>
-                    <div className="px-4 pb-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                        <div className="bg-slate-800/50 rounded-lg p-3">
-                          <p className="text-orange-400 font-medium mb-1">📦 Amazon SKU Economics</p>
-                          <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
-                          <p className="text-slate-400 text-xs mt-1">Seller Central → Reports → Business Reports → SKU Economics</p>
-                        </div>
-                        <div className="bg-slate-800/50 rounded-lg p-3">
-                          <p className="text-blue-400 font-medium mb-1">🛒 Shopify Sales by Product</p>
-                          <p className="text-white font-mono text-xs">{formatShort(startDate)} → {formatShort(endDate)}</p>
-                          <p className="text-slate-400 text-xs mt-1">Analytics → Reports → Sales by product variant SKU</p>
-                        </div>
-                      </div>
-                    </div>
-                  </details>
-                );
-              })()}
-              
-              {/* Sales Data Files - Need at least one */}
-              <div className="mb-4">
-                <h3 className="text-white font-medium mb-3 flex items-center gap-2">
-                  <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-                  Sales Data <span className="text-slate-400 text-xs font-normal">(upload at least one)</span>
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <FileBox type="amazon" label="Amazon Report" desc="Business Reports > Detail Page" />
-                  <FileBox type="shopify" label="Shopify Sales" desc="Analytics > Sales by product" />
-                </div>
-              </div>
-              
-              {/* Optional Files */}
-              <div className="mb-4">
-                <h3 className="text-white font-medium mb-3 flex items-center gap-2">
-                  <Package className="w-4 h-4 text-slate-400" />
-                  Additional Data <span className="text-slate-400 text-xs font-normal">(optional)</span>
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="relative">
-                    <FileBox type="threepl" label="3PL Costs" desc="Fulfillment invoice (CSV or Excel)" multi />
-                  </div>
-                  <FileBox type="cogs" label="COGS File" desc="SKU & Cost Per Unit columns" />
-                </div>
-                {/* 3PL Bulk Upload - Compact */}
-                <button 
-                  onClick={() => setShow3PLBulkUpload(true)}
-                  className="mt-3 w-full md:w-auto px-4 py-2 bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded-lg text-slate-300 text-sm flex items-center justify-center gap-2"
-                >
-                  <Truck className="w-4 h-4" />
-                  Bulk Upload 3PL Files (multiple at once)
-                </button>
-              </div>
-              
-              {/* Ad Spend Section - Consolidated */}
-              <div className="mb-6 bg-slate-900/50 rounded-xl p-4 border border-slate-700">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-white font-medium flex items-center gap-2">
-                    <TrendingUp className="w-4 h-4 text-violet-400" />
-                    Shopify Ad Spend
-                  </h3>
-                  <button 
-                    onClick={() => setShowAdsBulkUpload(true)}
-                    className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"
-                  >
-                    <Upload className="w-3 h-3" />
-                    Bulk Import CSV
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">Meta (Facebook/Instagram)</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
-                      <input 
-                        type="number" 
-                        id="weekly-meta-ad" 
-                        defaultValue={adSpend.meta} 
-                        onBlur={(e) => setAdSpend(p => ({ ...p, meta: e.target.value }))} 
-                        placeholder="0.00" 
-                        className="w-full bg-slate-800 border border-slate-600 rounded-lg pl-7 pr-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500" 
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">Google Ads</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
-                      <input 
-                        type="number" 
-                        id="weekly-google-ad" 
-                        defaultValue={adSpend.google} 
-                        onBlur={(e) => setAdSpend(p => ({ ...p, google: e.target.value }))} 
-                        placeholder="0.00" 
-                        className="w-full bg-slate-800 border border-slate-600 rounded-lg pl-7 pr-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500" 
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              {!hasCogs && <div className="bg-amber-900/30 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" /><div><p className="text-amber-300 font-medium">COGS not set up (optional)</p><p className="text-amber-200/70 text-sm">Upload a COGS file or configure in settings for profit tracking. You can still process without it.</p></div></div>}
-              
-              {/* Process Button with status */}
-              <div className="space-y-3">
-                <button 
-                  onClick={processSales} 
-                  disabled={isProcessing || !weekEnding || (!files.amazon && !files.shopify)} 
-                  className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:from-slate-700 disabled:to-slate-700 disabled:cursor-not-allowed text-white font-semibold py-4 rounded-xl flex items-center justify-center gap-2"
-                >
-                  {isProcessing ? (
-                    <><Loader2 className="w-5 h-5 animate-spin" />Processing...</>
-                  ) : (
-                    <><Upload className="w-5 h-5" />Process Weekly Data</>
-                  )}
-                </button>
-                
-                {/* Requirements checklist - only show if missing required items */}
-                {(!weekEnding || (!files.amazon && !files.shopify)) && (
-                  <div className="text-xs text-slate-400 text-center">
-                    <span className="text-slate-500">Required: </span>
-                    <span className={weekEnding ? 'text-emerald-500' : 'text-amber-400'}>
-                      {weekEnding ? '✓ Week selected' : '○ Select week'}
-                    </span>
-                    <span className="mx-2">+</span>
-                    <span className={(files.amazon || files.shopify) ? 'text-emerald-500' : 'text-amber-400'}>
-                      {(files.amazon || files.shopify) ? '✓ Data file uploaded' : '○ Upload Amazon or Shopify file'}
-                    </span>
-                  </div>
-                )}
-                
-                {/* Show what's loaded */}
-                {weekEnding && (files.amazon || files.shopify) && (
-                  <div className="text-xs text-slate-500 flex flex-wrap gap-x-3 gap-y-1 justify-center">
-                    {files.amazon && <span className="text-emerald-500">✓ Amazon</span>}
-                    {files.shopify && <span className="text-emerald-500">✓ Shopify</span>}
-                    {files.threepl && <span className="text-emerald-500">✓ 3PL</span>}
-                    {(parseFloat(adSpend.meta) > 0 || parseFloat(adSpend.google) > 0) && <span className="text-emerald-500">✓ Ad Spend</span>}
-                    {!hasCogs && <span className="text-amber-400">⚠ No COGS</span>}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
           
           {/* Period Upload */}
           {uploadTab === 'period' && (
@@ -27441,7 +27080,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               <h3 className="text-xl font-semibold text-white mb-2">No {periodLabel} Data Available</h3>
               <p className="text-slate-400 mb-4">Upload {trendsTab} data to see trends</p>
               {trendsTab === 'daily' && (
-                <button onClick={() => { setUploadTab('daily'); setView('upload'); }} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white">
+                <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white">
                   Upload Daily Data
                 </button>
               )}
@@ -30359,8 +29998,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-white">
                         Upload Forecast
                       </button>
-                      <button onClick={() => { setUploadTab('weekly'); setView('upload'); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white">
-                        Upload Weekly Data
+                      <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white">
+                        Upload Amazon Data
                       </button>
                     </div>
                   </div>
