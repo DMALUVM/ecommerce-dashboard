@@ -5240,7 +5240,10 @@ const savePeriods = async (d) => {
     const dailyByWeek = {};
     Object.entries(allDaysData).forEach(([dayKey, dayData]) => {
       if (!dayData) return;
+      // Validate date key format (YYYY-MM-DD)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return;
       const date = new Date(dayKey + 'T12:00:00');
+      if (isNaN(date.getTime())) return; // Skip invalid dates
       const dayOfWeek = date.getDay();
       const weekEnd = new Date(date);
       weekEnd.setDate(date.getDate() + (dayOfWeek === 0 ? 0 : 7 - dayOfWeek));
@@ -5419,10 +5422,14 @@ const savePeriods = async (d) => {
     const monthlyAgg = {};
     Object.entries(allWeeksData).forEach(([weekKey, weekData]) => {
       if (!weekData) return;
+      // Validate week key format
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(weekKey)) return;
       
       // Use the week ending date to determine the month
       const monthKey = weekKey.slice(0, 7); // YYYY-MM
-      const monthName = new Date(weekKey + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      const testDate = new Date(weekKey + 'T12:00:00');
+      if (isNaN(testDate.getTime())) return; // Skip invalid dates
+      const monthName = testDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
       
       if (!monthlyAgg[monthKey]) {
         monthlyAgg[monthKey] = {
@@ -16907,7 +16914,11 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
               const dayData = allDaysData[dayKey];
               if (!dayData) return;
               
+              // Validate date key format
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return;
               const date = new Date(dayKey + 'T12:00:00');
+              if (isNaN(date.getTime())) return; // Skip invalid dates
+              
               const dayOfWeek = date.getDay();
               const weekEnd = new Date(date);
               weekEnd.setDate(date.getDate() + (dayOfWeek === 0 ? 0 : 7 - dayOfWeek));
@@ -19693,16 +19704,37 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     
     // Compute Top/Worst Sellers
     const getProductPerformance = (days) => {
-      const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - days);
-      const cutoffKey = cutoffDate.toISOString().split('T')[0];
+      // Filter to only valid date keys
+      const sortedDays = Object.keys(allDaysData)
+        .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && hasDailySalesData(allDaysData[d]))
+        .sort();
       
-      const relevantDays = days === 'ytd' 
-        ? sortedDays.filter(d => d.startsWith(String(new Date().getFullYear())))
-        : sortedDays.filter(d => d >= cutoffKey);
+      if (sortedDays.length === 0) return { top: [], worst: [], period: 'No Data', daysAnalyzed: 0 };
       
-      if (relevantDays.length === 0) return { top: [], worst: [] };
+      let relevantDays;
+      let periodLabel;
+      
+      if (days === 'ytd') {
+        // Year to date
+        const currentYear = String(new Date().getFullYear());
+        relevantDays = sortedDays.filter(d => d.startsWith(currentYear));
+        periodLabel = 'Year to Date';
+      } else {
+        // Last N days
+        try {
+          const cutoffDate = new Date();
+          cutoffDate.setDate(cutoffDate.getDate() - Number(days));
+          if (isNaN(cutoffDate.getTime())) throw new Error('Invalid date');
+          const cutoffKey = cutoffDate.toISOString().split('T')[0];
+          relevantDays = sortedDays.filter(d => d >= cutoffKey);
+          periodLabel = `Last ${days} Days`;
+        } catch {
+          relevantDays = sortedDays.slice(-14); // Fallback to last 14 entries
+          periodLabel = 'Recent';
+        }
+      }
+      
+      if (relevantDays.length === 0) return { top: [], worst: [], period: periodLabel, daysAnalyzed: 0 };
       
       // Aggregate by SKU
       const skuData = {};
@@ -19736,7 +19768,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       return {
         top: sortedByRevenue.slice(0, 5),
         worst: sortedByRevenue.filter(p => p.revenue > 100).slice(-5).reverse(), // Only show products with >$100 revenue
-        period: days === 'ytd' ? 'Year to Date' : `Last ${days} Days`,
+        period: periodLabel,
         daysAnalyzed: relevantDays.length,
       };
     };
