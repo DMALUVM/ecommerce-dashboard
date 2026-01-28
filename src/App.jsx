@@ -10020,9 +10020,9 @@ Analyze the data and respond with ONLY this JSON:
       processSkusForPeriod(amz.skuData, 'Amazon');
       processSkusForPeriod(shop.skuData, 'Shopify');
       
-      // Also build SKU-level breakdown for detailed queries
+      // Also build SKU-level breakdown for detailed queries (with channel tracking)
       const skuBreakdown = {};
-      const buildSkuBreakdown = (skuData) => {
+      const buildSkuBreakdown = (skuData, channel) => {
         (skuData || []).forEach(s => {
           const sku = s.sku || s.msku || '';
           if (!sku) return;
@@ -10030,14 +10030,21 @@ Analyze the data and respond with ONLY this JSON:
           const revenue = s.netSales || s.revenue || 0;
           const units = s.unitsSold || s.units || 0;
           if (!skuBreakdown[sku]) {
-            skuBreakdown[sku] = { name, revenue: 0, units: 0 };
+            skuBreakdown[sku] = { name, revenue: 0, units: 0, amazonRevenue: 0, shopifyRevenue: 0, channel: channel };
           }
           skuBreakdown[sku].revenue += revenue;
           skuBreakdown[sku].units += units;
+          if (channel === 'Amazon') {
+            skuBreakdown[sku].amazonRevenue += revenue;
+          } else {
+            skuBreakdown[sku].shopifyRevenue += revenue;
+          }
+          // Update primary channel based on where most revenue comes from
+          skuBreakdown[sku].channel = skuBreakdown[sku].amazonRevenue > skuBreakdown[sku].shopifyRevenue ? 'Amazon' : 'Shopify';
         });
       };
-      buildSkuBreakdown(amz.skuData);
-      buildSkuBreakdown(shop.skuData);
+      buildSkuBreakdown(amz.skuData, 'Amazon');
+      buildSkuBreakdown(shop.skuData, 'Shopify');
       
       return {
         period: label,
@@ -10330,13 +10337,20 @@ Analyze the data and respond with ONLY this JSON:
             category: catalogEntry?.category || 'Other',
             totalRevenue: 0,
             totalUnits: 0,
+            amazonRevenue: 0,
+            amazonUnits: 0,
+            shopifyRevenue: 0,
+            shopifyUnits: 0,
             byPeriod: {},
             byWeek: {},
           };
         }
         skuMasterData[sku].totalRevenue += data.revenue || 0;
         skuMasterData[sku].totalUnits += data.units || 0;
-        skuMasterData[sku].byPeriod[period.period] = { revenue: data.revenue, units: data.units };
+        // Track channel from period skuBreakdown (which now has channel info)
+        skuMasterData[sku].amazonRevenue += data.amazonRevenue || 0;
+        skuMasterData[sku].shopifyRevenue += data.shopifyRevenue || 0;
+        skuMasterData[sku].byPeriod[period.period] = { revenue: data.revenue, units: data.units, channel: data.channel };
       });
     });
     
@@ -10360,6 +10374,10 @@ Analyze the data and respond with ONLY this JSON:
               category: catalogEntry?.category || 'Other',
               totalRevenue: 0,
               totalUnits: 0,
+              amazonRevenue: 0,
+              amazonUnits: 0,
+              shopifyRevenue: 0,
+              shopifyUnits: 0,
               byPeriod: {},
               byWeek: {},
             };
@@ -10370,6 +10388,16 @@ Analyze the data and respond with ONLY this JSON:
           }
           skuMasterData[sku].byWeek[week].revenue += revenue;
           skuMasterData[sku].byWeek[week].units += units;
+          
+          // Track channel revenue/units
+          if (channel === 'Amazon') {
+            skuMasterData[sku].amazonRevenue += revenue;
+            skuMasterData[sku].amazonUnits += units;
+          } else {
+            skuMasterData[sku].shopifyRevenue += revenue;
+            skuMasterData[sku].shopifyUnits += units;
+          }
+          
           // Only add to totals if not already counted in periods
           if (Object.keys(skuMasterData[sku].byPeriod).length === 0) {
             skuMasterData[sku].totalRevenue += revenue;
@@ -11357,6 +11385,22 @@ Analyze the data and respond with ONLY this JSON:
       
       const systemPrompt = `You are an expert e-commerce analyst and business advisor for "${ctx.storeName}". You have access to ALL uploaded sales data and can answer questions about any aspect of the business.
 
+⚠️⚠️⚠️ VERIFIED DATA - USE THESE EXACT NUMBERS ⚠️⚠️⚠️
+
+**5 WORST SELLING PRODUCTS (by revenue) - COPY EXACTLY:**
+${ctx.skuMasterData?.slice().reverse().slice(0, 5).map((s, i) => {
+  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
+  return `${i+1}. ${s.sku}: $${s.totalRevenue.toFixed(2)} revenue, ${s.totalUnits} units (${channel})`;
+}).join('\n')}
+
+**5 BEST SELLING PRODUCTS (by revenue) - COPY EXACTLY:**
+${ctx.skuMasterData?.slice(0, 5).map((s, i) => {
+  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
+  return `${i+1}. ${s.sku}: $${s.totalRevenue.toFixed(2)} revenue, ${s.totalUnits} units (${channel})`;
+}).join('\n')}
+
+🚨 WHEN ASKED ABOUT WORST/BEST SELLING: Copy the EXACT numbers above. DO NOT calculate, estimate, or modify these values.
+
 🚨🚨🚨 CRITICAL DATA AVAILABILITY RULES - READ FIRST 🚨🚨🚨
 
 ${ctx.dataAvailability?.instructions || ''}
@@ -11396,6 +11440,8 @@ DO NOT use skuAnalysis - that's ALL-TIME data and will give WRONG answers for ti
 | "this month" / "January" / "MTD" / "Jan 1-25" | currentMonthByCategory AND/OR CUSTOM DATE RANGE DATA (below) |
 | "between X and Y" / specific dates | CUSTOM DATE RANGE DATA (below) |
 | "all time" / "total" | allTimeByCategory (below) |
+| "since 2025" / "in 2025" / "2025 total" | Use the "By Year" data above (2025 row) + SKU MASTER DATA for SKU breakdown |
+| "worst/best selling since 2025" | Use COMPLETE ALL SKUs DATA section (it's sorted by all-time revenue including 2025+) |
 
 🎯 FOR DATE-SPECIFIC QUESTIONS LIKE "Jan 1-25" or "between Jan 1 and Jan 25":
 → USE the "CUSTOM DATE RANGE DATA" section below - it has PRE-COMPUTED Jan 2026 aggregates
@@ -11538,10 +11584,23 @@ ${Object.entries(ctx.skusByCategory || {}).map(([cat, skus]) => `${cat}: ${skus.
 === 📦 SKU MASTER DATA (PRIMARY DATA SOURCE - USE THIS) ===
 IMPORTANT: This is the authoritative SKU-level data. Use SKUs as the primary identifier for all analysis.
 
-**TOP 20 SKUs BY REVENUE (all-time across periods + weeks):**
-${ctx.skuMasterData?.slice(0, 20).map(s => 
-  `${s.sku}: "${s.name}" [${s.category}] - $${s.totalRevenue.toFixed(0)} rev, ${s.totalUnits} units`
-).join('\n') || 'No SKU data'}
+**COMPLETE ALL SKUs DATA (${ctx.skuMasterData?.length || 0} products - FULL LIST, sorted by revenue high to low):**
+${ctx.skuMasterData?.map(s => {
+  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'AMZ' : 'SHOP';
+  return `${s.sku}:$${s.totalRevenue.toFixed(0)}|${s.totalUnits}u|${channel}`;
+}).join(' ') || 'No SKU data'}
+
+**TOP 10 SKUs BY REVENUE (best sellers):**
+${ctx.skuMasterData?.slice(0, 10).map(s => {
+  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
+  return `${s.sku}: "${s.name}" [${s.category}] - $${s.totalRevenue.toFixed(2)} rev, ${s.totalUnits} units - PRIMARY CHANNEL: ${channel} (Amazon: $${(s.amazonRevenue || 0).toFixed(0)}, Shopify: $${(s.shopifyRevenue || 0).toFixed(0)})`;
+}).join('\n') || 'No SKU data'}
+
+**BOTTOM 15 SKUs BY REVENUE (WORST SELLERS - USE THIS for "worst selling" questions):**
+${ctx.skuMasterData?.slice().reverse().slice(0, 15).map((s, i) => {
+  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
+  return `${i+1}. ${s.sku}: "${s.name}" - $${s.totalRevenue.toFixed(2)} revenue, ${s.totalUnits} units - CHANNEL: ${channel} (AMZ: $${(s.amazonRevenue || 0).toFixed(0)}, SHOP: $${(s.shopifyRevenue || 0).toFixed(0)})`;
+}).join('\n') || 'No SKU data'}
 
 **SKU BREAKDOWN BY 2025 MONTH:**
 ${(() => {
@@ -11710,16 +11769,27 @@ BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
 
 🔑 REMEMBER: Internally always use SKUs - they're unique identifiers. Product names are for user-friendly display.
 
-=== WEEKLY DATA (most recent 12 weeks) ===
+=== WEEKLY DATA (most recent 12 weeks - detailed) ===
 ${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
+
+=== ALL WEEKS SUMMARY (${ctx.weeklyData.length} total weeks - complete list) ===
+${ctx.weeklyData.map(w => `${w.weekEnding}: $${w.totalRevenue.toFixed(0)}`).join(' | ')}
 
 === PERIOD DATA (Quarterly/Monthly/Yearly Historical) ===
 ${ctx.periodData.length > 0 ? `Total periods tracked: ${ctx.periodData.filter(p => p.totalRevenue > 0).length} (with data)
+
+=== ALL PERIODS SUMMARY (complete list) ===
+${ctx.periodData.filter(p => p.totalRevenue > 0).map(p => `${p.period}: $${p.totalRevenue.toFixed(0)}`).join(' | ')}
 
 📅 2025 MONTHLY TOTALS:
 ${ctx.periodData.filter(p => (p.period.includes('2025') || p.period.includes('-2025')) && p.type === 'monthly' && p.totalRevenue > 0).map(p => 
   `${p.period}: $${p.totalRevenue.toFixed(0)} rev, ${p.totalUnits} units, ${p.margin.toFixed(1)}% margin`
 ).join('\n') || 'No 2025 monthly periods'}
+
+📅 2026 DATA:
+${ctx.periodData.filter(p => (p.period.includes('2026') || p.period.includes('-2026')) && p.totalRevenue > 0).map(p => 
+  `${p.period}: $${p.totalRevenue.toFixed(0)} rev, ${p.totalUnits} units`
+).join('\n') || 'No 2026 periods yet'}
 
 📅 2024 QUARTERLY TOTALS:
 ${ctx.periodData.filter(p => (p.period.includes('2024') || p.period.includes('-2024')) && p.type === 'quarterly' && p.totalRevenue > 0).map(p => 
@@ -12296,6 +12366,34 @@ You can help with:
 
 Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. When comparing periods, always show the actual numbers and % change. If the user asks about data you don't have, let them know what they need to upload.
 
+🚨 CRITICAL: NEVER MAKE UP OR ESTIMATE NUMBERS. Only use exact figures from the data provided in this context. If you don't have specific data, say "I don't have that specific data" instead of inventing numbers. All revenue, unit, and profit figures MUST come directly from the SKU MASTER DATA, WEEKLY DATA, or PERIOD DATA sections above.
+
+⚠️ FOR WORST/BEST SELLING QUESTIONS: Use the VERIFIED DATA section at the top of this prompt. Those are the ONLY correct numbers. Do not calculate or modify them.
+
+=== 📋 PRE-COMPUTED ANSWERS (COPY THESE EXACTLY) ===
+
+**FOR "WORST SELLING PRODUCTS" QUESTIONS:**
+When user asks about worst selling products, COPY THIS EXACT ANSWER (just update if asking for different count):
+
+The 5 worst selling products by revenue are:
+${ctx.skuMasterData?.slice().reverse().slice(0, 5).map((s, i) => {
+  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
+  const name = ctx.productCatalog?.find(p => p.sku === s.sku)?.name || s.name || s.sku;
+  return `${i+1}. **${s.sku}** (${name.substring(0, 50)}...)
+   - Revenue: $${s.totalRevenue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+   - Units: ${s.totalUnits.toLocaleString()}
+   - Channel: ${channel}`;
+}).join('\n\n')}
+
+**FOR "BEST SELLING PRODUCTS" QUESTIONS:**
+${ctx.skuMasterData?.slice(0, 5).map((s, i) => {
+  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
+  const name = ctx.productCatalog?.find(p => p.sku === s.sku)?.name || s.name || s.sku;
+  return `${i+1}. ${s.sku} (${name.substring(0, 40)}): $${s.totalRevenue.toLocaleString('en-US', {minimumFractionDigits: 0})} revenue, ${s.totalUnits.toLocaleString()} units - ${channel}`;
+}).join('\n')}
+
+=== END PRE-COMPUTED ANSWERS ===
+
 === 🧠 AI LEARNING INSTRUCTIONS ===
 You have access to the MULTI-SIGNAL AI FORECAST which is the most accurate forecast available. Use it as your PRIMARY source for predictions.
 
@@ -12306,6 +12404,20 @@ You have access to the MULTI-SIGNAL AI FORECAST which is the most accurate forec
 - When user says "DDPE0004Shop" → look up directly in skuMasterData
 - When user says "assorted pack" → search productCatalog for matching name → get SKU → look up in skuMasterData
 - In responses, show BOTH: "DDPE0004Shop (Assorted 3-Pack Lip Balm): $X revenue"
+
+**FOR "WORST SELLING" / "BOTTOM PERFORMER" QUESTIONS (CRITICAL):**
+- ALWAYS use the "BOTTOM 15 SKUs BY REVENUE" section in SKU MASTER DATA above
+- The data shows EXACT revenue and units - COPY THESE NUMBERS EXACTLY
+- The channel (Amazon vs Shopify) is shown for each SKU - USE THIS
+- DO NOT round, estimate, or modify the numbers in any way
+- If a SKU shows "SHOP" or "Shopify", it is a SHOPIFY product, NOT Amazon
+- SKUs ending in "Shop" are typically Shopify products
+
+⚠️ EXAMPLE OF CORRECT RESPONSE FORMAT:
+"The worst selling product since 2025 is DDPE0010Shop with $400.07 revenue and 57 units, sold primarily on Shopify."
+
+❌ WRONG: Making up numbers like $567.75 or claiming Shopify products are Amazon
+✅ RIGHT: Copy the exact numbers from BOTTOM 15 SKUs section above
 
 **FOR SKU-LEVEL ANALYSIS:**
 1. Use skuMasterData as the authoritative source for all SKU data
