@@ -23,12 +23,13 @@ const DEFAULT_DASHBOARD_WIDGETS = {
     { id: 'todayPerformance', name: 'WTD / MTD Performance', enabled: true, order: 1 },
     { id: 'weekProgress', name: 'Weekly Goal Progress', enabled: true, order: 2 },
     { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 3 },
-    { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 4 },
-    { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 5 },
-    { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 6 },
-    { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 7 },
-    { id: 'dataHub', name: 'Data Hub', enabled: false, order: 8 },
-    { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 9 },
+    { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 4 },
+    { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 5 },
+    { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 6 },
+    { id: 'summaryMetrics', name: 'Summary Metrics (Time Range)', enabled: false, order: 7 },
+    { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 8 },
+    { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 9 },
+    { id: 'dataHub', name: 'Data Hub', enabled: false, order: 10 },
   ],
   layout: 'auto',
 };
@@ -14490,9 +14491,12 @@ if (shopifySkuWithShipping.length > 0) {
     );
   };
 
-  // DASHBOARD WIDGET CONFIGURATION MODAL
+  // DASHBOARD WIDGET CONFIGURATION MODAL with Drag & Drop
   const WidgetConfigModal = () => {
     if (!editingWidgets) return null;
+    
+    const [draggedWidget, setDraggedWidget] = useState(null);
+    const [dragOverWidget, setDragOverWidget] = useState(null);
     
     // Get widgets from state, falling back to defaults if needed
     const widgets = (widgetConfig?.widgets && widgetConfig.widgets.length > 0) 
@@ -14517,12 +14521,61 @@ if (shopifySkuWithShipping.length > 0) {
       const newIdx = direction === 'up' ? idx - 1 : idx + 1;
       if (newIdx < 0 || newIdx >= sortedWidgets.length) return;
       
-      // Swap orders
       const tempOrder = sortedWidgets[idx].order;
       sortedWidgets[idx] = { ...sortedWidgets[idx], order: sortedWidgets[newIdx].order };
       sortedWidgets[newIdx] = { ...sortedWidgets[newIdx], order: tempOrder };
       
       setWidgetConfig({ widgets: sortedWidgets, layout: 'auto' });
+    };
+    
+    // Drag and drop handlers
+    const handleDragStart = (e, widget) => {
+      setDraggedWidget(widget);
+      e.dataTransfer.effectAllowed = 'move';
+    };
+    
+    const handleDragOver = (e, widget) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (widget.id !== draggedWidget?.id) {
+        setDragOverWidget(widget);
+      }
+    };
+    
+    const handleDragLeave = () => {
+      setDragOverWidget(null);
+    };
+    
+    const handleDrop = (e, targetWidget) => {
+      e.preventDefault();
+      if (!draggedWidget || draggedWidget.id === targetWidget.id) {
+        setDraggedWidget(null);
+        setDragOverWidget(null);
+        return;
+      }
+      
+      // Reorder widgets
+      const sortedWidgets = [...widgets].sort((a, b) => (a.order || 0) - (b.order || 0));
+      const draggedIdx = sortedWidgets.findIndex(w => w.id === draggedWidget.id);
+      const targetIdx = sortedWidgets.findIndex(w => w.id === targetWidget.id);
+      
+      if (draggedIdx !== -1 && targetIdx !== -1) {
+        // Remove dragged widget and insert at target position
+        const [removed] = sortedWidgets.splice(draggedIdx, 1);
+        sortedWidgets.splice(targetIdx, 0, removed);
+        
+        // Reassign order values
+        const reorderedWidgets = sortedWidgets.map((w, i) => ({ ...w, order: i }));
+        setWidgetConfig({ widgets: reorderedWidgets, layout: 'auto' });
+      }
+      
+      setDraggedWidget(null);
+      setDragOverWidget(null);
+    };
+    
+    const handleDragEnd = () => {
+      setDraggedWidget(null);
+      setDragOverWidget(null);
     };
     
     const resetToDefaults = () => {
@@ -14552,10 +14605,24 @@ if (shopifySkuWithShipping.length > 0) {
               <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wide mb-3 flex items-center gap-2">
                 <Eye className="w-4 h-4" />
                 Active Widgets ({enabledWidgets.length})
+                <span className="text-slate-500 text-xs font-normal ml-2">Drag to reorder</span>
               </h3>
               <div className="space-y-2">
                 {enabledWidgets.map((widget, idx) => (
-                  <div key={widget.id} className="flex items-center gap-3 bg-slate-800/50 border border-slate-700 rounded-xl p-3">
+                  <div 
+                    key={widget.id} 
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, widget)}
+                    onDragOver={(e) => handleDragOver(e, widget)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, widget)}
+                    onDragEnd={handleDragEnd}
+                    className={`flex items-center gap-3 bg-slate-800/50 border rounded-xl p-3 cursor-grab active:cursor-grabbing transition-all ${
+                      draggedWidget?.id === widget.id ? 'opacity-50 border-violet-500' : 
+                      dragOverWidget?.id === widget.id ? 'border-violet-500 bg-violet-500/10' : 'border-slate-700'
+                    }`}
+                  >
+                    <Move className="w-4 h-4 text-slate-500 flex-shrink-0" />
                     <div className="flex flex-col gap-0.5">
                       <button 
                         onClick={() => moveWidget(widget.id, 'up')} 
@@ -18430,6 +18497,30 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       }
     }
     
+    // Check for weeks with missing 3PL or Ads data
+    const incompleteWeeks = Object.entries(allWeeksData)
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .slice(0, 4)
+      .filter(([key, data]) => {
+        const weeklyHas3PL = data.shopify?.threeplCosts > 0;
+        const ledgerHas3PL = (() => {
+          const ledgerData = get3PLForWeek(threeplLedger, key);
+          return ledgerData && ledgerData.metrics?.totalCost > 0;
+        })();
+        const has3PL = weeklyHas3PL || ledgerHas3PL;
+        const hasAds = (data.shopify?.metaSpend > 0) || (data.shopify?.googleSpend > 0);
+        return !has3PL || !hasAds;
+      });
+    
+    if (incompleteWeeks.length > 0) {
+      const weekText = incompleteWeeks.length === 1 ? '1 week' : `${incompleteWeeks.length} weeks`;
+      alerts.push({ 
+        type: 'warning', 
+        text: `${weekText} missing cost data (3PL or Ads)`,
+        link: 'weekly'
+      });
+    }
+    
     // Calculate total upcoming bills for display
     const totalUpcomingBills = upcomingBills.reduce((s, i) => s + i.amount, 0);
     
@@ -20002,108 +20093,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               )}
               {/* ============ END DAILY CALENDAR ============ */}
               
-              
-              {/* ============ AI FORECAST SUMMARY ============ */}
-              {(aiForecasts || Object.keys(allWeeksData).length >= 4) && (
-                <div className="bg-gradient-to-br from-purple-900/20 via-slate-800 to-indigo-900/10 rounded-2xl border border-purple-500/20 p-5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
-                        <Brain className="w-5 h-5 text-purple-400" />
-                      </div>
-                      <div>
-                        <h3 className="text-lg font-semibold text-white">AI Forecast</h3>
-                        {aiForecasts && !aiForecasts.error && aiForecasts.salesForecast?.next4Weeks?.[0] ? (
-                          <p className="text-slate-400 text-sm">
-                            Next week: {formatCurrency(aiForecasts.salesForecast.next4Weeks[0].predictedRevenue || 0)} revenue
-                          </p>
-                        ) : (
-                          <p className="text-slate-400 text-sm">AI-powered predictions ready to generate</p>
-                        )}
-                      </div>
-                    </div>
-                    <button 
-                      onClick={() => setView('forecast')}
-                      className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-white text-sm font-medium flex items-center gap-2"
-                    >
-                      <Zap className="w-4 h-4" />
-                      {aiForecasts ? 'View Full Forecast' : 'Generate Forecast'}
-                    </button>
-                  </div>
-                  {aiForecasts && aiForecasts.actionableInsights && aiForecasts.actionableInsights.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-slate-700">
-                      <p className="text-slate-400 text-xs mb-2">Top Recommendation:</p>
-                      <p className="text-white text-sm">{aiForecasts.actionableInsights[0].insight}</p>
-                    </div>
-                  )}
-                </div>
-              )}
-              {/* ============ END AI FORECAST SUMMARY ============ */}
-
-              
-              {/* Check for weeks with missing 3PL or Ad data */}
-              {(() => {
-                const recentWeeks = Object.entries(allWeeksData)
-                  .sort((a, b) => b[0].localeCompare(a[0]))
-                  .slice(0, 4); // Check last 4 weeks
-                
-                const incompleteWeeks = recentWeeks.filter(([key, data]) => {
-                  // Check both weekly data AND the 3PL ledger
-                  const weeklyHas3PL = data.shopify?.threeplCosts > 0;
-                  const ledgerHas3PL = (() => {
-                    const ledgerData = get3PLForWeek(threeplLedger, key);
-                    return ledgerData && ledgerData.metrics?.totalCost > 0;
-                  })();
-                  const has3PL = weeklyHas3PL || ledgerHas3PL;
-                  const hasAds = (data.shopify?.metaSpend > 0) || (data.shopify?.googleSpend > 0);
-                  return !has3PL || !hasAds;
-                });
-                
-                if (incompleteWeeks.length > 0) {
-                  return (
-                    <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6">
-                      <div className="flex items-start gap-3">
-                        <AlertTriangle className="w-5 h-5 text-amber-400 mt-0.5" />
-                        <div className="flex-1">
-                          <p className="text-amber-300 font-medium mb-2">Some weeks have incomplete cost data</p>
-                          <div className="space-y-2">
-                            {incompleteWeeks.slice(0, 3).map(([key, data]) => {
-                              const missing = [];
-                              const weeklyHas3PL = data.shopify?.threeplCosts > 0;
-                              const ledgerHas3PL = (() => {
-                                const ledgerData = get3PLForWeek(threeplLedger, key);
-                                return ledgerData && ledgerData.metrics?.totalCost > 0;
-                              })();
-                              if (!weeklyHas3PL && !ledgerHas3PL) missing.push('3PL');
-                              if (!data.shopify?.metaSpend && !data.shopify?.googleSpend) missing.push('Ads');
-                              return (
-                                <div key={key} className="flex items-center justify-between text-sm">
-                                  <span className="text-slate-400">
-                                    Week of {new Date(key + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                    <span className="text-amber-400/70 ml-2">— missing {missing.join(' & ')}</span>
-                                  </span>
-                                  <button 
-                                    onClick={() => { setSelectedWeek(key); setView('weekly'); }}
-                                    className="text-amber-400 hover:text-amber-300 text-xs underline"
-                                  >
-                                    Update
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                          {incompleteWeeks.length > 3 && (
-                            <p className="text-slate-500 text-xs mt-2">+ {incompleteWeeks.length - 3} more weeks</p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                }
-                return null;
-              })()}
-              
-              {/* Time Range Toggle & Key Metrics */}
+              {/* Time Range Toggle & Key Metrics - Optional Widget */}
+              {isWidgetEnabled('summaryMetrics') && (
+              <>
               <div className="flex flex-wrap items-center gap-2 mb-4">
                 <span className="text-slate-400 text-sm mr-2">View:</span>
                 {[
@@ -20218,329 +20210,15 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 </div>
               </div>
               )}
-              
-              {/* Goals Progress */}
-              {(goals.weeklyRevenue > 0 || goals.weeklyProfit > 0 || goals.monthlyRevenue > 0 || goals.monthlyProfit > 0) && sortedWeeks.length > 0 ? (
-                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5 mb-6">
-                  <h3 className="text-sm font-semibold text-amber-400 uppercase mb-4 flex items-center gap-2"><Target className="w-4 h-4" />Goals Progress</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {goals.weeklyRevenue > 0 && sortedWeeks.length > 0 && (() => {
-                      // Calculate current calendar week revenue from daily data
-                      const now = new Date();
-                      const dayOfWeek = now.getDay(); // 0 = Sunday
-                      const daysIntoWeek = dayOfWeek === 0 ? 7 : dayOfWeek;
-                      const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysIntoWeek + 1);
-                      
-                      let weeklyRevenue = 0;
-                      for (let i = 0; i < 7; i++) {
-                        const d = new Date(weekStart);
-                        d.setDate(weekStart.getDate() + i);
-                        const dateKey = formatDateKey(d);
-                        const dayData = allDaysData[dateKey];
-                        // Only include days with actual sales data
-                        if (hasDailySalesData(dayData)) {
-                          weeklyRevenue += dayData.total?.revenue || 0;
-                        }
-                      }
-                      
-                      // If no daily data, fall back to last week's uploaded data
-                      if (weeklyRevenue === 0) {
-                        const currentWeekKey = getSunday(now);
-                        weeklyRevenue = allWeeksData[currentWeekKey]?.total?.revenue || 
-                                       allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.revenue || 0;
-                      }
-                      
-                      return (
-                        <div>
-                          <div className="flex justify-between text-sm mb-1">
-                            <span className="text-slate-400">Weekly Revenue</span>
-                            <span className="text-white">{formatCurrency(weeklyRevenue)} / {formatCurrency(goals.weeklyRevenue)}</span>
-                          </div>
-                          <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                            <div className={`h-full ${weeklyRevenue >= goals.weeklyRevenue ? 'bg-emerald-500' : 'bg-amber-500'}`} 
-                              style={{ width: `${Math.min(100, (weeklyRevenue / goals.weeklyRevenue) * 100)}%` }} />
-                          </div>
-                        </div>
-                      );
-                    })()}
-                    {goals.weeklyProfit > 0 && sortedWeeks.length > 0 && (() => {
-                      // Calculate current calendar week profit from daily data
-                      const now = new Date();
-                      const dayOfWeek = now.getDay();
-                      const daysIntoWeek = dayOfWeek === 0 ? 7 : dayOfWeek;
-                      const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysIntoWeek + 1);
-                      
-                      let weeklyProfit = 0;
-                      for (let i = 0; i < 7; i++) {
-                        const d = new Date(weekStart);
-                        d.setDate(weekStart.getDate() + i);
-                        const dateKey = formatDateKey(d);
-                        const dayData = allDaysData[dateKey];
-                        // Only include days with actual sales data
-                        if (hasDailySalesData(dayData)) {
-                          weeklyProfit += dayData.total?.netProfit || 0;
-                        }
-                      }
-                      
-                      // If no daily data, fall back to last week's uploaded data
-                      if (weeklyProfit === 0) {
-                        const currentWeekKey = getSunday(now);
-                        weeklyProfit = allWeeksData[currentWeekKey]?.total?.netProfit || 
-                                      allWeeksData[sortedWeeks[sortedWeeks.length - 1]]?.total?.netProfit || 0;
-                      }
-                      
-                      return (
-                        <div>
-                          <div className="flex justify-between text-sm mb-1">
-                            <span className="text-slate-400">Weekly Profit</span>
-                            <span className="text-white">{formatCurrency(weeklyProfit)} / {formatCurrency(goals.weeklyProfit)}</span>
-                          </div>
-                          <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                            <div className={`h-full ${weeklyProfit >= goals.weeklyProfit ? 'bg-emerald-500' : 'bg-amber-500'}`}
-                              style={{ width: `${Math.min(100, Math.max(0, (weeklyProfit / goals.weeklyProfit) * 100))}%` }} />
-                          </div>
-                        </div>
-                      );
-                    })()}
-                    {goals.monthlyRevenue > 0 && (
-                      <div>
-                        <div className="flex justify-between text-sm mb-1">
-                          <span className="text-slate-400">Monthly Revenue</span>
-                          <span className="text-white">{formatCurrency(current.revenue)} / {formatCurrency(goals.monthlyRevenue)}</span>
-                        </div>
-                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                          <div className={`h-full ${current.revenue >= goals.monthlyRevenue ? 'bg-emerald-500' : 'bg-amber-500'}`}
-                            style={{ width: `${Math.min(100, (current.revenue / goals.monthlyRevenue) * 100)}%` }} />
-                        </div>
-                      </div>
-                    )}
-                    {goals.monthlyProfit > 0 && (
-                      <div>
-                        <div className="flex justify-between text-sm mb-1">
-                          <span className="text-slate-400">Monthly Profit</span>
-                          <span className="text-white">{formatCurrency(current.profit)} / {formatCurrency(goals.monthlyProfit)}</span>
-                        </div>
-                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                          <div className={`h-full ${current.profit >= goals.monthlyProfit ? 'bg-emerald-500' : 'bg-amber-500'}`}
-                            style={{ width: `${Math.min(100, Math.max(0, (current.profit / goals.monthlyProfit) * 100))}%` }} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-5 mb-6 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Target className="w-6 h-6 text-slate-500" />
-                    <div>
-                      <p className="text-slate-400 font-medium">No goals set</p>
-                      <p className="text-slate-500 text-sm">Set revenue and profit targets to track your progress</p>
-                    </div>
-                  </div>
-                  <button onClick={() => setShowGoalsModal(true)} className="px-4 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-amber-300 text-sm font-medium">
-                    Set Goals
-                  </button>
-                </div>
+              </>
               )}
-              
-              {/* Quick Actions & Recent Data */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-                {/* Recent Weeks */}
-                <div className="lg:col-span-2 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-semibold text-slate-300 uppercase">Recent Weeks</h3>
-                    <div className="flex items-center gap-2">
-                      {compareMode ? (
-                        <span className="text-xs text-violet-400">Select weeks to compare ({compareItems.length}/2)</span>
-                      ) : (
-                        <button onClick={() => setCompareMode(true)} className="text-xs text-slate-400 hover:text-violet-300 flex items-center gap-1"><GitCompareArrows className="w-3 h-3" />Compare</button>
-                      )}
-                      <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"><Upload className="w-3 h-3" />Add Week</button>
-                    </div>
-                  </div>
-                  {sortedWeeks.length > 0 ? (
-                    <div className="space-y-2">
-                      {sortedWeeks.slice(-5).reverse().map(w => {
-                        const week = allWeeksData[w];
-                        const isSelected = compareItems.includes(w);
-                        const note = weekNotes[w];
-                        return (
-                          <div key={w} className={`flex items-center gap-2 ${compareMode ? '' : ''}`}>
-                            {compareMode && (
-                              <button onClick={() => {
-                                if (isSelected) setCompareItems(p => p.filter(x => x !== w));
-                                else if (compareItems.length < 2) setCompareItems(p => [...p, w]);
-                              }} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center flex-shrink-0 ${isSelected ? 'bg-violet-600 border-violet-500' : 'border-slate-600 hover:border-violet-500'}`}>
-                                {isSelected && <Check className="w-4 h-4 text-white" />}
-                              </button>
-                            )}
-                            <button onClick={() => { if (!compareMode) { setSelectedWeek(w); setView('weekly'); }}} className={`flex-1 flex items-center justify-between p-3 bg-slate-900/50 hover:bg-slate-700/50 rounded-xl transition-all ${isSelected ? 'ring-2 ring-violet-500' : ''}`}>
-                              <div className="flex items-center gap-3">
-                                <Calendar className="w-5 h-5 text-violet-400" />
-                                <div className="text-left">
-                                  <p className="text-white font-medium">{new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
-                                  <div className="flex items-center gap-2">
-                                    <p className="text-slate-500 text-xs">{formatNumber(week.total?.units || 0)} units</p>
-                                    {note && <span className="text-amber-400 text-xs flex items-center gap-0.5"><StickyNote className="w-3 h-3" /></span>}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <p className="text-emerald-400 font-semibold">{formatCurrency(week.total?.revenue || 0)}</p>
-                                <p className={`text-xs ${(week.total?.netProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(week.total?.netProfit || 0)} profit</p>
-                              </div>
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className="text-slate-500 text-center py-4">No weekly data yet</p>
-                  )}
-                  {compareMode && compareItems.length === 2 && (
-                    <button onClick={() => {}} className="w-full mt-3 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium text-sm">
-                      Compare Selected Weeks
-                    </button>
-                  )}
-                </div>
-                
-                {/* Quick Stats & Actions */}
-                <div className="space-y-4">
-                  {/* Data Summary */}
-                  <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
-                    <h3 className="text-sm font-semibold text-slate-300 uppercase mb-3">Data Summary</h3>
-                    <div className="space-y-2">
-                      <div className="flex justify-between"><span className="text-slate-400">Weeks tracked</span><span className="text-white font-medium">{Object.keys(allWeeksData).length}</span></div>
-                      <div className="flex justify-between"><span className="text-slate-400">Periods saved</span><span className="text-white font-medium">{Object.keys(allPeriodsData).length}</span></div>
-                      <div className="flex justify-between"><span className="text-slate-400">COGS entries</span><span className="text-white font-medium">{Object.keys(savedCogs).length}</span></div>
-                      <div className="flex justify-between"><span className="text-slate-400">Inventory snapshots</span><span className="text-white font-medium">{Object.keys(invHistory).length}</span></div>
-                    </div>
-                  </div>
-                  
-                  {/* Quick Actions */}
-                  <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
-                    <h3 className="text-sm font-semibold text-slate-300 uppercase mb-3">Quick Actions</h3>
-                    <div className="space-y-2">
-                      <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="w-full p-2 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 rounded-lg text-violet-300 text-sm text-left flex items-center gap-2"><Upload className="w-4 h-4" />Upload Amazon Data</button>
-                      <button onClick={() => { setUploadTab('period'); setView('upload'); }} className="w-full p-2 bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/30 rounded-lg text-teal-300 text-sm text-left flex items-center gap-2"><CalendarRange className="w-4 h-4" />Upload Period Data</button>
-                      <button onClick={() => { setUploadTab('inventory'); setView('upload'); }} className="w-full p-2 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg text-emerald-300 text-sm text-left flex items-center gap-2"><Boxes className="w-4 h-4" />Upload Inventory</button>
-                      <button onClick={exportAll} className="w-full p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 text-sm text-left flex items-center gap-2"><Download className="w-4 h-4" />Export All Data</button>
-                    </div>
-                  </div>
-                  
-                  {/* Banking Summary Widget */}
-                  {bankingData.transactions?.length > 0 && (() => {
-                    const now = new Date();
-                    const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-                    const lastMonth = now.getMonth() === 0 
-                      ? `${now.getFullYear() - 1}-12` 
-                      : `${now.getFullYear()}-${String(now.getMonth()).padStart(2, '0')}`;
-                    const twoMonthsAgo = now.getMonth() <= 1
-                      ? `${now.getFullYear() - 1}-${String(12 + now.getMonth() - 1).padStart(2, '0')}`
-                      : `${now.getFullYear()}-${String(now.getMonth() - 1).padStart(2, '0')}`;
-                    
-                    const thisMonthSnap = bankingData.monthlySnapshots?.[thisMonth] || { income: 0, expenses: 0, net: 0 };
-                    const lastMonthSnap = bankingData.monthlySnapshots?.[lastMonth] || { income: 0, expenses: 0, net: 0 };
-                    const isStale = !bankingData.lastUpload || new Date().toDateString() !== new Date(bankingData.lastUpload).toDateString();
-                    
-                    // Filter to only real bank accounts (strict pattern matching)
-                    const allAccounts = Object.entries(bankingData.accounts || {});
-                    const realAccounts = allAccounts.filter(([name, _]) => {
-                      if (!/\(\d{4}\)\s*-\s*\d+$/.test(name)) return false;
-                      if (name.includes('"')) return false;
-                      if (name.length > 60) return false;
-                      if (!/^[A-Za-z]/.test(name.trim())) return false;
-                      return true;
-                    });
-                    const checkingAccounts = realAccounts.filter(([_, a]) => a.type !== 'credit_card');
-                    const creditCardAccounts = realAccounts.filter(([_, a]) => a.type === 'credit_card');
-                    const totalCash = checkingAccounts.reduce((sum, [_, a]) => sum + (a.balance || 0), 0);
-                    const totalDebt = creditCardAccounts.reduce((sum, [_, a]) => sum + Math.abs(a.balance || 0), 0);
-                    
-                    // Calculate burn rate (average monthly expenses over last 3 months)
-                    const recentMonths = Object.keys(bankingData.monthlySnapshots || {}).sort().slice(-3);
-                    const avgBurn = recentMonths.length > 0 
-                      ? recentMonths.reduce((s, m) => s + (bankingData.monthlySnapshots[m]?.expenses || 0), 0) / recentMonths.length
-                      : 0;
-                    
-                    // Calculate average net cash flow (income - expenses)
-                    const avgNetCashFlow = recentMonths.length > 0
-                      ? recentMonths.reduce((s, m) => s + (bankingData.monthlySnapshots[m]?.net || 0), 0) / recentMonths.length
-                      : 0;
-                    
-                    // Cash runway - for revenue-generating business, use NET cash flow
-                    // If net positive, runway is infinite. If net negative, calculate months until cash runs out.
-                    const runway = avgNetCashFlow >= 0 ? 99 : Math.floor(totalCash / Math.abs(avgNetCashFlow));
-                    const isCashFlowPositive = avgNetCashFlow >= 0;
-                    
-                    // Trend: compare this month to last month
-                    const trend = thisMonthSnap.net - lastMonthSnap.net;
-                    
-                    return (
-                      <div className={`bg-slate-800/50 rounded-2xl border ${isStale ? 'border-amber-500/50' : 'border-slate-700'} p-5`}>
-                        <div className="flex items-center justify-between mb-3">
-                          <h3 className="text-sm font-semibold text-slate-300 uppercase flex items-center gap-2">
-                            <Landmark className="w-4 h-4 text-green-400" />CFO Dashboard
-                          </h3>
-                          {isStale && <span className="text-xs text-amber-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />Update needed</span>}
-                        </div>
-                        
-                        {/* Cash Position & Debt */}
-                        <div className="grid grid-cols-2 gap-3 mb-3">
-                          <div className="bg-emerald-900/20 rounded-lg p-3 border border-emerald-500/20">
-                            <p className="text-xs text-emerald-400 mb-1">💵 Cash Position</p>
-                            <p className="text-lg font-bold text-white">{formatCurrency(totalCash)}</p>
-                          </div>
-                          <div className="bg-rose-900/20 rounded-lg p-3 border border-rose-500/20">
-                            <p className="text-xs text-rose-400 mb-1">💳 Credit Card Debt</p>
-                            <p className="text-lg font-bold text-white">{formatCurrency(totalDebt)}</p>
-                          </div>
-                        </div>
-                        
-                        {/* Key Metrics */}
-                        <div className="space-y-2 text-sm">
-                          <div className="flex justify-between items-center">
-                            <span className="text-slate-400">Avg Monthly Net</span>
-                            <span className={`font-medium ${avgNetCashFlow >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {avgNetCashFlow >= 0 ? '+' : ''}{formatCurrency(avgNetCashFlow)}
-                            </span>
-                          </div>
-                          <div className="flex justify-between items-center">
-                            <span className="text-slate-400">Cash Runway</span>
-                            <span className={`font-bold ${isCashFlowPositive ? 'text-emerald-400' : runway > 6 ? 'text-emerald-400' : runway > 3 ? 'text-amber-400' : 'text-rose-400'}`}>
-                              {isCashFlowPositive ? 'Cash Flow +' : runway > 12 ? '12+ months' : `${runway} months`}
-                            </span>
-                          </div>
-                          <div className="flex justify-between items-center pt-2 border-t border-slate-700">
-                            <span className="text-slate-300">This Month Cash Flow</span>
-                            <span className={`font-bold ${thisMonthSnap.net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {formatCurrency(thisMonthSnap.net)}
-                            </span>
-                          </div>
-                          <div className="flex justify-between items-center">
-                            <span className="text-slate-500 text-xs">vs Last Month</span>
-                            <span className={`text-xs flex items-center gap-1 ${trend >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {trend >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                              {trend >= 0 ? '+' : ''}{formatCurrency(trend)}
-                            </span>
-                          </div>
-                        </div>
-                        
-                        <button onClick={() => setView('banking')} className="w-full mt-3 p-2 bg-green-600/20 hover:bg-green-600/30 border border-green-500/30 rounded-lg text-green-300 text-sm flex items-center justify-center gap-2">
-                          <BarChart3 className="w-4 h-4" />View Full Banking
-                        </button>
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
+              {/* End Summary Metrics Widget */}
             </>
           )}
         </div>
       </div>
     );
   }
-
   // ==================== UPLOAD VIEW (Combined) ====================
   if (view === 'upload' || view === 'period-upload' || view === 'inv-upload') {
     
