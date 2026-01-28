@@ -190,9 +190,22 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
     }, 0).toString(36);
     const txnId = `${dateKey}-${currentAccount?.slice(0,15)}-${amount.toFixed(2)}-${memoHash}`.replace(/[^a-zA-Z0-9-]/g, '');
     
-    // Skip transfers and non-cash items
-    if (txnType === 'Credit Card Payment') continue;
+    // Skip journal entries and non-cash items
     if (txnType === 'Journal Entry') continue;
+    
+    // Handle Credit Card Payments:
+    // - From checking account: This is a cash OUTFLOW (expense) - money leaves checking
+    // - On credit card account: This is a payment RECEIVED (reduces balance) - skip to avoid double-counting
+    if (txnType === 'Credit Card Payment') {
+      // If we're in a checking account and paying a credit card, record as expense
+      if (currentAccountType === 'checking' && amount < 0) {
+        // This IS an expense from the checking account - don't skip!
+        // Fall through to normal processing
+      } else {
+        // Skip credit card payment entries on the credit card side
+        continue;
+      }
+    }
     
     const categoryLower = category.toLowerCase();
     const memoLower = memo.toLowerCase();
@@ -209,8 +222,10 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
     if (currentAccountType === 'credit_card') {
       if (txnType === 'Expense' && amount > 0) isExpense = true;
     } else {
+      // Checking/savings accounts
       if (txnType === 'Deposit' && amount > 0) isIncome = true;
       else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) isExpense = true;
+      else if (txnType === 'Credit Card Payment' && amount < 0) isExpense = true; // Cash leaving to pay card
       else if (txnType === 'Transfer' && amount > 0) isIncome = true;
       else if (txnType === 'Payroll Check') isExpense = true;
     }
