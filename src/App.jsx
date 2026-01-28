@@ -7220,6 +7220,13 @@ const savePeriods = async (d) => {
           const dateKey = dateRange.endDate.toISOString().split('T')[0];
           console.log('Importing daily data for date:', dateKey, 'revenue:', amzRev, 'units:', amzUnits);
           
+          const existingShopify = updatedDailyData[dateKey]?.shopify || { revenue: 0, units: 0, cogs: 0, netProfit: 0, adSpend: 0, skuData: [] };
+          const totalRev = amzRev + (existingShopify.revenue || 0);
+          const totalUnits = amzUnits + (existingShopify.units || 0);
+          const totalProfit = amzProfit + (existingShopify.netProfit || 0);
+          const totalCogs = amzCogs + (existingShopify.cogs || 0);
+          const totalAdSpend = amzAds + (existingShopify.adSpend || existingShopify.metaSpend || 0) + (existingShopify.googleSpend || 0);
+          
           updatedDailyData[dateKey] = {
             date: dateKey,
             createdAt: new Date().toISOString(),
@@ -7229,11 +7236,17 @@ const savePeriods = async (d) => {
               margin: amzRev > 0 ? (amzProfit / amzRev) * 100 : 0,
               skuData: amazonSkus,
             },
-            shopify: updatedDailyData[dateKey]?.shopify || { revenue: 0, units: 0, cogs: 0, netProfit: 0, skuData: [] },
+            shopify: existingShopify,
             total: {
-              revenue: amzRev + (updatedDailyData[dateKey]?.shopify?.revenue || 0),
-              units: amzUnits + (updatedDailyData[dateKey]?.shopify?.units || 0),
-              netProfit: amzProfit + (updatedDailyData[dateKey]?.shopify?.netProfit || 0),
+              revenue: totalRev,
+              units: totalUnits,
+              netProfit: totalProfit,
+              cogs: totalCogs,
+              adSpend: totalAdSpend,
+              netMargin: totalRev > 0 ? (totalProfit / totalRev) * 100 : 0,
+              roas: totalAdSpend > 0 ? totalRev / totalAdSpend : 0,
+              amazonShare: totalRev > 0 ? (amzRev / totalRev) * 100 : 0,
+              shopifyShare: totalRev > 0 ? ((existingShopify.revenue || 0) / totalRev) * 100 : 0,
             },
           };
           dailyImported++;
@@ -7278,6 +7291,13 @@ const savePeriods = async (d) => {
           // Import as period data
           const monthLabel = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
           
+          const existingPeriodShopify = updatedPeriodsData[monthLabel]?.shopify || { revenue: 0, units: 0, cogs: 0, netProfit: 0, adSpend: 0, skuData: [] };
+          const periodTotalRev = amzRev + (existingPeriodShopify.revenue || 0);
+          const periodTotalUnits = amzUnits + (existingPeriodShopify.units || 0);
+          const periodTotalProfit = amzProfit + (existingPeriodShopify.netProfit || 0);
+          const periodTotalCogs = amzCogs + (existingPeriodShopify.cogs || 0);
+          const periodTotalAdSpend = amzAds + (existingPeriodShopify.adSpend || existingPeriodShopify.metaSpend || 0) + (existingPeriodShopify.googleSpend || 0);
+          
           updatedPeriodsData[monthLabel] = {
             label: monthLabel,
             createdAt: new Date().toISOString(),
@@ -7287,11 +7307,16 @@ const savePeriods = async (d) => {
               margin: amzRev > 0 ? (amzProfit / amzRev) * 100 : 0,
               skuData: amazonSkus,
             },
-            shopify: updatedPeriodsData[monthLabel]?.shopify || { revenue: 0, units: 0, cogs: 0, netProfit: 0, skuData: [] },
+            shopify: existingPeriodShopify,
             total: {
-              revenue: amzRev + (updatedPeriodsData[monthLabel]?.shopify?.revenue || 0),
-              units: amzUnits + (updatedPeriodsData[monthLabel]?.shopify?.units || 0),
-              netProfit: amzProfit + (updatedPeriodsData[monthLabel]?.shopify?.netProfit || 0),
+              revenue: periodTotalRev,
+              units: periodTotalUnits,
+              netProfit: periodTotalProfit,
+              cogs: periodTotalCogs,
+              adSpend: periodTotalAdSpend,
+              netMargin: periodTotalRev > 0 ? (periodTotalProfit / periodTotalRev) * 100 : 0,
+              amazonShare: periodTotalRev > 0 ? (amzRev / periodTotalRev) * 100 : 0,
+              shopifyShare: periodTotalRev > 0 ? ((existingPeriodShopify.revenue || 0) / periodTotalRev) * 100 : 0,
             },
           };
           monthlyImported++;
@@ -28552,7 +28577,62 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       'custom': 'Custom Range',
     };
     
+    // Build daily 3PL data from ledger orders
+    const dailyData = (() => {
+      const byDay = {};
+      
+      // Aggregate ledger orders by day
+      Object.values(threeplLedger.orders || {}).forEach(order => {
+        const dayKey = order.dateKey;
+        if (!dayKey) return;
+        
+        if (!byDay[dayKey]) {
+          byDay[dayKey] = {
+            day: dayKey,
+            type: 'day',
+            label: new Date(dayKey + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            totalCost: 0,
+            orderCount: 0,
+            totalUnits: 0,
+            storage: 0,
+            shipping: 0,
+            pickFees: 0,
+            boxCharges: 0,
+            receiving: 0,
+            revenue: 0,
+          };
+        }
+        
+        const d = byDay[dayKey];
+        d.orderCount += 1;
+        d.totalUnits += order.totalUnits || 0;
+        d.shipping += order.shipping || 0;
+        d.pickFees += order.pickFees || 0;
+        d.boxCharges += order.boxCharges || 0;
+        d.receiving += order.receiving || 0;
+        d.totalCost += (order.shipping || 0) + (order.pickFees || 0) + (order.boxCharges || 0) + (order.receiving || 0);
+      });
+      
+      // Add revenue from allDaysData if available
+      Object.keys(byDay).forEach(dayKey => {
+        if (allDaysData[dayKey]?.shopify?.revenue) {
+          byDay[dayKey].revenue = allDaysData[dayKey].shopify.revenue;
+        }
+      });
+      
+      // Calculate averages
+      Object.values(byDay).forEach(d => {
+        d.avgCostPerOrder = d.orderCount > 0 ? d.totalCost / d.orderCount : 0;
+      });
+      
+      // Convert to array, filter by date range, and sort
+      return Object.values(byDay)
+        .filter(d => d.day >= dateBounds.start && d.day <= dateBounds.end)
+        .sort((a, b) => a.day.localeCompare(b.day));
+    })();
+    
     // Find max for chart scaling
+    const maxDailyCost = Math.max(...dailyData.map(d => d.totalCost), 1);
     const maxWeeklyCost = Math.max(...weeklyData.map(d => d.totalCost), 1);
     const maxMonthlyCost = Math.max(...months.map(d => d.totalCost), 1);
     
@@ -28769,6 +28849,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           
           {/* Time View Toggle */}
           <div className="flex gap-2 mb-4">
+            <button onClick={() => setTimeView('daily')} className={`px-4 py-2 rounded-lg text-sm font-medium ${timeView === 'daily' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>Daily</button>
             <button onClick={() => setTimeView('weekly')} className={`px-4 py-2 rounded-lg text-sm font-medium ${timeView === 'weekly' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>Weekly</button>
             <button onClick={() => setTimeView('monthly')} className={`px-4 py-2 rounded-lg text-sm font-medium ${timeView === 'monthly' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>Monthly</button>
           </div>
@@ -28776,19 +28857,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           {/* Cost Trend Chart */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6 overflow-hidden">
             <h3 className="text-lg font-semibold text-white mb-4">
-              {timeView === 'weekly' ? 'Weekly' : 'Monthly'} 3PL Costs
+              {timeView === 'daily' ? 'Daily' : timeView === 'weekly' ? 'Weekly' : 'Monthly'} 3PL Costs
             </h3>
             <div className="relative flex items-end gap-1 h-48">
-              {(timeView === 'weekly' ? weeklyData.slice(-12) : months.slice(-12)).map((d, i) => {
+              {(timeView === 'daily' ? dailyData.slice(-14) : timeView === 'weekly' ? weeklyData.slice(-12) : months.slice(-12)).map((d, i) => {
                 const data = d;
-                const height = timeView === 'weekly' 
+                const height = timeView === 'daily'
+                  ? (data.totalCost / maxDailyCost) * 100
+                  : timeView === 'weekly' 
                   ? (data.totalCost / maxWeeklyCost) * 100 
                   : (data.totalCost / maxMonthlyCost) * 100;
-                const label = timeView === 'weekly' 
+                const label = timeView === 'daily'
+                  ? new Date(data.day + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                  : timeView === 'weekly' 
                   ? new Date(data.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                   : new Date(data.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
                 return (
-                  <div key={timeView === 'weekly' ? data.week : data.month} className="flex-1 flex flex-col items-center group relative">
+                  <div key={timeView === 'daily' ? data.day : timeView === 'weekly' ? data.week : data.month} className="flex-1 flex flex-col items-center group relative">
                     <div className="absolute -top-14 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                       {label}<br/>
                       Total: {formatCurrency(data.totalCost)}<br/>
@@ -28817,10 +28902,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           
           {/* 3PL Trend Charts */}
           {(() => {
-            const chartData = (timeView === 'weekly' ? weeklyData : months).slice(-12);
+            const chartData = (timeView === 'daily' ? dailyData.slice(-14) : timeView === 'weekly' ? weeklyData : months).slice(-12);
             if (chartData.length < 2) return null;
             
-            const getLabel = (d) => timeView === 'weekly' 
+            const getLabel = (d) => timeView === 'daily'
+              ? new Date(d.day + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+              : timeView === 'weekly' 
               ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
               : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
             
@@ -28848,7 +28935,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           {change > 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}%
                         </div>
                       )}
-                      <p className="text-slate-500 text-xs mt-1">vs last {timeView === 'weekly' ? 'week' : 'month'}</p>
+                      <p className="text-slate-500 text-xs mt-1">vs last {timeView === 'daily' ? 'day' : timeView === 'weekly' ? 'week' : 'month'}</p>
                     </div>
                   </div>
                   <div className="relative flex items-end gap-1 h-20">
@@ -28931,12 +29018,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           
           {/* Detailed Table */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-            <h3 className="text-lg font-semibold text-white mb-4">{timeView === 'weekly' ? 'Weekly' : 'Monthly'} Breakdown</h3>
+            <h3 className="text-lg font-semibold text-white mb-4">{timeView === 'daily' ? 'Daily' : timeView === 'weekly' ? 'Weekly' : 'Monthly'} Breakdown</h3>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-700">
-                    <th className="text-left text-slate-400 py-2">{timeView === 'weekly' ? 'Week' : 'Month'}</th>
+                    <th className="text-left text-slate-400 py-2">{timeView === 'daily' ? 'Day' : timeView === 'weekly' ? 'Week' : 'Month'}</th>
                     <th className="text-right text-slate-400 py-2">Total</th>
                     <th className="text-right text-slate-400 py-2">Orders</th>
                     <th className="text-right text-slate-400 py-2">Units</th>
@@ -28949,14 +29036,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   </tr>
                 </thead>
                 <tbody>
-                  {(timeView === 'weekly' ? weeklyData.slice(-12).reverse() : months.slice(-12).reverse()).map(d => {
+                  {(timeView === 'daily' ? dailyData.slice(-14).reverse() : timeView === 'weekly' ? weeklyData.slice(-12).reverse() : months.slice(-12).reverse()).map(d => {
                     const pctOfRev = d.revenue > 0 ? (d.totalCost / d.revenue) * 100 : 0;
-                    const label = timeView === 'weekly' 
+                    const label = timeView === 'daily'
+                      ? new Date(d.day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+                      : timeView === 'weekly' 
                       ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-
                       : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
                     return (
-                      <tr key={timeView === 'weekly' ? d.week : d.month} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                      <tr key={timeView === 'daily' ? d.day : timeView === 'weekly' ? d.week : d.month} className="border-b border-slate-700/50 hover:bg-slate-700/30">
                         <td className="py-2 text-white">{label}</td>
                         <td className="py-2 text-right text-white font-medium">{formatCurrency(d.totalCost)}</td>
                         <td className="py-2 text-right text-white">{formatNumber(d.orderCount)}</td>
