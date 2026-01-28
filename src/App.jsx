@@ -7304,19 +7304,37 @@ const savePeriods = async (d) => {
       
       // Save all updated data
       if (dailyImported > 0) {
+        console.log('Saving daily data...');
         setAllDaysData(updatedDailyData);
-        try { localStorage.setItem('ecommerce_daily_data_v1', JSON.stringify(updatedDailyData)); } catch(e) {}
+        try { 
+          localStorage.setItem('ecommerce_daily_data_v1', JSON.stringify(updatedDailyData)); 
+          console.log('Daily data saved to localStorage');
+        } catch(e) {
+          console.error('Failed to save daily data to localStorage:', e.message);
+          // Try saving to LZ1 key instead
+          try {
+            const compressed = JSON.stringify(updatedDailyData);
+            localStorage.setItem('ecommerce_daily_sales_v1', compressed);
+            console.log('Saved to LZ1 key instead');
+          } catch(e2) {
+            console.error('Also failed LZ1 save:', e2.message);
+          }
+        }
       }
       if (weeklyImported > 0) {
+        console.log('Saving weekly data...');
         setAllWeeksData(updatedWeeklyData);
         save(updatedWeeklyData);
       }
       if (monthlyImported > 0) {
+        console.log('Saving monthly/period data...');
         setAllPeriodsData(updatedPeriodsData);
-        try { localStorage.setItem('ecommerce_periods_data_v1', JSON.stringify(updatedPeriodsData)); } catch(e) {}
+        try { localStorage.setItem('ecommerce_periods_data_v1', JSON.stringify(updatedPeriodsData)); } catch(e) {
+          console.error('Failed to save periods data:', e.message);
+        }
       }
       
-      // Clear upload state
+      console.log('All saves complete, clearing upload state...');
       setAmazonBulkFiles([]);
       setAmazonBulkParsed(null);
       
@@ -7338,6 +7356,7 @@ const savePeriods = async (d) => {
       }
       
       // Navigate to appropriate view
+      console.log('About to navigate. weeklyImported:', weeklyImported, 'dailyImported:', dailyImported);
       if (weeklyImported > 0) {
         const latestWeek = Object.keys(updatedWeeklyData).sort().reverse()[0];
         setSelectedWeek(latestWeek);
@@ -7347,10 +7366,13 @@ const savePeriods = async (d) => {
       } else if (monthlyImported > 0) {
         setView('periods');
       }
+      console.log('Navigation complete');
     } catch (err) {
       console.error('Bulk upload error:', err);
+      console.error('Error stack:', err.stack);
       setToast({ message: 'Error processing files: ' + err.message, type: 'error' });
     } finally {
+      console.log('Finally block executing - setting processing to false');
       setAmazonBulkProcessing(false);
     }
   }, [amazonBulkFiles, getCogsLookup, allDaysData, allWeeksData, allPeriodsData, save]);
