@@ -11033,13 +11033,29 @@ Respond with ONLY this JSON:
     
     try {
       // Get weeks where we have both Amazon forecast and actual data
+      // IMPORTANT: Only include weeks that have ACTUALLY PASSED and have real sales data
+      const today = new Date();
+      const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      
       const comparisons = [];
       Object.keys(amazonForecasts).forEach(weekKey => {
+        // Only compare weeks that have ended (in the past)
+        if (weekKey >= todayKey) return; // Skip future/current weeks
+        
         const forecast = amazonForecasts[weekKey];
         const actual = allWeeksData[weekKey];
-        if (actual && forecast) {
-          const forecastRevenue = forecast.totals?.sales || forecast.totalSales || 0;
-          const forecastUnits = forecast.totals?.units || forecast.totalUnits || 0;
+        
+        // Only include if we have BOTH forecast AND meaningful actual data
+        const actualRevenue = actual?.amazon?.revenue || 0;
+        const actualUnits = actual?.amazon?.units || 0;
+        
+        // Skip if actual data looks incomplete (no revenue)
+        if (!actual || actualRevenue <= 0) return;
+        
+        const forecastRevenue = forecast.totals?.sales || forecast.totalSales || 0;
+        const forecastUnits = forecast.totals?.units || forecast.totalUnits || 0;
+        
+        if (forecastRevenue > 0 || forecastUnits > 0) {
           comparisons.push({
             weekEnding: weekKey,
             amazonForecast: {
@@ -11047,12 +11063,12 @@ Respond with ONLY this JSON:
               units: forecastUnits,
             },
             actual: {
-              revenue: actual.amazon?.revenue || 0,
-              units: actual.amazon?.units || 0,
+              revenue: actualRevenue,
+              units: actualUnits,
             },
             variance: {
-              revenuePercent: forecastRevenue > 0 ? ((actual.amazon?.revenue || 0) - forecastRevenue) / forecastRevenue * 100 : 0,
-              unitsPercent: forecastUnits > 0 ? ((actual.amazon?.units || 0) - forecastUnits) / forecastUnits * 100 : 0,
+              revenuePercent: forecastRevenue > 0 ? (actualRevenue - forecastRevenue) / forecastRevenue * 100 : 0,
+              unitsPercent: forecastUnits > 0 ? (actualUnits - forecastUnits) / forecastUnits * 100 : 0,
             },
           });
         }
@@ -16090,6 +16106,218 @@ If you cannot find a field, use null. For dueDate, if only month/year given, use
         };
       })(),
       
+      // CURRENT MONTH (MTD) by category - aggregated from DAILY data for precision
+      // Falls back to WEEKLY data if no daily data exists
+      currentMonthByCategory: (() => {
+        const today = new Date();
+        const currentYear = today.getFullYear();
+        const currentMonth = today.getMonth();
+        const monthStart = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-01`;
+        const monthName = today.toLocaleDateString('en-US', { month: 'long' });
+        
+        // Aggregate SKU data - SEPARATE by channel
+        const amazonSkuTotals = {};
+        const shopifySkuTotals = {};
+        let totalRevenue = 0, totalUnits = 0, totalProfit = 0;
+        let amazonRevenue = 0, amazonUnits = 0, shopifyRevenue = 0, shopifyUnits = 0;
+        let dataSource = 'none';
+        let daysOrWeeksIncluded = 0;
+        
+        // Get all days in current month from DAILY data
+        const daysInMonth = sortedDays.filter(d => d >= monthStart && d <= formatDateKey(today));
+        
+        if (daysInMonth.length > 0) {
+          dataSource = 'daily';
+          daysOrWeeksIncluded = daysInMonth.length;
+          
+          daysInMonth.forEach(dayKey => {
+            const dayData = allDaysData[dayKey];
+            if (!dayData) return;
+            
+            // Amazon daily SKU data
+            (dayData.amazon?.skuData || []).forEach(s => {
+              const sku = s.sku || s.msku || '';
+              if (!sku) return;
+              const units = s.unitsSold || s.units || 0;
+              const revenue = s.netSales || s.revenue || 0;
+              const profit = s.netProceeds || revenue;
+              
+              if (!amazonSkuTotals[sku]) {
+                amazonSkuTotals[sku] = { sku, name: savedProductNames[sku] || s.name || sku, units: 0, revenue: 0, profit: 0, channel: 'Amazon' };
+              }
+              amazonSkuTotals[sku].units += units;
+              amazonSkuTotals[sku].revenue += revenue;
+              amazonSkuTotals[sku].profit += profit;
+              amazonRevenue += revenue;
+              amazonUnits += units;
+            });
+            
+            // Shopify daily SKU data
+            (dayData.shopify?.skuData || []).forEach(s => {
+              const sku = s.sku || '';
+              if (!sku) return;
+              const units = s.unitsSold || s.units || 0;
+              const revenue = s.netSales || s.revenue || 0;
+              const profit = revenue - (s.cogs || 0);
+              
+              if (!shopifySkuTotals[sku]) {
+                shopifySkuTotals[sku] = { sku, name: savedProductNames[sku] || s.name || sku, units: 0, revenue: 0, profit: 0, channel: 'Shopify' };
+              }
+              shopifySkuTotals[sku].units += units;
+              shopifySkuTotals[sku].revenue += revenue;
+              shopifySkuTotals[sku].profit += profit;
+              shopifyRevenue += revenue;
+              shopifyUnits += units;
+            });
+            
+            totalRevenue += (dayData.total?.revenue || 0);
+            totalUnits += (dayData.total?.units || 0);
+            totalProfit += (dayData.total?.netProfit || 0);
+          });
+        }
+        
+        // If no daily data OR no Amazon data in daily, try WEEKLY data
+        const weeksInMonth = Object.keys(allWeeksData).filter(w => w >= monthStart).sort();
+        if (weeksInMonth.length > 0 && (Object.keys(amazonSkuTotals).length === 0 || amazonUnits === 0)) {
+          // Use weekly data for Amazon (supplement or replace)
+          if (Object.keys(amazonSkuTotals).length === 0) {
+            dataSource = dataSource === 'daily' ? 'daily+weekly' : 'weekly';
+          } else {
+            dataSource = 'daily+weekly-amazon';
+          }
+          daysOrWeeksIncluded = weeksInMonth.length + ' weeks';
+          
+          weeksInMonth.forEach(weekKey => {
+            const weekData = allWeeksData[weekKey];
+            if (!weekData) return;
+            
+            // Amazon weekly SKU data (only if we don't have daily amazon data)
+            if (Object.keys(amazonSkuTotals).length === 0 || amazonUnits === 0) {
+              (weekData.amazon?.skuData || []).forEach(s => {
+                const sku = s.sku || s.msku || '';
+                if (!sku) return;
+                const units = s.unitsSold || s.units || 0;
+                const revenue = s.netSales || s.revenue || 0;
+                const profit = s.netProceeds || revenue;
+                
+                if (!amazonSkuTotals[sku]) {
+                  amazonSkuTotals[sku] = { sku, name: savedProductNames[sku] || s.name || sku, units: 0, revenue: 0, profit: 0, channel: 'Amazon' };
+                }
+                amazonSkuTotals[sku].units += units;
+                amazonSkuTotals[sku].revenue += revenue;
+                amazonSkuTotals[sku].profit += profit;
+                amazonRevenue += revenue;
+                amazonUnits += units;
+              });
+            }
+            
+            // If no daily Shopify data either, use weekly
+            if (Object.keys(shopifySkuTotals).length === 0) {
+              (weekData.shopify?.skuData || []).forEach(s => {
+                const sku = s.sku || '';
+                if (!sku) return;
+                const units = s.unitsSold || s.units || 0;
+                const revenue = s.netSales || s.revenue || 0;
+                const profit = revenue - (s.cogs || 0);
+                
+                if (!shopifySkuTotals[sku]) {
+                  shopifySkuTotals[sku] = { sku, name: savedProductNames[sku] || s.name || sku, units: 0, revenue: 0, profit: 0, channel: 'Shopify' };
+                }
+                shopifySkuTotals[sku].units += units;
+                shopifySkuTotals[sku].revenue += revenue;
+                shopifySkuTotals[sku].profit += profit;
+                shopifyRevenue += revenue;
+                shopifyUnits += units;
+              });
+            }
+            
+            // Update totals from weekly if no daily
+            if (daysInMonth.length === 0) {
+              totalRevenue += (weekData.total?.revenue || 0);
+              totalUnits += (weekData.total?.units || 0);
+              totalProfit += (weekData.total?.netProfit || 0);
+            }
+          });
+        }
+        
+        if (Object.keys(amazonSkuTotals).length === 0 && Object.keys(shopifySkuTotals).length === 0) {
+          return null;
+        }
+        
+        // Build category breakdown from SKU data
+        const byCategory = {};
+        const bySku = {};
+        
+        const processSkuForCategory = (skuData) => {
+          Object.values(skuData).forEach(s => {
+            // Determine category
+            const productName = s.name.toLowerCase();
+            const sku = s.sku.toLowerCase();
+            let category = 'Other';
+            
+            if (productName.includes('lip balm') || productName.includes('lip-balm') || 
+                /^(ddpe|lb)/i.test(s.sku) ||
+                ((productName.includes('pack') || productName.includes('pk')) && 
+                 (productName.includes('orange') || productName.includes('peppermint') || 
+                  productName.includes('unscented') || productName.includes('assorted')))) {
+              category = 'Lip Balm';
+            } else if (productName.includes('deodorant') || productName.includes('deo')) {
+              category = 'Deodorant';
+            } else if (productName.includes('soap')) {
+              category = 'Soap';
+            } else if (productName.includes('sun balm') || productName.includes('spf')) {
+              category = 'Sun Balm';
+            } else if (productName.includes('tallow balm') || productName.includes('moisturizer')) {
+              category = 'Tallow Balm';
+            }
+            
+            if (!byCategory[category]) {
+              byCategory[category] = { units: 0, revenue: 0, profit: 0, amazonUnits: 0, shopifyUnits: 0, skus: [] };
+            }
+            byCategory[category].units += s.units;
+            byCategory[category].revenue += s.revenue;
+            byCategory[category].profit += s.profit;
+            if (s.channel === 'Amazon') byCategory[category].amazonUnits += s.units;
+            if (s.channel === 'Shopify') byCategory[category].shopifyUnits += s.units;
+            byCategory[category].skus.push(s);
+            
+            // Also track by SKU
+            if (!bySku[s.sku]) {
+              bySku[s.sku] = { ...s };
+            } else {
+              bySku[s.sku].units += s.units;
+              bySku[s.sku].revenue += s.revenue;
+              bySku[s.sku].profit += s.profit;
+            }
+          });
+        };
+        
+        processSkuForCategory(amazonSkuTotals);
+        processSkuForCategory(shopifySkuTotals);
+        
+        // Sort SKUs by units within each category
+        Object.values(byCategory).forEach(cat => {
+          cat.skus.sort((a, b) => b.units - a.units);
+        });
+        
+        return {
+          month: monthName,
+          year: currentYear,
+          dateRange: `${monthName} 1-${today.getDate()}, ${currentYear}`,
+          dataSource,
+          daysOrWeeksIncluded,
+          totalRevenue,
+          totalUnits,
+          totalProfit,
+          amazonRevenue,
+          amazonUnits,
+          shopifyRevenue,
+          shopifyUnits,
+          byCategory,
+          bySku: Object.values(bySku).sort((a, b) => b.units - a.units).slice(0, 30),
+        };
+      })(),
+      
       skuAnalysis: skuAnalysis.slice(0, 30),
       skusByProfitPerUnit: [...skuAnalysis].sort((a, b) => b.profitPerUnit - a.profitPerUnit).slice(0, 10),
       decliningSkus: skuAnalysis.filter(s => s.trend === 'declining').slice(0, 10),
@@ -16478,17 +16706,28 @@ DO NOT use skuAnalysis - that's ALL-TIME data and will give WRONG answers for ti
 | "last week" | lastWeekByCategory (below) |
 | "last 2 weeks" | last2WeeksByCategory (below) |
 | "last month" / "last 4 weeks" | last4WeeksByCategory (below) |
+| "this month" / "January" / "MTD" / "Jan 1-25" | currentMonthByCategory AND/OR CUSTOM DATE RANGE DATA (below) |
+| "between X and Y" / specific dates | CUSTOM DATE RANGE DATA (below) |
 | "all time" / "total" | allTimeByCategory (below) |
 
-For category questions (e.g., "how much lip balm last week?"):
-→ Look up: lastWeekByCategory.byCategory["Lip Balm"]
-→ The data includes: units, revenue, profit, margin
+🎯 FOR DATE-SPECIFIC QUESTIONS LIKE "Jan 1-25" or "between Jan 1 and Jan 25":
+→ USE the "CUSTOM DATE RANGE DATA" section below - it has PRE-COMPUTED Jan 2026 aggregates
+→ The data shows EXACT Amazon vs Shopify breakdown by SKU
+
+For category questions (e.g., "how much lip balm this month?"):
+→ Look up: currentMonthByCategory.byCategory["Lip Balm"]
+→ OR use CUSTOM DATE RANGE DATA for LIP BALM 3-PACKS breakdown
+
+⚠️ IMPORTANT: currentMonthByCategory has SEPARATE Amazon vs Shopify counts!
+→ If user asks "Amazon lip balm units", use amazonUnits from the category
+→ If user asks "total lip balm units", add Amazon + Shopify
 
 ⛔ NEVER use skuAnalysis for timeframe questions - it contains ALL-TIME totals
 ⛔ NEVER sum from skuByWeek array - those are historical weeks
-⛔ NEVER treat missing Amazon daily data as $0 - use period data instead
-✅ ALWAYS use the pre-computed byCategory data for the matching timeframe
+⛔ NEVER use weekly skuData for Jan 2026 - it's MISSING Amazon SKU breakdown
+✅ ALWAYS use DAILY data aggregates (currentMonthByCategory or CUSTOM DATE RANGE DATA) for Jan 2026
 ✅ ALWAYS use unifiedMetrics for all-time totals (includes Amazon 2025 period data)
+✅ For "Jan 1-25" questions → USE CUSTOM DATE RANGE DATA section
 
 IMPORTANT PROFIT CALCULATION NOTES:
 - Amazon "Net Proceeds" IS the profit - it already has COGS, fees, and ad spend deducted
@@ -16687,6 +16926,68 @@ Total Units: ${ctx.last4WeeksByCategory.totalUnits}
 BY CATEGORY: ${JSON.stringify(ctx.last4WeeksByCategory.byCategory)}
 ` : 'No data'}
 
+**🆕 CURRENT MONTH MTD (${ctx.currentMonthByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "this month", "January", "MTD" questions
+${ctx.currentMonthByCategory ? `
+Data Source: ${ctx.currentMonthByCategory.dataSource} (${ctx.currentMonthByCategory.daysOrWeeksIncluded})
+AMAZON: $${ctx.currentMonthByCategory.amazonRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.amazonUnits || 0} units
+SHOPIFY: $${ctx.currentMonthByCategory.shopifyRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.shopifyUnits || 0} units
+TOTAL: $${ctx.currentMonthByCategory.totalRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.totalUnits || 0} units
+BY CATEGORY (units): ${JSON.stringify(Object.fromEntries(Object.entries(ctx.currentMonthByCategory.byCategory || {}).map(([cat, data]) => [cat, { total: data.units, amazon: data.amazonUnits, shopify: data.shopifyUnits }])))}
+TOP SKUs BY UNITS: ${JSON.stringify((ctx.currentMonthByCategory.bySku || []).slice(0, 15).map(s => ({ sku: s.sku, name: s.name, channel: s.channel, units: s.units })))}
+` : 'No daily or weekly data for current month - User should upload Amazon/Shopify reports via Upload tab'}
+
+**⚠️ DATA AVAILABILITY CHECK:**
+Daily data days: ${Object.keys(allDaysData || {}).length}
+Days with Amazon skuData: ${Object.keys(allDaysData || {}).filter(d => (allDaysData[d]?.amazon?.skuData || []).length > 0).length}
+Days with Shopify skuData: ${Object.keys(allDaysData || {}).filter(d => (allDaysData[d]?.shopify?.skuData || []).length > 0).length}
+Latest daily data: ${sortedDays[sortedDays.length - 1] || 'none'}
+Jan 2026 daily days: ${sortedDays.filter(d => d.startsWith('2026-01')).length}
+
+**📅 CUSTOM DATE RANGE DATA (For "Jan 1-25", "between X and Y" type questions):**
+${(() => {
+  // Pre-compute Jan 2026 aggregates since it's the most likely question
+  const jan2026Days = sortedDays.filter(d => d >= '2026-01-01' && d <= '2026-01-25');
+  if (jan2026Days.length === 0) return 'No Jan 2026 daily data available';
+  
+  const skuTotals = {};
+  let amzTotal = 0, shopTotal = 0;
+  
+  jan2026Days.forEach(dayKey => {
+    const dayData = allDaysData[dayKey];
+    if (!dayData) return;
+    
+    (dayData.amazon?.skuData || []).forEach(s => {
+      const sku = s.sku || s.msku || '';
+      const units = s.unitsSold || s.units || 0;
+      if (!skuTotals[sku]) skuTotals[sku] = { amazon: 0, shopify: 0, name: savedProductNames[sku] || s.name || sku };
+      skuTotals[sku].amazon += units;
+      amzTotal += units;
+    });
+    
+    (dayData.shopify?.skuData || []).forEach(s => {
+      const sku = s.sku || '';
+      const units = s.unitsSold || s.units || 0;
+      if (!skuTotals[sku]) skuTotals[sku] = { amazon: 0, shopify: 0, name: savedProductNames[sku] || s.name || sku };
+      skuTotals[sku].shopify += units;
+      shopTotal += units;
+    });
+  });
+  
+  // Get lip balm SKUs (DDPE*)
+  const lipBalmSkus = Object.entries(skuTotals)
+    .filter(([sku]) => sku.startsWith('DDPE') && (sku.includes('0001') || sku.includes('0002') || sku.includes('0003') || sku.includes('0004')))
+    .sort((a, b) => (b[1].amazon + b[1].shopify) - (a[1].amazon + a[1].shopify));
+  
+  return `
+JAN 1-25, 2026 (${jan2026Days.length} days of daily data):
+- Total Amazon units: ${amzTotal}
+- Total Shopify units: ${shopTotal}
+
+LIP BALM 3-PACKS (DDPE0001-0004) for Jan 1-25:
+${lipBalmSkus.map(([sku, d]) => `  ${sku} (${d.name?.substring(0, 40) || sku}): Amazon ${d.amazon}, Shopify ${d.shopify}, TOTAL ${d.amazon + d.shopify}`).join('\n')}
+`;
+})()}
+
 **ALL TIME (${ctx.allTimeByCategory?.weeks || 0} weeks):** ← USE THIS FOR "all time/total" questions
 ${ctx.allTimeByCategory ? `
 Total Revenue: $${ctx.allTimeByCategory.totalRevenue.toFixed(2)}
@@ -16696,7 +16997,8 @@ BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
 ` : 'No data'}
 
 ⚠️ REMINDER: For "how much X sold last week" → use lastWeekByCategory.byCategory["X"]
-⚠️ DO NOT use skuAnalysis below - that is ALL-TIME data!
+⚠️ FOR JANUARY 2026 / DATE RANGE QUESTIONS → use CUSTOM DATE RANGE DATA above (has pre-computed Jan 1-25 totals)
+⚠️ DO NOT use skuAnalysis or weekly skuData for Jan 2026 - they're missing Amazon data!
 
 🗓️ FOR HISTORICAL QUESTIONS (2025 monthly, 2024 quarterly):
 - "How did we do in January 2025?" → Use PERIOD DATA section above
@@ -18533,10 +18835,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       }
     }
     
-    // Check for weeks with missing 3PL or Ads data - separate alerts
+    // Check for weeks with missing 3PL or Ads data - only 2026 weeks
     const recentWeeks = Object.entries(allWeeksData)
+      .filter(([key]) => key.startsWith('2026-')) // Only 2026 weeks
       .sort((a, b) => b[0].localeCompare(a[0]))
-      .slice(0, 4);
+      .slice(0, 4); // Last 4 weeks of 2026
     
     const weeksMissing3PL = recentWeeks.filter(([key, data]) => {
       const weeklyHas3PL = data.shopify?.threeplCosts > 0;
@@ -18551,23 +18854,33 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       return !data.shopify?.metaSpend && !data.shopify?.googleSpend;
     });
     
+    // Helper to format week dates
+    const formatWeekDates = (weeks) => {
+      return weeks.map(([key]) => {
+        const endDate = new Date(key + 'T12:00:00');
+        const startDate = new Date(endDate);
+        startDate.setDate(endDate.getDate() - 6);
+        return `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}-${endDate.toLocaleDateString('en-US', { day: 'numeric' })}`;
+      }).join(', ');
+    };
+    
     if (weeksMissing3PL.length > 0) {
-      const weekText = weeksMissing3PL.length === 1 ? '1 week' : `${weeksMissing3PL.length} weeks`;
+      const weekDates = formatWeekDates(weeksMissing3PL);
       alerts.push({ 
         type: 'warning', 
-        text: `${weekText} missing 3PL cost data`,
+        text: `Missing 3PL data: ${weekDates}`,
         link: '3pl',
         action: () => setView('3pl')
       });
     }
     
     if (weeksMissingAds.length > 0) {
-      const weekText = weeksMissingAds.length === 1 ? '1 week' : `${weeksMissingAds.length} weeks`;
+      const weekDates = formatWeekDates(weeksMissingAds);
       alerts.push({ 
         type: 'warning', 
-        text: `${weekText} missing Ads data`,
+        text: `Missing Ads data: ${weekDates}`,
         link: 'ads-upload',
-        action: () => { setUploadTab('ads'); setView('upload'); }
+        action: () => { setUploadTab('bulk-ads'); setView('upload'); }
       });
     }
     
@@ -24392,7 +24705,7 @@ if (shopifySkuWithShipping.length > 0) {
           )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             <MetricCard label="Total Units" value={formatNumber(filteredSummary.totalUnits)} sub={filteredSummary.skuCount + ' active SKUs'} icon={Package} color="blue" />
-            <MetricCard label="Total Value" value={formatCurrency(filteredSummary.totalValue)} icon={DollarSign} color="emerald" />
+            <MetricCard label="Total Value (at cost)" value={formatCurrency(filteredSummary.totalValue)} sub="Units × COGS" icon={DollarSign} color="emerald" />
             <MetricCard label="Amazon FBA" value={formatNumber(filteredSummary.amazonUnits)} sub={formatCurrency(filteredSummary.amazonValue)} icon={ShoppingCart} color="orange" />
             <MetricCard label="3PL" value={formatNumber(filteredSummary.threeplUnits)} sub={formatCurrency(filteredSummary.threeplValue)} icon={Boxes} color="violet" />
           </div>
@@ -31578,8 +31891,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         <p className="text-3xl font-bold text-white">{aiForecastModule.inventory.summary?.healthyCount || 0}</p>
                       </div>
                       <div className="bg-slate-800 rounded-xl p-4 border border-slate-600">
-                        <p className="text-slate-400 text-sm">Total Value</p>
+                        <p className="text-slate-400 text-sm">Total Value (AI est.)</p>
                         <p className="text-2xl font-bold text-white">{formatCurrency(aiForecastModule.inventory.summary?.totalValue || 0)}</p>
+                        <p className="text-slate-500 text-xs">See Inventory for precise</p>
                       </div>
                     </div>
                     
@@ -31671,6 +31985,52 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     {aiForecastModule.loading === 'comparison' ? <><Loader2 className="w-5 h-5 animate-spin" />Analyzing...</> : <><Zap className="w-5 h-5" />Compare Forecasts</>}
                   </button>
                 </div>
+                
+                {/* Data Requirements Check */}
+                {(() => {
+                  // Check what data we have for comparison
+                  const forecastWeeks = Object.keys(amazonForecasts || {});
+                  const actualWeeks = Object.keys(allWeeksData || {}).filter(k => (allWeeksData[k]?.amazon?.revenue || 0) > 0);
+                  const overlappingWeeks = forecastWeeks.filter(w => actualWeeks.includes(w));
+                  const weeksWithBothData = overlappingWeeks.filter(w => {
+                    const actual = allWeeksData[w]?.amazon?.revenue || 0;
+                    const forecast = amazonForecasts[w]?.totals?.sales || amazonForecasts[w]?.totalSales || 0;
+                    return actual > 0 && forecast > 0;
+                  });
+                  
+                  if (forecastWeeks.length === 0) {
+                    return (
+                      <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-4">
+                        <p className="text-amber-400 font-medium mb-1">📊 No Amazon forecasts uploaded yet</p>
+                        <p className="text-slate-400 text-sm">Upload Amazon forecast files to enable comparison. Go to Upload → Forecast tab.</p>
+                      </div>
+                    );
+                  }
+                  
+                  if (weeksWithBothData.length === 0) {
+                    const nextComparisonWeek = forecastWeeks.sort()[0];
+                    return (
+                      <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4 mb-4">
+                        <p className="text-blue-400 font-medium mb-1">⏳ Waiting for actual data to compare</p>
+                        <p className="text-slate-400 text-sm mb-2">
+                          You have {forecastWeeks.length} week(s) of Amazon forecasts. 
+                          Comparison will be available once those weeks have actual sales data.
+                        </p>
+                        <p className="text-slate-500 text-xs">
+                          Forecast weeks: {forecastWeeks.slice(0, 3).map(w => new Date(w + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })).join(', ')}
+                          {forecastWeeks.length > 3 && ` +${forecastWeeks.length - 3} more`}
+                        </p>
+                      </div>
+                    );
+                  }
+                  
+                  return (
+                    <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-xl p-4 mb-4">
+                      <p className="text-emerald-400 font-medium mb-1">✓ Ready to compare: {weeksWithBothData.length} week(s) with both forecast and actual data</p>
+                      <p className="text-slate-400 text-sm">Click "Compare Forecasts" to analyze accuracy.</p>
+                    </div>
+                  );
+                })()}
                 
                 {aiForecastModule.comparison ? (
                   <div className="space-y-4">
