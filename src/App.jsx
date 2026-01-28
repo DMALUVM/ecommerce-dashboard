@@ -24,6 +24,7 @@ import SettingRow from './components/ui/SettingRow';
 import Toggle from './components/ui/Toggle';
 import NumberInput from './components/ui/NumberInput';
 import Toast from './components/ui/Toast';
+import ValidationModal from './components/ui/ValidationModal';
 
 // Dashboard widget configuration - defined at module level for consistent access
 const DEFAULT_DASHBOARD_WIDGETS = {
@@ -4660,71 +4661,6 @@ const savePeriods = async (d) => {
   }, [weekEnding, savedCogs]);
 
   // Validation Modal Component (defined inline for access to state)
-  const ValidationModal = () => {
-    if (!showValidationModal) return null;
-    const hasErrors = dataValidationWarnings.some(w => w.type === 'error');
-    
-    return (
-      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto">
-          <h2 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
-            {hasErrors ? <AlertCircle className="w-6 h-6 text-rose-400" /> : <AlertTriangle className="w-6 h-6 text-amber-400" />}
-            Data Validation {hasErrors ? 'Errors' : 'Warnings'}
-          </h2>
-          <p className="text-slate-400 text-sm mb-4">
-            {hasErrors ? 'Please fix these issues before proceeding:' : 'Review these warnings before proceeding:'}
-          </p>
-          
-          <div className="space-y-3 mb-6">
-            {dataValidationWarnings.map((warning, idx) => (
-              <div key={idx} className={`rounded-lg p-3 ${
-                warning.type === 'error' ? 'bg-rose-900/30 border border-rose-500/50' :
-                warning.type === 'warning' ? 'bg-amber-900/30 border border-amber-500/50' :
-                'bg-blue-900/30 border border-blue-500/50'
-              }`}>
-                <p className={`font-medium ${
-                  warning.type === 'error' ? 'text-rose-300' :
-                  warning.type === 'warning' ? 'text-amber-300' :
-                  'text-blue-300'
-                }`}>
-                  {warning.type === 'error' ? '❌' : warning.type === 'warning' ? '⚠️' : 'ℹ️'} {warning.message}
-                </p>
-                {warning.detail && <p className="text-slate-400 text-sm mt-1">{warning.detail}</p>}
-              </div>
-            ))}
-          </div>
-          
-          <div className="flex gap-3">
-            {!hasErrors && (
-              <button 
-                onClick={() => {
-                  setShowValidationModal(false);
-                  if (pendingProcessAction) {
-                    pendingProcessAction();
-                    setPendingProcessAction(null);
-                  }
-                }} 
-                className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-semibold py-2 rounded-lg"
-              >
-                Continue Anyway
-              </button>
-            )}
-            <button 
-              onClick={() => { 
-                setShowValidationModal(false); 
-                setPendingProcessAction(null);
-                setDataValidationWarnings([]);
-              }} 
-              className={`${hasErrors ? 'flex-1' : ''} bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 px-4 rounded-lg`}
-            >
-              {hasErrors ? 'Go Back & Fix' : 'Cancel'}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
   const processSales = useCallback(() => {
     const cogsLookup = getCogsLookup();
     if (!weekEnding) { alert('Please select a week ending date'); return; }
@@ -19821,7 +19757,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal /><WidgetConfigModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal /><WidgetConfigModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -21396,7 +21332,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-4xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -24038,7 +23974,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-3xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -24056,7 +23992,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-3xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -24081,7 +24017,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -24328,7 +24264,7 @@ if (shopifySkuWithShipping.length > 0) {
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div className="flex items-center gap-4">
@@ -24499,7 +24435,7 @@ if (shopifySkuWithShipping.length > 0) {
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -24773,7 +24709,7 @@ if (shopifySkuWithShipping.length > 0) {
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -24799,7 +24735,7 @@ if (shopifySkuWithShipping.length > 0) {
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs />
           <div className="flex items-center gap-4 mb-6">
@@ -24836,7 +24772,7 @@ if (shopifySkuWithShipping.length > 0) {
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -25462,7 +25398,7 @@ if (shopifySkuWithShipping.length > 0) {
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />{SkuSettingsModalJSX}
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />{SkuSettingsModalJSX}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">📦 Inventory Management</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} • {items.length} active SKUs</p></div>
             <div className="flex gap-2">
@@ -27796,7 +27732,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
 
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <NavTabs />
           {dataBar}
           
@@ -28980,7 +28916,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <NavTabs />
           {dataBar}
           
@@ -29459,7 +29395,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     if (!hasWeeklyData && !hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+          <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
             <NavTabs />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -29486,7 +29422,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     if (!hasWeeklyData && hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+          <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
             <NavTabs />{dataBar}
             
             <div className="mb-6">
@@ -29557,7 +29493,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <NavTabs />
           {dataBar}
           
@@ -30175,7 +30111,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <NavTabs />
           {dataBar}
           
@@ -30554,7 +30490,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white">Analytics & Forecasting</h1>
@@ -31574,7 +31510,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <NavTabs />
           {dataBar}
           
@@ -32067,7 +32003,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <NavTabs />
           {dataBar}
           
@@ -33654,7 +33590,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           <NavTabs />
           {dataBar}
           
@@ -35836,7 +35772,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal /><StateConfigModal /><FilingDetailModal />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal /><StateConfigModal /><FilingDetailModal />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -39720,7 +39656,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
+        <div className="max-w-4xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager /><ProductCatalogModal /><UploadHelpModal /><ForecastModal /><BreakEvenModal /><ExportModal /><ComparisonView /><InvoiceModal /><ThreePLBulkUploadModal /><AdsBulkUploadModal /><AmazonAdsBulkUploadModal /><GoalsModal /><StoreSelectorModal /><ConflictResolutionModal />
           
           <div className="flex items-center justify-between mb-6">
             <div>
