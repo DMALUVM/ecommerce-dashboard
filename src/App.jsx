@@ -20381,253 +20381,262 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 </DashboardWidget>
               )}
               
-              {/* Quick Action Widgets */}
+              {/* Quick Action Widgets - Rendered in dynamic order */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                {/* Sales Tax Due This Month Card */}
-                {isWidgetEnabled('salesTax') && (
-                <DraggableWidget id="salesTax">
-                <div 
-                  className={`rounded-2xl border p-4 cursor-pointer hover:opacity-90 ${
-                    salesTaxDueThisMonth.some(s => s.isOverdue) 
-                      ? 'bg-gradient-to-br from-rose-900/30 to-red-900/20 border-rose-500/30'
-                      : salesTaxDueThisMonth.length > 0
-                        ? 'bg-gradient-to-br from-violet-900/30 to-purple-900/20 border-violet-500/30'
-                        : 'bg-slate-800/30 border-slate-700'
-                  }`}
-                  onClick={() => setView('sales-tax')}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className={`text-sm font-semibold flex items-center gap-2 ${
-                      salesTaxDueThisMonth.some(s => s.isOverdue) ? 'text-rose-400' : salesTaxDueThisMonth.length > 0 ? 'text-violet-400' : 'text-slate-400'
-                    }`}>
-                      <DollarSign className="w-4 h-4" />Sales Tax
-                    </h3>
-                    <span className="text-xs text-slate-400">This month</span>
-                  </div>
-                  {salesTaxDueThisMonth.length > 0 ? (
-                    <>
-                      <p className="text-lg font-bold text-white mb-1">{salesTaxDueThisMonth.length} filing{salesTaxDueThisMonth.length > 1 ? 's' : ''} due</p>
-                      <div className="space-y-1">
-                        {salesTaxDueThisMonth.slice(0, 3).map((st, i) => (
-                          <p key={i} className={`text-xs ${st.isOverdue ? 'text-rose-400' : st.daysUntil <= 7 ? 'text-amber-400' : 'text-slate-400'}`}>
-                            {st.stateName}{st.filingName ? ` (${st.filingName})` : ''}: {st.isOverdue ? 'OVERDUE' : `${st.daysUntil} days`}
-                          </p>
-                        ))}
-                        {salesTaxDueThisMonth.length > 3 && (
-                          <p className="text-xs text-slate-500">+{salesTaxDueThisMonth.length - 3} more</p>
-                        )}
-                      </div>
-                    </>
-                  ) : Object.keys(salesTaxConfig.nexusStates || {}).length > 0 ? (
-                    <>
-                      <p className="text-emerald-400 text-sm mb-1 flex items-center gap-1"><Check className="w-4 h-4" />All clear</p>
-                      <p className="text-slate-500 text-xs">No filings due this month</p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-slate-500 text-sm mb-1">No nexus configured</p>
-                      <p className="text-xs text-violet-400">Setup states →</p>
-                    </>
-                  )}
-                </div>
-                </DraggableWidget>
-                )}
-                
-                {/* AI Forecast Widget - Unified Predictions */}
-                {isWidgetEnabled('aiForecast') && (
-                  <DraggableWidget id="aiForecast">
-                  {aiForecasts && !aiForecasts.error && aiForecasts.salesForecast ? (
-                  <div className="bg-gradient-to-br from-purple-900/30 to-indigo-900/20 rounded-2xl border border-purple-500/30 p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-purple-400 text-sm font-semibold flex items-center gap-2">
-                        <Brain className="w-4 h-4" />AI Forecast
-                      </h3>
-                      <span className="text-xs text-slate-400">Multi-Signal</span>
-                    </div>
-                    {aiForecasts.salesForecast.next4Weeks?.[0] && (
-                      <>
-                        <p className="text-2xl font-bold text-white">{formatCurrency(aiForecasts.salesForecast.next4Weeks[0].predictedRevenue || 0)}</p>
-                        <p className="text-slate-400 text-sm">Next week prediction</p>
-                        <p className={`text-xs mt-1 ${(aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {formatCurrency(aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0)} profit • {aiForecasts.salesForecast.next4Weeks[0].confidence} confidence
-                        </p>
-                        {aiForecasts.calculatedSignals && (
-                          <div className="mt-2 pt-2 border-t border-slate-700/50 text-xs text-slate-500 space-y-0.5">
-                            <p>📊 Daily avg: {formatCurrency(aiForecasts.calculatedSignals.dailyAvg7)}/day</p>
-                            <p>📈 Momentum: {aiForecasts.calculatedSignals.momentum > 0 ? '+' : ''}{aiForecasts.calculatedSignals.momentum?.toFixed(1)}%</p>
-                            {aiForecasts.dataPoints?.amazonForecastWeeks > 0 && (
-                              <p>🛒 Amazon forecast: {aiForecasts.dataPoints.amazonForecastWeeks} weeks</p>
+                {(() => {
+                  // Define the grid widgets and their render functions
+                  const gridWidgets = {
+                    salesTax: () => (
+                      <DraggableWidget id="salesTax" key="salesTax">
+                        <div 
+                          className={`rounded-2xl border p-4 cursor-pointer hover:opacity-90 ${
+                            salesTaxDueThisMonth.some(s => s.isOverdue) 
+                              ? 'bg-gradient-to-br from-rose-900/30 to-red-900/20 border-rose-500/30'
+                              : salesTaxDueThisMonth.length > 0
+                                ? 'bg-gradient-to-br from-violet-900/30 to-purple-900/20 border-violet-500/30'
+                                : 'bg-slate-800/30 border-slate-700'
+                          }`}
+                          onClick={() => setView('sales-tax')}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <h3 className={`text-sm font-semibold flex items-center gap-2 ${
+                              salesTaxDueThisMonth.some(s => s.isOverdue) ? 'text-rose-400' : salesTaxDueThisMonth.length > 0 ? 'text-violet-400' : 'text-slate-400'
+                            }`}>
+                              <DollarSign className="w-4 h-4" />Sales Tax
+                            </h3>
+                            <span className="text-xs text-slate-400">This month</span>
+                          </div>
+                          {salesTaxDueThisMonth.length > 0 ? (
+                            <>
+                              <p className="text-lg font-bold text-white mb-1">{salesTaxDueThisMonth.length} filing{salesTaxDueThisMonth.length > 1 ? 's' : ''} due</p>
+                              <div className="space-y-1">
+                                {salesTaxDueThisMonth.slice(0, 3).map((st, i) => (
+                                  <p key={i} className={`text-xs ${st.isOverdue ? 'text-rose-400' : st.daysUntil <= 7 ? 'text-amber-400' : 'text-slate-400'}`}>
+                                    {st.stateName}{st.filingName ? ` (${st.filingName})` : ''}: {st.isOverdue ? 'OVERDUE' : `${st.daysUntil} days`}
+                                  </p>
+                                ))}
+                                {salesTaxDueThisMonth.length > 3 && (
+                                  <p className="text-xs text-slate-500">+{salesTaxDueThisMonth.length - 3} more</p>
+                                )}
+                              </div>
+                            </>
+                          ) : Object.keys(salesTaxConfig.nexusStates || {}).length > 0 ? (
+                            <>
+                              <p className="text-emerald-400 text-sm mb-1 flex items-center gap-1"><Check className="w-4 h-4" />All clear</p>
+                              <p className="text-slate-500 text-xs">No filings due this month</p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-slate-500 text-sm mb-1">No nexus configured</p>
+                              <p className="text-xs text-violet-400">Setup states →</p>
+                            </>
+                          )}
+                        </div>
+                      </DraggableWidget>
+                    ),
+                    
+                    aiForecast: () => (
+                      <DraggableWidget id="aiForecast" key="aiForecast">
+                        {aiForecasts && !aiForecasts.error && aiForecasts.salesForecast ? (
+                          <div className="bg-gradient-to-br from-purple-900/30 to-indigo-900/20 rounded-2xl border border-purple-500/30 p-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <h3 className="text-purple-400 text-sm font-semibold flex items-center gap-2">
+                                <Brain className="w-4 h-4" />AI Forecast
+                              </h3>
+                              <span className="text-xs text-slate-400">Multi-Signal</span>
+                            </div>
+                            {aiForecasts.salesForecast.next4Weeks?.[0] && (
+                              <>
+                                <p className="text-2xl font-bold text-white">{formatCurrency(aiForecasts.salesForecast.next4Weeks[0].predictedRevenue || 0)}</p>
+                                <p className="text-slate-400 text-sm">Next week prediction</p>
+                                <p className={`text-xs mt-1 ${(aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {formatCurrency(aiForecasts.salesForecast.next4Weeks[0].predictedProfit || 0)} profit • {aiForecasts.salesForecast.next4Weeks[0].confidence} confidence
+                                </p>
+                                {aiForecasts.calculatedSignals && (
+                                  <div className="mt-2 pt-2 border-t border-slate-700/50 text-xs text-slate-500 space-y-0.5">
+                                    <p>📊 Daily avg: {formatCurrency(aiForecasts.calculatedSignals.dailyAvg7)}/day</p>
+                                    <p>📈 Momentum: {aiForecasts.calculatedSignals.momentum > 0 ? '+' : ''}{aiForecasts.calculatedSignals.momentum?.toFixed(1)}%</p>
+                                    {aiForecasts.dataPoints?.amazonForecastWeeks > 0 && (
+                                      <p>🛒 Amazon forecast: {aiForecasts.dataPoints.amazonForecastWeeks} weeks</p>
+                                    )}
+                                  </div>
+                                )}
+                              </>
+                            )}
+                            <button 
+                              onClick={generateAIForecasts}
+                              disabled={aiForecastLoading}
+                              className="mt-2 text-xs text-purple-400 hover:text-purple-300 flex items-center gap-1"
+                            >
+                              {aiForecastLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                              {aiForecastLoading ? 'Analyzing signals...' : 'Refresh forecast'}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="bg-gradient-to-br from-purple-900/20 to-slate-800 rounded-2xl border border-dashed border-purple-500/30 p-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <h3 className="text-purple-400 text-sm font-semibold flex items-center gap-2">
+                                <Brain className="w-4 h-4" />AI Forecast
+                              </h3>
+                            </div>
+                            <p className="text-slate-400 text-sm mb-2">Multi-signal AI predictions</p>
+                            <button 
+                              onClick={generateAIForecasts}
+                              disabled={aiForecastLoading || (Object.keys(allWeeksData).length < 2 && Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length < 7)}
+                              className="text-xs bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 disabled:text-slate-500 px-3 py-1.5 rounded-lg text-white flex items-center gap-1"
+                            >
+                              {aiForecastLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+                              {aiForecastLoading ? 'Analyzing...' : 'Generate Forecast'}
+                            </button>
+                            {Object.keys(allWeeksData).length < 2 && Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length < 7 && (
+                              <p className="text-slate-500 text-xs mt-2">Need 2+ weeks or 7+ days of data</p>
                             )}
                           </div>
                         )}
-                      </>
-                    )}
-                    <button 
-                      onClick={generateAIForecasts}
-                      disabled={aiForecastLoading}
-                      className="mt-2 text-xs text-purple-400 hover:text-purple-300 flex items-center gap-1"
-                    >
-                      {aiForecastLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                      {aiForecastLoading ? 'Analyzing signals...' : 'Refresh forecast'}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="bg-gradient-to-br from-purple-900/20 to-slate-800 rounded-2xl border border-dashed border-purple-500/30 p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-purple-400 text-sm font-semibold flex items-center gap-2">
-                        <Brain className="w-4 h-4" />AI Forecast
-                      </h3>
-                    </div>
-                    <p className="text-slate-400 text-sm mb-2">Multi-signal AI predictions</p>
-                    <button 
-                      onClick={generateAIForecasts}
-                      disabled={aiForecastLoading || (Object.keys(allWeeksData).length < 2 && Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length < 7)}
-                      className="text-xs bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 disabled:text-slate-500 px-3 py-1.5 rounded-lg text-white flex items-center gap-1"
-                    >
-                      {aiForecastLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
-                      {aiForecastLoading ? 'Analyzing...' : 'Generate Forecast'}
-                    </button>
-                    {Object.keys(allWeeksData).length < 2 && Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length < 7 && (
-                      <p className="text-slate-500 text-xs mt-2">Need 2+ weeks or 7+ days of data</p>
-                    )}
-                  </div>
-                )}
-                </DraggableWidget>
-                )}
-                
-                {/* Upcoming Bills Widget */}
-                {isWidgetEnabled('billsDue') && (
-                <DraggableWidget id="billsDue">
-                {upcomingBills.length > 0 ? (
-                  <div className="bg-gradient-to-br from-rose-900/30 to-pink-900/20 rounded-2xl border border-rose-500/30 p-4 cursor-pointer hover:border-rose-400/50" onClick={() => setShowInvoiceModal(true)}>
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-rose-400 text-sm font-semibold flex items-center gap-2">
-                        <FileText className="w-4 h-4" />Upcoming Bills
-                      </h3>
-                      <span className="text-xs text-slate-400">{upcomingBills.length} due</span>
-                    </div>
-                    <p className="text-2xl font-bold text-white">{formatCurrency(totalUpcomingBills)}</p>
-                    {(() => {
-                      const nextBill = upcomingBills.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
-                      const daysUntil = Math.ceil((new Date(nextBill.dueDate) - new Date()) / (1000 * 60 * 60 * 24));
-                      return (
-                        <>
-                          <p className="text-slate-400 text-sm">Next: {nextBill.vendor}</p>
-                          <p className={`text-xs mt-1 ${daysUntil <= 3 ? 'text-rose-400' : daysUntil <= 7 ? 'text-amber-400' : 'text-slate-500'}`}>
-                            {daysUntil <= 0 ? 'Due today!' : `Due in ${daysUntil} days`}
-                          </p>
-                        </>
-                      );
-                    })()}
-                  </div>
-                ) : (
-                  <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-slate-400 text-sm font-semibold flex items-center gap-2">
-                        <FileText className="w-4 h-4" />Upcoming Bills
-                      </h3>
-                    </div>
-                    <p className="text-slate-500 text-sm mb-2">No bills tracked</p>
-                    <button onClick={() => setShowInvoiceModal(true)} className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1">
-                      <Plus className="w-3 h-3" />Add a bill
-                    </button>
-                  </div>
-                )}
-                </DraggableWidget>
-                )}
-                
-                {/* Sync & Backup Status Widget */}
-                {isWidgetEnabled('syncStatus') && (
-                <DraggableWidget id="syncStatus">
-                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
-                      <Database className="w-4 h-4" />Data Status
-                    </h3>
-                  </div>
-                  <div className="space-y-2">
-                    {/* Cloud Sync Status */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400 text-sm">Cloud Sync</span>
-                      {!supabase ? (
-                        <span className="text-slate-500 text-xs flex items-center gap-1">Not configured</span>
-                      ) : session ? (
-                        <div className="flex items-center gap-2">
-                          {cloudStatus && cloudStatus.includes('failed') ? (
-                            <span className="text-amber-400 text-xs">{cloudStatus}</span>
-                          ) : cloudStatus ? (
-                            <span className="text-blue-400 text-xs">{cloudStatus}</span>
-                          ) : (
-                            <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />Connected</span>
-                          )}
+                      </DraggableWidget>
+                    ),
+                    
+                    billsDue: () => (
+                      <DraggableWidget id="billsDue" key="billsDue">
+                        {upcomingBills.length > 0 ? (
+                          <div className="bg-gradient-to-br from-rose-900/30 to-pink-900/20 rounded-2xl border border-rose-500/30 p-4 cursor-pointer hover:border-rose-400/50" onClick={() => setShowInvoiceModal(true)}>
+                            <div className="flex items-center justify-between mb-2">
+                              <h3 className="text-rose-400 text-sm font-semibold flex items-center gap-2">
+                                <FileText className="w-4 h-4" />Upcoming Bills
+                              </h3>
+                              <span className="text-xs text-slate-400">{upcomingBills.length} due</span>
+                            </div>
+                            <p className="text-2xl font-bold text-white">{formatCurrency(totalUpcomingBills)}</p>
+                            {(() => {
+                              const nextBill = upcomingBills.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
+                              const daysUntil = Math.ceil((new Date(nextBill.dueDate) - new Date()) / (1000 * 60 * 60 * 24));
+                              return (
+                                <>
+                                  <p className="text-slate-400 text-sm">Next: {nextBill.vendor}</p>
+                                  <p className={`text-xs mt-1 ${daysUntil <= 3 ? 'text-rose-400' : daysUntil <= 7 ? 'text-amber-400' : 'text-slate-500'}`}>
+                                    {daysUntil <= 0 ? 'Due today!' : `Due in ${daysUntil} days`}
+                                  </p>
+                                </>
+                              );
+                            })()}
+                          </div>
+                        ) : (
+                          <div className="bg-slate-800/30 rounded-2xl border border-dashed border-slate-600 p-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <h3 className="text-slate-400 text-sm font-semibold flex items-center gap-2">
+                                <FileText className="w-4 h-4" />Upcoming Bills
+                              </h3>
+                            </div>
+                            <p className="text-slate-500 text-sm mb-2">No bills tracked</p>
+                            <button onClick={() => setShowInvoiceModal(true)} className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1">
+                              <Plus className="w-3 h-3" />Add a bill
+                            </button>
+                          </div>
+                        )}
+                      </DraggableWidget>
+                    ),
+                    
+                    syncStatus: () => (
+                      <DraggableWidget id="syncStatus" key="syncStatus">
+                        <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <h3 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
+                              <Database className="w-4 h-4" />Data Status
+                            </h3>
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400 text-sm">Cloud Sync</span>
+                              {!supabase ? (
+                                <span className="text-slate-500 text-xs flex items-center gap-1">Not configured</span>
+                              ) : session ? (
+                                <div className="flex items-center gap-2">
+                                  {cloudStatus && cloudStatus.includes('failed') ? (
+                                    <span className="text-amber-400 text-xs">{cloudStatus}</span>
+                                  ) : cloudStatus ? (
+                                    <span className="text-blue-400 text-xs">{cloudStatus}</span>
+                                  ) : (
+                                    <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />Connected</span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-amber-400 text-xs flex items-center gap-1"><AlertCircle className="w-3 h-3" />Local only</span>
+                              )}
+                            </div>
+                            {session && lastSyncDate && (
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-400 text-sm">Last Sync</span>
+                                <span className="text-slate-400 text-xs">{new Date(lastSyncDate).toLocaleString()}</span>
+                              </div>
+                            )}
+                            {session && supabase && (
+                              <button
+                                onClick={async () => {
+                                  setCloudStatus('Refreshing...');
+                                  await loadFromCloud();
+                                  setToast({ message: 'Refreshed from cloud', type: 'success' });
+                                }}
+                                className="w-full mt-2 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 flex items-center justify-center gap-2"
+                              >
+                                <RefreshCw className="w-3 h-3" />
+                                Refresh from Cloud
+                              </button>
+                            )}
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400 text-sm">Last Backup</span>
+                              {lastBackupDate ? (
+                                <span className={`text-xs ${(new Date() - new Date(lastBackupDate)) / (1000 * 60 * 60 * 24) > 7 ? 'text-amber-400' : 'text-slate-400'}`}>
+                                  {new Date(lastBackupDate).toLocaleDateString()}
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 text-xs">Never</span>
+                              )}
+                            </div>
+                            <div className="flex gap-2 mt-2">
+                              <button onClick={exportAll} className="flex-1 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white flex items-center justify-center gap-1">
+                                <Download className="w-3 h-3" />Backup
+                              </button>
+                              {session && supabase && (
+                                <button 
+                                  onClick={async () => {
+                                    setToast({ message: 'Reloading from cloud...', type: 'info' });
+                                    const result = await loadFromCloud();
+                                    if (result.ok) {
+                                      setToast({ message: 'Data reloaded from cloud!', type: 'success' });
+                                    } else {
+                                      setToast({ message: 'No cloud data found or error loading', type: 'error' });
+                                    }
+                                  }} 
+                                  className="flex-1 px-2 py-1.5 bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/50 rounded-lg text-xs text-cyan-300 flex items-center justify-center gap-1"
+                                >
+                                  <RefreshCw className="w-3 h-3" />Reload
+                                </button>
+                              )}
+                              {!session && supabase && (
+                                <button onClick={() => setView('settings')} className="flex-1 px-2 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-xs text-violet-300 flex items-center justify-center gap-1">
+                                  <Cloud className="w-3 h-3" />Enable Sync
+                                </button>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      ) : (
-                        <span className="text-amber-400 text-xs flex items-center gap-1"><AlertCircle className="w-3 h-3" />Local only</span>
-                      )}
-                    </div>
-                    {/* Last Sync (for cloud users) */}
-                    {session && lastSyncDate && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-400 text-sm">Last Sync</span>
-                        <span className="text-slate-400 text-xs">{new Date(lastSyncDate).toLocaleString()}</span>
-                      </div>
-                    )}
-                    {/* Refresh from Cloud button */}
-                    {session && supabase && (
-                      <button
-                        onClick={async () => {
-                          setCloudStatus('Refreshing...');
-                          await loadFromCloud();
-                          setToast({ message: 'Refreshed from cloud', type: 'success' });
-                        }}
-                        className="w-full mt-2 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 flex items-center justify-center gap-2"
-                      >
-                        <RefreshCw className="w-3 h-3" />
-                        Refresh from Cloud
-                      </button>
-                    )}
-                    {/* Last Backup */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400 text-sm">Last Backup</span>
-                      {lastBackupDate ? (
-                        <span className={`text-xs ${(new Date() - new Date(lastBackupDate)) / (1000 * 60 * 60 * 24) > 7 ? 'text-amber-400' : 'text-slate-400'}`}>
-                          {new Date(lastBackupDate).toLocaleDateString()}
-                        </span>
-                      ) : (
-                        <span className="text-slate-500 text-xs">Never</span>
-                      )}
-                    </div>
-                    {/* Quick Actions */}
-                    <div className="flex gap-2 mt-2">
-                      <button onClick={exportAll} className="flex-1 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white flex items-center justify-center gap-1">
-                        <Download className="w-3 h-3" />Backup
-                      </button>
-                      {session && supabase && (
-                        <button 
-                          onClick={async () => {
-                            setToast({ message: 'Reloading from cloud...', type: 'info' });
-                            const result = await loadFromCloud();
-                            if (result.ok) {
-                              setToast({ message: 'Data reloaded from cloud!', type: 'success' });
-                            } else {
-                              setToast({ message: 'No cloud data found or error loading', type: 'error' });
-                            }
-                          }} 
-                          className="flex-1 px-2 py-1.5 bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/50 rounded-lg text-xs text-cyan-300 flex items-center justify-center gap-1"
-                        >
-                          <RefreshCw className="w-3 h-3" />Reload
-                        </button>
-                      )}
-                      {!session && supabase && (
-                        <button onClick={() => setView('settings')} className="flex-1 px-2 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-xs text-violet-300 flex items-center justify-center gap-1">
-                          <Cloud className="w-3 h-3" />Enable Sync
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                </DraggableWidget>
-                )}
+                      </DraggableWidget>
+                    ),
+                  };
+                  
+                  // Get widget order and render in sorted order
+                  const gridWidgetIds = ['salesTax', 'aiForecast', 'billsDue', 'syncStatus'];
+                  const widgets = widgetConfig?.widgets || DEFAULT_DASHBOARD_WIDGETS.widgets;
+                  
+                  return gridWidgetIds
+                    .filter(id => isWidgetEnabled(id))
+                    .sort((a, b) => {
+                      const orderA = widgets.find(w => w.id === a)?.order ?? 99;
+                      const orderB = widgets.find(w => w.id === b)?.order ?? 99;
+                      return orderA - orderB;
+                    })
+                    .map(id => gridWidgets[id]());
+                })()}
               </div>
               
               {/* Quick Uploads Shortcuts */}
