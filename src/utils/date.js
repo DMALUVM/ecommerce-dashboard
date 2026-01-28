@@ -12,12 +12,34 @@ export const hasDailySalesData = (dayData) => {
 
 // Helper: Format date to YYYY-MM-DD without timezone issues
 export const formatDateKey = (date) => {
-  const d = date instanceof Date ? date : new Date(date);
+  const d = date instanceof Date ? date : new Date(date + 'T12:00:00');
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
+// Get the Sunday (week-ending) for a given date
+// IMPORTANT: Uses T12:00:00 to prevent timezone shifts
 export const getSunday = (date) => {
-  const d = new Date(date);
-  d.setDate(d.getDate() + (7 - d.getDay()) % 7);
-  return formatDateKey(d);
+  // Handle both Date objects and string date keys
+  const d = date instanceof Date 
+    ? new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0)
+    : new Date(date + 'T12:00:00');
+  
+  const dayOfWeek = d.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+  d.setDate(d.getDate() + daysUntilSunday);
+  
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+// Get the Monday (week-starting) for a given date
+export const getMonday = (date) => {
+  const d = date instanceof Date 
+    ? new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0)
+    : new Date(date + 'T12:00:00');
+  
+  const dayOfWeek = d.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  d.setDate(d.getDate() - daysSinceMonday);
+  
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
