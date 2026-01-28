@@ -11259,6 +11259,7 @@ Analyze the data and respond with ONLY this JSON:
     
     try {
       const ctx = prepareDataContext();
+      const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
       
       // Build alerts summary for AI
       const alertsSummary = [];
@@ -27721,6 +27722,48 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             </button>
           </div>
           
+          {/* Shared Date Selector for Amazon, Meta/Google, and Trends views */}
+          {(adsViewMode === 'campaigns' || adsViewMode === 'shopify' || adsViewMode === 'trends') && (
+            <div className="flex flex-wrap items-center gap-3 mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700">
+              <div className="flex gap-1">
+                {['daily', 'weekly', 'monthly', 'quarterly', 'yearly'].map(tab => (
+                  <button key={tab} onClick={() => setAdsTimeTab(tab)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all capitalize ${adsTimeTab === tab ? (adsViewMode === 'campaigns' ? 'bg-gradient-to-r from-orange-600 to-amber-600' : adsViewMode === 'shopify' ? 'bg-gradient-to-r from-blue-600 to-red-600' : 'bg-gradient-to-r from-violet-600 to-purple-600') + ' text-white' : 'text-slate-400 hover:bg-slate-700'}`}>
+                    {tab}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 ml-auto">
+                <select value={adsYear} onChange={(e) => setAdsYear(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                  {[...new Set([...Object.keys(allDaysData), ...Object.keys(amazonCampaigns?.historicalDaily || {})].map(d => parseInt(d.substring(0, 4))))].filter(y => y > 2020).sort((a, b) => b - a).slice(0, 5).map(y => <option key={y} value={y}>{y}</option>)}
+                  {![...new Set([...Object.keys(allDaysData)].map(d => parseInt(d.substring(0, 4))))].includes(adsYear) && <option value={adsYear}>{adsYear}</option>}
+                </select>
+                {adsTimeTab === 'monthly' && (
+                  <select value={adsMonth} onChange={(e) => setAdsMonth(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                    {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, i) => <option key={i} value={i}>{m}</option>)}
+                  </select>
+                )}
+                {adsTimeTab === 'quarterly' && (
+                  <select value={adsQuarter} onChange={(e) => setAdsQuarter(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                    {[1, 2, 3, 4].map(q => <option key={q} value={q}>Q{q}</option>)}
+                  </select>
+                )}
+                {adsTimeTab === 'weekly' && (
+                  <select value={adsSelectedWeek || ''} onChange={(e) => setAdsSelectedWeek(e.target.value)} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                    {sortedWeeks.filter(w => w.startsWith(String(adsYear))).slice().reverse().slice(0, 20).map(w => <option key={w} value={w}>{new Date(w + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</option>)}
+                  </select>
+                )}
+                {adsTimeTab === 'daily' && (
+                  <select value={adsSelectedDay || ''} onChange={(e) => setAdsSelectedDay(e.target.value)} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                    {sortedDays.filter(d => d.startsWith(String(adsYear))).slice().reverse().slice(0, 60).map(d => <option key={d} value={d}>{new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</option>)}
+                  </select>
+                )}
+              </div>
+              <span className="text-slate-500 text-xs">
+                {adsViewMode === 'campaigns' ? '(Campaign data is a snapshot from last upload)' : ''}
+              </span>
+            </div>
+          )}
+          
           {/* Shopify Ads (Meta/Google) View */}
           {adsViewMode === 'shopify' && (() => {
             // Get date range based on current selection
@@ -27828,41 +27871,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   </div>
                 ) : (
                   <>
-                    {/* Date Range Selector */}
-                    <div className="flex flex-wrap items-center gap-3 mb-4 p-3 bg-slate-800/50 rounded-xl">
-                      <div className="flex gap-1">
-                        {['daily', 'weekly', 'monthly', 'quarterly', 'yearly'].map(tab => (
-                          <button key={tab} onClick={() => setAdsTimeTab(tab)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all capitalize ${adsTimeTab === tab ? 'bg-gradient-to-r from-blue-600 to-red-600 text-white' : 'text-slate-400 hover:bg-slate-700'}`}>
-                            {tab}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="flex items-center gap-2 ml-auto">
-                        <select value={adsYear} onChange={(e) => setAdsYear(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                          {[...new Set(sortedDays.map(d => parseInt(d.substring(0, 4))))].sort((a, b) => b - a).map(y => <option key={y} value={y}>{y}</option>)}
-                        </select>
-                        {adsTimeTab === 'monthly' && (
-                          <select value={adsMonth} onChange={(e) => setAdsMonth(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                            {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, i) => <option key={i} value={i}>{m}</option>)}
-                          </select>
-                        )}
-                        {adsTimeTab === 'quarterly' && (
-                          <select value={adsQuarter} onChange={(e) => setAdsQuarter(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                            {[1, 2, 3, 4].map(q => <option key={q} value={q}>Q{q}</option>)}
-                          </select>
-                        )}
-                        {adsTimeTab === 'weekly' && (
-                          <select value={adsSelectedWeek || ''} onChange={(e) => setAdsSelectedWeek(e.target.value)} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                            {sortedWeeks.filter(w => w.startsWith(String(adsYear))).slice().reverse().map(w => <option key={w} value={w}>{new Date(w + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</option>)}
-                          </select>
-                        )}
-                        {adsTimeTab === 'daily' && (
-                          <select value={adsSelectedDay || ''} onChange={(e) => setAdsSelectedDay(e.target.value)} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                            {sortedDays.filter(d => d.startsWith(String(adsYear))).slice().reverse().slice(0, 60).map(d => <option key={d} value={d}>{new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</option>)}
-                          </select>
-                        )}
-                      </div>
-                    </div>
                     {/* Summary Cards */}
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
                       <div className="bg-gradient-to-br from-violet-900/30 to-slate-800/50 rounded-xl border border-violet-500/30 p-4">
@@ -28021,33 +28029,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             
             return (
             <div>
-              {/* Date Range Selector */}
-              <div className="flex flex-wrap items-center gap-3 mb-4 p-3 bg-slate-800/50 rounded-xl">
-                <div className="flex gap-1">
-                  {['daily', 'weekly', 'monthly', 'quarterly', 'yearly'].map(tab => (
-                    <button key={tab} onClick={() => setAdsTimeTab(tab)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all capitalize ${adsTimeTab === tab ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white' : 'text-slate-400 hover:bg-slate-700'}`}>
-                      {tab}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex items-center gap-2 ml-auto">
-                  <select value={adsYear} onChange={(e) => setAdsYear(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                    {[...new Set(Object.keys(amazonCampaigns?.historicalDaily || {}).map(d => parseInt(d.substring(0, 4))))].sort((a, b) => b - a).map(y => <option key={y} value={y}>{y}</option>)}
-                    {![...new Set(Object.keys(amazonCampaigns?.historicalDaily || {}).map(d => parseInt(d.substring(0, 4))))].includes(adsYear) && <option value={adsYear}>{adsYear}</option>}
-                  </select>
-                  {adsTimeTab === 'monthly' && (
-                    <select value={adsMonth} onChange={(e) => setAdsMonth(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                      {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, i) => <option key={i} value={i}>{m}</option>)}
-                    </select>
-                  )}
-                  {adsTimeTab === 'quarterly' && (
-                    <select value={adsQuarter} onChange={(e) => setAdsQuarter(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                      {[1, 2, 3, 4].map(q => <option key={q} value={q}>Q{q}</option>)}
-                    </select>
-                  )}
-                </div>
-              </div>
-              
               {!hasHistoricalData ? (
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-8 text-center">
                   <div className="w-16 h-16 bg-violet-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -28065,7 +28046,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 const histDates = dateRange 
                   ? allDates.filter(d => d >= dateRange.start && d <= dateRange.end)
                   : allDates;
-                const dateRange = { start: histDates[0], end: histDates[histDates.length - 1] };
+                const displayDateRange = { start: histDates[0], end: histDates[histDates.length - 1] };
                 
                 // Monthly aggregation
                 const monthly = {};
