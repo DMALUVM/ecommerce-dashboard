@@ -1688,6 +1688,7 @@ const handleLogout = async () => {
   const [adsMonth, setAdsMonth] = useState(new Date().getMonth()); // Selected month (0-11)
   const [adsQuarter, setAdsQuarter] = useState(Math.floor(new Date().getMonth() / 3) + 1); // 1-4
   const [adsSelectedWeek, setAdsSelectedWeek] = useState(null); // Selected week ending date for weekly comparison
+  const [adsSelectedDay, setAdsSelectedDay] = useState(null); // Selected day for daily view
   const [adsViewMode, setAdsViewMode] = useState('performance'); // 'performance' | 'campaigns' for ads tab
   
   // Forecast view state
@@ -13505,6 +13506,10 @@ if (shopifySkuWithShipping.length > 0) {
             
             // Map headers to indices
             const getColIdx = (patterns) => headers.findIndex(h => patterns.some(p => h.includes(p)));
+            // More precise matching for columns that could conflict (e.g., "purchases" vs "purchases value")
+            const getExactColIdx = (patterns, excludePatterns = []) => headers.findIndex(h => 
+              patterns.some(p => h.includes(p)) && !excludePatterns.some(ex => h.includes(ex))
+            );
             
             const dailyData = {}; // { date: { metaSpend, googleSpend, impressions, clicks, ... } }
             
@@ -13532,8 +13537,9 @@ if (shopifySkuWithShipping.length > 0) {
               if (isMetaAds) {
                 // Meta columns: Amount spent, Purchases value, Purchases, ROAS, Impressions, Link clicks, CTR, CPC, CPM
                 const spendIdx = getColIdx(['amount spent']);
-                const purchaseValueIdx = getColIdx(['purchases value', 'purchase value']);
-                const purchasesIdx = getColIdx(['purchases (all)', 'purchases']);
+                const purchaseValueIdx = getColIdx(['purchases value', 'purchase value', 'website purchase value']);
+                // Use exact matching to avoid 'purchases' matching 'purchases value'
+                const purchasesIdx = getExactColIdx(['purchases (all)', 'purchases', 'website purchases'], ['value']);
                 const roasIdx = getColIdx(['roas']);
                 const impressionsIdx = getColIdx(['impressions']);
                 const clicksIdx = getColIdx(['link clicks', 'clicks']);
@@ -32329,6 +32335,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       setTimeout(() => setAdsSelectedWeek(weeksInYear[weeksInYear.length - 1]), 0);
     }
     
+    // Initialize selected day if not set
+    if (adsTimeTab === 'daily' && !adsSelectedDay && sortedDays.length > 0) {
+      setTimeout(() => setAdsSelectedDay(sortedDays[sortedDays.length - 1]), 0);
+    }
+    
     // Helper to aggregate ad data from weeks
     const aggregateWeeklyData = (weeks) => {
       return weeks.reduce((acc, w) => {
@@ -32516,8 +32527,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       
       switch (adsTimeTab) {
         case 'daily': {
-          // Show all days in the selected month (controlled by adsMonth selector)
-          return daysInMonth.length > 0 ? daysInMonth : sortedDays.slice(-30);
+          // Show only the selected day
+          if (adsSelectedDay) {
+            return [adsSelectedDay];
+          }
+          // Fall back to most recent day
+          return sortedDays.length > 0 ? [sortedDays[sortedDays.length - 1]] : [];
         }
         case 'weekly': {
           // Days in selected week
@@ -32691,6 +32706,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     const getCompLabel = () => {
       switch (adsTimeTab) {
+        case 'daily': {
+          const idx = sortedDays.indexOf(adsSelectedDay);
+          if (idx > 0) {
+            const prevDay = new Date(sortedDays[idx - 1] + 'T12:00:00');
+            return `vs ${prevDay.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+          }
+          return '';
+        }
         case 'weekly': return compWeeks.length > 0 ? 'vs prev week' : '';
         case 'monthly': {
           const pm = adsMonth === 0 ? 11 : adsMonth - 1;
@@ -32709,7 +32732,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     // Navigation
     const goToPrev = () => {
-      if (adsTimeTab === 'daily' || adsTimeTab === 'monthly') {
+      if (adsTimeTab === 'daily') {
+        const idx = sortedDays.indexOf(adsSelectedDay);
+        if (idx > 0) setAdsSelectedDay(sortedDays[idx - 1]);
+      } else if (adsTimeTab === 'monthly') {
         if (adsMonth === 0) { setAdsMonth(11); setAdsYear(adsYear - 1); }
         else setAdsMonth(adsMonth - 1);
       } else if (adsTimeTab === 'weekly') {
@@ -32725,7 +32751,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     };
     
     const goToNext = () => {
-      if (adsTimeTab === 'daily' || adsTimeTab === 'monthly') {
+      if (adsTimeTab === 'daily') {
+        const idx = sortedDays.indexOf(adsSelectedDay);
+        if (idx < sortedDays.length - 1) setAdsSelectedDay(sortedDays[idx + 1]);
+      } else if (adsTimeTab === 'monthly') {
         if (adsMonth === 11) { setAdsMonth(0); setAdsYear(adsYear + 1); }
         else setAdsMonth(adsMonth + 1);
       } else if (adsTimeTab === 'weekly') {
@@ -33622,12 +33651,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               </select>
             </div>
             
-            {/* Show month selector for daily and monthly tabs */}
-            {(adsTimeTab === 'daily' || adsTimeTab === 'monthly') && (
+            {/* Show month selector for monthly tab only */}
+            {adsTimeTab === 'monthly' && (
               <div className="flex items-center gap-2">
                 <span className="text-slate-400 text-sm">Month:</span>
                 <select value={adsMonth} onChange={(e) => setAdsMonth(parseInt(e.target.value))} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
                   {monthNames.map((m, i) => <option key={i} value={i} disabled={!monthsWithData.includes(i)}>{m}</option>)}
+                </select>
+              </div>
+            )}
+            
+            {/* Day selector for daily mode */}
+            {adsTimeTab === 'daily' && sortedDays.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 text-sm">Day:</span>
+                <select value={adsSelectedDay || ''} onChange={(e) => setAdsSelectedDay(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
+                  {sortedDays.slice().reverse().slice(0, 90).map(d => (
+                    <option key={d} value={d}>
+                      {new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                    </option>
+                  ))}
                 </select>
               </div>
             )}
@@ -33775,7 +33818,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     <div className="grid grid-cols-3 gap-2 text-xs mb-2">
                       <div><p className="text-slate-500">Impressions</p><p className="text-white font-medium">{formatNumber(dailyTotals.metaImpressions)}</p></div>
                       <div><p className="text-slate-500">Clicks</p><p className="text-white font-medium">{formatNumber(dailyTotals.metaClicks)}</p></div>
-                      <div><p className="text-slate-500">Purchases</p><p className="text-emerald-400 font-medium">{dailyTotals.metaPurchases}</p></div>
+                      <div><p className="text-slate-500">Purchases</p><p className="text-emerald-400 font-medium">{formatNumber(Math.round(dailyTotals.metaPurchases))}</p></div>
                     </div>
                     <div className="grid grid-cols-3 gap-2 text-xs pt-2 border-t border-slate-700/50">
                       <div>
