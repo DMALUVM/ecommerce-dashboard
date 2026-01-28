@@ -72,4 +72,54 @@ const parseShopifyTaxReport = (csvData, stateCode) => {
   return result;
 };
 
-export { parseShopifyTaxReport };
+
+// Calculate next due date based on filing frequency
+const getNextDueDate = (frequency, stateCode) => {
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+  const currentDay = now.getDate();
+  
+  // Most states have 20th of month due dates, some vary
+  const dueDayOfMonth = 20;
+  
+  if (frequency === 'monthly') {
+    // Due 20th of following month
+    let dueMonth = currentMonth + 1;
+    let dueYear = currentYear;
+    if (dueMonth > 11) { dueMonth = 0; dueYear++; }
+    const dueDate = new Date(dueYear, dueMonth, dueDayOfMonth);
+    if (dueDate <= now) {
+      dueMonth++;
+      if (dueMonth > 11) { dueMonth = 0; dueYear++; }
+      return new Date(dueYear, dueMonth, dueDayOfMonth);
+    }
+    return dueDate;
+  } else if (frequency === 'quarterly') {
+    // Q1 (Jan-Mar) due Apr 20, Q2 (Apr-Jun) due Jul 20, Q3 (Jul-Sep) due Oct 20, Q4 (Oct-Dec) due Jan 20
+    const quarterEnds = [[3, 20], [6, 20], [9, 20], [0, 20]]; // [month, day]
+    const quarterYears = [0, 0, 0, 1]; // year offset
+    for (let i = 0; i < 4; i++) {
+      const [m, d] = quarterEnds[i];
+      const y = currentYear + quarterYears[i];
+      const dueDate = new Date(y, m, d);
+      if (dueDate > now) return dueDate;
+    }
+    return new Date(currentYear + 1, 3, 20);
+  } else if (frequency === 'semi-annual') {
+    // Jan-Jun due Jul 20, Jul-Dec due Jan 20
+    const h1Due = new Date(currentYear, 6, 20); // Jul 20
+    const h2Due = new Date(currentYear + 1, 0, 20); // Jan 20 next year
+    if (h1Due > now) return h1Due;
+    if (h2Due > now) return h2Due;
+    return new Date(currentYear + 1, 6, 20);
+  } else if (frequency === 'annual') {
+    // Due Jan 20 of following year
+    const dueDate = new Date(currentYear + 1, 0, 20);
+    if (dueDate <= now) return new Date(currentYear + 2, 0, 20);
+    return dueDate;
+  }
+  return new Date(currentYear, currentMonth + 1, 20);
+};
+
+export { parseShopifyTaxReport, getNextDueDate };

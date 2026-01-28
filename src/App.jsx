@@ -50,32 +50,14 @@ import NavTabs from './components/ui/NavTabs';
 import { US_STATES_TAX_INFO, STATE_FILING_FORMATS } from './utils/taxData';
 import { parse3PLData, parse3PLExcel, get3PLForWeek, get3PLForDay, get3PLForPeriod } from './utils/threePL';
 import { parseQBOTransactions } from './utils/banking';
-import { parseShopifyTaxReport } from './utils/salesTax';
+import { parseShopifyTaxReport, getNextDueDate } from './utils/salesTax';
+import { DEFAULT_DASHBOARD_WIDGETS } from './utils/config';
+import { calculateBreakEven } from './utils/calculations';
+import { exportToCSV } from './utils/export';
 import { AI_CONFIG, callAI } from './utils/ai';
 
-// Dashboard widget configuration - defined at module level for consistent access
-const DEFAULT_DASHBOARD_WIDGETS = {
-  widgets: [
-    { id: 'alerts', name: 'Alerts & Notifications', enabled: true, order: 0 },
-    { id: 'todayPerformance', name: 'Last Week & MTD Performance', enabled: true, order: 1 },
-    { id: 'weekProgress', name: 'This Week\'s Goal', enabled: true, order: 2 },
-    { id: 'topSellers14d', name: 'Top Sellers (14 Days)', enabled: true, order: 3 },
-    { id: 'worstSellers14d', name: 'Needs Attention (14 Days)', enabled: true, order: 4 },
-    { id: 'topSellersYTD', name: 'Top Sellers (YTD)', enabled: false, order: 5 },
-    { id: 'worstSellersYTD', name: 'Needs Attention (YTD)', enabled: false, order: 6 },
-    { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 7 },
-    { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 8 },
-    { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 9 },
-    { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 10 },
-    { id: 'summaryMetrics', name: 'Summary Metrics (Time Range)', enabled: false, order: 11 },
-    { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 12 },
-    { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 13 },
-    { id: 'dataHub', name: 'Data Hub', enabled: false, order: 14 },
-  ],
-  stacks: {}, // { 'salesTax': ['salesTax', 'billsDue'] } - widget stacks
-  layout: 'auto',
-};
 
+// DEFAULT_DASHBOARD_WIDGETS extracted to utils/config.js
 
 // parseQBOTransactions extracted to utils/banking.js
 
@@ -1463,55 +1445,8 @@ allWeekKeys.forEach((weekKey) => {
 
 
 // Filing frequency due date calculator
-const getNextDueDate = (frequency, stateCode) => {
-  const now = new Date();
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
-  const currentDay = now.getDate();
-  
-  // Most states have 20th of month due dates, some vary
-  const dueDayOfMonth = 20;
-  
-  if (frequency === 'monthly') {
-    // Due 20th of following month
-    let dueMonth = currentMonth + 1;
-    let dueYear = currentYear;
-    if (dueMonth > 11) { dueMonth = 0; dueYear++; }
-    const dueDate = new Date(dueYear, dueMonth, dueDayOfMonth);
-    if (dueDate <= now) {
-      dueMonth++;
-      if (dueMonth > 11) { dueMonth = 0; dueYear++; }
-      return new Date(dueYear, dueMonth, dueDayOfMonth);
-    }
-    return dueDate;
-  } else if (frequency === 'quarterly') {
-    // Q1 (Jan-Mar) due Apr 20, Q2 (Apr-Jun) due Jul 20, Q3 (Jul-Sep) due Oct 20, Q4 (Oct-Dec) due Jan 20
-    const quarterEnds = [[3, 20], [6, 20], [9, 20], [0, 20]]; // [month, day]
-    const quarterYears = [0, 0, 0, 1]; // year offset
-    for (let i = 0; i < 4; i++) {
-      const [m, d] = quarterEnds[i];
-      const y = currentYear + quarterYears[i];
-      const dueDate = new Date(y, m, d);
-      if (dueDate > now) return dueDate;
-    }
-    return new Date(currentYear + 1, 3, 20);
-  } else if (frequency === 'semi-annual') {
-    // Jan-Jun due Jul 20, Jul-Dec due Jan 20
-    const h1Due = new Date(currentYear, 6, 20); // Jul 20
-    const h2Due = new Date(currentYear + 1, 0, 20); // Jan 20 next year
-    if (h1Due > now) return h1Due;
-    if (h2Due > now) return h2Due;
-    return new Date(currentYear + 1, 6, 20);
-  } else if (frequency === 'annual') {
-    // Due Jan 20 of following year
-    const dueDate = new Date(currentYear + 1, 0, 20);
-    if (dueDate <= now) return new Date(currentYear + 2, 0, 20);
-    return dueDate;
-  }
-  return new Date(currentYear, currentMonth + 1, 20);
-};
+// getNextDueDate extracted to utils/salesTax.js
 
-// Parse Shopify tax report - handles jurisdiction-based reports
 // parseShopifyTaxReport extracted to utils/salesTax.js
 
 const combinedData = useMemo(() => ({
@@ -9916,32 +9851,10 @@ Analyze the data and respond with ONLY this JSON:
   
   // ============ END MODULAR AI FORECAST SYSTEM ============
 
-  // 7. BREAK-EVEN CALCULATOR
-  const calculateBreakEven = (adSpend, cogs, price, conversionRate) => {
-    if (!price || price <= cogs) return null;
-    const profitPerUnit = price - cogs;
-    const unitsToBreakEven = Math.ceil(adSpend / profitPerUnit);
-    const clicksNeeded = conversionRate > 0 ? Math.ceil(unitsToBreakEven / (conversionRate / 100)) : 0;
-    const revenueAtBreakEven = unitsToBreakEven * price;
-    const roasAtBreakEven = adSpend > 0 ? revenueAtBreakEven / adSpend : 0;
-    return { unitsToBreakEven, clicksNeeded, revenueAtBreakEven, roasAtBreakEven, profitPerUnit };
-  };
 
-  // 10. CSV EXPORT functions
-  const exportToCSV = (data, filename, headers) => {
-    const csvContent = [
-      headers.join(','),
-      ...data.map(row => headers.map(h => {
-        const val = row[h] ?? '';
-        return typeof val === 'string' && val.includes(',') ? `"${val}"` : val;
-      }).join(','))
-    ].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${filename}_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-  };
+  // calculateBreakEven extracted to utils/calculations.js
+  // exportToCSV extracted to utils/export.js
+
 
   const exportWeeklyDataCSV = () => {
     const sortedWeeks = Object.keys(allWeeksData).sort();
