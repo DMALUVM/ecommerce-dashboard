@@ -1554,6 +1554,8 @@ const handleLogout = async () => {
     }
   });
   const [editingWidgets, setEditingWidgets] = useState(false);
+  const [draggedWidgetId, setDraggedWidgetId] = useState(null);
+  const [dragOverWidgetId, setDragOverWidgetId] = useState(null);
   
   // Production Pipeline
   const PRODUCTION_KEY = 'ecommerce_production_v1';
@@ -14495,9 +14497,6 @@ if (shopifySkuWithShipping.length > 0) {
   const WidgetConfigModal = () => {
     if (!editingWidgets) return null;
     
-    const [draggedWidget, setDraggedWidget] = useState(null);
-    const [dragOverWidget, setDragOverWidget] = useState(null);
-    
     // Get widgets from state, falling back to defaults if needed
     const widgets = (widgetConfig?.widgets && widgetConfig.widgets.length > 0) 
       ? widgetConfig.widgets 
@@ -14528,36 +14527,36 @@ if (shopifySkuWithShipping.length > 0) {
       setWidgetConfig({ widgets: sortedWidgets, layout: 'auto' });
     };
     
-    // Drag and drop handlers
-    const handleDragStart = (e, widget) => {
-      setDraggedWidget(widget);
+    // Drag and drop handlers - using parent state
+    const handleDragStart = (e, widgetId) => {
+      setDraggedWidgetId(widgetId);
       e.dataTransfer.effectAllowed = 'move';
     };
     
-    const handleDragOver = (e, widget) => {
+    const handleDragOver = (e, widgetId) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      if (widget.id !== draggedWidget?.id) {
-        setDragOverWidget(widget);
+      if (widgetId !== draggedWidgetId) {
+        setDragOverWidgetId(widgetId);
       }
     };
     
     const handleDragLeave = () => {
-      setDragOverWidget(null);
+      setDragOverWidgetId(null);
     };
     
-    const handleDrop = (e, targetWidget) => {
+    const handleDrop = (e, targetWidgetId) => {
       e.preventDefault();
-      if (!draggedWidget || draggedWidget.id === targetWidget.id) {
-        setDraggedWidget(null);
-        setDragOverWidget(null);
+      if (!draggedWidgetId || draggedWidgetId === targetWidgetId) {
+        setDraggedWidgetId(null);
+        setDragOverWidgetId(null);
         return;
       }
       
       // Reorder widgets
       const sortedWidgets = [...widgets].sort((a, b) => (a.order || 0) - (b.order || 0));
-      const draggedIdx = sortedWidgets.findIndex(w => w.id === draggedWidget.id);
-      const targetIdx = sortedWidgets.findIndex(w => w.id === targetWidget.id);
+      const draggedIdx = sortedWidgets.findIndex(w => w.id === draggedWidgetId);
+      const targetIdx = sortedWidgets.findIndex(w => w.id === targetWidgetId);
       
       if (draggedIdx !== -1 && targetIdx !== -1) {
         // Remove dragged widget and insert at target position
@@ -14569,13 +14568,13 @@ if (shopifySkuWithShipping.length > 0) {
         setWidgetConfig({ widgets: reorderedWidgets, layout: 'auto' });
       }
       
-      setDraggedWidget(null);
-      setDragOverWidget(null);
+      setDraggedWidgetId(null);
+      setDragOverWidgetId(null);
     };
     
     const handleDragEnd = () => {
-      setDraggedWidget(null);
-      setDragOverWidget(null);
+      setDraggedWidgetId(null);
+      setDragOverWidgetId(null);
     };
     
     const resetToDefaults = () => {
@@ -14612,14 +14611,14 @@ if (shopifySkuWithShipping.length > 0) {
                   <div 
                     key={widget.id} 
                     draggable
-                    onDragStart={(e) => handleDragStart(e, widget)}
-                    onDragOver={(e) => handleDragOver(e, widget)}
+                    onDragStart={(e) => handleDragStart(e, widget.id)}
+                    onDragOver={(e) => handleDragOver(e, widget.id)}
                     onDragLeave={handleDragLeave}
-                    onDrop={(e) => handleDrop(e, widget)}
+                    onDrop={(e) => handleDrop(e, widget.id)}
                     onDragEnd={handleDragEnd}
                     className={`flex items-center gap-3 bg-slate-800/50 border rounded-xl p-3 cursor-grab active:cursor-grabbing transition-all ${
-                      draggedWidget?.id === widget.id ? 'opacity-50 border-violet-500' : 
-                      dragOverWidget?.id === widget.id ? 'border-violet-500 bg-violet-500/10' : 'border-slate-700'
+                      draggedWidgetId === widget.id ? 'opacity-50 border-violet-500' : 
+                      dragOverWidgetId === widget.id ? 'border-violet-500 bg-violet-500/10' : 'border-slate-700'
                     }`}
                   >
                     <Move className="w-4 h-4 text-slate-500 flex-shrink-0" />
@@ -18497,27 +18496,41 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       }
     }
     
-    // Check for weeks with missing 3PL or Ads data
-    const incompleteWeeks = Object.entries(allWeeksData)
+    // Check for weeks with missing 3PL or Ads data - separate alerts
+    const recentWeeks = Object.entries(allWeeksData)
       .sort((a, b) => b[0].localeCompare(a[0]))
-      .slice(0, 4)
-      .filter(([key, data]) => {
-        const weeklyHas3PL = data.shopify?.threeplCosts > 0;
-        const ledgerHas3PL = (() => {
-          const ledgerData = get3PLForWeek(threeplLedger, key);
-          return ledgerData && ledgerData.metrics?.totalCost > 0;
-        })();
-        const has3PL = weeklyHas3PL || ledgerHas3PL;
-        const hasAds = (data.shopify?.metaSpend > 0) || (data.shopify?.googleSpend > 0);
-        return !has3PL || !hasAds;
-      });
+      .slice(0, 4);
     
-    if (incompleteWeeks.length > 0) {
-      const weekText = incompleteWeeks.length === 1 ? '1 week' : `${incompleteWeeks.length} weeks`;
+    const weeksMissing3PL = recentWeeks.filter(([key, data]) => {
+      const weeklyHas3PL = data.shopify?.threeplCosts > 0;
+      const ledgerHas3PL = (() => {
+        const ledgerData = get3PLForWeek(threeplLedger, key);
+        return ledgerData && ledgerData.metrics?.totalCost > 0;
+      })();
+      return !weeklyHas3PL && !ledgerHas3PL;
+    });
+    
+    const weeksMissingAds = recentWeeks.filter(([key, data]) => {
+      return !data.shopify?.metaSpend && !data.shopify?.googleSpend;
+    });
+    
+    if (weeksMissing3PL.length > 0) {
+      const weekText = weeksMissing3PL.length === 1 ? '1 week' : `${weeksMissing3PL.length} weeks`;
       alerts.push({ 
         type: 'warning', 
-        text: `${weekText} missing cost data (3PL or Ads)`,
-        link: 'weekly'
+        text: `${weekText} missing 3PL cost data`,
+        link: '3pl',
+        action: () => setView('3pl')
+      });
+    }
+    
+    if (weeksMissingAds.length > 0) {
+      const weekText = weeksMissingAds.length === 1 ? '1 week' : `${weeksMissingAds.length} weeks`;
+      alerts.push({ 
+        type: 'warning', 
+        text: `${weekText} missing Ads data`,
+        link: 'ads-upload',
+        action: () => { setUploadTab('ads'); setView('upload'); }
       });
     }
     
@@ -18679,25 +18692,49 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       const today = new Date();
       const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
       
-      // Get start of current week (Monday)
-      const weekStart = new Date(today);
-      const dayOfWeek = today.getDay();
-      const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-      weekStart.setDate(today.getDate() - daysToMonday);
-      const weekStartKey = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, '0')}-${String(weekStart.getDate()).padStart(2, '0')}`;
+      // Find the latest day with complete data
+      const sortedDays = Object.keys(allDaysData).filter(k => allDaysData[k]?.amazon?.revenue > 0).sort().reverse();
+      const latestDayKey = sortedDays[0];
+      if (!latestDayKey) return null;
       
-      // Get start of current month
-      const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+      const latestDate = new Date(latestDayKey + 'T12:00:00');
+      const dataFreshness = Math.floor((today - latestDate) / (1000 * 60 * 60 * 24));
+      
+      // Calculate the LAST COMPLETE WEEK (Mon-Sun) that has data
+      // Find the Sunday that ends the week containing the latest data
+      const latestDayOfWeek = latestDate.getDay(); // 0=Sun, 1=Mon, etc
+      const weekEndDate = new Date(latestDate);
+      // If latest is not Sunday, go back to find the previous Sunday (end of last complete week)
+      if (latestDayOfWeek !== 0) {
+        weekEndDate.setDate(latestDate.getDate() - latestDayOfWeek); // Go to previous Sunday
+      }
+      // weekEndDate is now the Sunday that ends the complete week
+      
+      const weekStartDate = new Date(weekEndDate);
+      weekStartDate.setDate(weekEndDate.getDate() - 6); // Monday of that week
+      
+      const weekStartKey = `${weekStartDate.getFullYear()}-${String(weekStartDate.getMonth() + 1).padStart(2, '0')}-${String(weekStartDate.getDate()).padStart(2, '0')}`;
+      const weekEndKey = `${weekEndDate.getFullYear()}-${String(weekEndDate.getMonth() + 1).padStart(2, '0')}-${String(weekEndDate.getDate()).padStart(2, '0')}`;
+      
+      // Previous week for comparison
+      const prevWeekEndDate = new Date(weekStartDate);
+      prevWeekEndDate.setDate(prevWeekEndDate.getDate() - 1); // Sunday before
+      const prevWeekStartDate = new Date(prevWeekEndDate);
+      prevWeekStartDate.setDate(prevWeekEndDate.getDate() - 6);
+      
+      const prevWeekStartKey = `${prevWeekStartDate.getFullYear()}-${String(prevWeekStartDate.getMonth() + 1).padStart(2, '0')}-${String(prevWeekStartDate.getDate()).padStart(2, '0')}`;
+      const prevWeekEndKey = `${prevWeekEndDate.getFullYear()}-${String(prevWeekEndDate.getMonth() + 1).padStart(2, '0')}-${String(prevWeekEndDate.getDate()).padStart(2, '0')}`;
+      
+      // Get start of current month (for MTD - this still uses current month through latest data)
+      const monthStart = new Date(latestDate.getFullYear(), latestDate.getMonth(), 1);
       const monthStartKey = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-01`;
       
-      // Get start of last week (for comparison)
-      const lastWeekStart = new Date(weekStart);
-      lastWeekStart.setDate(lastWeekStart.getDate() - 7);
-      const lastWeekStartKey = `${lastWeekStart.getFullYear()}-${String(lastWeekStart.getMonth() + 1).padStart(2, '0')}-${String(lastWeekStart.getDate()).padStart(2, '0')}`;
-      
-      // Get start of last month (for comparison)
-      const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-      const lastMonthStartKey = `${lastMonthStart.getFullYear()}-${String(lastMonthStart.getMonth() + 1).padStart(2, '0')}-01`;
+      // Previous month for comparison (same day of month)
+      const prevMonthStart = new Date(latestDate.getFullYear(), latestDate.getMonth() - 1, 1);
+      const prevMonthEndDate = new Date(prevMonthStart);
+      prevMonthEndDate.setDate(Math.min(latestDate.getDate(), new Date(prevMonthStart.getFullYear(), prevMonthStart.getMonth() + 1, 0).getDate()));
+      const prevMonthStartKey = `${prevMonthStart.getFullYear()}-${String(prevMonthStart.getMonth() + 1).padStart(2, '0')}-01`;
+      const prevMonthEndKey = `${prevMonthEndDate.getFullYear()}-${String(prevMonthEndDate.getMonth() + 1).padStart(2, '0')}-${String(prevMonthEndDate.getDate()).padStart(2, '0')}`;
       
       // Helper to aggregate days in a range
       const aggregateDays = (startKey, endKey) => {
@@ -18727,49 +18764,38 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         return { revenue, units, netProfit, adSpend, amazonRev, shopifyRev, cogs, daysCount: days.length };
       };
       
-      // Current periods
-      const wtd = aggregateDays(weekStartKey, todayKey);
-      const mtd = aggregateDays(monthStartKey, todayKey);
-      
-      // Calculate same period last week (same number of days)
-      const lastWeekEndDate = new Date(lastWeekStart);
-      lastWeekEndDate.setDate(lastWeekEndDate.getDate() + wtd.daysCount - 1);
-      const lastWeekEndKey = `${lastWeekEndDate.getFullYear()}-${String(lastWeekEndDate.getMonth() + 1).padStart(2, '0')}-${String(lastWeekEndDate.getDate()).padStart(2, '0')}`;
-      const lastWtd = aggregateDays(lastWeekStartKey, lastWeekEndKey);
-      
-      // Calculate same period last month (same day of month)
-      const lastMonthEndDate = new Date(lastMonthStart);
-      lastMonthEndDate.setDate(Math.min(today.getDate(), new Date(lastMonthStart.getFullYear(), lastMonthStart.getMonth() + 1, 0).getDate()));
-      const lastMonthEndKey = `${lastMonthEndDate.getFullYear()}-${String(lastMonthEndDate.getMonth() + 1).padStart(2, '0')}-${String(lastMonthEndDate.getDate()).padStart(2, '0')}`;
-      const lastMtd = aggregateDays(lastMonthStartKey, lastMonthEndKey);
-      
-      // Find latest day with data for freshness indicator
-      const sortedDays = Object.keys(allDaysData).filter(k => allDaysData[k]?.amazon?.revenue > 0).sort().reverse();
-      const latestDayKey = sortedDays[0];
-      const latestDate = latestDayKey ? new Date(latestDayKey + 'T12:00:00') : null;
-      const dataFreshness = latestDate ? Math.floor((today - latestDate) / (1000 * 60 * 60 * 24)) : null;
+      // Aggregate periods
+      const wtd = aggregateDays(weekStartKey, weekEndKey);
+      const mtd = aggregateDays(monthStartKey, latestDayKey); // MTD through latest data
+      const prevWtd = aggregateDays(prevWeekStartKey, prevWeekEndKey);
+      const prevMtd = aggregateDays(prevMonthStartKey, prevMonthEndKey);
       
       if (wtd.daysCount === 0 && mtd.daysCount === 0) return null;
+      
+      // Format week label
+      const weekLabel = `Week of ${weekStartDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
       
       return {
         wtd: {
           ...wtd,
           margin: wtd.revenue > 0 ? (wtd.netProfit / wtd.revenue) * 100 : 0,
           tacos: wtd.revenue > 0 ? (wtd.adSpend / wtd.revenue) * 100 : 0,
-          revenueChange: lastWtd.revenue > 0 ? ((wtd.revenue - lastWtd.revenue) / lastWtd.revenue) * 100 : null,
-          profitChange: lastWtd.netProfit !== 0 ? ((wtd.netProfit - lastWtd.netProfit) / Math.abs(lastWtd.netProfit)) * 100 : null,
+          revenueChange: prevWtd.revenue > 0 ? ((wtd.revenue - prevWtd.revenue) / prevWtd.revenue) * 100 : null,
+          profitChange: prevWtd.netProfit !== 0 ? ((wtd.netProfit - prevWtd.netProfit) / Math.abs(prevWtd.netProfit)) * 100 : null,
+          weekLabel,
+          weekEndDate: weekEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         },
         mtd: {
           ...mtd,
           margin: mtd.revenue > 0 ? (mtd.netProfit / mtd.revenue) * 100 : 0,
           tacos: mtd.revenue > 0 ? (mtd.adSpend / mtd.revenue) * 100 : 0,
-          revenueChange: lastMtd.revenue > 0 ? ((mtd.revenue - lastMtd.revenue) / lastMtd.revenue) * 100 : null,
-          profitChange: lastMtd.netProfit !== 0 ? ((mtd.netProfit - lastMtd.netProfit) / Math.abs(lastMtd.netProfit)) * 100 : null,
+          revenueChange: prevMtd.revenue > 0 ? ((mtd.revenue - prevMtd.revenue) / prevMtd.revenue) * 100 : null,
+          profitChange: prevMtd.netProfit !== 0 ? ((mtd.netProfit - prevMtd.netProfit) / Math.abs(prevMtd.netProfit)) * 100 : null,
         },
         latestDay: latestDayKey,
         dataFreshness,
         weekStartKey,
-        monthName: today.toLocaleDateString('en-US', { month: 'long' }),
+        monthName: latestDate.toLocaleDateString('en-US', { month: 'long' }),
       };
     };
     
@@ -19022,18 +19048,29 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     <div 
                       key={i} 
                       onClick={() => {
-                        if (alert.link === 'invoices') setShowInvoiceModal(true);
-                        else if (alert.link === 'forecast') { setUploadTab('forecast'); setView('upload'); }
-                        else if (alert.link === 'sales-tax') setView('sales-tax');
-                        else if (alert.link) setView(alert.link);
+                        if (alert.action) {
+                          alert.action();
+                        } else if (alert.link === 'invoices') {
+                          setShowInvoiceModal(true);
+                        } else if (alert.link === 'forecast') {
+                          setUploadTab('forecast'); setView('upload');
+                        } else if (alert.link === 'sales-tax') {
+                          setView('sales-tax');
+                        } else if (alert.link === 'ads-upload') {
+                          setUploadTab('ads'); setView('upload');
+                        } else if (alert.link === '3pl') {
+                          setView('3pl');
+                        } else if (alert.link) {
+                          setView(alert.link);
+                        }
                       }}
-                      className={`flex items-center justify-between p-3 rounded-xl ${alert.type === 'critical' ? 'bg-rose-900/30 border border-rose-500/50' : 'bg-amber-900/30 border border-amber-500/50'} ${alert.link ? 'cursor-pointer hover:opacity-80' : ''}`}
+                      className={`flex items-center justify-between p-3 rounded-xl ${alert.type === 'critical' ? 'bg-rose-900/30 border border-rose-500/50' : 'bg-amber-900/30 border border-amber-500/50'} ${alert.link || alert.action ? 'cursor-pointer hover:opacity-80' : ''}`}
                     >
                       <div className="flex items-center gap-3">
                         <AlertTriangle className={`w-5 h-5 ${alert.type === 'critical' ? 'text-rose-400' : 'text-amber-400'}`} />
                         <span className={alert.type === 'critical' ? 'text-rose-300' : 'text-amber-300'}>{alert.text}</span>
                       </div>
-                      {alert.link && <ChevronRight className="w-5 h-5 text-slate-400" />}
+                      {(alert.link || alert.action) && <ChevronRight className="w-5 h-5 text-slate-400" />}
                     </div>
                   ))}
                 </div>
@@ -19068,12 +19105,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     
                     {/* WTD and MTD Side by Side */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      {/* Week to Date */}
+                      {/* Last Complete Week */}
                       <div className="bg-slate-900/50 rounded-xl p-4 border border-violet-500/20">
                         <div className="flex items-center justify-between mb-3">
                           <h4 className="text-sm font-semibold text-violet-400 flex items-center gap-2">
                             <Calendar className="w-4 h-4" />
-                            Week to Date
+                            {periodMetrics.wtd.weekLabel || 'Last Week'}
                           </h4>
                           <span className="text-xs text-slate-500">{periodMetrics.wtd.daysCount} days</span>
                         </div>
@@ -19084,7 +19121,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             {periodMetrics.wtd.revenueChange !== null && (
                               <p className={`text-xs flex items-center gap-1 ${periodMetrics.wtd.revenueChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                                 {periodMetrics.wtd.revenueChange >= 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
-                                {Math.abs(periodMetrics.wtd.revenueChange).toFixed(1)}% vs last wk
+                                {Math.abs(periodMetrics.wtd.revenueChange).toFixed(1)}% vs prior wk
                               </p>
                             )}
                           </div>
