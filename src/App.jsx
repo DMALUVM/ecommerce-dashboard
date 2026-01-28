@@ -7130,7 +7130,13 @@ const savePeriods = async (d) => {
   
   // Process Amazon bulk upload - import into appropriate data structures
   const processAmazonBulkUpload = useCallback(async () => {
-    if (amazonBulkFiles.length === 0) return;
+    console.log('=== processAmazonBulkUpload CALLED ===');
+    console.log('amazonBulkFiles.length:', amazonBulkFiles.length);
+    
+    if (amazonBulkFiles.length === 0) {
+      console.log('No files to process, returning early');
+      return;
+    }
     
     setAmazonBulkProcessing(true);
     const cogsLookup = getCogsLookup();
@@ -7207,9 +7213,12 @@ const savePeriods = async (d) => {
           continue;
         }
         
+        console.log('Processing file:', fileData.name, 'reportType:', reportType, 'dateKey:', dateRange.endDate.toISOString().split('T')[0]);
+        
         if (reportType === 'daily') {
           // Import as daily data
           const dateKey = dateRange.endDate.toISOString().split('T')[0];
+          console.log('Importing daily data for date:', dateKey, 'revenue:', amzRev, 'units:', amzUnits);
           
           updatedDailyData[dateKey] = {
             date: dateKey,
@@ -7228,6 +7237,7 @@ const savePeriods = async (d) => {
             },
           };
           dailyImported++;
+          console.log('Daily import complete. dailyImported now:', dailyImported);
         } else if (reportType === 'weekly') {
           // Import as weekly data
           const weekKey = dateRange.endDate.toISOString().split('T')[0];
@@ -7289,6 +7299,8 @@ const savePeriods = async (d) => {
           console.warn('Unknown report type:', reportType, 'for file:', fileData.name);
         }
       }
+      
+      console.log('Import loop complete. dailyImported:', dailyImported, 'weeklyImported:', weeklyImported, 'monthlyImported:', monthlyImported);
       
       // Save all updated data
       if (dailyImported > 0) {
