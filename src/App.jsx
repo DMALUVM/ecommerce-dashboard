@@ -1083,7 +1083,7 @@ export default function Dashboard() {
   const [deletedItems, setDeletedItems] = useState([]); // Array of { type, key, data, expiry, undoTimer }
   
   const [reprocessPeriod, setReprocessPeriod] = useState(null); // For period reprocessing
-  const [threeplTimeView, setThreeplTimeView] = useState('weekly'); // For 3PL analytics view
+  const [threeplTimeView, setThreeplTimeView] = useState('weekly'); // For 3PL analytics view (weekly or monthly only) (weekly or monthly only)
   const [threeplDateRange, setThreeplDateRange] = useState('all'); // 'week' | '4weeks' | 'month' | 'quarter' | 'year' | 'all' | 'custom'
   const [threeplCustomStart, setThreeplCustomStart] = useState('');
   const [threeplCustomEnd, setThreeplCustomEnd] = useState('');
@@ -1392,7 +1392,7 @@ const handleLogout = async () => {
   const [lastSyncDate, setLastSyncDate] = useState(null);
   
   // Bulk Ad Upload state
-  const [bulkAdPlatform, setBulkAdPlatform] = useState('google'); // 'google' | 'meta'
+  // const [bulkAdPlatform, setBulkAdPlatform] = useState('google'); // No longer needed - auto-detected
   const [bulkAdFiles, setBulkAdFiles] = useState([]); // Array of { name, content, parsed }
   const [bulkAdParsed, setBulkAdParsed] = useState(null); // Combined: { dailyData, weeklyData, totalSpend, error, dateRange }
   const [bulkAdProcessing, setBulkAdProcessing] = useState(false); // Processing multiple files
@@ -6832,6 +6832,7 @@ const savePeriods = async (d) => {
               adName,
               isMonthly: isMonthlyRecord,
               monthLabel: isMonthlyRecord ? dateStr : null,
+              platform: detectedPlatform, // Tag each record with its source platform
             });
             
             totalSpend += cost;
@@ -6938,7 +6939,7 @@ const savePeriods = async (d) => {
           const weekEnding = formatDateKey(weekEndDate);
           
           if (!weeklyMap[weekEnding]) {
-            weeklyMap[weekEnding] = { weekEnding, spend: 0, impressions: 0, clicks: 0, conversions: 0, convValue: 0, days: [] };
+            weeklyMap[weekEnding] = { weekEnding, spend: 0, impressions: 0, clicks: 0, conversions: 0, convValue: 0, days: [], platform: d.platform };
           }
           weeklyMap[weekEnding].spend += d.spend;
           weeklyMap[weekEnding].impressions += d.impressions;
@@ -6946,6 +6947,10 @@ const savePeriods = async (d) => {
           weeklyMap[weekEnding].conversions += d.conversions;
           weeklyMap[weekEnding].convValue += d.convValue;
           weeklyMap[weekEnding].days.push(d.date);
+          // Keep platform from first record (all records in same file have same platform)
+          if (!weeklyMap[weekEnding].platform && d.platform) {
+            weeklyMap[weekEnding].platform = d.platform;
+          }
         });
         
         // Calculate derived metrics
@@ -7482,6 +7487,8 @@ const savePeriods = async (d) => {
         
         parsed.monthlyData.forEach(m => {
           const periodKey = m.periodLabel; // "Apr 2024"
+          // Use per-record platform if available, fallback to passed parameter
+          const recordPlatform = m.platform || platform;
           
           // Check if we have weekly data for this month (weekly data takes precedence)
           // Parse "Apr 2024" to check for weekly data
@@ -7516,7 +7523,7 @@ const savePeriods = async (d) => {
             let newMetaSpend = oldMetaSpend;
             let newGoogleSpend = oldGoogleSpend;
             
-            if (platform === 'google') {
+            if (recordPlatform === 'google') {
               newGoogleSpend = m.spend;
             } else {
               newMetaSpend = m.spend;
@@ -7545,7 +7552,7 @@ const savePeriods = async (d) => {
               // Store ad KPIs
               adKPIs: {
                 ...(period.adKPIs || {}),
-                [platform]: {
+                [recordPlatform]: {
                   spend: m.spend,
                   impressions: m.impressions,
                   clicks: m.clicks,
@@ -7559,8 +7566,8 @@ const savePeriods = async (d) => {
             updatedCount++;
           } else {
             // Period doesn't exist - create it with ad data
-            const metaSpend = platform === 'meta' ? m.spend : 0;
-            const googleSpend = platform === 'google' ? m.spend : 0;
+            const metaSpend = recordPlatform === 'meta' ? m.spend : 0;
+            const googleSpend = recordPlatform === 'google' ? m.spend : 0;
             const totalAds = metaSpend + googleSpend;
             
             updatedPeriods[periodKey] = {
@@ -7572,7 +7579,7 @@ const savePeriods = async (d) => {
               },
               total: { revenue: 0, units: 0, cogs: 0, adSpend: totalAds, netProfit: -totalAds },
               adKPIs: {
-                [platform]: {
+                [recordPlatform]: {
                   spend: m.spend,
                   impressions: m.impressions,
                   clicks: m.clicks,
@@ -7594,8 +7601,11 @@ const savePeriods = async (d) => {
         setBulkAdFiles([]);
         setBulkAdParsed(null);
         
-        const platformName = platform === 'google' ? 'Google' : 'Meta';
-        let message = `${platformName} ads updated for ${updatedCount + createdCount} month(s)`;
+        // Show platforms that were updated
+        const platformNames = parsed.platforms?.length > 0 
+          ? (parsed.platforms.length === 2 ? 'Google & Meta' : parsed.platforms[0] === 'google' ? 'Google' : 'Meta')
+          : 'Ad';
+        let message = `${platformNames} ads updated for ${updatedCount + createdCount} month(s)`;
         if (skippedCount > 0) {
           message += `. Skipped ${skippedCount} month(s) with weekly data: ${skippedMonths.slice(0, 3).join(', ')}${skippedMonths.length > 3 ? '...' : ''}`;
         }
@@ -7632,8 +7642,11 @@ const savePeriods = async (d) => {
           const existingDay = updatedDays[dayKey] || {};
           const existingShopify = existingDay.shopify || { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0 };
           
+          // Use per-record platform if available, fallback to passed parameter
+          const recordPlatform = d.platform || platform;
+          
           // Store ad spend in daily data - both at top level AND in shopify object
-          if (platform === 'google') {
+          if (recordPlatform === 'google') {
             const newGoogleSpend = d.spend;
             const existingMeta = existingDay.metaSpend || existingShopify.metaSpend || 0;
             const totalAds = existingMeta + newGoogleSpend;
@@ -7776,6 +7789,8 @@ const savePeriods = async (d) => {
       // Then aggregate into weekly data
       parsed.weeklyData.forEach(w => {
         const weekKey = w.weekEnding;
+        // Use per-record platform if available, fallback to passed parameter
+        const recordPlatform = w.platform || platform;
         
         if (updated[weekKey]) {
           // Week exists - update ad spend
@@ -7786,7 +7801,7 @@ const savePeriods = async (d) => {
           let newMetaSpend = oldMetaSpend;
           let newGoogleSpend = oldGoogleSpend;
           
-          if (platform === 'google') {
+          if (recordPlatform === 'google') {
             newGoogleSpend = w.spend;
           } else {
             newMetaSpend = w.spend;
@@ -7833,15 +7848,15 @@ const savePeriods = async (d) => {
             // Store detailed KPIs by platform for the Ads page
             adKPIs: {
               ...(week.adKPIs || {}),
-              [platform]: platformKPIs,
+              [recordPlatform]: platformKPIs,
             },
           };
           updatedCount++;
         } else {
           // Week doesn't exist - create a placeholder with just ad data
           // This allows ad data to be stored even before weekly sales data is uploaded
-          const metaSpend = platform === 'meta' ? w.spend : 0;
-          const googleSpend = platform === 'google' ? w.spend : 0;
+          const metaSpend = recordPlatform === 'meta' ? w.spend : 0;
+          const googleSpend = recordPlatform === 'google' ? w.spend : 0;
           const totalAds = metaSpend + googleSpend;
           
           // Build KPI object for this platform
@@ -7867,7 +7882,7 @@ const savePeriods = async (d) => {
             },
             total: { revenue: 0, units: 0, cogs: 0, adSpend: totalAds, netProfit: -totalAds, netMargin: 0, roas: 0 },
             adKPIs: {
-              [platform]: platformKPIs,
+              [recordPlatform]: platformKPIs,
             },
             _adDataOnly: true, // Flag to indicate this is placeholder ad data
           };
@@ -7881,37 +7896,44 @@ const savePeriods = async (d) => {
       // Store campaign and ad summaries for the Ads page (if available)
       if (parsed.campaignSummary?.length > 0 || parsed.adSummary?.length > 0) {
         const existingAdAnalytics = JSON.parse(localStorage.getItem('ecommerce_ad_analytics_v1') || '{}');
-        const updatedAdAnalytics = {
-          ...existingAdAnalytics,
-          lastUpdated: new Date().toISOString(),
-          [platform]: {
-            ...existingAdAnalytics[platform],
-            lastImport: new Date().toISOString(),
-            dateRange: parsed.dateRange,
-            totalSpend: parsed.totalSpend,
-            totalImpressions: parsed.totalImpressions,
-            totalClicks: parsed.totalClicks,
-            totalConversions: parsed.totalConversions,
-            totalConvValue: parsed.totalConvValue,
-            avgCpc: parsed.avgCpc,
-            avgCpm: parsed.avgCpm,
-            avgCtr: parsed.avgCtr,
-            avgCpa: parsed.avgCpa,
-            overallRoas: parsed.overallRoas,
-            campaigns: parsed.campaignSummary || [],
-            ads: parsed.adSummary || [],
-            dailyData: parsed.dailyData || [],
-          },
-        };
-        localStorage.setItem('ecommerce_ad_analytics_v1', JSON.stringify(updatedAdAnalytics));
+        // Store for each detected platform
+        const platforms = parsed.platforms || [platform || 'unknown'];
+        platforms.forEach(plat => {
+          const updatedAdAnalytics = {
+            ...existingAdAnalytics,
+            lastUpdated: new Date().toISOString(),
+            [plat]: {
+              ...existingAdAnalytics[plat],
+              lastImport: new Date().toISOString(),
+              dateRange: parsed.dateRange,
+              totalSpend: parsed.totalSpend,
+              totalImpressions: parsed.totalImpressions,
+              totalClicks: parsed.totalClicks,
+              totalConversions: parsed.totalConversions,
+              totalConvValue: parsed.totalConvValue,
+              avgCpc: parsed.avgCpc,
+              avgCpm: parsed.avgCpm,
+              avgCtr: parsed.avgCtr,
+              avgCpa: parsed.avgCpa,
+              overallRoas: parsed.overallRoas,
+              campaigns: parsed.campaignSummary || [],
+              ads: parsed.adSummary || [],
+              dailyData: parsed.dailyData || [],
+            },
+          };
+          localStorage.setItem('ecommerce_ad_analytics_v1', JSON.stringify(updatedAdAnalytics));
+        });
       }
       
       // Clear upload state
       setBulkAdFiles([]);
       setBulkAdParsed(null);
       
-      const platformName = platform === 'google' ? 'Google' : 'Meta';
-      let msg = `${platformName} ads: ${updatedCount} week(s) updated`;
+      // Show platforms that were updated
+      const platformNames = parsed.platforms?.length > 0 
+        ? (parsed.platforms.length === 2 ? 'Google & Meta' : parsed.platforms[0] === 'google' ? 'Google' : 'Meta')
+        : 'Ad';
+      let msg = `${platformNames} ads: ${updatedCount} week(s) updated`;
       if (createdCount > 0) msg += `, ${createdCount} placeholder week(s) created`;
       if (dailyCount > 0) msg += `, ${dailyCount} day(s) stored`;
       setToast({ message: msg, type: 'success' });
@@ -20569,42 +20591,32 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           {uploadTab === 'bulk-ads' && (
             <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
               <h2 className="text-lg font-semibold text-white mb-1">📊 Bulk Ad Spend Upload</h2>
-              <p className="text-slate-400 text-sm mb-6">Upload Google Ads or Meta Ads exports to bulk update ad spend across multiple weeks</p>
+              <p className="text-slate-400 text-sm mb-6">Upload Google Ads or Meta Ads exports - platform is auto-detected</p>
               
-              {/* Platform Selection */}
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-slate-300 mb-2">Ad Platform</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button 
-                    onClick={() => setBulkAdPlatform('google')}
-                    className={`p-4 rounded-xl border-2 flex items-center gap-3 transition-all ${bulkAdPlatform === 'google' ? 'bg-red-900/30 border-red-500' : 'bg-slate-900/50 border-slate-700 hover:border-slate-500'}`}
-                  >
-                    <div className="w-10 h-10 rounded-lg bg-red-600/20 flex items-center justify-center">
-                      <span className="text-xl">🔴</span>
+              {/* Supported Formats Info */}
+              <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
+                <p className="text-slate-300 text-sm mb-2 font-medium">Supported file formats:</p>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="flex items-start gap-2">
+                    <span className="text-red-400">🔴</span>
+                    <div>
+                      <p className="text-slate-300 font-medium">Google Ads</p>
+                      <p className="text-slate-500">Day, Cost, Impressions, Clicks, Avg. CPC</p>
                     </div>
-                    <div className="text-left">
-                      <p className={`font-medium ${bulkAdPlatform === 'google' ? 'text-red-400' : 'text-white'}`}>Google Ads</p>
-                      <p className="text-xs text-slate-500">Time series export</p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-blue-400">🔵</span>
+                    <div>
+                      <p className="text-slate-300 font-medium">Meta Ads</p>
+                      <p className="text-slate-500">Date, Amount spent, Impressions, Link clicks</p>
                     </div>
-                  </button>
-                  <button 
-                    onClick={() => setBulkAdPlatform('meta')}
-                    className={`p-4 rounded-xl border-2 flex items-center gap-3 transition-all ${bulkAdPlatform === 'meta' ? 'bg-blue-900/30 border-blue-500' : 'bg-slate-900/50 border-slate-700 hover:border-slate-500'}`}
-                  >
-                    <div className="w-10 h-10 rounded-lg bg-blue-600/20 flex items-center justify-center">
-                      <span className="text-xl">🔵</span>
-                    </div>
-                    <div className="text-left">
-                      <p className={`font-medium ${bulkAdPlatform === 'meta' ? 'text-blue-400' : 'text-white'}`}>Meta Ads</p>
-                      <p className="text-xs text-slate-500">Facebook/Instagram</p>
-                    </div>
-                  </button>
+                  </div>
                 </div>
               </div>
               
               {/* File Upload */}
               <div className="mb-6">
-                <label className="block text-sm font-medium text-slate-300 mb-2">Upload CSV Files (select multiple)</label>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Upload CSV Files (select multiple, can mix Google & Meta)</label>
                 <div 
                   className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${bulkAdFiles.length > 0 ? 'border-emerald-500/50 bg-emerald-900/20' : 'border-slate-600 hover:border-slate-500'}`}
                   onClick={() => document.getElementById('bulk-ad-file')?.click()}
@@ -20623,7 +20635,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       setBulkAdFiles([]);
                       setBulkAdParsed(null);
                       
-                      // Parse all files
+                      // Parse all files - auto-detect platform
                       const parsedFiles = [];
                       let combinedDaily = [];
                       let combinedWeekly = [];
@@ -20633,17 +20645,20 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       let totalClicks = 0;
                       let totalConversions = 0;
                       let errors = [];
+                      let detectedPlatforms = new Set();
                       
                       for (const file of files) {
                         const text = await file.text();
-                        const parsed = parseBulkAdFile(text, bulkAdPlatform, file.name);
+                        // Pass null for platform to auto-detect
+                        const parsed = parseBulkAdFile(text, null, file.name);
                         
                         if (parsed.error) {
                           errors.push(`${file.name}: ${parsed.error}`);
                           continue;
                         }
                         
-                        parsedFiles.push({ name: file.name, parsed });
+                        if (parsed.platform) detectedPlatforms.add(parsed.platform);
+                        parsedFiles.push({ name: file.name, parsed, platform: parsed.platform });
                         
                         // Combine data
                         if (parsed.dailyData) combinedDaily.push(...parsed.dailyData);
@@ -20703,6 +20718,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                         dateRange,
                         fileCount: parsedFiles.length,
                         errors: errors.length > 0 ? errors : null,
+                        platforms: [...detectedPlatforms],
+                        parsedFiles,
                         weeksWithExistingData: dedupedWeekly.filter(w => allWeeksData[w.weekEnding]).length,
                         monthsWithExistingData: dedupedMonthly.filter(m => allPeriodsData[m.periodLabel]).length,
                       });
@@ -20726,12 +20743,29 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   ) : (
                     <div>
                       <Upload className="w-8 h-8 text-slate-500 mx-auto mb-2" />
-                      <p className="text-slate-400">Click to upload {bulkAdPlatform === 'google' ? 'Google' : 'Meta'} Ads CSV files</p>
-                      <p className="text-slate-500 text-sm mt-1">Select multiple files (daily, monthly, or quarterly)</p>
+                      <p className="text-slate-400">Click to upload Google or Meta Ads CSV files</p>
+                      <p className="text-slate-500 text-sm mt-1">Platform auto-detected • Can mix Google & Meta files</p>
                     </div>
                   )}
                 </div>
               </div>
+              
+              {/* Files list with detected platforms */}
+              {bulkAdFiles.length > 0 && !bulkAdParsed && (
+                <div className="mb-4 space-y-2">
+                  {bulkAdFiles.map((f, i) => (
+                    <div key={i} className="flex items-center gap-3 bg-slate-900/50 rounded-lg p-2">
+                      <span className={f.platform === 'google' ? 'text-red-400' : f.platform === 'meta' ? 'text-blue-400' : 'text-slate-400'}>
+                        {f.platform === 'google' ? '🔴' : f.platform === 'meta' ? '🔵' : '📄'}
+                      </span>
+                      <span className="text-white text-sm flex-1 truncate">{f.name}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded ${f.platform === 'google' ? 'bg-red-900/30 text-red-400' : f.platform === 'meta' ? 'bg-blue-900/30 text-blue-400' : 'bg-slate-700 text-slate-400'}`}>
+                        {f.platform === 'google' ? 'Google' : f.platform === 'meta' ? 'Meta' : 'Unknown'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
               
               {/* Parse Preview */}
               {bulkAdParsed && (
@@ -20847,7 +20881,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                     </div>
                                     <div className="flex items-center gap-3">
                                       <span className="text-slate-400 text-xs">{formatNumber(m.clicks || 0)} clicks</span>
-                                      <span className={`font-medium ${hasWeeklyData ? 'text-slate-500 line-through' : bulkAdPlatform === 'google' ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(m.spend)}</span>
+                                      <span className={`font-medium ${hasWeeklyData ? 'text-slate-500 line-through' : m.platform === 'google' ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(m.spend)}</span>
                                     </div>
                                   </div>
                                 );
@@ -20860,10 +20894,15 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                     {allWeeksData[w.weekEnding] && (
                                       <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">exists</span>
                                     )}
+                                    {w.platform && (
+                                      <span className={`text-xs px-1.5 py-0.5 rounded ${w.platform === 'google' ? 'bg-red-900/30 text-red-400' : 'bg-blue-900/30 text-blue-400'}`}>
+                                        {w.platform === 'google' ? 'Google' : 'Meta'}
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="flex items-center gap-3">
                                     <span className="text-slate-400 text-xs">{formatNumber(w.clicks || 0)} clicks</span>
-                                    <span className={`font-medium ${bulkAdPlatform === 'google' ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(w.spend)}</span>
+                                    <span className={`font-medium ${w.platform === 'google' ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(w.spend)}</span>
                                   </div>
                                 </div>
                               ))
@@ -20902,19 +20941,19 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 <ul className="text-slate-400 text-sm space-y-1">
                   <li>• Daily ad spend is aggregated into weeks (ending Sunday)</li>
                   <li>• Monthly ad data is stored by period (e.g., "Apr 2024")</li>
-                  <li>• Existing {bulkAdPlatform === 'google' ? 'Google' : 'Meta'} ad spend will be overwritten (not duplicated)</li>
+                  <li>• Existing ad spend for same platform will be overwritten (not duplicated)</li>
                   <li>• If no data exists for that period, it will be created</li>
                 </ul>
               </div>
               
               <button 
-                onClick={() => processBulkAdUpload(bulkAdParsed, bulkAdPlatform)} 
+                onClick={() => processBulkAdUpload(bulkAdParsed, null)} 
                 disabled={isProcessing || !bulkAdParsed || bulkAdParsed.error || (!bulkAdParsed.weeklyData?.length && !bulkAdParsed.monthlyData?.length)} 
                 className="w-full bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl"
               >
                 {isProcessing ? 'Processing...' : bulkAdParsed?.isMonthlyData 
-                  ? `Update ${bulkAdParsed?.monthlyData?.length || 0} Month(s) with ${bulkAdPlatform === 'google' ? 'Google' : 'Meta'} Ad Spend`
-                  : `Update ${bulkAdParsed?.weeklyData?.length || 0} Week(s) with ${bulkAdPlatform === 'google' ? 'Google' : 'Meta'} Ad Spend`
+                  ? `Update ${bulkAdParsed?.monthlyData?.length || 0} Month(s) with Ad Spend`
+                  : `Update ${bulkAdParsed?.weeklyData?.length || 0} Week(s) with ${bulkAdParsed?.platforms?.length === 2 ? 'Google & Meta' : bulkAdParsed?.platforms?.[0] === 'google' ? 'Google' : 'Meta'} Ad Spend`
                 }
               </button>
             </div>
@@ -28300,62 +28339,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       'custom': 'Custom Range',
     };
     
-    // Build daily 3PL data from ledger orders
-    const dailyData = (() => {
-      const byDay = {};
-      
-      // Aggregate ledger orders by day
-      Object.values(threeplLedger.orders || {}).forEach(order => {
-        const dayKey = order.dateKey;
-        if (!dayKey) return;
-        
-        if (!byDay[dayKey]) {
-          byDay[dayKey] = {
-            day: dayKey,
-            type: 'day',
-            label: new Date(dayKey + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-            totalCost: 0,
-            orderCount: 0,
-            totalUnits: 0,
-            storage: 0,
-            shipping: 0,
-            pickFees: 0,
-            boxCharges: 0,
-            receiving: 0,
-            revenue: 0,
-          };
-        }
-        
-        const d = byDay[dayKey];
-        d.orderCount += 1;
-        d.totalUnits += order.totalUnits || 0;
-        d.shipping += order.shipping || 0;
-        d.pickFees += order.pickFees || 0;
-        d.boxCharges += order.boxCharges || 0;
-        d.receiving += order.receiving || 0;
-        d.totalCost += (order.shipping || 0) + (order.pickFees || 0) + (order.boxCharges || 0) + (order.receiving || 0);
-      });
-      
-      // Add revenue from allDaysData if available
-      Object.keys(byDay).forEach(dayKey => {
-        if (allDaysData[dayKey]?.shopify?.revenue) {
-          byDay[dayKey].revenue = allDaysData[dayKey].shopify.revenue;
-        }
-      });
-      
-      // Calculate averages
-      Object.values(byDay).forEach(d => {
-        d.avgCostPerOrder = d.orderCount > 0 ? d.totalCost / d.orderCount : 0;
-      });
-      
-      // Convert to array, filter by date range, and sort
-      return Object.values(byDay)
-        .filter(d => d.day >= dateBounds.start && d.day <= dateBounds.end)
-        .sort((a, b) => a.day.localeCompare(b.day));
-    })();
-    
     // Find max for chart scaling
-    const maxDailyCost = Math.max(...dailyData.map(d => d.totalCost), 1);
     const maxWeeklyCost = Math.max(...weeklyData.map(d => d.totalCost), 1);
     const maxMonthlyCost = Math.max(...months.map(d => d.totalCost), 1);
     
@@ -28572,7 +28556,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           
           {/* Time View Toggle */}
           <div className="flex gap-2 mb-4">
-            <button onClick={() => setTimeView('daily')} className={`px-4 py-2 rounded-lg text-sm font-medium ${timeView === 'daily' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>Daily</button>
             <button onClick={() => setTimeView('weekly')} className={`px-4 py-2 rounded-lg text-sm font-medium ${timeView === 'weekly' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>Weekly</button>
             <button onClick={() => setTimeView('monthly')} className={`px-4 py-2 rounded-lg text-sm font-medium ${timeView === 'monthly' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>Monthly</button>
           </div>
@@ -28580,23 +28563,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           {/* Cost Trend Chart */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6 overflow-hidden">
             <h3 className="text-lg font-semibold text-white mb-4">
-              {timeView === 'daily' ? 'Daily' : timeView === 'weekly' ? 'Weekly' : 'Monthly'} 3PL Costs
+              {timeView === 'weekly' ? 'Weekly' : 'Monthly'} 3PL Costs
             </h3>
             <div className="relative flex items-end gap-1 h-48">
-              {(timeView === 'daily' ? dailyData.slice(-14) : timeView === 'weekly' ? weeklyData.slice(-12) : months.slice(-12)).map((d, i) => {
+              {(timeView === 'weekly' ? weeklyData.slice(-12) : months.slice(-12)).map((d, i) => {
                 const data = d;
-                const height = timeView === 'daily'
-                  ? (data.totalCost / maxDailyCost) * 100
-                  : timeView === 'weekly' 
+                const height = timeView === 'weekly' 
                   ? (data.totalCost / maxWeeklyCost) * 100 
                   : (data.totalCost / maxMonthlyCost) * 100;
-                const label = timeView === 'daily'
-                  ? new Date(data.day + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                  : timeView === 'weekly' 
+                const label = timeView === 'weekly' 
                   ? new Date(data.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                   : new Date(data.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
                 return (
-                  <div key={timeView === 'daily' ? data.day : timeView === 'weekly' ? data.week : data.month} className="flex-1 flex flex-col items-center group relative">
+                  <div key={timeView === 'weekly' ? data.week : data.month} className="flex-1 flex flex-col items-center group relative">
                     <div className="absolute -top-14 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none shadow-lg">
                       {label}<br/>
                       Total: {formatCurrency(data.totalCost)}<br/>
@@ -28625,12 +28604,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           
           {/* 3PL Trend Charts */}
           {(() => {
-            const chartData = (timeView === 'daily' ? dailyData.slice(-14) : timeView === 'weekly' ? weeklyData : months).slice(-12);
+            const chartData = (timeView === 'weekly' ? weeklyData : months).slice(-12);
             if (chartData.length < 2) return null;
             
-            const getLabel = (d) => timeView === 'daily'
-              ? new Date(d.day + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-              : timeView === 'weekly' 
+            const getLabel = (d) => timeView === 'weekly' 
               ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
               : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
             
@@ -28658,7 +28635,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           {change > 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}%
                         </div>
                       )}
-                      <p className="text-slate-500 text-xs mt-1">vs last {timeView === 'daily' ? 'day' : timeView === 'weekly' ? 'week' : 'month'}</p>
+                      <p className="text-slate-500 text-xs mt-1">vs last {timeView === 'weekly' ? 'week' : 'month'}</p>
                     </div>
                   </div>
                   <div className="relative flex items-end gap-1 h-20">
@@ -28741,12 +28718,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           
           {/* Detailed Table */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-            <h3 className="text-lg font-semibold text-white mb-4">{timeView === 'daily' ? 'Daily' : timeView === 'weekly' ? 'Weekly' : 'Monthly'} Breakdown</h3>
+            <h3 className="text-lg font-semibold text-white mb-4">{timeView === 'weekly' ? 'Weekly' : 'Monthly'} Breakdown</h3>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-700">
-                    <th className="text-left text-slate-400 py-2">{timeView === 'daily' ? 'Day' : timeView === 'weekly' ? 'Week' : 'Month'}</th>
+                    <th className="text-left text-slate-400 py-2">{timeView === 'weekly' ? 'Week' : 'Month'}</th>
                     <th className="text-right text-slate-400 py-2">Total</th>
                     <th className="text-right text-slate-400 py-2">Orders</th>
                     <th className="text-right text-slate-400 py-2">Units</th>
@@ -28759,15 +28736,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   </tr>
                 </thead>
                 <tbody>
-                  {(timeView === 'daily' ? dailyData.slice(-14).reverse() : timeView === 'weekly' ? weeklyData.slice(-12).reverse() : months.slice(-12).reverse()).map(d => {
+                  {(timeView === 'weekly' ? weeklyData.slice(-12).reverse() : months.slice(-12).reverse()).map(d => {
                     const pctOfRev = d.revenue > 0 ? (d.totalCost / d.revenue) * 100 : 0;
-                    const label = timeView === 'daily'
-                      ? new Date(d.day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-                      : timeView === 'weekly' 
+                    const label = timeView === 'weekly' 
                       ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                       : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
                     return (
-                      <tr key={timeView === 'daily' ? d.day : timeView === 'weekly' ? d.week : d.month} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                      <tr key={timeView === 'weekly' ? d.week : d.month} className="border-b border-slate-700/50 hover:bg-slate-700/30">
                         <td className="py-2 text-white">{label}</td>
                         <td className="py-2 text-right text-white font-medium">{formatCurrency(d.totalCost)}</td>
                         <td className="py-2 text-right text-white">{formatNumber(d.orderCount)}</td>
