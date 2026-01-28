@@ -7388,7 +7388,9 @@ const savePeriods = async (d) => {
         setSelectedWeek(latestWeek);
         setView('weekly');
       } else if (dailyImported > 0) {
-        setView('days');
+        const latestDay = Object.keys(updatedDailyData).filter(k => hasDailySalesData(updatedDailyData[k])).sort().reverse()[0];
+        if (latestDay) setSelectedDay(latestDay);
+        setView('daily');
       } else if (monthlyImported > 0) {
         setView('periods');
       }
