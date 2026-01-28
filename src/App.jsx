@@ -19651,8 +19651,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setDragOverWidgetId(null);
     };
     
-    // DashboardWidget wrapper component with drag/drop and hide
-    const DashboardWidget = ({ id, title, icon: Icon, children, className = '', noPadding = false }) => {
+    // DraggableWidget - minimal wrapper that just adds drag/drop to any widget
+    const DraggableWidget = ({ id, children, className = '' }) => {
       const isDragging = draggedWidgetId === id;
       const isDragOver = dragOverWidgetId === id;
       
@@ -19664,30 +19664,40 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           onDragLeave={() => setDragOverWidgetId(null)}
           onDrop={(e) => handleDashboardDrop(e, id)}
           onDragEnd={handleDashboardDragEnd}
-          className={`relative group bg-gradient-to-br from-slate-800/80 to-slate-900/80 rounded-2xl border transition-all cursor-grab active:cursor-grabbing ${
-            isDragging ? 'opacity-50 border-violet-500 scale-[0.98]' : 
-            isDragOver ? 'border-violet-500 bg-violet-500/10 scale-[1.01]' : 
-            'border-slate-700 hover:border-slate-600'
+          className={`relative group transition-all duration-200 ${
+            isDragging ? 'opacity-50 scale-[0.98]' : 
+            isDragOver ? 'scale-[1.01]' : ''
           } ${className}`}
         >
-          {/* Drag handle and hide button - visible on hover */}
-          <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-            <div className="p-1.5 bg-slate-700/80 rounded-lg cursor-grab">
-              <Move className="w-3.5 h-3.5 text-slate-400" />
+          {/* Floating controls - visible on hover */}
+          <div className="absolute -top-2 -right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+            <div className="p-1.5 bg-slate-700 rounded-lg shadow-lg cursor-grab border border-slate-600">
+              <Move className="w-3 h-3 text-slate-300" />
             </div>
             <button
-              onClick={(e) => { e.stopPropagation(); hideWidget(id); }}
-              className="p-1.5 bg-slate-700/80 hover:bg-rose-600/80 rounded-lg transition-colors"
+              onClick={(e) => { e.stopPropagation(); e.preventDefault(); hideWidget(id); }}
+              className="p-1.5 bg-slate-700 hover:bg-rose-600 rounded-lg shadow-lg transition-colors border border-slate-600"
               title="Hide widget"
             >
-              <EyeOff className="w-3.5 h-3.5 text-slate-400 hover:text-white" />
+              <EyeOff className="w-3 h-3 text-slate-300" />
             </button>
           </div>
-          
-          {/* Widget content */}
-          <div className={noPadding ? '' : 'p-5'}>
+          {/* Drop indicator */}
+          {isDragOver && (
+            <div className="absolute inset-0 border-2 border-violet-500 rounded-2xl pointer-events-none z-10" />
+          )}
+          {children}
+        </div>
+      );
+    };
+    
+    // DashboardWidget - full widget with title/icon for consistent look
+    const DashboardWidget = ({ id, title, icon: Icon, children, className = '', noPadding = false }) => {
+      return (
+        <DraggableWidget id={id} className={className}>
+          <div className="bg-gradient-to-br from-slate-800/80 to-slate-900/80 rounded-2xl border border-slate-700 hover:border-slate-600 transition-colors">
             {title && (
-              <div className="flex items-center gap-3 mb-4">
+              <div className="flex items-center gap-3 mb-4 p-5 pb-0">
                 {Icon && (
                   <div className="p-2 rounded-xl bg-gradient-to-br from-violet-500/20 to-cyan-500/20">
                     <Icon className="w-5 h-5 text-violet-400" />
@@ -19696,9 +19706,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 <h3 className="text-lg font-bold text-white">{title}</h3>
               </div>
             )}
-            {children}
+            <div className={noPadding ? '' : 'p-5 pt-0'}>
+              {children}
+            </div>
           </div>
-        </div>
+        </DraggableWidget>
       );
     };
     
@@ -20008,42 +20020,45 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             <>
               {/* Alerts */}
               {isWidgetEnabled('alerts') && alerts.length > 0 && (
-                <div className="mb-6 space-y-2">
-                  {alerts.map((alert, i) => (
-                    <div 
-                      key={i} 
-                      onClick={() => {
-                        if (alert.action) {
-                          alert.action();
-                        } else if (alert.link === 'invoices') {
-                          setShowInvoiceModal(true);
-                        } else if (alert.link === 'forecast') {
-                          setUploadTab('forecast'); setView('upload');
-                        } else if (alert.link === 'sales-tax') {
-                          setView('sales-tax');
-                        } else if (alert.link === 'ads-upload') {
-                          setUploadTab('ads'); setView('upload');
-                        } else if (alert.link === '3pl') {
-                          setView('3pl');
-                        } else if (alert.link) {
-                          setView(alert.link);
-                        }
-                      }}
-                      className={`flex items-center justify-between p-3 rounded-xl ${alert.type === 'critical' ? 'bg-rose-900/30 border border-rose-500/50' : 'bg-amber-900/30 border border-amber-500/50'} ${alert.link || alert.action ? 'cursor-pointer hover:opacity-80' : ''}`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <AlertTriangle className={`w-5 h-5 ${alert.type === 'critical' ? 'text-rose-400' : 'text-amber-400'}`} />
-                        <span className={alert.type === 'critical' ? 'text-rose-300' : 'text-amber-300'}>{alert.text}</span>
+                <DashboardWidget id="alerts" title="Alerts" icon={AlertTriangle} className="mb-6" noPadding>
+                  <div className="px-5 pb-5 space-y-2">
+                    {alerts.map((alert, i) => (
+                      <div 
+                        key={i} 
+                        onClick={() => {
+                          if (alert.action) {
+                            alert.action();
+                          } else if (alert.link === 'invoices') {
+                            setShowInvoiceModal(true);
+                          } else if (alert.link === 'forecast') {
+                            setUploadTab('forecast'); setView('upload');
+                          } else if (alert.link === 'sales-tax') {
+                            setView('sales-tax');
+                          } else if (alert.link === 'ads-upload') {
+                            setUploadTab('ads'); setView('upload');
+                          } else if (alert.link === '3pl') {
+                            setView('3pl');
+                          } else if (alert.link) {
+                            setView(alert.link);
+                          }
+                        }}
+                        className={`flex items-center justify-between p-3 rounded-xl ${alert.type === 'critical' ? 'bg-rose-900/30 border border-rose-500/50' : 'bg-amber-900/30 border border-amber-500/50'} ${alert.link || alert.action ? 'cursor-pointer hover:opacity-80' : ''}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <AlertTriangle className={`w-5 h-5 ${alert.type === 'critical' ? 'text-rose-400' : 'text-amber-400'}`} />
+                          <span className={alert.type === 'critical' ? 'text-rose-300' : 'text-amber-300'}>{alert.text}</span>
+                        </div>
+                        {(alert.link || alert.action) && <ChevronRight className="w-5 h-5 text-slate-400" />}
                       </div>
-                      {(alert.link || alert.action) && <ChevronRight className="w-5 h-5 text-slate-400" />}
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                </DashboardWidget>
               )}
               
               {/* Week-to-Date & Month-to-Date Performance */}
               {isWidgetEnabled('todayPerformance') && periodMetrics && (
-                <div className="mb-6 bg-gradient-to-br from-slate-800/80 to-slate-900/80 rounded-2xl border border-slate-700 overflow-hidden">
+                <DraggableWidget id="todayPerformance" className="mb-6">
+                <div className="bg-gradient-to-br from-slate-800/80 to-slate-900/80 rounded-2xl border border-slate-700 overflow-hidden">
                   <div className="p-5">
                     {/* Header with data freshness */}
                     <div className="flex items-center justify-between mb-4">
@@ -20170,11 +20185,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     </div>
                   </div>
                 </div>
+                </DraggableWidget>
               )}
               
               {/* Weekly Progress Bar */}
               {isWidgetEnabled('weekProgress') && weeklyProgress && (
-                <div className={`mb-6 rounded-2xl border p-4 ${
+                <DraggableWidget id="weekProgress" className="mb-6">
+                <div className={`rounded-2xl border p-4 ${
                   weeklyProgress.onTrack 
                     ? 'bg-gradient-to-r from-emerald-900/30 to-teal-900/20 border-emerald-500/30' 
                     : weeklyProgress.projectedPct >= 80 
@@ -20254,6 +20271,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     </div>
                   )}
                 </div>
+                </DraggableWidget>
               )}
               
               {/* Top Sellers (14 Days) */}
@@ -20367,6 +20385,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 {/* Sales Tax Due This Month Card */}
                 {isWidgetEnabled('salesTax') && (
+                <DraggableWidget id="salesTax">
                 <div 
                   className={`rounded-2xl border p-4 cursor-pointer hover:opacity-90 ${
                     salesTaxDueThisMonth.some(s => s.isOverdue) 
@@ -20411,10 +20430,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     </>
                   )}
                 </div>
+                </DraggableWidget>
                 )}
                 
                 {/* AI Forecast Widget - Unified Predictions */}
-                {isWidgetEnabled('aiForecast') && aiForecasts && !aiForecasts.error && aiForecasts.salesForecast ? (
+                {isWidgetEnabled('aiForecast') && (
+                  <DraggableWidget id="aiForecast">
+                  {aiForecasts && !aiForecasts.error && aiForecasts.salesForecast ? (
                   <div className="bg-gradient-to-br from-purple-900/30 to-indigo-900/20 rounded-2xl border border-purple-500/30 p-4">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-purple-400 text-sm font-semibold flex items-center gap-2">
@@ -20470,9 +20492,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     )}
                   </div>
                 )}
+                </DraggableWidget>
+                )}
                 
                 {/* Upcoming Bills Widget */}
-                {isWidgetEnabled('billsDue') && (upcomingBills.length > 0 ? (
+                {isWidgetEnabled('billsDue') && (
+                <DraggableWidget id="billsDue">
+                {upcomingBills.length > 0 ? (
                   <div className="bg-gradient-to-br from-rose-900/30 to-pink-900/20 rounded-2xl border border-rose-500/30 p-4 cursor-pointer hover:border-rose-400/50" onClick={() => setShowInvoiceModal(true)}>
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-rose-400 text-sm font-semibold flex items-center gap-2">
@@ -20506,10 +20532,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       <Plus className="w-3 h-3" />Add a bill
                     </button>
                   </div>
-                ))}
+                )}
+                </DraggableWidget>
+                )}
                 
                 {/* Sync & Backup Status Widget */}
                 {isWidgetEnabled('syncStatus') && (
+                <DraggableWidget id="syncStatus">
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
@@ -20597,12 +20626,14 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     </div>
                   </div>
                 </div>
+                </DraggableWidget>
                 )}
               </div>
               
               {/* Quick Uploads Shortcuts */}
               {isWidgetEnabled('quickUpload') && (
-              <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-4 mb-6">
+              <DraggableWidget id="quickUpload" className="mb-6">
+              <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-4">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
                     <Upload className="w-4 h-4" />Quick Uploads
@@ -20644,6 +20675,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   </button>
                 </div>
               </div>
+              </DraggableWidget>
               )}
               
               {/* Quick Upload - Show if most recent week is missing */}
@@ -20689,7 +20721,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               
               {/* ============ DATA HUB - Complete Data Status ============ */}
               {isWidgetEnabled('dataHub') && (
-              <div className="bg-gradient-to-r from-slate-800/70 to-slate-900/70 rounded-2xl border border-purple-500/30 p-5 mb-6">
+              <DraggableWidget id="dataHub" className="mb-6">
+              <div className="bg-gradient-to-r from-slate-800/70 to-slate-900/70 rounded-2xl border border-purple-500/30 p-5">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-white font-semibold flex items-center gap-2">
                     <Database className="w-5 h-5 text-purple-400" />
@@ -20911,11 +20944,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   </div>
                 </div>
               </div>
+              </DraggableWidget>
               )}
               {/* ============ END DATA HUB ============ */}
               
               {/* ============ DAILY CALENDAR ============ */}
               {isWidgetEnabled('calendar') && Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).length > 0 && (
+                <DraggableWidget id="calendar" className="mb-6">
                 <div className="bg-gradient-to-br from-slate-800 to-slate-800/50 rounded-2xl border border-slate-700 p-6 shadow-lg">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -21199,11 +21234,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     );
                   })()}
                 </div>
+                </DraggableWidget>
               )}
               {/* ============ END DAILY CALENDAR ============ */}
               
               {/* Time Range Toggle & Key Metrics - Optional Widget */}
               {isWidgetEnabled('summaryMetrics') && (
+              <DraggableWidget id="summaryMetrics" className="mb-6">
               <>
               <div className="flex flex-wrap items-center gap-2 mb-4">
                 <span className="text-slate-400 text-sm mr-2">View:</span>
@@ -21320,6 +21357,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               </div>
               )}
               </>
+              </DraggableWidget>
               )}
               {/* End Summary Metrics Widget */}
             </>
