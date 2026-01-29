@@ -1442,6 +1442,7 @@ allWeekKeys.forEach((weekKey) => {
     // Display preferences
     currencySymbol: '$',
     dateFormat: 'US', // 'US' (MM/DD/YYYY) or 'EU' (DD/MM/YYYY)
+    timezone: 'America/New_York', // Business day timezone (for day boundary calculations)
   });
   
   const clearPeriod3PLFiles = useCallback(() => {
@@ -33636,6 +33637,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       alertSalesTaxEnabled: true,
       currencySymbol: '$',
       dateFormat: 'US',
+      timezone: 'America/New_York',
     };
     
     // Merge defaults with saved settings
@@ -35167,6 +35169,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     className={`w-8 h-8 rounded-full bg-${color}-500 ${theme.accent === color ? 'ring-2 ring-white ring-offset-2 ring-offset-slate-800' : ''}`} />
                 ))}
               </div>
+            </SettingRow>
+            <SettingRow label="Business Timezone" desc="Used for day/week boundary calculations">
+              <select 
+                value={currentLocalSettings.timezone || 'America/New_York'} 
+                onChange={(e) => updateSetting('timezone', e.target.value)} 
+                className="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white"
+              >
+                <option value="America/New_York">Eastern (EST/EDT)</option>
+                <option value="America/Chicago">Central (CST/CDT)</option>
+                <option value="America/Denver">Mountain (MST/MDT)</option>
+                <option value="America/Los_Angeles">Pacific (PST/PDT)</option>
+                <option value="America/Anchorage">Alaska (AKST/AKDT)</option>
+                <option value="Pacific/Honolulu">Hawaii (HST)</option>
+                <option value="UTC">UTC</option>
+              </select>
             </SettingRow>
             <SettingRow label="Mobile-Optimized View" desc="Simplified layout for small screens">
               <div className="flex items-center gap-2">
