@@ -111,6 +111,23 @@ const safeLocalStorageGetString = (key, defaultValue = '') => {
 // Enhanced 3PL parsing - extracts detailed metrics from 3PL CSV files
 // 3PL utility functions extracted to utils/threePL.js
 
+// SKU normalization and validation
+// Valid SKUs must start with uppercase DDPE - lowercase ddpe are duplicates to be excluded
+const normalizeSku = (sku) => {
+  if (!sku) return '';
+  const trimmed = String(sku).trim();
+  // REJECT lowercase ddpe SKUs entirely - these are duplicates
+  if (trimmed.startsWith('ddpe')) return ''; // Return empty to filter out
+  return trimmed; // Keep original case for valid SKUs
+};
+
+// Check if SKU is valid (uppercase DDPE pattern)
+const isValidSku = (sku) => {
+  if (!sku) return false;
+  const trimmed = String(sku).trim();
+  // Must start with uppercase DDPE, not lowercase ddpe
+  return trimmed.startsWith('DDPE');
+};
 
 export default function Dashboard() {
   const [view, setView] = useState('dashboard'); // Start with dashboard
@@ -1585,7 +1602,16 @@ const loadFromLocal = useCallback(() => {
 
   try {
     const r = lsGet(INVENTORY_KEY);
-    if (r) setInvHistory(JSON.parse(r));
+    if (r) {
+      const invData = JSON.parse(r);
+      // Filter out invalid SKUs (lowercase ddpe) from inventory items
+      Object.keys(invData).forEach(dateKey => {
+        if (invData[dateKey]?.items) {
+          invData[dateKey].items = invData[dateKey].items.filter(item => isValidSku(item.sku));
+        }
+      });
+      setInvHistory(invData);
+    }
   } catch {}
 
   try {
@@ -1922,7 +1948,14 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     setAllDaysData(cloud.dailySales || {}); // Load daily data
     const w = Object.keys(migratedSales).sort().reverse();
     if (w.length) { setSelectedWeek(w[0]); }
-    setInvHistory(cloud.inventory || {});
+    // Filter out invalid SKUs (lowercase ddpe) from cloud inventory
+    const cloudInv = cloud.inventory || {};
+    Object.keys(cloudInv).forEach(dateKey => {
+      if (cloudInv[dateKey]?.items) {
+        cloudInv[dateKey].items = cloudInv[dateKey].items.filter(item => isValidSku(item.sku));
+      }
+    });
+    setInvHistory(cloudInv);
     setSavedCogs(cloud.cogs?.lookup || {});
     setCogsLastUpdated(cloud.cogs?.updatedAt || null);
     setAllPeriodsData(cloud.periods || {});
@@ -3454,17 +3487,19 @@ const savePeriods = async (d) => {
         weeklyAgg[weekKey].amazon.adSpend += dayData.amazon.adSpend || 0;
         weeklyAgg[weekKey].amazon.netProfit += dayData.amazon.netProfit || 0;
         
-        // Aggregate SKU data
+        // Aggregate SKU data - normalize SKU keys to uppercase
         (dayData.amazon.skuData || []).forEach(sku => {
-          if (!weeklyAgg[weekKey].amazon.skuData[sku.sku]) {
-            weeklyAgg[weekKey].amazon.skuData[sku.sku] = { ...sku, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+          const normalizedSku = normalizeSku(sku.sku);
+          if (!normalizedSku) return;
+          if (!weeklyAgg[weekKey].amazon.skuData[normalizedSku]) {
+            weeklyAgg[weekKey].amazon.skuData[normalizedSku] = { ...sku, sku: normalizedSku, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
           }
-          weeklyAgg[weekKey].amazon.skuData[sku.sku].unitsSold += sku.unitsSold || 0;
-          weeklyAgg[weekKey].amazon.skuData[sku.sku].returns += sku.returns || 0;
-          weeklyAgg[weekKey].amazon.skuData[sku.sku].netSales += sku.netSales || 0;
-          weeklyAgg[weekKey].amazon.skuData[sku.sku].netProceeds += sku.netProceeds || 0;
-          weeklyAgg[weekKey].amazon.skuData[sku.sku].adSpend += sku.adSpend || 0;
-          weeklyAgg[weekKey].amazon.skuData[sku.sku].cogs += sku.cogs || 0;
+          weeklyAgg[weekKey].amazon.skuData[normalizedSku].unitsSold += sku.unitsSold || 0;
+          weeklyAgg[weekKey].amazon.skuData[normalizedSku].returns += sku.returns || 0;
+          weeklyAgg[weekKey].amazon.skuData[normalizedSku].netSales += sku.netSales || 0;
+          weeklyAgg[weekKey].amazon.skuData[normalizedSku].netProceeds += sku.netProceeds || 0;
+          weeklyAgg[weekKey].amazon.skuData[normalizedSku].adSpend += sku.adSpend || 0;
+          weeklyAgg[weekKey].amazon.skuData[normalizedSku].cogs += sku.cogs || 0;
         });
       }
       
@@ -3479,15 +3514,17 @@ const savePeriods = async (d) => {
         weeklyAgg[weekKey].shopify.discounts += dayData.shopify.discounts || 0;
         weeklyAgg[weekKey].shopify.netProfit += dayData.shopify.netProfit || 0;
         
-        // Aggregate SKU data
+        // Aggregate SKU data - normalize SKU keys to uppercase
         (dayData.shopify.skuData || []).forEach(sku => {
-          if (!weeklyAgg[weekKey].shopify.skuData[sku.sku]) {
-            weeklyAgg[weekKey].shopify.skuData[sku.sku] = { ...sku, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+          const normalizedSku = normalizeSku(sku.sku);
+          if (!normalizedSku) return;
+          if (!weeklyAgg[weekKey].shopify.skuData[normalizedSku]) {
+            weeklyAgg[weekKey].shopify.skuData[normalizedSku] = { ...sku, sku: normalizedSku, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
           }
-          weeklyAgg[weekKey].shopify.skuData[sku.sku].unitsSold += sku.unitsSold || 0;
-          weeklyAgg[weekKey].shopify.skuData[sku.sku].netSales += sku.netSales || 0;
-          weeklyAgg[weekKey].shopify.skuData[sku.sku].discounts += sku.discounts || 0;
-          weeklyAgg[weekKey].shopify.skuData[sku.sku].cogs += sku.cogs || 0;
+          weeklyAgg[weekKey].shopify.skuData[normalizedSku].unitsSold += sku.unitsSold || 0;
+          weeklyAgg[weekKey].shopify.skuData[normalizedSku].netSales += sku.netSales || 0;
+          weeklyAgg[weekKey].shopify.skuData[normalizedSku].discounts += sku.discounts || 0;
+          weeklyAgg[weekKey].shopify.skuData[normalizedSku].cogs += sku.cogs || 0;
         });
       }
     });
@@ -3649,9 +3686,9 @@ const savePeriods = async (d) => {
         dailyByWeek[weekKey].amazon.adSpend += dayData.amazon.adSpend || 0;
         dailyByWeek[weekKey].amazon.netProfit += dayData.amazon.netProfit || 0;
         
-        // Aggregate SKU data
+        // Aggregate SKU data - normalize to uppercase
         (dayData.amazon.skuData || []).forEach(sku => {
-          const skuKey = sku.sku || sku.msku;
+          const skuKey = normalizeSku(sku.sku || sku.msku);
           if (!skuKey) return;
           if (!dailyByWeek[weekKey].amazon.skuData[skuKey]) {
             dailyByWeek[weekKey].amazon.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
@@ -3674,9 +3711,9 @@ const savePeriods = async (d) => {
         dailyByWeek[weekKey].shopify.netProfit += dayData.shopify.netProfit || 0;
         dailyByWeek[weekKey].shopify.threeplCosts += dayData.shopify.threeplCosts || 0;
         
-        // Aggregate SKU data  
+        // Aggregate SKU data - normalize to uppercase
         (dayData.shopify.skuData || []).forEach(sku => {
-          const skuKey = sku.sku;
+          const skuKey = normalizeSku(sku.sku);
           if (!skuKey) return;
           if (!dailyByWeek[weekKey].shopify.skuData[skuKey]) {
             dailyByWeek[weekKey].shopify.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
@@ -4231,10 +4268,14 @@ const savePeriods = async (d) => {
     }
     setIsProcessing(true);
 
-    const cogsLookup = { ...savedCogs };
+    // Build cogsLookup - only include valid SKUs (uppercase DDPE, not lowercase ddpe)
+    const cogsLookup = {};
+    Object.entries(savedCogs).forEach(([sku, cost]) => {
+      if (isValidSku(sku)) cogsLookup[sku.trim()] = cost;
+    });
     if (invFiles.cogs) invFiles.cogs.forEach(r => { 
-      const s = r['SKU'] || r['sku']; 
-      if (s) cogsLookup[s] = parseFloat(r['Cost Per Unit'] || 0); 
+      const s = (r['SKU'] || r['sku'] || '').trim();
+      if (isValidSku(s)) cogsLookup[s] = parseFloat(r['Cost Per Unit'] || 0); 
     });
 
     // Build velocity from ALL available sales data sources
@@ -4258,19 +4299,21 @@ const savePeriods = async (d) => {
       
       last28.forEach(d => {
         const dayData = legacyDailyData[d];
-        // Amazon SKU data - store only under original SKU
+        // Amazon SKU data - filter out lowercase ddpe SKUs
         (dayData?.amazon?.skuData || []).forEach(item => {
-          if (!item.sku) return;
-          if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
+          if (!item.sku || !isValidSku(item.sku)) return;
+          const sku = item.sku.trim();
+          if (!amazonSkuVelocity[sku]) amazonSkuVelocity[sku] = 0;
           const units = item.unitsSold || item.units || 0;
-          amazonSkuVelocity[item.sku] += units / weeksEquiv;
+          amazonSkuVelocity[sku] += units / weeksEquiv;
         });
-        // Shopify SKU data - store only under original SKU
+        // Shopify SKU data - filter out lowercase ddpe SKUs
         (dayData?.shopify?.skuData || []).forEach(item => {
-          if (!item.sku) return;
-          if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
+          if (!item.sku || !isValidSku(item.sku)) return;
+          const sku = item.sku.trim();
+          if (!shopifySkuVelocity[sku]) shopifySkuVelocity[sku] = 0;
           const units = item.unitsSold || item.units || 0;
-          shopifySkuVelocity[item.sku] += units / weeksEquiv;
+          shopifySkuVelocity[sku] += units / weeksEquiv;
         });
       });
       
@@ -4322,29 +4365,31 @@ const savePeriods = async (d) => {
           }
         }
         
-        // Shopify SKU velocity - store only under original SKU
+        // Shopify SKU velocity - filter out lowercase ddpe SKUs
         if (weekData.shopify?.skuData) {
           const skuData = Array.isArray(weekData.shopify.skuData) 
             ? weekData.shopify.skuData 
             : Object.values(weekData.shopify.skuData);
           skuData.forEach(item => {
-            if (!item.sku) return;
-            if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
+            if (!item.sku || !isValidSku(item.sku)) return;
+            const sku = item.sku.trim();
+            if (!shopifySkuVelocity[sku]) shopifySkuVelocity[sku] = 0;
             const units = item.unitsSold || item.units || 0;
-            shopifySkuVelocity[item.sku] += units;
+            shopifySkuVelocity[sku] += units;
           });
         }
         
-        // Amazon SKU velocity from weekly data - store only under original SKU
+        // Amazon SKU velocity from weekly data - filter out lowercase ddpe SKUs
         if (weekData.amazon?.skuData) {
           const skuData = Array.isArray(weekData.amazon.skuData)
             ? weekData.amazon.skuData
             : Object.values(weekData.amazon.skuData);
           skuData.forEach(item => {
-            if (!item.sku) return;
-            if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
+            if (!item.sku || !isValidSku(item.sku)) return;
+            const sku = item.sku.trim();
+            if (!amazonSkuVelocity[sku]) amazonSkuVelocity[sku] = 0;
             const units = item.unitsSold || item.units || 0;
-            amazonSkuVelocity[item.sku] += units;
+            amazonSkuVelocity[sku] += units;
           });
         }
       });
@@ -4427,11 +4472,12 @@ const savePeriods = async (d) => {
             ? dayData.amazon.skuData
             : Object.values(dayData.amazon.skuData);
           skuData.forEach(item => {
-            if (!item.sku) return;
-            if (!dailyAmazonVel[item.sku]) dailyAmazonVel[item.sku] = 0;
+            if (!item.sku || !isValidSku(item.sku)) return;
+            const sku = item.sku.trim();
+            if (!dailyAmazonVel[sku]) dailyAmazonVel[sku] = 0;
             // Check multiple field names for units
             const units = item.unitsSold || item.units || item.Units || item.UNITS || item.quantity || 0;
-            dailyAmazonVel[item.sku] += units;
+            dailyAmazonVel[sku] += units;
           });
         }
         
@@ -4440,11 +4486,12 @@ const savePeriods = async (d) => {
             ? dayData.shopify.skuData
             : Object.values(dayData.shopify.skuData);
           skuData.forEach(item => {
-            if (!item.sku) return;
-            if (!dailyShopifyVel[item.sku]) dailyShopifyVel[item.sku] = 0;
+            if (!item.sku || !isValidSku(item.sku)) return;
+            const sku = item.sku.trim();
+            if (!dailyShopifyVel[sku]) dailyShopifyVel[sku] = 0;
             // Check multiple field names for units
             const units = item.unitsSold || item.units || item.Units || item.UNITS || item.quantity || 0;
-            dailyShopifyVel[item.sku] += units;
+            dailyShopifyVel[sku] += units;
           });
         }
       });
@@ -4484,30 +4531,32 @@ const savePeriods = async (d) => {
       sortedPeriods.forEach(periodKey => {
         const periodData = allPeriodsData[periodKey];
         
-        // Amazon SKU velocity from period data
+        // Amazon SKU velocity from period data - filter out lowercase ddpe SKUs
         if (periodData.amazon?.skuData) {
           const skuData = Array.isArray(periodData.amazon.skuData)
             ? periodData.amazon.skuData
             : Object.values(periodData.amazon.skuData);
           skuData.forEach(item => {
-            if (!item.sku) return;
+            if (!item.sku || !isValidSku(item.sku)) return;
+            const sku = item.sku.trim();
             // Divide monthly units by weeks per month to get weekly rate
             const weeklyUnits = (item.unitsSold || item.units || 0) / WEEKS_PER_MONTH;
-            if (!periodAmazonVel[item.sku]) periodAmazonVel[item.sku] = 0;
-            periodAmazonVel[item.sku] += weeklyUnits;
+            if (!periodAmazonVel[sku]) periodAmazonVel[sku] = 0;
+            periodAmazonVel[sku] += weeklyUnits;
           });
         }
         
-        // Shopify SKU velocity from period data
+        // Shopify SKU velocity from period data - filter out lowercase ddpe SKUs
         if (periodData.shopify?.skuData) {
           const skuData = Array.isArray(periodData.shopify.skuData)
             ? periodData.shopify.skuData
             : Object.values(periodData.shopify.skuData);
           skuData.forEach(item => {
-            if (!item.sku) return;
+            if (!item.sku || !isValidSku(item.sku)) return;
+            const sku = item.sku.trim();
             const weeklyUnits = (item.unitsSold || item.units || 0) / WEEKS_PER_MONTH;
-            if (!periodShopifyVel[item.sku]) periodShopifyVel[item.sku] = 0;
-            periodShopifyVel[item.sku] += weeklyUnits;
+            if (!periodShopifyVel[sku]) periodShopifyVel[sku] = 0;
+            periodShopifyVel[sku] += weeklyUnits;
           });
         }
       });
@@ -4563,8 +4612,9 @@ const savePeriods = async (d) => {
         if (data.success && data.items) {
           amzSource = data.source || 'amazon-sp-api';
           data.items.forEach(item => {
-            const sku = item.sku;
-            if (!sku) return;
+            // Skip invalid SKUs (lowercase ddpe or empty)
+            if (!item.sku || !isValidSku(item.sku)) return;
+            const sku = item.sku.trim();
             
             // Use FBA quantities (AWD is separate distribution inventory)
             const avail = item.fbaFulfillable || item.available || 0;
@@ -4572,14 +4622,13 @@ const savePeriods = async (d) => {
             const inb = item.fbaInbound || item.amazonInbound || 0;
             const total = avail + reserved;
             
-            const cost = cogsLookup[sku] || cogsLookup[sku.toLowerCase()] || cogsLookup[sku.toUpperCase()] || 0;
+            const cost = cogsLookup[sku] || 0;
             amzTotal += total;
             amzValue += total * cost;
             amzInbound += inb;
             
-            // Get velocity - try multiple case variants
-            const skuLower = sku.toLowerCase();
-            const amzVelFromWeekly = amazonSkuVelocity[sku] || amazonSkuVelocity[skuLower] || amazonSkuVelocity[sku.toUpperCase()] || 0;
+            // Get velocity
+            const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
             const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : 0;
             
             const itemData = { 
@@ -4592,8 +4641,7 @@ const savePeriods = async (d) => {
               amzWeeklyVel 
             };
             
-            // Store only under original SKU (not multiple case variants)
-            // We'll build case-insensitive lookup later
+            // Store under normalized SKU
             amzInv[sku] = itemData;
             
             // Track AWD separately
@@ -4620,22 +4668,23 @@ const savePeriods = async (d) => {
     if (Object.keys(amzInv).length === 0 && invFiles.amazon) {
       amzSource = 'file-upload';
       invFiles.amazon.forEach(r => {
-        const sku = r['sku'] || '', avail = parseInt(r['available'] || 0), inb = parseInt(r['inbound-quantity'] || 0);
+        const rawSku = r['sku'] || '';
+        // Skip invalid SKUs (lowercase ddpe or empty)
+        if (!rawSku || !isValidSku(rawSku)) return;
+        const sku = rawSku.trim();
+        const avail = parseInt(r['available'] || 0), inb = parseInt(r['inbound-quantity'] || 0);
         const res = parseInt(r['Total Reserved Quantity'] || 0), t30 = parseInt(r['units-shipped-t30'] || 0);
         const name = r['product-name'] || '', asin = r['asin'] || '';
-        const skuLower = sku.toLowerCase();
-        const cost = cogsLookup[sku] || cogsLookup[skuLower] || 0, total = avail + res;
+        const cost = cogsLookup[sku] || 0, total = avail + res;
         amzTotal += total; amzValue += total * cost; amzInbound += inb;
         
-        // Use weekly data velocity if available, otherwise fall back to t30 from file
-        const amzVelFromWeekly = amazonSkuVelocity[sku] || amazonSkuVelocity[skuLower] || 0;
+        // Use weekly data velocity if available
+        const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
         const amzVelFromFile = t30 / 4.3;
         const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : amzVelFromFile;
         
         const itemData = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel };
-        if (sku) {
-          amzInv[sku] = itemData;
-        }
+        amzInv[sku] = itemData;
       });
     }
 
@@ -4662,8 +4711,9 @@ const savePeriods = async (d) => {
         if (data.success && data.items) {
           tplSource = 'packiyo-direct';
           data.items.forEach(item => {
-            const sku = item.sku;
-            if (!sku || sku.includes('Bundle') || item.name?.includes('Gift Card') || item.name?.includes('FREE')) return;
+            // Skip invalid SKUs (lowercase ddpe, empty, bundles, gift cards)
+            if (!item.sku || !isValidSku(item.sku) || item.sku.includes('Bundle') || item.name?.includes('Gift Card') || item.name?.includes('FREE')) return;
+            const sku = item.sku.trim();
             
             const qty = item.quantity_on_hand || 0;
             const inb = item.quantity_inbound || 0;
@@ -4678,7 +4728,7 @@ const savePeriods = async (d) => {
             
             const itemData = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
             
-            // Store only under original SKU
+            // Store under SKU
             tplInv[sku] = itemData;
           });
           
@@ -4695,15 +4745,17 @@ const savePeriods = async (d) => {
     if (Object.keys(tplInv).length === 0 && invFiles.threepl) {
       tplSource = 'file-upload';
       invFiles.threepl.forEach(r => {
-        const sku = r['sku'] || '', name = r['name'] || '', qty = parseInt(r['quantity_on_hand'] || 0);
+        const rawSku = r['sku'] || '';
+        // Skip invalid SKUs (lowercase ddpe or empty)
+        if (!rawSku || !isValidSku(rawSku)) return;
+        const sku = rawSku.trim();
+        const name = r['name'] || '', qty = parseInt(r['quantity_on_hand'] || 0);
         const inb = parseInt(r['quantity_inbound'] || 0), cost = parseFloat(r['cost'] || 0) || cogsLookup[sku] || 0;
         if (sku.includes('Bundle') || name.includes('Gift Card') || name.includes('FREE') || qty === 0) return;
         tplTotal += qty; tplValue += qty * cost; tplInbound += inb;
         
         const itemData = { sku, name, total: qty, inbound: inb, cost };
-        if (sku) {
-          tplInv[sku] = itemData;
-        }
+        tplInv[sku] = itemData;
       });
     }
 
@@ -4730,8 +4782,9 @@ const savePeriods = async (d) => {
         if (data.success && data.items) {
           homeSource = 'shopify-sync';
           data.items.forEach(item => {
-            const sku = item.sku;
-            if (!sku) return;
+            // Skip invalid SKUs (lowercase ddpe or empty)
+            if (!item.sku || !isValidSku(item.sku)) return;
+            const sku = item.sku.trim();
             
             // Only get home/office location inventory (not 3PL locations)
             const homeQty = item.homeQty || 0;
@@ -4749,68 +4802,36 @@ const savePeriods = async (d) => {
     }
 
     // ===== COMBINE ALL INVENTORY SOURCES =====
-    // Build case-insensitive lookup maps for matching
-    const tplInvLower = {};
-    Object.entries(tplInv).forEach(([sku, data]) => {
-      tplInvLower[sku.toLowerCase()] = data;
-    });
-    const homeInvLower = {};
-    Object.entries(homeInv).forEach(([sku, data]) => {
-      homeInvLower[sku.toLowerCase()] = data;
-    });
-    const amzInvLower = {};
-    Object.entries(amzInv).forEach(([sku, data]) => {
-      amzInvLower[sku.toLowerCase()] = data;
-    });
-    const amzVelLower = {};
-    Object.entries(amazonSkuVelocity).forEach(([sku, vel]) => {
-      amzVelLower[sku.toLowerCase()] = vel;
-    });
-    const shopVelLower = {};
-    Object.entries(shopifySkuVelocity).forEach(([sku, vel]) => {
-      shopVelLower[sku.toLowerCase()] = vel;
-    });
+    // All SKUs are now normalized to uppercase via normalizeSku()
+    // No need for case-insensitive lookups anymore
     
     const allSkus = new Set([...Object.keys(amzInv), ...Object.keys(tplInv), ...Object.keys(homeInv)]);
     
-    // Deduplicate SKUs - keep only one version of each SKU (prefer original case)
-    const seenSkusLower = new Set();
-    const uniqueSkus = [];
-    allSkus.forEach(sku => {
-      const skuLower = sku.toLowerCase();
-      if (!seenSkusLower.has(skuLower)) {
-        seenSkusLower.add(skuLower);
-        uniqueSkus.push(sku);
-      }
-    });
-    
-    console.log('SKU deduplication: allSkus =', allSkus.size, ', uniqueSkus =', uniqueSkus.length);
+    console.log('Total unique SKUs (all normalized to uppercase):', allSkus.size);
     
     const items = [];
     let critical = 0, low = 0, healthy = 0, overstock = 0;
 
-    uniqueSkus.forEach(sku => {
-      const skuLower = sku.toLowerCase();
-      
-      // Case-insensitive lookups for all inventory sources
-      const a = amzInv[sku] || amzInvLower[skuLower] || {};
-      const t = tplInv[sku] || tplInvLower[skuLower] || {};
-      const h = homeInv[sku] || homeInvLower[skuLower] || {};
+    allSkus.forEach(sku => {
+      // All lookups are now uppercase
+      const a = amzInv[sku] || {};
+      const t = tplInv[sku] || {};
+      const h = homeInv[sku] || {};
       
       const aQty = a.total || 0;
       const tQty = t.total || 0;
       const hQty = h.total || 0;
       const totalQty = aQty + tQty + hQty;
       
-      const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || cogsLookup[skuLower] || 0;
+      const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || 0;
       
       // Get velocity from both weekly data AND Amazon inventory file
       // Priority: weekly sales data > t30 from inventory file
-      const amzVelFromWeekly = amazonSkuVelocity[sku] || amzVelLower[skuLower] || 0;
+      const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
       const amzVelFromInv = a.amzWeeklyVel || 0; // This comes from t30 in inventory file
       const amzVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : amzVelFromInv;
       
-      const shopVel = shopifySkuVelocity[sku] || shopVelLower[skuLower] || 0;
+      const shopVel = shopifySkuVelocity[sku] || 0;
       const totalVel = amzVel + shopVel;
       
       // Apply learned corrections
@@ -4865,7 +4886,7 @@ const savePeriods = async (d) => {
       }
       
       items.push({ 
-        sku, 
+        sku: sku.toUpperCase(), // Always normalize to uppercase
         name: a.name || t.name || h.name || sku, 
         asin: a.asin || '', 
         amazonQty: aQty, 
@@ -19407,14 +19428,19 @@ if (shopifySkuWithShipping.length > 0) {
     const rawItems = data.items || [];
     
     // FILTER AND DEDUPLICATE SKUs
+    // EXCLUDE lowercase ddpe SKUs - these are duplicates
     // Priority: SKUs with inventory > 0, prefer "Shop" suffix variants
     const deduplicatedItems = (() => {
       const skuMap = new Map();
       
       rawItems.forEach(item => {
-        // Normalize SKU - check if this is a "Shop" variant
-        const baseSku = item.sku.replace(/Shop$/i, '');
-        const isShopVariant = item.sku.toLowerCase().endsWith('shop');
+        // Skip invalid SKUs (lowercase ddpe or empty)
+        if (!item.sku || !isValidSku(item.sku)) return;
+        const sku = item.sku.trim();
+        
+        // Check if this is a "Shop" variant
+        const baseSku = sku.replace(/Shop$/i, '');
+        const isShopVariant = sku.endsWith('Shop');
         const hasInventory = (item.totalQty || 0) > 0;
         
         // Check if we already have this base SKU
@@ -19422,7 +19448,7 @@ if (shopifySkuWithShipping.length > 0) {
         
         if (!existing) {
           // First time seeing this SKU
-          skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+          skuMap.set(baseSku, { ...item, sku, _baseSku: baseSku, _isShopVariant: isShopVariant });
         } else {
           // We have a duplicate - decide which to keep
           const existingHasInventory = (existing.totalQty || 0) > 0;
@@ -19433,15 +19459,15 @@ if (shopifySkuWithShipping.length > 0) {
           // 3. Higher inventory wins if tied
           if (hasInventory && !existingHasInventory) {
             // New item has inventory, existing doesn't - replace
-            skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+            skuMap.set(baseSku, { ...item, sku, _baseSku: baseSku, _isShopVariant: isShopVariant });
           } else if (hasInventory === existingHasInventory) {
             // Both have same inventory status
             if (isShopVariant && !existing._isShopVariant) {
               // Prefer Shop variant
-              skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+              skuMap.set(baseSku, { ...item, sku, _baseSku: baseSku, _isShopVariant: isShopVariant });
             } else if ((item.totalQty || 0) > (existing.totalQty || 0)) {
               // Higher inventory wins
-              skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+              skuMap.set(baseSku, { ...item, sku, _baseSku: baseSku, _isShopVariant: isShopVariant });
             }
           }
           // Otherwise keep existing
