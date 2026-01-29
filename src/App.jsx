@@ -196,6 +196,7 @@ export default function Dashboard() {
   
   // Shopify Integration
   const [shopifyCredentials, setShopifyCredentials] = useState({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
+  const [qboCredentials, setQboCredentials] = useState({ clientId: '', clientSecret: '', realmId: '', connected: false, lastSync: null, accessToken: '', refreshToken: '' });
   const [shopifySyncStatus, setShopifySyncStatus] = useState({ loading: false, error: null, progress: '' });
   const [shopifySyncRange, setShopifySyncRange] = useState({ start: '', end: '' });
   const [shopifySyncPreview, setShopifySyncPreview] = useState(null);
@@ -19904,8 +19905,8 @@ if (shopifySkuWithShipping.length > 0) {
                         <td className="text-right px-2 py-2 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
                         <td className="text-right px-2 py-2 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
                         <td className="text-right px-2 py-2 text-white text-sm">{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</td>
-                        <td className="text-right px-2 py-2 text-slate-400 text-xs">{item.stockoutDate ? new Date(item.stockoutDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
-                        <td className={`text-right px-2 py-2 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? new Date(item.reorderByDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
+                        <td className="text-right px-2 py-2 text-slate-400 text-xs">{item.stockoutDate ? (() => { const d = new Date(item.stockoutDate); const thisYear = new Date().getFullYear(); return d.getFullYear() !== thisYear ? `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}` : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); })() : '—'}</td>
+                        <td className={`text-right px-2 py-2 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? (() => { const d = new Date(item.reorderByDate); const thisYear = new Date().getFullYear(); return d.getFullYear() !== thisYear ? `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}` : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); })() : '—'}</td>
                         <td className="text-center px-2 py-2"><HealthBadge health={item.aiUrgency || item.health} /></td>
                         <td className="text-center px-2 py-2">
                           <button 
@@ -31325,14 +31326,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const monthKeys = Object.keys(monthlySnapshots).sort().slice(-12);
     
     // Handle file upload
-    const handleBankingUpload = async (e) => {
+    const handleBankingUpload = async (e, replaceAll = true) => {
       const file = e.target.files?.[0];
       if (!file) return;
       
       setBankingProcessing(true);
       try {
         const content = await file.text();
-        // Pass existing category overrides to parser
+        // Pass existing category overrides to parser (keep category customizations)
         const parsed = parseQBOTransactions(content, bankingData.categoryOverrides || {});
         
         if (parsed.transactions.length === 0) {
@@ -31341,46 +31342,33 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           return;
         }
         
-        // Smart merge: deduplicate transactions based on ID
-        let mergedTransactions = parsed.transactions;
-        let newCount = parsed.transactions.length;
-        let duplicateCount = 0;
-        
-        if (bankingData.transactions?.length > 0) {
-          const existingIds = new Set(bankingData.transactions.map(t => t.id));
-          const newTxns = parsed.transactions.filter(t => !existingIds.has(t.id));
-          duplicateCount = parsed.transactions.length - newTxns.length;
-          
-          // Merge: keep existing transactions, add only new ones
-          // Sort by date to maintain chronological order
-          mergedTransactions = [...bankingData.transactions, ...newTxns]
-            .sort((a, b) => b.date.localeCompare(a.date));
-          newCount = newTxns.length;
-        }
-        
-        // Recalculate all aggregates from merged transactions
+        // REPLACE MODE: Start fresh with parsed data, use balances directly from QBO
+        const transactions = parsed.transactions;
         const accounts = {};
         const categories = {};
         const monthlySnapshots = {};
         
-        // Track net change from new transactions for each account
-        const newTxnNetByAccount = {};
+        // Use account balances directly from parsed QBO data
+        Object.entries(parsed.accounts).forEach(([name, acct]) => {
+          accounts[name] = {
+            ...acct,
+            balance: acct.balance || 0,
+            initialBalance: acct.balance || 0,
+          };
+        });
         
-        mergedTransactions.forEach(txn => {
-          // Account aggregates
+        // Rebuild aggregates from transactions
+        transactions.forEach(txn => {
+          // Ensure account exists
           if (!accounts[txn.account]) {
-            // Start with existing balance if we have prior data, otherwise use parsed balance
-            const existingBalance = bankingData.accounts?.[txn.account]?.balance;
-            const existingInitialBalance = bankingData.accounts?.[txn.account]?.initialBalance;
             accounts[txn.account] = { 
               name: txn.account, 
               type: txn.accountType, 
               transactions: 0, 
               totalIn: 0, 
               totalOut: 0,
-              // Preserve initial balance if set, or use existing balance as starting point
-              initialBalance: existingInitialBalance ?? existingBalance ?? 0,
-              balance: existingBalance ?? parsed.accounts[txn.account]?.balance ?? 0,
+              balance: 0,
+              initialBalance: 0,
             };
           }
           accounts[txn.account].transactions++;
@@ -31408,57 +31396,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           }
         });
         
-        // Update account balances properly:
-        // - If balance was manually set, preserve it and add net of new transactions
-        // - If we had existing data, add the NET of new transactions to existing balance
-        // - If this is first upload, use parsed balance from QBO
-        if (bankingData.transactions?.length > 0 && newCount > 0) {
-          // Calculate net change from NEW transactions only
-          const newTxns = parsed.transactions.filter(t => !new Set(bankingData.transactions.map(bt => bt.id)).has(t.id));
-          const netByAccount = {};
-          newTxns.forEach(txn => {
-            if (!netByAccount[txn.account]) netByAccount[txn.account] = 0;
-            if (txn.isIncome) netByAccount[txn.account] += txn.amount;
-            if (txn.isExpense) netByAccount[txn.account] -= txn.amount;
-          });
-          
-          // Apply net change to existing balances
-          Object.entries(netByAccount).forEach(([acctName, netChange]) => {
-            if (accounts[acctName]) {
-              const existingBal = bankingData.accounts?.[acctName]?.balance || 0;
-              const wasManuallySet = bankingData.accounts?.[acctName]?.balanceManuallySet;
-              accounts[acctName].balance = existingBal + netChange;
-              // Preserve manual set flag
-              if (wasManuallySet) {
-                accounts[acctName].balanceManuallySet = true;
-                accounts[acctName].balanceSetDate = bankingData.accounts[acctName].balanceSetDate;
-              }
-            }
-          });
-        } else {
-          // First upload - use parsed balances (net of transactions in report)
-          // User may need to set initial balance manually
-          Object.entries(parsed.accounts).forEach(([name, acct]) => {
-            if (accounts[name]) {
-              accounts[name].balance = acct.balance || 0;
-            }
-          });
-        }
-        
         // Calculate date range
-        const dates = mergedTransactions.map(t => t.date).sort();
+        const dates = transactions.map(t => t.date).sort();
         const dateRange = { 
           start: dates[0], 
           end: dates[dates.length - 1] 
         };
         
         const newBankingData = {
-          transactions: mergedTransactions,
+          transactions,
           accounts,
           categories,
           monthlySnapshots,
           dateRange,
-          transactionCount: mergedTransactions.length,
+          transactionCount: transactions.length,
           lastUpload: new Date().toISOString(),
           categoryOverrides: bankingData.categoryOverrides || {},
           settings: bankingData.settings,
@@ -31468,9 +31419,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
         queueCloudSave({ ...combinedData, bankingData: newBankingData });
         
-        const message = duplicateCount > 0 
-          ? `Added ${newCount} new transactions (${duplicateCount} duplicates skipped). Total: ${mergedTransactions.length}`
-          : `Imported ${newCount} transactions from ${dateRange.start} to ${dateRange.end}`;
+        const message = `Imported ${transactions.length} transactions from ${dateRange.start} to ${dateRange.end}. Balances reset from QBO.`;
         setToast({ message, type: 'success' });
       } catch (err) {
         setToast({ message: 'Error parsing file: ' + err.message, type: 'error' });
@@ -31527,8 +31476,24 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               <label className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-white font-medium cursor-pointer flex items-center gap-2 transition-colors">
                 <Upload className="w-4 h-4" />
                 {bankingProcessing ? 'Processing...' : 'Upload QBO Export'}
-                <input type="file" accept=".csv" onChange={handleBankingUpload} className="hidden" disabled={bankingProcessing} />
+                <input type="file" accept=".csv" onChange={(e) => handleBankingUpload(e, true)} className="hidden" disabled={bankingProcessing} />
               </label>
+              
+              {/* Clear Data Button */}
+              {bankingData.transactions?.length > 0 && (
+                <button
+                  onClick={() => {
+                    if (confirm('Clear all banking data? This will reset account balances and transaction history.')) {
+                      setBankingData({ transactions: [], accounts: {}, categories: {}, monthlySnapshots: {}, categoryOverrides: {} });
+                      setToast({ message: 'Banking data cleared', type: 'success' });
+                    }
+                  }}
+                  className="px-3 py-2 bg-slate-700 hover:bg-rose-600/50 rounded-lg text-slate-300 hover:text-white text-sm flex items-center gap-2 transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Clear Data
+                </button>
+              )}
             </div>
           </div>
           
@@ -31567,7 +31532,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               <label className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-xl text-white font-medium cursor-pointer inline-flex items-center gap-2 transition-colors">
                 <Upload className="w-5 h-5" />
                 Upload QBO Export (.csv)
-                <input type="file" accept=".csv" onChange={handleBankingUpload} className="hidden" />
+                <input type="file" accept=".csv" onChange={(e) => handleBankingUpload(e, true)} className="hidden" />
               </label>
             </div>
           ) : (
@@ -35036,6 +35001,121 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             <p className="text-slate-500 text-xs mt-4">
               ℹ️ Inventory sources are additive and don't overwrite each other. Amazon FBA/AWD, 3PL (Packiyo), and Wormans Mill (Shopify) inventories are tracked separately.
             </p>
+          </SettingSection>
+          
+          {/* QuickBooks Online Connection */}
+          <SettingSection title="📊 QuickBooks Online">
+            <p className="text-slate-400 text-sm mb-4">Connect to QBO for automatic bank balance and expense tracking</p>
+            
+            {qboCredentials.connected ? (
+              <div className="space-y-4">
+                <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-emerald-500/20 rounded-full flex items-center justify-center">
+                        <Check className="w-5 h-5 text-emerald-400" />
+                      </div>
+                      <div>
+                        <p className="text-emerald-400 font-medium">Connected to QuickBooks</p>
+                        <p className="text-slate-400 text-sm">Company ID: {qboCredentials.realmId}</p>
+                        {qboCredentials.lastSync && (
+                          <p className="text-slate-500 text-xs">Last sync: {new Date(qboCredentials.lastSync).toLocaleString()}</p>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (confirm('Disconnect from QuickBooks? Your synced data will remain.')) {
+                          setQboCredentials({ clientId: '', clientSecret: '', realmId: '', connected: false, lastSync: null, accessToken: '', refreshToken: '' });
+                          setToast({ message: 'QuickBooks disconnected', type: 'success' });
+                        }
+                      }}
+                      className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                </div>
+                <SettingRow label="Sync Banking Data" desc="Pull recent transactions and balances">
+                  <button
+                    onClick={() => setToast({ message: 'QBO sync coming soon! Use CSV upload in Banking tab for now.', type: 'info' })}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text-white flex items-center gap-2"
+                  >
+                    <RefreshCw className="w-4 h-4" />Sync Now
+                  </button>
+                </SettingRow>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4">
+                  <h4 className="text-blue-400 font-medium mb-2">Why Connect QBO?</h4>
+                  <ul className="text-slate-400 text-sm space-y-1">
+                    <li>• Automatic bank balance tracking</li>
+                    <li>• Real-time expense categorization</li>
+                    <li>• Cash flow visibility in Banking tab</li>
+                    <li>• Reconciliation with Amazon/Shopify payouts</li>
+                  </ul>
+                  <p className="text-slate-500 text-xs mt-3">Note: QBO shows bank deposits (after fees), not gross sales. Continue using Amazon/Shopify reports for revenue tracking.</p>
+                </div>
+                
+                <div className="bg-slate-900/50 rounded-xl p-4">
+                  <h4 className="text-white font-medium mb-4">🔧 Setup Instructions</h4>
+                  <ol className="text-slate-400 text-sm space-y-3 list-decimal list-inside">
+                    <li><strong>Create Developer Account:</strong> Go to <a href="https://developer.intuit.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">developer.intuit.com</a> and sign up</li>
+                    <li><strong>Create an App:</strong> Click "Create an app" → Select "QuickBooks Online and Payments" → Name it "Tallowbourn Dashboard"</li>
+                    <li><strong>Get Credentials:</strong> Go to "Keys & credentials" tab → Copy your <strong className="text-white">Client ID</strong> and <strong className="text-white">Client Secret</strong></li>
+                    <li><strong>Set Redirect URI:</strong> Add <code className="text-xs bg-slate-800 px-1.5 py-0.5 rounded">{typeof window !== 'undefined' ? window.location.origin : 'https://yourdomain.com'}/api/qbo/callback</code></li>
+                    <li><strong>App Review:</strong> For Production access, submit for review (takes 1-3 business days)</li>
+                  </ol>
+                </div>
+                
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-slate-300 text-sm font-medium mb-2">Client ID</label>
+                    <input
+                      type="text"
+                      placeholder="ABxxxxxxxxxxxxxxxxxxxxxx"
+                      value={qboCredentials.clientId}
+                      onChange={(e) => setQboCredentials(p => ({ ...p, clientId: e.target.value }))}
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 text-sm font-medium mb-2">Client Secret</label>
+                    <input
+                      type="password"
+                      placeholder="Your Client Secret"
+                      value={qboCredentials.clientSecret}
+                      onChange={(e) => setQboCredentials(p => ({ ...p, clientSecret: e.target.value }))}
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (!qboCredentials.clientId || !qboCredentials.clientSecret) {
+                        setToast({ message: 'Please enter Client ID and Client Secret', type: 'error' });
+                        return;
+                      }
+                      // OAuth flow would redirect to Intuit
+                      const redirectUri = encodeURIComponent(window.location.origin + '/api/qbo/callback');
+                      const authUrl = `https://appcenter.intuit.com/connect/oauth2?client_id=${qboCredentials.clientId}&response_type=code&scope=com.intuit.quickbooks.accounting&redirect_uri=${redirectUri}&state=${Date.now()}`;
+                      setToast({ message: 'QBO OAuth requires backend API route. Opening auth URL...', type: 'info' });
+                      window.open(authUrl, '_blank');
+                    }}
+                    className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 rounded-xl text-white font-medium flex items-center justify-center gap-2"
+                  >
+                    <Landmark className="w-5 h-5" />
+                    Connect to QuickBooks
+                  </button>
+                </div>
+                
+                <div className="text-center pt-2">
+                  <p className="text-slate-500 text-xs">
+                    Or <button onClick={() => { setView('banking'); }} className="text-blue-400 hover:underline">upload QBO Transaction Detail CSV</button> manually in the Banking tab
+                  </p>
+                </div>
+              </div>
+            )}
           </SettingSection>
             </>
           )}
