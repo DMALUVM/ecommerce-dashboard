@@ -34574,15 +34574,113 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             saveInv(newHistory);
                             setToast({ message: `Merged ${newTplTotal.toLocaleString()} 3PL units with existing inventory`, type: 'success' });
                           } else {
-                            // No snapshot exists for today - CREATE a new 3PL-only snapshot
-                            console.log('No snapshot exists - creating new 3PL-only snapshot');
+                            // No snapshot exists for today - CREATE a new 3PL-only snapshot WITH velocity from sales data
+                            console.log('No snapshot exists - creating new 3PL-only snapshot with velocity calculation');
                             const todayDate = new Date().toISOString().split('T')[0];
                             const packiyoData = data.inventoryBySku;
                             const cogsLookup = getCogsLookup();
                             
+                            // ===== CALCULATE VELOCITY FROM SALES DATA =====
+                            const amazonSkuVelocity = {};
+                            const shopifySkuVelocity = {};
+                            
+                            // Try localStorage for legacy daily data first
+                            try {
+                              const legacyRaw = localStorage.getItem('ecommerce_daily_data');
+                              if (legacyRaw) {
+                                const legacyDailyData = JSON.parse(legacyRaw);
+                                const legacyDates = Object.keys(legacyDailyData).sort().reverse();
+                                const last28 = legacyDates.slice(0, 28);
+                                const weeksEquiv = last28.length / 7;
+                                
+                                if (weeksEquiv > 0) {
+                                  last28.forEach(d => {
+                                    const dayData = legacyDailyData[d];
+                                    (dayData?.amazon?.skuData || []).forEach(item => {
+                                      if (!item.sku || !isValidSku(item.sku)) return;
+                                      const sku = item.sku.trim();
+                                      if (!amazonSkuVelocity[sku]) amazonSkuVelocity[sku] = 0;
+                                      amazonSkuVelocity[sku] += (item.unitsSold || item.units || 0) / weeksEquiv;
+                                    });
+                                    (dayData?.shopify?.skuData || []).forEach(item => {
+                                      if (!item.sku || !isValidSku(item.sku)) return;
+                                      const sku = item.sku.trim();
+                                      if (!shopifySkuVelocity[sku]) shopifySkuVelocity[sku] = 0;
+                                      shopifySkuVelocity[sku] += (item.unitsSold || item.units || 0) / weeksEquiv;
+                                    });
+                                  });
+                                  console.log('Calculated velocity from', last28.length, 'days of legacy data');
+                                }
+                              }
+                            } catch (e) { console.log('Legacy data not available:', e); }
+                            
+                            // Also try allWeeksData
+                            const sortedWeeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
+                            if (sortedWeeks.length > 0) {
+                              sortedWeeks.forEach(w => {
+                                const weekData = allWeeksData[w];
+                                if (weekData.shopify?.skuData) {
+                                  const skuData = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
+                                  skuData.forEach(item => {
+                                    if (!item.sku || !isValidSku(item.sku)) return;
+                                    const sku = item.sku.trim();
+                                    if (!shopifySkuVelocity[sku]) shopifySkuVelocity[sku] = 0;
+                                    shopifySkuVelocity[sku] += (item.unitsSold || item.units || 0);
+                                  });
+                                }
+                                if (weekData.amazon?.skuData) {
+                                  const skuData = Array.isArray(weekData.amazon.skuData) ? weekData.amazon.skuData : Object.values(weekData.amazon.skuData);
+                                  skuData.forEach(item => {
+                                    if (!item.sku || !isValidSku(item.sku)) return;
+                                    const sku = item.sku.trim();
+                                    if (!amazonSkuVelocity[sku]) amazonSkuVelocity[sku] = 0;
+                                    amazonSkuVelocity[sku] += (item.unitsSold || item.units || 0);
+                                  });
+                                }
+                              });
+                              // Average over weeks
+                              Object.keys(amazonSkuVelocity).forEach(sku => { amazonSkuVelocity[sku] /= sortedWeeks.length; });
+                              Object.keys(shopifySkuVelocity).forEach(sku => { shopifySkuVelocity[sku] /= sortedWeeks.length; });
+                              console.log('Added velocity from', sortedWeeks.length, 'weeks of data');
+                            }
+                            
+                            // Also try allDaysData
+                            const sortedDays = Object.keys(allDaysData).sort().reverse().slice(0, 28);
+                            if (sortedDays.length > 0) {
+                              const weeksEquiv = sortedDays.length / 7;
+                              sortedDays.forEach(d => {
+                                const dayData = allDaysData[d];
+                                if (dayData?.amazon?.skuData) {
+                                  (Array.isArray(dayData.amazon.skuData) ? dayData.amazon.skuData : Object.values(dayData.amazon.skuData)).forEach(item => {
+                                    if (!item.sku || !isValidSku(item.sku)) return;
+                                    const sku = item.sku.trim();
+                                    if (!amazonSkuVelocity[sku] || amazonSkuVelocity[sku] === 0) {
+                                      if (!amazonSkuVelocity[sku]) amazonSkuVelocity[sku] = 0;
+                                      amazonSkuVelocity[sku] += (item.unitsSold || item.units || 0) / weeksEquiv;
+                                    }
+                                  });
+                                }
+                                if (dayData?.shopify?.skuData) {
+                                  (Array.isArray(dayData.shopify.skuData) ? dayData.shopify.skuData : Object.values(dayData.shopify.skuData)).forEach(item => {
+                                    if (!item.sku || !isValidSku(item.sku)) return;
+                                    const sku = item.sku.trim();
+                                    if (!shopifySkuVelocity[sku] || shopifySkuVelocity[sku] === 0) {
+                                      if (!shopifySkuVelocity[sku]) shopifySkuVelocity[sku] = 0;
+                                      shopifySkuVelocity[sku] += (item.unitsSold || item.units || 0) / weeksEquiv;
+                                    }
+                                  });
+                                }
+                              });
+                              console.log('Added velocity from', sortedDays.length, 'days of daily data');
+                            }
+                            
+                            console.log('Velocity calculated for', Object.keys(amazonSkuVelocity).length, 'Amazon SKUs,', Object.keys(shopifySkuVelocity).length, 'Shopify SKUs');
+                            
+                            // ===== BUILD INVENTORY ITEMS =====
                             let newTplTotal = 0;
                             let newTplValue = 0;
                             const newItems = [];
+                            let critical = 0, low = 0, healthy = 0, overstock = 0;
                             
                             Object.entries(packiyoData).forEach(([sku, item]) => {
                               // Skip invalid SKUs (lowercase ddpe)
@@ -34597,14 +34695,28 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               newTplTotal += qty;
                               newTplValue += qty * cost;
                               
-                              // Determine health status
-                              const weeklyVel = 0; // No velocity data yet
-                              const daysOfSupply = weeklyVel > 0 ? (qty / weeklyVel) * 7 : 999;
+                              // Get velocity - try SKU with and without Shop suffix
+                              const amzVel = amazonSkuVelocity[sku] || amazonSkuVelocity[sku.replace(/Shop$/, '')] || 0;
+                              const shopVel = shopifySkuVelocity[sku] || shopifySkuVelocity[sku.replace(/Shop$/, '')] || 0;
+                              const totalVel = amzVel + shopVel;
+                              
+                              // Calculate days of supply and health
+                              const daysOfSupply = totalVel > 0 ? (qty / totalVel) * 7 : 999;
                               let health = 'unknown';
-                              if (daysOfSupply < 14) health = 'critical';
-                              else if (daysOfSupply < 30) health = 'low';
-                              else if (daysOfSupply > 180) health = 'overstock';
-                              else health = 'healthy';
+                              if (totalVel > 0) {
+                                if (daysOfSupply < 14) { health = 'critical'; critical++; }
+                                else if (daysOfSupply < 30) { health = 'low'; low++; }
+                                else if (daysOfSupply > 180) { health = 'overstock'; overstock++; }
+                                else { health = 'healthy'; healthy++; }
+                              } else {
+                                overstock++; // No sales = overstock
+                                health = 'overstock';
+                              }
+                              
+                              // Calculate stockout date
+                              const stockoutDate = totalVel > 0 
+                                ? new Date(Date.now() + daysOfSupply * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+                                : null;
                               
                               newItems.push({
                                 sku,
@@ -34616,8 +34728,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                 totalQty: qty,
                                 cost,
                                 totalValue: qty * cost,
-                                weeklyVel: 0,
-                                daysOfSupply,
+                                amzWeeklyVel: amzVel,
+                                shopWeeklyVel: shopVel,
+                                weeklyVel: totalVel,
+                                daysOfSupply: Math.round(daysOfSupply),
+                                stockoutDate,
                                 health,
                               });
                             });
@@ -34639,10 +34754,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                 homeUnits: 0,
                                 homeValue: 0,
                                 skuCount: newItems.length,
-                                critical: newItems.filter(i => i.health === 'critical').length,
-                                low: newItems.filter(i => i.health === 'low').length,
-                                healthy: newItems.filter(i => i.health === 'healthy').length,
-                                overstock: newItems.filter(i => i.health === 'overstock').length,
+                                critical,
+                                low,
+                                healthy,
+                                overstock,
                               },
                               sources: {
                                 amazon: 'none',
@@ -34657,7 +34772,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             setInvHistory(newHistory);
                             setSelectedInvDate(todayDate);
                             saveInv(newHistory);
-                            setToast({ message: `Created inventory snapshot with ${newTplTotal.toLocaleString()} 3PL units (${newItems.length} SKUs)`, type: 'success' });
+                            setToast({ message: `Created inventory with ${newTplTotal.toLocaleString()} units, ${newItems.length} SKUs (velocity from ${Object.keys(shopifySkuVelocity).length} Shopify + ${Object.keys(amazonSkuVelocity).length} Amazon SKUs)`, type: 'success' });
                           }
                         }
                       } catch (err) {
