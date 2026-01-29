@@ -11290,24 +11290,20 @@ Analyze the data and respond with ONLY this JSON:
       const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
       
       // ========== BUILD VERIFIED FACTS DIRECTLY FROM SOURCE DATA ==========
-      // HYBRID APPROACH: Period data + Weekly data for complete coverage
-      // Period data has historical SKU breakdowns (including Amazon)
-      // Weekly data fills gaps for recent weeks not yet in period aggregates
+      // DATA SOURCE STRATEGY:
+      // - SHOPIFY (all years): Use WEEKLY SKU data (complete daily/weekly data via API)
+      // - AMAZON 2025: Use PERIOD SKU data (monthly aggregates - best available)
+      // - AMAZON 2026: Use WEEKLY SKU data (daily data available)
       
       const computedSkuTotals = {};
       
-      // STEP 1: Get all periods that have SKU data (for tracking what's covered)
-      const periodsWithData = new Set();
-      
-      // Process period data first (2025 + 2026 monthly)
+      // STEP 1: Get AMAZON data from PERIODS (2025 monthly data)
       Object.entries(allPeriodsData).forEach(([periodKey, periodData]) => {
-        // Only process 2025 and 2026 monthly data
-        if (!periodKey.includes('2025') && !periodKey.includes('2026')) return;
-        if (periodKey === '2025' || periodKey === '2026') return; // Skip consolidated totals
+        // Only process 2025 period data for Amazon
+        if (!periodKey.includes('2025')) return;
+        if (periodKey === '2025') return; // Skip consolidated total
         
-        periodsWithData.add(periodKey);
-        
-        // Process Amazon SKUs from period
+        // Process Amazon SKUs from period data (this is the best source for Amazon 2025)
         (periodData.amazon?.skuData || []).forEach(sku => {
           const skuId = sku.sku || sku.msku || '';
           if (!skuId) return;
@@ -11317,102 +11313,66 @@ Analyze the data and respond with ONLY this JSON:
             computedSkuTotals[skuId] = { 
               sku: skuId, 
               name: savedProductNames[skuId] || sku.name || skuId,
-              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
-              periodMonths: new Set()
+              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0
             };
           }
           computedSkuTotals[skuId].revenue += rev;
           computedSkuTotals[skuId].units += units;
           computedSkuTotals[skuId].amazonRev += rev;
-          computedSkuTotals[skuId].periodMonths.add(periodKey);
-        });
-        
-        // Process Shopify SKUs from period
-        (periodData.shopify?.skuData || []).forEach(sku => {
-          const skuId = sku.sku || sku.title || '';
-          if (!skuId) return;
-          const rev = sku.netSales || sku.revenue || 0;
-          const units = sku.unitsSold || sku.units || 0;
-          if (!computedSkuTotals[skuId]) {
-            computedSkuTotals[skuId] = { 
-              sku: skuId, 
-              name: savedProductNames[skuId] || sku.name || skuId,
-              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
-              periodMonths: new Set()
-            };
-          }
-          computedSkuTotals[skuId].revenue += rev;
-          computedSkuTotals[skuId].units += units;
-          computedSkuTotals[skuId].shopifyRev += rev;
-          computedSkuTotals[skuId].periodMonths.add(periodKey);
         });
       });
       
-      // STEP 2: Add weekly data for weeks NOT covered by period data
-      // This handles cases where period aggregates are missing certain SKUs for certain months
+      // STEP 2: Get SHOPIFY data from WEEKLY (all 2025+2026 - complete daily data)
+      // Also get AMAZON 2026 data from WEEKLY (daily data available)
       const sortedWeeks = Object.keys(allWeeksData).sort();
       
-      // Helper to get period key from week date (e.g., "2025-11-23" -> "november-2025")
-      const monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december'];
-      const weekToPeriod = (weekDate) => {
-        const [year, month] = weekDate.split('-');
-        return `${monthNames[parseInt(month, 10) - 1]}-${year}`;
-      };
-      
-      // Process weekly data for 2025+2026
       sortedWeeks.forEach(weekKey => {
         if (!weekKey.startsWith('2025') && !weekKey.startsWith('2026')) return;
         
         const weekData = allWeeksData[weekKey];
         if (!weekData) return;
         
-        const periodKey = weekToPeriod(weekKey);
+        const is2026 = weekKey.startsWith('2026');
         
-        // Process Shopify SKUs from weekly (always add - weekly has good Shopify coverage)
+        // Process Shopify SKUs from weekly data (complete for all years)
         (weekData.shopify?.skuData || []).forEach(sku => {
           const skuId = sku.sku || sku.title || '';
           if (!skuId) return;
           const rev = sku.netSales || sku.revenue || 0;
           const units = sku.unitsSold || sku.units || 0;
           
-          // Only add if this SKU doesn't have this month in period data
-          if (!computedSkuTotals[skuId] || !computedSkuTotals[skuId].periodMonths.has(periodKey)) {
-            if (!computedSkuTotals[skuId]) {
-              computedSkuTotals[skuId] = { 
-                sku: skuId, 
-                name: savedProductNames[skuId] || sku.name || skuId,
-                revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
-                periodMonths: new Set()
-              };
-            }
-            computedSkuTotals[skuId].revenue += rev;
-            computedSkuTotals[skuId].units += units;
-            computedSkuTotals[skuId].shopifyRev += rev;
+          if (!computedSkuTotals[skuId]) {
+            computedSkuTotals[skuId] = { 
+              sku: skuId, 
+              name: savedProductNames[skuId] || sku.name || skuId,
+              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0
+            };
           }
+          computedSkuTotals[skuId].revenue += rev;
+          computedSkuTotals[skuId].units += units;
+          computedSkuTotals[skuId].shopifyRev += rev;
         });
         
-        // Process Amazon SKUs from weekly (only if there's actual Amazon SKU data)
-        (weekData.amazon?.skuData || []).forEach(sku => {
-          const skuId = sku.sku || sku.msku || '';
-          if (!skuId) return;
-          const rev = sku.netSales || sku.revenue || 0;
-          const units = sku.unitsSold || sku.units || 0;
-          
-          // Only add if this SKU doesn't have this month in period data
-          if (!computedSkuTotals[skuId] || !computedSkuTotals[skuId].periodMonths.has(periodKey)) {
+        // Process Amazon SKUs from weekly data (only for 2026 - has daily data)
+        if (is2026) {
+          (weekData.amazon?.skuData || []).forEach(sku => {
+            const skuId = sku.sku || sku.msku || '';
+            if (!skuId) return;
+            const rev = sku.netSales || sku.revenue || 0;
+            const units = sku.unitsSold || sku.units || 0;
+            
             if (!computedSkuTotals[skuId]) {
               computedSkuTotals[skuId] = { 
                 sku: skuId, 
                 name: savedProductNames[skuId] || sku.name || skuId,
-                revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
-                periodMonths: new Set()
+                revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0
               };
             }
             computedSkuTotals[skuId].revenue += rev;
             computedSkuTotals[skuId].units += units;
             computedSkuTotals[skuId].amazonRev += rev;
-          }
-        });
+          });
+        }
       });
       
       // Sort by revenue and add channel
