@@ -13959,6 +13959,102 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} />
           
+          {/* Metrics Export Modal */}
+          {showMetricsExport && (
+            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+              <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                    <FileDown className="w-5 h-5 text-emerald-400" />
+                    Export Metrics
+                  </h2>
+                  <button onClick={() => setShowMetricsExport(false)} className="p-1 hover:bg-slate-700 rounded">
+                    <X className="w-5 h-5 text-slate-400" />
+                  </button>
+                </div>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-3">📅 Select Date Range</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { value: 'all', label: 'All Data' },
+                        { value: 'last-week', label: 'Last Week' },
+                        { value: 'last-month', label: 'Last Month' },
+                        { value: 'last-quarter', label: 'Last Quarter' },
+                        { value: 'ytd', label: 'Year to Date' },
+                        { value: 'custom', label: 'Custom Range' },
+                      ].map(opt => (
+                        <button
+                          key={opt.value}
+                          onClick={() => setMetricsExportRange(opt.value)}
+                          className={`p-3 rounded-lg text-sm font-medium transition-all ${
+                            metricsExportRange === opt.value 
+                              ? 'bg-emerald-600 text-white ring-2 ring-emerald-400' 
+                              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  {metricsExportRange === 'custom' && (
+                    <div className="grid grid-cols-2 gap-3 p-3 bg-slate-900/50 rounded-lg">
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">Start Date</label>
+                        <input 
+                          type="date" 
+                          value={metricsExportCustomStart}
+                          onChange={(e) => setMetricsExportCustomStart(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 text-white text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">End Date</label>
+                        <input 
+                          type="date" 
+                          value={metricsExportCustomEnd}
+                          onChange={(e) => setMetricsExportCustomEnd(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 text-white text-sm"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div className="bg-slate-900/50 rounded-lg p-4 text-sm text-slate-300">
+                    <p className="font-medium text-white mb-2">📊 Export includes:</p>
+                    <ul className="space-y-1 text-slate-400 text-xs">
+                      <li>• Revenue, profit & margins by channel</li>
+                      <li>• Ad spend & ROAS (Amazon, Meta, Google)</li>
+                      <li>• Units sold, returns & AOV</li>
+                      <li>• Top 20 SKUs by revenue</li>
+                      <li>• Daily breakdown (if available)</li>
+                    </ul>
+                  </div>
+                  
+                  <div className="flex gap-3 pt-2">
+                    <button 
+                      onClick={() => exportMetricsForRange('csv')}
+                      className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2"
+                    >
+                      <FileDown className="w-4 h-4" />
+                      Export CSV
+                    </button>
+                    <button 
+                      onClick={() => exportMetricsForRange('json')}
+                      className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2"
+                    >
+                      <FileDown className="w-4 h-4" />
+                      Export JSON
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div className="flex items-center gap-4">
@@ -14061,7 +14157,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 )}
                 <button onClick={() => setShowBreakEven(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Break-even Calculator"><Calculator className="w-4 h-4" /></button>
                 <button onClick={() => setShowMetricsExport(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-xs font-medium flex items-center gap-1" title="Export Metrics Report"><FileDown className="w-3.5 h-3.5" />Export</button>
-                <button onClick={() => setShowExportModal(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Export Raw Data"><Download className="w-4 h-4" /></button>
                 <button onClick={() => setShowUploadHelp(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Help"><HelpCircle className="w-4 h-4" /></button>
               </div>
             </div>
