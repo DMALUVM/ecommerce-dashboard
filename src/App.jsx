@@ -34574,13 +34574,90 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             saveInv(newHistory);
                             setToast({ message: `Merged ${newTplTotal.toLocaleString()} 3PL units with existing inventory`, type: 'success' });
                           } else {
-                            // No snapshot exists for today - don't create 3PL-only snapshot that would lose Amazon data
-                            // Instead, tell user to create inventory snapshot first
-                            console.log('No snapshot exists for today - user should create one with Amazon data first');
-                            setToast({ 
-                              message: 'Packiyo synced but no inventory snapshot exists for today. Go to Inventory tab and create a new snapshot to include Amazon + 3PL data.', 
-                              type: 'warning' 
+                            // No snapshot exists for today - CREATE a new 3PL-only snapshot
+                            console.log('No snapshot exists - creating new 3PL-only snapshot');
+                            const todayDate = new Date().toISOString().split('T')[0];
+                            const packiyoData = data.inventoryBySku;
+                            const cogsLookup = getCogsLookup();
+                            
+                            let newTplTotal = 0;
+                            let newTplValue = 0;
+                            const newItems = [];
+                            
+                            Object.entries(packiyoData).forEach(([sku, item]) => {
+                              // Skip invalid SKUs (lowercase ddpe)
+                              if (!isValidSku(sku)) return;
+                              
+                              const qty = item.quantityOnHand || item.quantity_on_hand || 0;
+                              const inbound = item.quantityInbound || item.quantity_inbound || 0;
+                              const cost = cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/, '')] || 0;
+                              
+                              if (qty === 0 && inbound === 0) return;
+                              
+                              newTplTotal += qty;
+                              newTplValue += qty * cost;
+                              
+                              // Determine health status
+                              const weeklyVel = 0; // No velocity data yet
+                              const daysOfSupply = weeklyVel > 0 ? (qty / weeklyVel) * 7 : 999;
+                              let health = 'unknown';
+                              if (daysOfSupply < 14) health = 'critical';
+                              else if (daysOfSupply < 30) health = 'low';
+                              else if (daysOfSupply > 180) health = 'overstock';
+                              else health = 'healthy';
+                              
+                              newItems.push({
+                                sku,
+                                name: item.name || sku,
+                                amazonQty: 0,
+                                threeplQty: qty,
+                                threeplInbound: inbound,
+                                homeQty: 0,
+                                totalQty: qty,
+                                cost,
+                                totalValue: qty * cost,
+                                weeklyVel: 0,
+                                daysOfSupply,
+                                health,
+                              });
                             });
+                            
+                            newItems.sort((a, b) => b.totalValue - a.totalValue);
+                            
+                            const newSnapshot = {
+                              date: todayDate,
+                              items: newItems,
+                              summary: {
+                                totalUnits: newTplTotal,
+                                totalValue: newTplValue,
+                                amazonUnits: 0,
+                                amazonValue: 0,
+                                amazonInbound: 0,
+                                threeplUnits: newTplTotal,
+                                threeplValue: newTplValue,
+                                threeplInbound: 0,
+                                homeUnits: 0,
+                                homeValue: 0,
+                                skuCount: newItems.length,
+                                critical: newItems.filter(i => i.health === 'critical').length,
+                                low: newItems.filter(i => i.health === 'low').length,
+                                healthy: newItems.filter(i => i.health === 'healthy').length,
+                                overstock: newItems.filter(i => i.health === 'overstock').length,
+                              },
+                              sources: {
+                                amazon: 'none',
+                                threepl: 'packiyo-direct',
+                                home: 'none',
+                                packiyoConnected: true,
+                                lastPackiyoSync: new Date().toISOString(),
+                              },
+                            };
+                            
+                            const newHistory = { ...invHistory, [todayDate]: newSnapshot };
+                            setInvHistory(newHistory);
+                            setSelectedInvDate(todayDate);
+                            saveInv(newHistory);
+                            setToast({ message: `Created inventory snapshot with ${newTplTotal.toLocaleString()} 3PL units (${newItems.length} SKUs)`, type: 'success' });
                           }
                         }
                       } catch (err) {
