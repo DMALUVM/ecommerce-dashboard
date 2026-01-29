@@ -35611,6 +35611,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 <button onClick={() => setShowResetConfirm(true)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">Reset Settings</button>
               )}
             </SettingRow>
+            
+            {/* Clear Inventory Only */}
+            <SettingRow label="Clear Inventory Data" desc="Reset inventory snapshots to fix duplicate SKU issues">
+              <button 
+                onClick={() => {
+                  if (!confirm('Clear all inventory data? This will remove all inventory snapshots. You can re-sync after to get fresh data.')) return;
+                  setInvHistory({});
+                  try { localStorage.removeItem('ecommerce_inventory_history'); } catch {}
+                  setToast({ message: 'Inventory data cleared. Click Sync Inventory to reload.', type: 'success' });
+                }}
+                className="px-4 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-2"
+              >
+                <Trash2 className="w-4 h-4" />Clear Inventory
+              </button>
+            </SettingRow>
           </SettingSection>
             </>
           )}
