@@ -5796,8 +5796,16 @@ const savePeriods = async (d) => {
           reportType = 'weekly';
         } else if (daysDiff >= 28 && daysDiff <= 31) {
           reportType = 'monthly';
+        } else if (daysDiff >= 85 && daysDiff <= 95) {
+          reportType = 'quarterly';
+        } else if (daysDiff >= 360) {
+          reportType = 'yearly';
+        } else if (daysDiff <= 14) {
+          reportType = 'daily'; // Treat short ranges as daily
+        } else if (daysDiff <= 40) {
+          reportType = 'monthly';
         } else {
-          reportType = daysDiff <= 14 ? 'daily' : daysDiff <= 40 ? 'monthly' : 'period';
+          reportType = 'period'; // Custom period
         }
         
         // Calculate summary metrics
@@ -5846,7 +5854,11 @@ const savePeriods = async (d) => {
       dailyCount: parsedFiles.filter(f => f.reportType === 'daily').length,
       weeklyCount: parsedFiles.filter(f => f.reportType === 'weekly').length,
       monthlyCount: parsedFiles.filter(f => f.reportType === 'monthly').length,
+      quarterlyCount: parsedFiles.filter(f => f.reportType === 'quarterly').length,
+      yearlyCount: parsedFiles.filter(f => f.reportType === 'yearly').length,
+      periodCount: parsedFiles.filter(f => f.reportType === 'period').length,
       totalRevenue: parsedFiles.reduce((sum, f) => sum + (f.revenue || 0), 0),
+      totalFiles: parsedFiles.length,
       dateRange: parsedFiles.length > 0 ? {
         start: parsedFiles[0]?.dateRange?.start,
         end: parsedFiles[parsedFiles.length - 1]?.dateRange?.end,
@@ -5871,7 +5883,7 @@ const savePeriods = async (d) => {
     setAmazonBulkProcessing(true);
     const cogsLookup = getCogsLookup();
     
-    let dailyImported = 0, weeklyImported = 0, monthlyImported = 0;
+    let dailyImported = 0, weeklyImported = 0, monthlyImported = 0, skippedDuplicates = 0;
     const updatedDailyData = { ...allDaysData };
     const updatedWeeklyData = { ...allWeeksData };
     const updatedPeriodsData = { ...allPeriodsData };
@@ -5944,6 +5956,52 @@ const savePeriods = async (d) => {
         }
         
         console.log('Processing file:', fileData.name, 'reportType:', reportType, 'dateKey:', dateRange.endDate.toISOString().split('T')[0]);
+        
+        // Smart duplicate detection - check if we already have data for this period
+        let existingAmazonRev = 0;
+        let shouldSkip = false;
+        
+        if (reportType === 'daily') {
+          const dateKey = dateRange.endDate.toISOString().split('T')[0];
+          existingAmazonRev = updatedDailyData[dateKey]?.amazon?.revenue || 0;
+          // Skip if existing has more revenue (more complete data)
+          if (existingAmazonRev > 0 && existingAmazonRev >= amzRev * 0.99) {
+            console.log(`Skipping ${dateKey} - existing Amazon rev $${existingAmazonRev.toFixed(2)} >= new $${amzRev.toFixed(2)}`);
+            shouldSkip = true;
+          }
+        } else if (reportType === 'weekly') {
+          const weekKey = dateRange.endDate.toISOString().split('T')[0];
+          existingAmazonRev = updatedWeeklyData[weekKey]?.amazon?.revenue || 0;
+          if (existingAmazonRev > 0 && existingAmazonRev >= amzRev * 0.99) {
+            console.log(`Skipping week ${weekKey} - existing Amazon rev $${existingAmazonRev.toFixed(2)} >= new $${amzRev.toFixed(2)}`);
+            shouldSkip = true;
+          }
+        } else if (reportType === 'monthly') {
+          const monthLabel = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+          existingAmazonRev = updatedPeriodsData[monthLabel]?.amazon?.revenue || 0;
+          if (existingAmazonRev > 0 && existingAmazonRev >= amzRev * 0.99) {
+            console.log(`Skipping ${monthLabel} - existing Amazon rev $${existingAmazonRev.toFixed(2)} >= new $${amzRev.toFixed(2)}`);
+            shouldSkip = true;
+          }
+        } else if (reportType === 'yearly') {
+          const yearLabel = dateRange.startDate.getFullYear().toString();
+          existingAmazonRev = updatedPeriodsData[yearLabel]?.amazon?.revenue || 0;
+          if (existingAmazonRev > 0 && existingAmazonRev >= amzRev * 0.99) {
+            console.log(`Skipping ${yearLabel} - existing Amazon rev $${existingAmazonRev.toFixed(2)} >= new $${amzRev.toFixed(2)}`);
+            shouldSkip = true;
+          }
+        }
+        
+        // If new data has significantly more revenue, update; otherwise skip
+        if (shouldSkip) {
+          console.log(`Duplicate detected - keeping existing data (higher or equal revenue)`);
+          skippedDuplicates++;
+          continue;
+        }
+        
+        if (existingAmazonRev > 0) {
+          console.log(`Updating with new data - new rev $${amzRev.toFixed(2)} > existing $${existingAmazonRev.toFixed(2)}`);
+        }
         
         if (reportType === 'daily') {
           // Import as daily data
@@ -6030,6 +6088,7 @@ const savePeriods = async (d) => {
           
           updatedPeriodsData[monthLabel] = {
             label: monthLabel,
+            type: 'monthly',
             createdAt: new Date().toISOString(),
             amazon: {
               revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs,
@@ -6050,6 +6109,58 @@ const savePeriods = async (d) => {
             },
           };
           monthlyImported++;
+        } else if (reportType === 'quarterly' || reportType === 'yearly' || reportType === 'period') {
+          // Import as period data with appropriate label
+          let periodLabel;
+          if (reportType === 'yearly') {
+            // Use just the year, e.g., "2025"
+            periodLabel = dateRange.startDate.getFullYear().toString();
+          } else if (reportType === 'quarterly') {
+            // Calculate quarter, e.g., "Q1 2025"
+            const quarter = Math.floor(dateRange.startDate.getMonth() / 3) + 1;
+            periodLabel = `Q${quarter} ${dateRange.startDate.getFullYear()}`;
+          } else {
+            // Custom period - use date range, e.g., "Jan 1 - Mar 15, 2025"
+            const startStr = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            const endStr = dateRange.endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            periodLabel = `${startStr} - ${endStr}`;
+          }
+          
+          const existingPeriodShopify = updatedPeriodsData[periodLabel]?.shopify || { revenue: 0, units: 0, cogs: 0, netProfit: 0, adSpend: 0, skuData: [] };
+          const periodTotalRev = amzRev + (existingPeriodShopify.revenue || 0);
+          const periodTotalUnits = amzUnits + (existingPeriodShopify.units || 0);
+          const periodTotalProfit = amzProfit + (existingPeriodShopify.netProfit || 0);
+          const periodTotalCogs = amzCogs + (existingPeriodShopify.cogs || 0);
+          const periodTotalAdSpend = amzAds + (existingPeriodShopify.adSpend || existingPeriodShopify.metaSpend || 0) + (existingPeriodShopify.googleSpend || 0);
+          
+          updatedPeriodsData[periodLabel] = {
+            label: periodLabel,
+            type: reportType,
+            createdAt: new Date().toISOString(),
+            dateRange: {
+              start: dateRange.start,
+              end: dateRange.end,
+              days: dateRange.daysDiff,
+            },
+            amazon: {
+              revenue: amzRev, netSales: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs,
+              fees: amzFees, adSpend: amzAds, netProfit: amzProfit,
+              margin: amzRev > 0 ? (amzProfit / amzRev) * 100 : 0,
+              skuData: amazonSkus,
+            },
+            shopify: existingPeriodShopify,
+            total: {
+              revenue: periodTotalRev,
+              units: periodTotalUnits,
+              netProfit: periodTotalProfit,
+              cogs: periodTotalCogs,
+              adSpend: periodTotalAdSpend,
+              netMargin: periodTotalRev > 0 ? (periodTotalProfit / periodTotalRev) * 100 : 0,
+              amazonShare: periodTotalRev > 0 ? (amzRev / periodTotalRev) * 100 : 0,
+              shopifyShare: periodTotalRev > 0 ? ((existingPeriodShopify.revenue || 0) / periodTotalRev) * 100 : 0,
+            },
+          };
+          monthlyImported++; // Count all period types together
         } else {
           console.warn('Unknown report type:', reportType, 'for file:', fileData.name);
         }
@@ -6122,12 +6233,21 @@ const savePeriods = async (d) => {
       const messages = [];
       if (dailyImported > 0) messages.push(`${dailyImported} daily`);
       if (weeklyImported > 0) messages.push(`${weeklyImported} weekly`);
-      if (monthlyImported > 0) messages.push(`${monthlyImported} monthly`);
+      if (monthlyImported > 0) messages.push(`${monthlyImported} monthly/period`);
       
       if (messages.length > 0) {
+        let toastMsg = `Imported ${messages.join(', ')} report${dailyImported + weeklyImported + monthlyImported > 1 ? 's' : ''}!`;
+        if (skippedDuplicates > 0) {
+          toastMsg += ` (${skippedDuplicates} duplicate${skippedDuplicates > 1 ? 's' : ''} skipped)`;
+        }
         setToast({ 
-          message: `Imported ${messages.join(', ')} report${dailyImported + weeklyImported + monthlyImported > 1 ? 's' : ''}!`, 
+          message: toastMsg, 
           type: 'success' 
+        });
+      } else if (skippedDuplicates > 0) {
+        setToast({ 
+          message: `All ${skippedDuplicates} file${skippedDuplicates > 1 ? 's' : ''} skipped - data already exists with equal or higher revenue.`, 
+          type: 'info' 
         });
       } else {
         setToast({ 
@@ -11300,13 +11420,16 @@ Analyze the data and respond with ONLY this JSON:
       // Get COGS lookup table
       const cogsLookup = savedCogs || {};
       
-      // STEP 1: Get AMAZON data from PERIODS (2025 monthly data)
+      // STEP 1: Get AMAZON data from PERIODS
+      // Use the CONSOLIDATED year entries (e.g., "2025") as they have complete data
+      // Individual monthly entries may be incomplete
       Object.entries(allPeriodsData).forEach(([periodKey, periodData]) => {
-        // Only process 2025 period data for Amazon
-        if (!periodKey.includes('2025')) return;
-        if (periodKey === '2025') return; // Skip consolidated total
+        // For 2025, use ONLY the consolidated "2025" entry (not monthly)
+        // For 2024, use ONLY the consolidated "2024" entry (not quarterly)
+        if (periodKey.includes('-')) return; // Skip monthly/quarterly entries like "january-2025"
+        if (!['2024', '2025'].includes(periodKey)) return;
         
-        // Process Amazon SKUs from period data (this is the best source for Amazon 2025)
+        // Process Amazon SKUs from period data
         (periodData.amazon?.skuData || []).forEach(sku => {
           const skuId = sku.sku || sku.msku || '';
           if (!skuId) return;
@@ -11333,30 +11456,13 @@ Analyze the data and respond with ONLY this JSON:
           computedSkuTotals[skuId].adSpend += adSpend;
           computedSkuTotals[skuId].returns += returns;
         });
-      });
-      
-      // STEP 2: Get SHOPIFY data from WEEKLY (all 2025+2026 - complete daily data)
-      // Also get AMAZON 2026 data from WEEKLY (daily data available)
-      const sortedWeeks = Object.keys(allWeeksData).sort();
-      
-      sortedWeeks.forEach(weekKey => {
-        if (!weekKey.startsWith('2025') && !weekKey.startsWith('2026')) return;
         
-        const weekData = allWeeksData[weekKey];
-        if (!weekData) return;
-        
-        const is2026 = weekKey.startsWith('2026');
-        
-        // Process Shopify SKUs from weekly data (complete for all years)
-        (weekData.shopify?.skuData || []).forEach(sku => {
+        // Also process Shopify SKUs from consolidated period data
+        (periodData.shopify?.skuData || []).forEach(sku => {
           const skuId = sku.sku || sku.title || '';
           if (!skuId) return;
           const rev = sku.netSales || sku.revenue || 0;
           const units = sku.unitsSold || sku.units || 0;
-          const cogs = sku.cogs || 0;
-          const netProceeds = sku.netProceeds || 0;
-          const adSpend = sku.adSpend || 0;
-          const returns = sku.returns || 0;
           
           if (!computedSkuTotals[skuId]) {
             computedSkuTotals[skuId] = { 
@@ -11369,59 +11475,91 @@ Analyze the data and respond with ONLY this JSON:
           computedSkuTotals[skuId].revenue += rev;
           computedSkuTotals[skuId].units += units;
           computedSkuTotals[skuId].shopifyRev += rev;
+          // Shopify COGS calculated from lookup in step 3
+        });
+      });
+      
+      // STEP 2: Get 2026 data from WEEKLY (daily data available for 2026)
+      // 2024 and 2025 data already loaded from consolidated period entries above
+      const sortedWeeks = Object.keys(allWeeksData).sort();
+      
+      sortedWeeks.forEach(weekKey => {
+        // Only process 2026 weekly data (2025 comes from consolidated period)
+        if (!weekKey.startsWith('2026')) return;
+        
+        const weekData = allWeeksData[weekKey];
+        if (!weekData) return;
+        
+        // Process Shopify SKUs from 2026 weekly data
+        (weekData.shopify?.skuData || []).forEach(sku => {
+          const skuId = sku.sku || sku.title || '';
+          if (!skuId) return;
+          const rev = sku.netSales || sku.revenue || 0;
+          const units = sku.unitsSold || sku.units || 0;
+          
+          if (!computedSkuTotals[skuId]) {
+            computedSkuTotals[skuId] = { 
+              sku: skuId, 
+              name: savedProductNames[skuId] || sku.name || skuId,
+              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
+              cogs: 0, netProceeds: 0, adSpend: 0, returns: 0
+            };
+          }
+          computedSkuTotals[skuId].revenue += rev;
+          computedSkuTotals[skuId].units += units;
+          computedSkuTotals[skuId].shopifyRev += rev;
+        });
+        
+        // Process Amazon SKUs from 2026 weekly data
+        (weekData.amazon?.skuData || []).forEach(sku => {
+          const skuId = sku.sku || sku.msku || '';
+          if (!skuId) return;
+          const rev = sku.netSales || sku.revenue || 0;
+          const units = sku.unitsSold || sku.units || 0;
+          const cogs = sku.cogs || 0;
+          const netProceeds = sku.netProceeds || 0;
+          const adSpend = sku.adSpend || 0;
+          
+          if (!computedSkuTotals[skuId]) {
+            computedSkuTotals[skuId] = { 
+              sku: skuId, 
+              name: savedProductNames[skuId] || sku.name || skuId,
+              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
+              cogs: 0, netProceeds: 0, adSpend: 0, returns: 0
+            };
+          }
+          computedSkuTotals[skuId].revenue += rev;
+          computedSkuTotals[skuId].units += units;
+          computedSkuTotals[skuId].amazonRev += rev;
           computedSkuTotals[skuId].cogs += cogs;
           computedSkuTotals[skuId].netProceeds += netProceeds;
           computedSkuTotals[skuId].adSpend += adSpend;
-          computedSkuTotals[skuId].returns += returns;
         });
-        
-        // Process Amazon SKUs from weekly data (only for 2026 - has daily data)
-        if (is2026) {
-          (weekData.amazon?.skuData || []).forEach(sku => {
-            const skuId = sku.sku || sku.msku || '';
-            if (!skuId) return;
-            const rev = sku.netSales || sku.revenue || 0;
-            const units = sku.unitsSold || sku.units || 0;
-            const cogs = sku.cogs || 0;
-            const netProceeds = sku.netProceeds || 0;
-            const adSpend = sku.adSpend || 0;
-            const returns = sku.returns || 0;
-            
-            if (!computedSkuTotals[skuId]) {
-              computedSkuTotals[skuId] = { 
-                sku: skuId, 
-                name: savedProductNames[skuId] || sku.name || skuId,
-                revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
-                cogs: 0, netProceeds: 0, adSpend: 0, returns: 0
-              };
-            }
-            computedSkuTotals[skuId].revenue += rev;
-            computedSkuTotals[skuId].units += units;
-            computedSkuTotals[skuId].amazonRev += rev;
-            computedSkuTotals[skuId].cogs += cogs;
-            computedSkuTotals[skuId].netProceeds += netProceeds;
-            computedSkuTotals[skuId].adSpend += adSpend;
-            computedSkuTotals[skuId].returns += returns;
-          });
-        }
       });
       
       // STEP 3: Calculate profit for each SKU
-      // For SKUs without embedded COGS, use the COGS lookup table
+      // IMPORTANT: For Amazon, netProceeds IS the profit (already has fees AND COGS deducted)
+      // For Shopify, we need to subtract COGS from revenue
       Object.values(computedSkuTotals).forEach(sku => {
-        // If no COGS from data, try lookup table
-        if (sku.cogs === 0 && sku.units > 0) {
+        // For Shopify SKUs without COGS data, use lookup table
+        if (sku.shopifyRev > 0 && sku.cogs === 0 && sku.units > 0) {
           const lookupKey = sku.sku.replace('Shop', '').replace('SHOP', '');
           const unitCogs = cogsLookup[sku.sku] || cogsLookup[lookupKey] || 0;
           sku.cogs = unitCogs * sku.units;
         }
-        // Calculate profit: netProceeds - cogs - adSpend (if we have netProceeds)
-        // Or estimate: revenue - cogs - adSpend (simplified)
-        if (sku.netProceeds > 0) {
-          sku.profit = sku.netProceeds - sku.cogs - sku.adSpend;
+        
+        // Calculate profit:
+        // - Amazon: netProceeds IS the profit (already has all fees + COGS deducted)
+        // - Shopify: revenue - COGS
+        if (sku.amazonRev > 0 && sku.netProceeds > 0) {
+          // Amazon data - netProceeds is already the final profit
+          sku.profit = sku.netProceeds;
+        } else if (sku.shopifyRev > 0) {
+          // Shopify - subtract COGS from revenue
+          sku.profit = sku.shopifyRev - sku.cogs;
         } else {
-          // Simplified profit estimate when we don't have netProceeds
-          sku.profit = sku.revenue - sku.cogs - sku.adSpend;
+          // Fallback
+          sku.profit = sku.revenue - sku.cogs;
         }
         sku.margin = sku.revenue > 0 ? ((sku.profit / sku.revenue) * 100) : 0;
       });
@@ -16363,11 +16501,17 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           file.reportType === 'daily' ? 'bg-cyan-500/20' :
                           file.reportType === 'weekly' ? 'bg-violet-500/20' :
                           file.reportType === 'monthly' ? 'bg-teal-500/20' :
+                          file.reportType === 'quarterly' ? 'bg-amber-500/20' :
+                          file.reportType === 'yearly' ? 'bg-emerald-500/20' :
+                          file.reportType === 'period' ? 'bg-rose-500/20' :
                           'bg-slate-600/50'
                         }`}>
                           {file.reportType === 'daily' ? <Clock className="w-5 h-5 text-cyan-400" /> :
                            file.reportType === 'weekly' ? <Calendar className="w-5 h-5 text-violet-400" /> :
                            file.reportType === 'monthly' ? <CalendarRange className="w-5 h-5 text-teal-400" /> :
+                           file.reportType === 'quarterly' ? <CalendarRange className="w-5 h-5 text-amber-400" /> :
+                           file.reportType === 'yearly' ? <CalendarRange className="w-5 h-5 text-emerald-400" /> :
+                           file.reportType === 'period' ? <CalendarRange className="w-5 h-5 text-rose-400" /> :
                            <FileSpreadsheet className="w-5 h-5 text-slate-400" />}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -16377,9 +16521,14 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               <span className={`${
                                 file.reportType === 'daily' ? 'text-cyan-400' :
                                 file.reportType === 'weekly' ? 'text-violet-400' :
-                                'text-teal-400'
+                                file.reportType === 'monthly' ? 'text-teal-400' :
+                                file.reportType === 'quarterly' ? 'text-amber-400' :
+                                file.reportType === 'yearly' ? 'text-emerald-400' :
+                                file.reportType === 'period' ? 'text-rose-400' :
+                                'text-slate-400'
                               }`}>
                                 {file.reportType.charAt(0).toUpperCase() + file.reportType.slice(1)}
+                                {file.dateRange?.daysDiff > 1 && ` (${file.dateRange.daysDiff} days)`}
                               </span>
                             ) : 'Parsing...'}{' '}
                             {file.dateRange && `• ${file.dateRange.start} to ${file.dateRange.end}`}
@@ -16401,22 +16550,46 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   {amazonBulkParsed && (
                     <div className="bg-slate-900/50 rounded-xl p-4 space-y-3">
                       <h4 className="text-white font-medium">Import Summary</h4>
-                      <div className="grid grid-cols-3 gap-4 text-center">
-                        <div>
-                          <p className="text-2xl font-bold text-cyan-400">{amazonBulkParsed.dailyCount || 0}</p>
-                          <p className="text-xs text-slate-400">Daily Reports</p>
-                        </div>
-                        <div>
-                          <p className="text-2xl font-bold text-violet-400">{amazonBulkParsed.weeklyCount || 0}</p>
-                          <p className="text-xs text-slate-400">Weekly Reports</p>
-                        </div>
-                        <div>
-                          <p className="text-2xl font-bold text-teal-400">{amazonBulkParsed.monthlyCount || 0}</p>
-                          <p className="text-xs text-slate-400">Monthly Reports</p>
-                        </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-center">
+                        {amazonBulkParsed.dailyCount > 0 && (
+                          <div>
+                            <p className="text-xl font-bold text-cyan-400">{amazonBulkParsed.dailyCount}</p>
+                            <p className="text-xs text-slate-400">Daily</p>
+                          </div>
+                        )}
+                        {amazonBulkParsed.weeklyCount > 0 && (
+                          <div>
+                            <p className="text-xl font-bold text-violet-400">{amazonBulkParsed.weeklyCount}</p>
+                            <p className="text-xs text-slate-400">Weekly</p>
+                          </div>
+                        )}
+                        {amazonBulkParsed.monthlyCount > 0 && (
+                          <div>
+                            <p className="text-xl font-bold text-teal-400">{amazonBulkParsed.monthlyCount}</p>
+                            <p className="text-xs text-slate-400">Monthly</p>
+                          </div>
+                        )}
+                        {amazonBulkParsed.quarterlyCount > 0 && (
+                          <div>
+                            <p className="text-xl font-bold text-amber-400">{amazonBulkParsed.quarterlyCount}</p>
+                            <p className="text-xs text-slate-400">Quarterly</p>
+                          </div>
+                        )}
+                        {amazonBulkParsed.yearlyCount > 0 && (
+                          <div>
+                            <p className="text-xl font-bold text-emerald-400">{amazonBulkParsed.yearlyCount}</p>
+                            <p className="text-xs text-slate-400">Yearly</p>
+                          </div>
+                        )}
+                        {amazonBulkParsed.periodCount > 0 && (
+                          <div>
+                            <p className="text-xl font-bold text-rose-400">{amazonBulkParsed.periodCount}</p>
+                            <p className="text-xs text-slate-400">Custom</p>
+                          </div>
+                        )}
                       </div>
                       <div className="pt-3 border-t border-slate-700 text-sm text-slate-300">
-                        <p>Total Revenue: <span className="text-white font-medium">{formatCurrency(amazonBulkParsed.totalRevenue || 0)}</span></p>
+                        <p>Total Files: <span className="text-white font-medium">{amazonBulkParsed.totalFiles}</span> • Revenue: <span className="text-white font-medium">{formatCurrency(amazonBulkParsed.totalRevenue || 0)}</span></p>
                         <p>Date Range: <span className="text-white">{amazonBulkParsed.dateRange?.start} to {amazonBulkParsed.dateRange?.end}</span></p>
                       </div>
                     </div>
