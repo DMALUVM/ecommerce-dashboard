@@ -5984,7 +5984,17 @@ const savePeriods = async (d) => {
             shouldSkip = true;
           }
         } else if (reportType === 'yearly') {
-          const yearLabel = dateRange.startDate.getFullYear().toString();
+          // Check with the same label format used during import
+          const startYear = dateRange.startDate.getFullYear();
+          const endYear = dateRange.endDate.getFullYear();
+          let yearLabel;
+          if (startYear === endYear) {
+            yearLabel = `${startYear} Full Year`;
+          } else {
+            const startStr = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+            const endStr = dateRange.endDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+            yearLabel = `${startStr} - ${endStr}`;
+          }
           existingAmazonRev = updatedPeriodsData[yearLabel]?.amazon?.revenue || 0;
           if (existingAmazonRev > 0 && existingAmazonRev >= amzRev * 0.99) {
             console.log(`Skipping ${yearLabel} - existing Amazon rev $${existingAmazonRev.toFixed(2)} >= new $${amzRev.toFixed(2)}`);
@@ -6113,8 +6123,16 @@ const savePeriods = async (d) => {
           // Import as period data with appropriate label
           let periodLabel;
           if (reportType === 'yearly') {
-            // Use just the year, e.g., "2025"
-            periodLabel = dateRange.startDate.getFullYear().toString();
+            // Use date range for yearly to avoid conflicts, e.g., "2025 Full Year" or "Jan 2025 - Jan 2026"
+            const startYear = dateRange.startDate.getFullYear();
+            const endYear = dateRange.endDate.getFullYear();
+            if (startYear === endYear) {
+              periodLabel = `${startYear} Full Year`;
+            } else {
+              const startStr = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+              const endStr = dateRange.endDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+              periodLabel = `${startStr} - ${endStr}`;
+            }
           } else if (reportType === 'quarterly') {
             // Calculate quarter, e.g., "Q1 2025"
             const quarter = Math.floor(dateRange.startDate.getMonth() / 3) + 1;
@@ -6229,6 +6247,7 @@ const savePeriods = async (d) => {
       console.log('All saves complete, clearing upload state...');
       setAmazonBulkFiles([]);
       setAmazonBulkParsed(null);
+      setAmazonBulkProcessing(false); // Reset processing state immediately
       
       const messages = [];
       if (dailyImported > 0) messages.push(`${dailyImported} daily`);
@@ -6256,20 +6275,22 @@ const savePeriods = async (d) => {
         });
       }
       
-      // Navigate to appropriate view
-      console.log('About to navigate. weeklyImported:', weeklyImported, 'dailyImported:', dailyImported);
-      if (weeklyImported > 0) {
-        const latestWeek = Object.keys(updatedWeeklyData).sort().reverse()[0];
-        setSelectedWeek(latestWeek);
-        setView('weekly');
-      } else if (dailyImported > 0) {
-        const latestDay = Object.keys(updatedDailyData).filter(k => hasDailySalesData(updatedDailyData[k])).sort().reverse()[0];
-        if (latestDay) setSelectedDay(latestDay);
-        setView('daily');
-      } else if (monthlyImported > 0) {
-        setView('periods');
-      }
-      console.log('Navigation complete');
+      // Navigate to appropriate view after a short delay to let React settle
+      console.log('About to navigate. weeklyImported:', weeklyImported, 'dailyImported:', dailyImported, 'monthlyImported:', monthlyImported);
+      setTimeout(() => {
+        if (weeklyImported > 0) {
+          const latestWeek = Object.keys(updatedWeeklyData).sort().reverse()[0];
+          setSelectedWeek(latestWeek);
+          setView('weekly');
+        } else if (dailyImported > 0) {
+          const latestDay = Object.keys(updatedDailyData).filter(k => hasDailySalesData(updatedDailyData[k])).sort().reverse()[0];
+          if (latestDay) setSelectedDay(latestDay);
+          setView('daily');
+        } else if (monthlyImported > 0) {
+          setView('periods');
+        }
+        console.log('Navigation complete');
+      }, 100);
     } catch (err) {
       console.error('Bulk upload error:', err);
       console.error('Error stack:', err.stack);
