@@ -9879,11 +9879,24 @@ Analyze the data and respond with ONLY this JSON:
         startDate = allDates.length > 0 ? new Date(allDates[0]) : new Date(2024, 0, 1);
         endDate = allDates.length > 0 ? new Date(allDates[allDates.length - 1]) : today;
         break;
+      case 'this-week':
+        // Current week: Monday through today (week to date)
+        const todayDow = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+        // Calculate days since Monday (if Sunday, it's 6 days since Monday)
+        const daysSinceMonday = todayDow === 0 ? 6 : todayDow - 1;
+        startDate = new Date(today);
+        startDate.setDate(today.getDate() - daysSinceMonday); // Go back to Monday
+        endDate = new Date(today); // Through today
+        break;
       case 'last-week':
+        // Get the most recent completed week (Monday to Sunday)
+        const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+        // If today is Sunday, go back to previous Sunday; otherwise go back to last Sunday
+        const daysToLastSunday = dayOfWeek === 0 ? 7 : dayOfWeek;
         endDate = new Date(today);
-        endDate.setDate(today.getDate() - today.getDay()); // Last Sunday
+        endDate.setDate(today.getDate() - daysToLastSunday); // Last Sunday
         startDate = new Date(endDate);
-        startDate.setDate(startDate.getDate() - 6); // Previous Monday
+        startDate.setDate(endDate.getDate() - 6); // Monday of that week
         break;
       case 'last-month':
         startDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
@@ -12272,6 +12285,14 @@ Analyze the data and respond with ONLY this JSON:
       const systemPrompt = `You are an expert e-commerce analyst for "${ctx.storeName}". You have COMPLETE access to all business data and can answer ANY question about it.
 
 ═══════════════════════════════════════════════════════════════════
+IMPORTANT: WEEK DEFINITION
+═══════════════════════════════════════════════════════════════════
+In this system, a "week" is ALWAYS Monday through Sunday.
+- Weeks are keyed/stored by their ending Sunday date (e.g., "2026-01-26" = week of Mon Jan 20 - Sun Jan 26)
+- "Last week" means the most recent completed Monday-Sunday period
+- "Week to date" or "this week" means Monday through today
+
+═══════════════════════════════════════════════════════════════════
 DATA DICTIONARY - All available data sources:
 ═══════════════════════════════════════════════════════════════════
 
@@ -13979,6 +14000,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     <div className="grid grid-cols-2 gap-2">
                       {[
                         { value: 'all', label: 'All Data' },
+                        { value: 'this-week', label: 'This Week (WTD)' },
                         { value: 'last-week', label: 'Last Week' },
                         { value: 'last-month', label: 'Last Month' },
                         { value: 'last-quarter', label: 'Last Quarter' },
@@ -19531,6 +19553,7 @@ if (shopifySkuWithShipping.length > 0) {
               <div className="grid grid-cols-2 gap-2">
                 {[
                   { value: 'all', label: 'All Data' },
+                  { value: 'this-week', label: 'This Week (WTD)' },
                   { value: 'last-week', label: 'Last Week' },
                   { value: 'last-month', label: 'Last Month' },
                   { value: 'last-quarter', label: 'Last Quarter' },
