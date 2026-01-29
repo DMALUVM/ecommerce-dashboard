@@ -11794,7 +11794,7 @@ ${verifiedFacts.allSkus.map((s, i) => `${i+1}. ${s.sku}: $${s.revenue.toLocaleSt
 ${(() => {
   const cats = {};
   verifiedFacts.allSkus.forEach(s => {
-    const cat = productCatalog.find(p => p.sku === s.sku)?.category || 'Other';
+    const cat = ctx.productCatalog?.find(p => p.sku === s.sku)?.category || 'Other';
     if (!cats[cat]) cats[cat] = { revenue: 0, units: 0, count: 0 };
     cats[cat].revenue += s.revenue;
     cats[cat].units += s.units;
