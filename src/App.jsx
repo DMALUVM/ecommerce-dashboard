@@ -111,22 +111,22 @@ const safeLocalStorageGetString = (key, defaultValue = '') => {
 // Enhanced 3PL parsing - extracts detailed metrics from 3PL CSV files
 // 3PL utility functions extracted to utils/threePL.js
 
-// SKU normalization and validation
-// Valid SKUs must start with uppercase DDPE - lowercase ddpe are duplicates to be excluded
-const normalizeSku = (sku) => {
-  if (!sku) return '';
-  const trimmed = String(sku).trim();
-  // REJECT lowercase ddpe SKUs entirely - these are duplicates
-  if (trimmed.startsWith('ddpe')) return ''; // Return empty to filter out
-  return trimmed; // Keep original case for valid SKUs
-};
-
-// Check if SKU is valid (uppercase DDPE pattern)
+// SKU validation - reject lowercase ddpe duplicates, allow everything else
 const isValidSku = (sku) => {
   if (!sku) return false;
   const trimmed = String(sku).trim();
-  // Must start with uppercase DDPE, not lowercase ddpe
-  return trimmed.startsWith('DDPE');
+  // REJECT lowercase ddpe SKUs - these are duplicates
+  // Allow ALL other SKUs (including DDPE, Amazon ASINs, etc.)
+  if (trimmed.startsWith('ddpe')) return false;
+  return true;
+};
+
+// Legacy function kept for compatibility
+const normalizeSku = (sku) => {
+  if (!sku) return '';
+  const trimmed = String(sku).trim();
+  if (trimmed.startsWith('ddpe')) return ''; // Filter out lowercase
+  return trimmed;
 };
 
 export default function Dashboard() {
