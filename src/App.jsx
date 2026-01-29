@@ -5,7 +5,7 @@ import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, Ba
 import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
 import { formatCurrency, formatPercent, formatNumber } from './utils/format';
-import { hasDailySalesData, formatDateKey, getSunday, migrateWeekKeys } from './utils/date';
+import { hasDailySalesData, formatDateKey, getSunday } from './utils/date';
 import { deriveWeeksFromDays, mergeWeekData } from './utils/weekly';
 import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from './utils/ads';
 import { withShippingSkuRow, sumSkuRows } from './utils/reconcile';
@@ -47,29 +47,433 @@ import GoalsCard from './components/ui/GoalsCard';
 import StateConfigModal from './components/ui/StateConfigModal';
 import FilingDetailModal from './components/ui/FilingDetailModal';
 import NavTabs from './components/ui/NavTabs';
-import { US_STATES_TAX_INFO, STATE_FILING_FORMATS } from './utils/taxData';
-import { parse3PLData, parse3PLExcel, get3PLForWeek, get3PLForDay, get3PLForPeriod } from './utils/threePL';
-import { parseQBOTransactions } from './utils/banking';
-import { parseShopifyTaxReport, getNextDueDate } from './utils/salesTax';
-import { DEFAULT_DASHBOARD_WIDGETS } from './utils/config';
-import { calculateBreakEven } from './utils/calculations';
-import { exportToCSV } from './utils/export';
-import { AI_CONFIG, callAI } from './utils/ai';
-import { processAmazonForecast } from './utils/forecast';
-import { getMonths as getMonthsUtil, getYears as getYearsUtil, getMonthlyData as getMonthlyDataUtil, getYearlyData as getYearlyDataUtil } from './utils/aggregation';
-import WeeklyReportModal from './components/ui/WeeklyReportModal';
-import AIChatPanel from './components/ui/AIChatPanel';
-import SkuSettingsModal from './components/ui/SkuSettingsModal';
+
+// Dashboard widget configuration - defined at module level for consistent access
+const DEFAULT_DASHBOARD_WIDGETS = {
+  widgets: [
+    { id: 'alerts', name: 'Alerts & Notifications', enabled: true, order: 0 },
+    { id: 'todayPerformance', name: 'Last Week & MTD Performance', enabled: true, order: 1 },
+    { id: 'weekProgress', name: 'This Week\'s Goal', enabled: true, order: 2 },
+    { id: 'topSellers14d', name: 'Top Sellers (14 Days)', enabled: true, order: 3 },
+    { id: 'worstSellers14d', name: 'Needs Attention (14 Days)', enabled: true, order: 4 },
+    { id: 'topSellersYTD', name: 'Top Sellers (YTD)', enabled: false, order: 5 },
+    { id: 'worstSellersYTD', name: 'Needs Attention (YTD)', enabled: false, order: 6 },
+    { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 7 },
+    { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 8 },
+    { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 9 },
+    { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 10 },
+    { id: 'summaryMetrics', name: 'Summary Metrics (Time Range)', enabled: false, order: 11 },
+    { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 12 },
+    { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 13 },
+    { id: 'dataHub', name: 'Data Hub', enabled: false, order: 14 },
+  ],
+  stacks: {}, // { 'salesTax': ['salesTax', 'billsDue'] } - widget stacks
+  layout: 'auto',
+};
 
 
-// DEFAULT_DASHBOARD_WIDGETS extracted to utils/config.js
+// Parse QBO Transaction Detail CSV
+const parseQBOTransactions = (content, categoryOverrides = {}) => {
+  const lines = content.split(/\r?\n/).filter(l => l.trim());
+  const transactions = [];
+  const accounts = {};
+  const categories = {};
+  let currentAccount = null;
+  let currentAccountType = 'checking';
+  
+  // First pass: Find account totals from "Total for [Account]" lines
+  const accountTotals = {};
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('Total for ')) {
+      const cols = parseCSVLine(line);
+      const match = cols[0].match(/Total for (.+)/);
+      if (match) {
+        const accountName = match[1].trim();
+        // Parse the total amount (usually in column 8 or 9)
+        let totalStr = (cols[9] || cols[8] || cols[7] || '').replace(/[$,"\s]/g, '');
+        const total = parseFloat(totalStr) || 0;
+        accountTotals[accountName] = total;
+      }
+    }
+  }
+  
+  // Skip header rows
+  let dataStartIndex = 0;
+  for (let i = 0; i < Math.min(10, lines.length); i++) {
+    if (lines[i].includes('Transaction date') || lines[i].includes('transaction date')) {
+      dataStartIndex = i + 1;
+      break;
+    }
+  }
+  
+  // Bank account patterns - must have account number pattern like (5983), (1003), (1009)
+  const isBankAccount = (name) => {
+    // Must have account number in parentheses pattern at end
+    const hasAccountNumber = /\(\d{4}\)\s*-\s*\d+$/.test(name);
+    if (!hasAccountNumber) return false;
+    
+    // Must NOT contain quotes (sign of corrupted multi-line CSV parsing)
+    if (name.includes('"')) return false;
+    
+    // Must be reasonably short (account names are typically < 50 chars)
+    if (name.length > 60) return false;
+    
+    // Must start with a letter (not a continuation of a memo)
+    if (!/^[A-Za-z]/.test(name.trim())) return false;
+    
+    const lower = name.toLowerCase();
+    return (
+      lower.includes('checking') ||
+      lower.includes('savings') ||
+      lower.includes('operations') ||
+      lower.includes('card') ||
+      lower.includes('credit') ||
+      lower.includes('amex') ||
+      lower.includes('visa') ||
+      lower.includes('mastercard') ||
+      lower.includes('platinum') ||
+      lower.includes('(5983)') ||
+      lower.includes('(1003)') ||
+      lower.includes('(1009)')
+    );
+  };
+  
+  // Non-cash/asset patterns to skip
+  const isNonCashAccount = (name) => {
+    const lower = name.toLowerCase();
+    return (
+      lower.includes('depreciation') ||
+      lower.includes('accumulated') ||
+      lower.includes('asset') ||
+      lower.includes('vehicle') ||
+      lower.includes('equipment') ||
+      lower.includes('tundra') ||
+      lower.includes('furniture') ||
+      lower.includes('inventory asset')
+    );
+  };
+  
+  for (let i = dataStartIndex; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    
+    const cols = parseCSVLine(line);
+    
+    // Check for account section headers
+    if (cols[0] && cols[0].trim() && !cols[1]?.trim() && !cols[0].startsWith('Total for') && !cols[0].includes(',TOTAL')) {
+      const potentialAccount = cols[0].trim();
+      
+      // Skip non-bank accounts
+      if (isNonCashAccount(potentialAccount)) {
+        currentAccount = null;
+        continue;
+      }
+      
+      // Only track real bank accounts
+      if (isBankAccount(potentialAccount)) {
+        currentAccount = potentialAccount;
+        const lowerName = potentialAccount.toLowerCase();
+        currentAccountType = (lowerName.includes('card') || 
+                             lowerName.includes('credit') ||
+                             lowerName.includes('amex') ||
+                             lowerName.includes('platinum') ||
+                             lowerName.includes('1003') ||
+                             lowerName.includes('1009')) ? 'credit_card' : 'checking';
+        
+        if (!accounts[currentAccount]) {
+          // Get balance from totals we found earlier
+          const balance = accountTotals[currentAccount] || 0;
+          accounts[currentAccount] = { 
+            name: currentAccount, 
+            type: currentAccountType, 
+            transactions: 0, 
+            totalIn: 0, 
+            totalOut: 0,
+            balance: balance
+          };
+        }
+      } else {
+        currentAccount = null;
+      }
+      continue;
+    }
+    
+    // Skip if we're not in a valid bank account
+    if (!currentAccount) continue;
+    
+    // Skip total rows and metadata rows
+    if (cols[0]?.startsWith('Total for') || cols[0]?.includes(',TOTAL') || cols[0]?.includes('Cash Basis')) continue;
+    
+    // Parse transaction row
+    const dateStr = cols[1]?.trim();
+    if (!dateStr || !dateStr.match(/^\d{1,2}\/\d{1,2}\/\d{4}$/)) continue;
+    
+    const txnType = cols[2]?.trim() || '';
+    const vendorName = cols[4]?.trim() || '';
+    const memo = cols[6]?.trim() || '';
+    const category = cols[7]?.trim() || 'Uncategorized';
+    
+    let amountStr = cols[8]?.trim().replace(/,/g, '').replace(/"/g, '') || '0';
+    const amount = parseFloat(amountStr) || 0;
+    
+    // Parse date
+    const dateParts = dateStr.split('/');
+    const dateKey = `${dateParts[2]}-${dateParts[0].padStart(2, '0')}-${dateParts[1].padStart(2, '0')}`;
+    
+    // Create unique transaction ID using simple hash of full memo
+    const memoHash = memo.split('').reduce((hash, char) => {
+      return ((hash << 5) - hash) + char.charCodeAt(0) | 0;
+    }, 0).toString(36);
+    const txnId = `${dateKey}-${currentAccount?.slice(0,15)}-${amount.toFixed(2)}-${memoHash}`.replace(/[^a-zA-Z0-9-]/g, '');
+    
+    // Skip journal entries and non-cash items
+    if (txnType === 'Journal Entry') continue;
+    
+    // Handle Credit Card Payments:
+    // - From checking account: This is a cash OUTFLOW (expense) - money leaves checking
+    // - On credit card account: This is a payment RECEIVED (reduces balance) - skip to avoid double-counting
+    if (txnType === 'Credit Card Payment') {
+      // If we're in a checking account and paying a credit card, record as expense
+      if (currentAccountType === 'checking' && amount < 0) {
+        // This IS an expense from the checking account - don't skip!
+        // Fall through to normal processing
+      } else {
+        // Skip credit card payment entries on the credit card side
+        continue;
+      }
+    }
+    
+    const categoryLower = category.toLowerCase();
+    const memoLower = memo.toLowerCase();
+    if (categoryLower.includes('depreciation') || categoryLower.includes('amortization') ||
+        categoryLower.includes('accumulated') || categoryLower.includes('unrealized') ||
+        memoLower.includes('depreciation') || memoLower.includes('amortization')) {
+      continue;
+    }
+    
+    // Determine income vs expense
+    let isIncome = false;
+    let isExpense = false;
+    
+    if (currentAccountType === 'credit_card') {
+      if (txnType === 'Expense' && amount > 0) isExpense = true;
+    } else {
+      // Checking/savings accounts
+      if (txnType === 'Deposit' && amount > 0) isIncome = true;
+      else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) isExpense = true;
+      else if (txnType === 'Credit Card Payment' && amount < 0) isExpense = true; // Cash leaving to pay card
+      else if (txnType === 'Transfer' && amount > 0) isIncome = true;
+      else if (txnType === 'Payroll Check') isExpense = true;
+    }
+    
+    if (!isIncome && !isExpense) continue;
+    
+    const finalCategory = categoryOverrides[txnId] || category;
+    const topCategory = finalCategory.split(':')[0].trim();
+    const subCategory = finalCategory.includes(':') ? finalCategory.split(':').slice(1).join(':').trim() : '';
+    
+    // Extract vendor
+    let vendor = vendorName;
+    if (!vendor && memo) {
+      const memoUpper = memo.toUpperCase();
+      if (memoUpper.includes('AMAZON')) vendor = 'Amazon';
+      else if (memoUpper.includes('SHOPIFY')) vendor = 'Shopify';
+      else if (memoUpper.includes('GOOGLE')) vendor = 'Google';
+      else if (memoUpper.includes('META') || memoUpper.includes('FACEBOOK')) vendor = 'Meta';
+      else vendor = memo.split(' ')[0] || 'Unknown';
+    }
+    if (!vendor) vendor = 'Unknown';
+    
+    const txn = {
+      id: txnId,
+      date: dateKey,
+      dateDisplay: dateStr,
+      type: txnType,
+      vendor,
+      memo,
+      category: finalCategory,
+      originalCategory: category,
+      topCategory,
+      subCategory,
+      amount: Math.abs(amount),
+      isIncome,
+      isExpense,
+      account: currentAccount,
+      accountType: currentAccountType,
+    };
+    
+    transactions.push(txn);
+    
+    if (accounts[currentAccount]) {
+      accounts[currentAccount].transactions++;
+      if (txn.isIncome) accounts[currentAccount].totalIn += txn.amount;
+      if (txn.isExpense) accounts[currentAccount].totalOut += txn.amount;
+    }
+    
+    // Category stats
+    if (!categories[topCategory]) {
+      categories[topCategory] = { name: topCategory, count: 0, totalIn: 0, totalOut: 0, subCategories: {} };
+    }
+    categories[topCategory].count++;
+    if (txn.isIncome) categories[topCategory].totalIn += txn.amount;
+    if (txn.isExpense) categories[topCategory].totalOut += txn.amount;
+    
+    if (subCategory) {
+      if (!categories[topCategory].subCategories[subCategory]) {
+        categories[topCategory].subCategories[subCategory] = { count: 0, totalIn: 0, totalOut: 0 };
+      }
+      categories[topCategory].subCategories[subCategory].count++;
+      if (txn.isIncome) categories[topCategory].subCategories[subCategory].totalIn += txn.amount;
+      if (txn.isExpense) categories[topCategory].subCategories[subCategory].totalOut += txn.amount;
+    }
+  }
+  
+  // Sort by date
+  transactions.sort((a, b) => a.date.localeCompare(b.date));
+  
+  // Generate monthly snapshots
+  const monthlySnapshots = {};
+  transactions.forEach(txn => {
+    const monthKey = txn.date.substring(0, 7);
+    if (!monthlySnapshots[monthKey]) {
+      monthlySnapshots[monthKey] = { income: 0, expenses: 0, transactions: 0, byCategory: {} };
+    }
+    monthlySnapshots[monthKey].transactions++;
+    if (txn.isIncome) monthlySnapshots[monthKey].income += txn.amount;
+    if (txn.isExpense) monthlySnapshots[monthKey].expenses += txn.amount;
+    
+    if (!monthlySnapshots[monthKey].byCategory[txn.topCategory]) {
+      monthlySnapshots[monthKey].byCategory[txn.topCategory] = { income: 0, expenses: 0 };
+    }
+    if (txn.isIncome) monthlySnapshots[monthKey].byCategory[txn.topCategory].income += txn.amount;
+    if (txn.isExpense) monthlySnapshots[monthKey].byCategory[txn.topCategory].expenses += txn.amount;
+  });
+  
+  Object.keys(monthlySnapshots).forEach(m => {
+    monthlySnapshots[m].net = monthlySnapshots[m].income - monthlySnapshots[m].expenses;
+  });
+  
+  return {
+    transactions,
+    accounts,
+    categories,
+    monthlySnapshots,
+    dateRange: transactions.length > 0 ? {
+      start: transactions[0].date,
+      end: transactions[transactions.length - 1].date
+    } : null,
+    transactionCount: transactions.length,
+  };
+};
 
-// parseQBOTransactions extracted to utils/banking.js
+// ============ UNIFIED AI CONFIGURATION (Pro Plan) ============
+// All AI features use these consistent settings for best results
+const AI_CONFIG = {
+  model: 'claude-sonnet-4-20250514',
+  maxTokens: 4000,  // Pro plan allows comprehensive responses
+  maxDuration: 60,  // Pro plan 60-second timeout
+  streaming: true,  // Use streaming to avoid 25s first-byte timeout
+  
+  // Forecast calculation weights (data-driven, not AI-generated)
+  forecastWeights: {
+    daily: 0.60,    // 60% weight on recent daily average
+    weekly: 0.20,   // 20% weight on weekly trend
+    amazon: 0.20,   // 20% weight on Amazon forecast (if available)
+  },
+  
+  // Sanity bounds for AI adjustments
+  bounds: {
+    maxAdjustment: 0.05,  // Max ±5% adjustment per future week
+    maxTotalDeviation: 0.25, // Max ±25% from calculated baseline
+  },
+  
+  // Learning configuration
+  learning: {
+    minSamplesForCorrection: 3,  // Need 3+ samples before applying learned corrections
+    correctionDecay: 0.95,       // Older corrections weighted less
+    maxCorrectionFactor: 1.5,    // Max correction multiplier
+    minCorrectionFactor: 0.5,    // Min correction multiplier
+  },
+};
 
+// Helper to call AI with unified config (streaming)
+// Can be called as:
+//   callAI(prompt, systemPrompt) - for simple prompts
+//   callAI({ messages: [...], system: '...' }) - for chat with history or complex content
+const callAI = async (promptOrOptions, systemPrompt = '') => {
+  let requestBody;
+  
+  if (typeof promptOrOptions === 'string') {
+    // Simple prompt string
+    requestBody = {
+      system: systemPrompt || 'You are a helpful e-commerce analytics AI. Respond with JSON when requested.',
+      messages: [{ role: 'user', content: promptOrOptions }],
+      model: AI_CONFIG.model,
+      max_tokens: AI_CONFIG.maxTokens,
+    };
+  } else {
+    // Options object with messages array (supports complex content like PDFs)
+    requestBody = {
+      system: promptOrOptions.system || 'You are a helpful e-commerce analytics AI.',
+      messages: promptOrOptions.messages || [],
+      model: AI_CONFIG.model,
+      max_tokens: AI_CONFIG.maxTokens,
+    };
+  }
+  
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+  
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`AI API error: ${response.status} - ${error}`);
+  }
+  
+  // Handle streaming response
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('text/event-stream')) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let buffer = '';
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      
+      for (const line of lines) {
+        if (line.startsWith(':')) continue; // Skip SSE comments like ": connected"
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'delta' && data.text) fullText += data.text;
+            else if (data.type === 'complete' && data.content?.[0]?.text) fullText = data.content[0].text;
+            else if (data.type === 'done' && data.fullText) fullText = data.fullText;
+            else if (data.type === 'error') throw new Error(data.error);
+          } catch (e) { /* Skip parse errors for incomplete JSON */ }
+        }
+      }
+    }
+    return fullText;
+  }
+  
+  // Fallback to JSON response (shouldn't happen with streaming enabled)
+  const data = await response.json();
+  return data.content?.[0]?.text || '';
+};
 
-
-// AI_CONFIG and callAI extracted to utils/ai.js
-
+// Supabase (cloud auth + storage)
+// Create a .env.local file in your Vite project with:
+//   VITE_SUPABASE_URL=...
+//   VITE_SUPABASE_ANON_KEY=...
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY)
@@ -109,24 +513,595 @@ const safeLocalStorageGetString = (key, defaultValue = '') => {
 };
 
 // Enhanced 3PL parsing - extracts detailed metrics from 3PL CSV files
-// 3PL utility functions extracted to utils/threePL.js
-
-// SKU validation - reject lowercase ddpe duplicates, allow everything else
-const isValidSku = (sku) => {
-  if (!sku) return false;
-  const trimmed = String(sku).trim();
-  // REJECT lowercase ddpe SKUs - these are duplicates
-  // Allow ALL other SKUs (including DDPE, Amazon ASINs, etc.)
-  if (trimmed.startsWith('ddpe')) return false;
-  return true;
+const parse3PLData = (threeplFiles) => {
+  const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+  const metrics = {
+    totalCost: 0,
+    orderCount: 0,
+    totalUnits: 0,
+    avgShippingCost: 0,
+    avgPickCost: 0,
+    avgPackagingCost: 0,
+    avgCostPerOrder: 0,
+    avgUnitsPerOrder: 0,
+    shippingCount: 0,
+    firstPickCount: 0,
+    additionalPickCount: 0,
+  };
+  
+  if (!threeplFiles) return { breakdown, metrics };
+  
+  // Normalize to array of file data arrays
+  // threeplFiles could be:
+  // 1. null/undefined -> return empty
+  // 2. Array of row objects (single file): [{Charge: x}, {Charge: y}] 
+  // 3. Array of arrays (multiple files): [[{row1}, {row2}], [{row1}, {row2}]]
+  let filesArray;
+  if (Array.isArray(threeplFiles)) {
+    // Check if first element is an array (multiple files) or an object (single file's rows)
+    if (threeplFiles.length > 0 && Array.isArray(threeplFiles[0])) {
+      // Multiple files: [[rows], [rows]]
+      filesArray = threeplFiles;
+    } else {
+      // Single file: [rows] - wrap it
+      filesArray = [threeplFiles];
+    }
+  } else {
+    // Single non-array item (shouldn't happen but handle it)
+    filesArray = [[threeplFiles]];
+  }
+  
+  filesArray.forEach(fileData => {
+    if (!fileData || !Array.isArray(fileData)) return;
+    fileData.forEach(r => {
+      if (!r || typeof r !== 'object') return;
+      const charge = r['Charge On Invoice'] || '';
+      const amount = parseFloat(r['Amount Total ($)'] || 0);
+      const count = parseInt(r['Count Total'] || 0);
+      const avg = parseFloat(r['Average ($)'] || 0);
+      const chargeLower = charge.toLowerCase();
+      
+      metrics.totalCost += amount;
+      
+      if (chargeLower.includes('storage')) {
+        breakdown.storage += amount;
+      } else if (chargeLower.includes('shipping')) {
+        breakdown.shipping += amount;
+        metrics.shippingCount += count;
+        metrics.avgShippingCost = avg; // Use the average from the row
+      } else if (chargeLower.includes('first pick')) {
+        breakdown.pickFees += amount;
+        metrics.firstPickCount += count;
+        metrics.orderCount += count; // First pick count = order count
+      } else if (chargeLower.includes('additional pick')) {
+        breakdown.pickFees += amount;
+        metrics.additionalPickCount += count;
+      } else if (chargeLower.includes('pick')) {
+        breakdown.pickFees += amount;
+      } else if (chargeLower.includes('box') || chargeLower.includes('mailer')) {
+        breakdown.boxCharges += amount;
+      } else if (chargeLower.includes('receiving')) {
+        breakdown.receiving += amount;
+      } else {
+        breakdown.other += amount;
+      }
+    });
+  });
+  
+  // Calculate derived metrics
+  metrics.totalUnits = metrics.firstPickCount + metrics.additionalPickCount;
+  
+  if (metrics.orderCount > 0) {
+    metrics.avgPickCost = breakdown.pickFees / metrics.orderCount;
+    metrics.avgPackagingCost = breakdown.boxCharges / metrics.orderCount;
+    // Fulfillment cost = everything except storage
+    const fulfillmentCost = metrics.totalCost - breakdown.storage;
+    metrics.avgCostPerOrder = fulfillmentCost / metrics.orderCount;
+    metrics.avgUnitsPerOrder = metrics.totalUnits / metrics.orderCount;
+  }
+  
+  return { breakdown, metrics };
 };
 
-// Legacy function kept for compatibility
-const normalizeSku = (sku) => {
-  if (!sku) return '';
-  const trimmed = String(sku).trim();
-  if (trimmed.startsWith('ddpe')) return ''; // Filter out lowercase
-  return trimmed;
+// Parse Excel file for 3PL bulk upload - extracts Summary and Detail sheets
+const parse3PLExcel = async (file) => {
+  // Load SheetJS from CDN if not already loaded
+  const xlsx = await loadXLSX();
+  
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = xlsx.read(data, { type: 'array' });
+        
+        const result = {
+          fileName: file.name,
+          summary: [],
+          detail: [],
+          invoiceLevel: [],
+          dateRange: { start: null, end: null },
+          orders: [],
+          nonOrderCharges: [],
+          format: 'unknown',
+        };
+        
+        // Detect format based on sheet names
+        const sheetNames = workbook.SheetNames;
+        const hasDetailSheet = sheetNames.includes('Detail');
+        const hasSummarySheet = sheetNames.includes('Summary');
+        const hasShipmentsSheet = sheetNames.some(s => s.toLowerCase().includes('shipment'));
+        const hasPackagingSheet = sheetNames.includes('Packaging');
+        
+        // FORMAT 1: Packiyo Invoice Format (Summary, Detail, Invoice Level sheets)
+        if (hasDetailSheet && hasSummarySheet) {
+          result.format = 'packiyo-invoice';
+          
+          // Parse Summary sheet
+          const summarySheet = workbook.Sheets['Summary'];
+          result.summary = xlsx.utils.sheet_to_json(summarySheet);
+          
+          // Parse Detail sheet
+          const detailSheet = workbook.Sheets['Detail'];
+          const detailRows = xlsx.utils.sheet_to_json(detailSheet);
+          result.detail = detailRows;
+          
+          // Extract orders with dates
+          detailRows.forEach(row => {
+            const shipDateStr = row['Ship Datetime'] || row['Order Datetime'];
+            if (!shipDateStr) return;
+            
+            // Parse date (format: "2025-10-19 04:58:32 PM" or "2025-09-16 08:53:45 AM")
+            const dateStr = shipDateStr.toString().split(' ')[0];
+            const shipDate = new Date(dateStr + 'T00:00:00');
+            if (isNaN(shipDate)) return;
+            
+            const orderNumber = (row['Order Number'] || '').toString();
+            const trackingNumber = (row['Tracking Number'] || '').toString();
+            const uniqueKey = `${orderNumber}-${trackingNumber}`;
+            const weekKey = getSunday(shipDate);
+            
+            // Update date range
+            if (!result.dateRange.start || shipDate < new Date(result.dateRange.start)) {
+              result.dateRange.start = shipDate.toISOString().split('T')[0];
+            }
+            if (!result.dateRange.end || shipDate > new Date(result.dateRange.end)) {
+              result.dateRange.end = shipDate.toISOString().split('T')[0];
+            }
+            
+            result.orders.push({
+              uniqueKey,
+              orderNumber,
+              trackingNumber,
+              shipDate: shipDate.toISOString().split('T')[0],
+              weekKey,
+              carrier: (row['Carrier Name'] || '').toString(),
+              serviceLevel: (row['Service Level Name'] || '').toString(),
+              state: (row['Ship Recipient Address State'] || '').toString(),
+              postalCode: (row['Ship Recipient Address Postal Code'] || '').toString(),
+              weight: parseFloat(row['Weight Value'] || 0),
+              weightUnit: (row['Weight Unit'] || 'oz').toString(),
+              packageType: (row['Package Type Name'] || '').toString(),
+              charges: {
+                additionalPick: parseFloat(row['Additional Pick Fee - Amount ($)'] || 0),
+                additionalPickQty: parseInt(row['Additional Pick Fee - Quantity'] || 0),
+                firstPick: parseFloat(row['First Pick Fee - Amount ($)'] || 0),
+                firstPickQty: parseInt(row['First Pick Fee - Quantity'] || 0),
+                box: parseFloat(row['Box Charge - Amount ($)'] || 0),
+                boxQty: parseInt(row['Box Charge - Quantity'] || 0),
+                reBoxing: parseFloat(row['Re-Boxing Fee - Amount ($)'] || 0),
+                fbaForwarding: parseFloat(row['Fba Forwarding - Amount ($)'] || 0),
+              },
+            });
+          });
+          
+          // Parse Invoice Level for non-order charges
+          if (sheetNames.includes('Invoice Level')) {
+            const invoiceSheet = workbook.Sheets['Invoice Level'];
+            result.invoiceLevel = xlsx.utils.sheet_to_json(invoiceSheet);
+          }
+          
+          // Extract non-order charges from Summary
+          result.summary.forEach(row => {
+            const charge = (row['Charge On Invoice'] || '').toString();
+            const chargeLower = charge.toLowerCase();
+            const amount = parseFloat(row['Amount Total ($)'] || 0);
+            const count = parseInt(row['Count Total'] || 0);
+            
+            if (chargeLower.includes('storage') || chargeLower.includes('receiving') || 
+                chargeLower.includes('shipping') || chargeLower.includes('credit') ||
+                chargeLower.includes('special project')) {
+              result.nonOrderCharges.push({
+                chargeType: charge,
+                amount,
+                count,
+                average: parseFloat(row['Average ($)'] || 0),
+              });
+            }
+          });
+        }
+        
+        // FORMAT 2: Packiyo Shipments Export (Shipments sheet with order/shipment_date columns)
+        else if (hasShipmentsSheet) {
+          result.format = 'packiyo-shipments';
+          
+          // Find the shipments sheet
+          const shipmentsSheetName = sheetNames.find(s => s.toLowerCase().includes('shipment'));
+          const shipmentsSheet = workbook.Sheets[shipmentsSheetName];
+          const rows = xlsx.utils.sheet_to_json(shipmentsSheet);
+          
+          // Parse packaging costs if available
+          let packagingCosts = {};
+          if (hasPackagingSheet) {
+            const packagingSheet = workbook.Sheets['Packaging'];
+            const packagingRows = xlsx.utils.sheet_to_json(packagingSheet);
+            packagingRows.forEach(row => {
+              const type = (row['Type of Packaging'] || '').toString();
+              const cost = parseFloat(row['Packaging Cost'] || 0);
+              if (type && cost > 0) packagingCosts[type.toLowerCase()] = cost;
+            });
+          }
+          
+          rows.forEach(row => {
+            // Try different column name variations
+            const shipDateStr = row['shipment_date'] || row['Shipment Date'] || row['ship_date'] || row['order_date'] || row['Order Date'];
+            if (!shipDateStr) return;
+            
+            // Parse date (format: "2025-07-31 21:25:24")
+            const dateStr = shipDateStr.toString().split(' ')[0];
+            const shipDate = new Date(dateStr + 'T00:00:00');
+            if (isNaN(shipDate)) return;
+            
+            const orderNumber = (row['order'] || row['Order'] || row['order_number'] || row['Order Number'] || '').toString();
+            const trackingNumber = (row['tracking_number'] || row['Tracking Number'] || '').toString();
+            // Extract just the tracking number if it's a URL
+            const trackingClean = trackingNumber.includes('http') ? trackingNumber.split('/').pop() : trackingNumber;
+            const uniqueKey = `${orderNumber}-${trackingClean || shipDate.toISOString()}`;
+            const weekKey = getSunday(shipDate);
+            
+            // Update date range
+            if (!result.dateRange.start || shipDate < new Date(result.dateRange.start)) {
+              result.dateRange.start = shipDate.toISOString().split('T')[0];
+            }
+            if (!result.dateRange.end || shipDate > new Date(result.dateRange.end)) {
+              result.dateRange.end = shipDate.toISOString().split('T')[0];
+            }
+            
+            // Try to estimate costs from packaging info
+            let packagingCost = 0;
+            const packaging = (row['packaging'] || row['Packaging'] || row['package_type'] || '').toString().toLowerCase();
+            if (packaging && packagingCosts[packaging]) {
+              packagingCost = packagingCosts[packaging];
+            }
+            
+            result.orders.push({
+              uniqueKey,
+              orderNumber,
+              trackingNumber: trackingClean,
+              shipDate: shipDate.toISOString().split('T')[0],
+              weekKey,
+              carrier: (row['shipping_carrier'] || row['Shipping Carrier'] || row['user_defined_shipping_carrier'] || '').toString(),
+              serviceLevel: (row['shipping_method'] || row['Shipping Method'] || '').toString(),
+              state: (row['state'] || row['State'] || '').toString(),
+              postalCode: (row['zip'] || row['Zip'] || row['postal_code'] || '').toString(),
+              weight: parseFloat(row['weight'] || row['Weight'] || 0),
+              weightUnit: 'oz',
+              packageType: packaging,
+              charges: {
+                // This format doesn't have per-order charges, use packaging costs
+                additionalPick: 0,
+                additionalPickQty: 0,
+                firstPick: 2.50, // Default pick fee estimate
+                firstPickQty: 1,
+                box: packagingCost,
+                boxQty: packagingCost > 0 ? 1 : 0,
+                reBoxing: 0,
+                fbaForwarding: 0,
+              },
+            });
+          });
+        }
+        
+        // FORMAT 3: Simple summary sheet - try to extract what we can
+        else {
+          result.format = 'simple-summary';
+          
+          // Try first sheet
+          const firstSheet = workbook.Sheets[sheetNames[0]];
+          const rows = xlsx.utils.sheet_to_json(firstSheet, { header: 1 });
+          
+          // Look for any date info in filename
+          const fileNameMatch = file.name.match(/(\d{1,2})[_-](\d{1,2})[_-]?(\d{1,2})?[_-]?(\d{1,2})?/);
+          if (fileNameMatch) {
+            // Try to parse date range from filename like "8_1-8_31" or "9_1-9_30"
+            const month1 = parseInt(fileNameMatch[1]);
+            const day1 = parseInt(fileNameMatch[2]);
+            const month2 = fileNameMatch[3] ? parseInt(fileNameMatch[3]) : month1;
+            const day2 = fileNameMatch[4] ? parseInt(fileNameMatch[4]) : 28;
+            const year = 2025; // Default year
+            
+            result.dateRange.start = `${year}-${String(month1).padStart(2, '0')}-${String(day1).padStart(2, '0')}`;
+            result.dateRange.end = `${year}-${String(month2).padStart(2, '0')}-${String(day2).padStart(2, '0')}`;
+          }
+          
+          // Try to extract order count from content
+          rows.forEach(row => {
+            if (Array.isArray(row)) {
+              const text = row.join(' ').toLowerCase();
+              if (text.includes('order') && row[1]) {
+                const count = parseInt(row[1]) || 0;
+                if (count > 0 && count < 10000) {
+                  // Create placeholder orders based on count
+                  // This is imprecise but better than nothing
+                }
+              }
+            }
+          });
+        }
+        
+        resolve(result);
+      } catch (err) {
+        console.error('Error parsing 3PL file:', err);
+        reject(err);
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+};
+
+// Helper to get 3PL data for a specific week from the ledger
+const get3PLForWeek = (ledger, weekKey) => {
+  if (!ledger) return null;
+  
+  // Convert weekKey to date for fuzzy matching
+  const targetDate = new Date(weekKey + 'T00:00:00');
+  const targetStart = new Date(targetDate);
+  targetStart.setDate(targetDate.getDate() - 6); // Start of week (7 days before)
+  const targetEnd = new Date(targetDate);
+  targetEnd.setDate(targetDate.getDate() + 1); // Include day after for timezone tolerance
+  
+  // Find orders that match this week (fuzzy match within 2 days of week boundary)
+  const weekOrders = ledger.orders ? Object.values(ledger.orders).filter(o => {
+    // Try exact match first
+    if (o.weekKey === weekKey) return true;
+    
+    // Try fuzzy match - check if order's weekKey is within 2 days of target
+    if (o.weekKey) {
+      const orderWeekDate = new Date(o.weekKey + 'T00:00:00');
+      const diffDays = Math.abs((orderWeekDate - targetDate) / (1000 * 60 * 60 * 24));
+      if (diffDays <= 2) return true;
+    }
+    
+    // Also try matching by shipDate
+    if (o.shipDate) {
+      const shipDate = new Date(o.shipDate + 'T00:00:00');
+      return shipDate >= targetStart && shipDate <= targetEnd;
+    }
+    
+    return false;
+  }) : [];
+  
+  const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+  const metrics = {
+    totalCost: 0,
+    orderCount: weekOrders.length,
+    totalUnits: 0,
+    avgShippingCost: 0,
+    avgPickCost: 0,
+    avgPackagingCost: 0,
+    avgCostPerOrder: 0,
+    avgUnitsPerOrder: 0,
+    shippingCount: 0,
+    firstPickCount: 0,
+    additionalPickCount: 0,
+    carrierBreakdown: {},
+    stateBreakdown: {},
+  };
+  
+  let totalShipping = 0;
+  
+  weekOrders.forEach(order => {
+    const c = order.charges || {};
+    breakdown.pickFees += (c.firstPick || 0) + (c.additionalPick || 0);
+    breakdown.boxCharges += c.box || 0;
+    breakdown.other += (c.reBoxing || 0) + (c.fbaForwarding || 0);
+    
+    metrics.firstPickCount += c.firstPickQty || 0;
+    metrics.additionalPickCount += c.additionalPickQty || 0;
+    
+    // Track by carrier
+    if (order.carrier) {
+      if (!metrics.carrierBreakdown[order.carrier]) metrics.carrierBreakdown[order.carrier] = { orders: 0, cost: 0 };
+      metrics.carrierBreakdown[order.carrier].orders++;
+    }
+    
+    // Track by state
+    if (order.state) {
+      if (!metrics.stateBreakdown[order.state]) metrics.stateBreakdown[order.state] = 0;
+      metrics.stateBreakdown[order.state]++;
+    }
+  });
+  
+  // Add non-order charges allocated to this week (fuzzy match)
+  Object.values(ledger.summaryCharges || {}).forEach(charge => {
+    const chargeWeekDate = new Date((charge.weekKey || '') + 'T00:00:00');
+    const diffDays = Math.abs((chargeWeekDate - targetDate) / (1000 * 60 * 60 * 24));
+    
+    if (charge.weekKey === weekKey || diffDays <= 2) {
+      const chargeLower = (charge.chargeType || '').toLowerCase();
+      if (chargeLower.includes('storage')) breakdown.storage += charge.amount || 0;
+      else if (chargeLower.includes('shipping')) {
+        breakdown.shipping += charge.amount || 0;
+        totalShipping += charge.amount || 0;
+        metrics.shippingCount += charge.count || 0;
+      }
+      else if (chargeLower.includes('receiving')) breakdown.receiving += charge.amount || 0;
+      else breakdown.other += charge.amount || 0;
+    }
+  });
+  
+  metrics.totalUnits = metrics.firstPickCount + metrics.additionalPickCount;
+  metrics.totalCost = breakdown.storage + breakdown.shipping + breakdown.pickFees + breakdown.boxCharges + breakdown.receiving + breakdown.other;
+  
+  // Return null if no data found (no orders and no costs)
+  if (metrics.orderCount === 0 && metrics.totalCost === 0) return null;
+  
+  if (metrics.orderCount > 0) {
+    metrics.avgPickCost = breakdown.pickFees / metrics.orderCount;
+    metrics.avgPackagingCost = breakdown.boxCharges / metrics.orderCount;
+    const fulfillmentCost = metrics.totalCost - breakdown.storage;
+    metrics.avgCostPerOrder = fulfillmentCost / metrics.orderCount;
+    metrics.avgUnitsPerOrder = metrics.totalUnits / metrics.orderCount;
+    if (metrics.shippingCount > 0) metrics.avgShippingCost = totalShipping / metrics.shippingCount;
+  }
+  
+  return { breakdown, metrics };
+};
+
+// Get 3PL data for a specific day by filtering ledger orders by shipDate
+// NOTE: Storage is excluded as it's a weekly/monthly aggregate, not per-shipment
+const get3PLForDay = (ledger, dayKey) => {
+  if (!ledger || !ledger.orders) return null;
+  
+  // Find orders that shipped on this specific day
+  const dayOrders = Object.values(ledger.orders).filter(o => o.shipDate === dayKey);
+  
+  if (dayOrders.length === 0) return null;
+  
+  const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+  const metrics = {
+    totalCost: 0,
+    orderCount: dayOrders.length,
+    totalUnits: 0,
+    avgShippingCost: 0,
+    avgPickCost: 0,
+    avgPackagingCost: 0,
+    avgCostPerOrder: 0,
+    avgUnitsPerOrder: 0,
+    shippingCount: 0,
+    firstPickCount: 0,
+    additionalPickCount: 0,
+    carrierBreakdown: {},
+    stateBreakdown: {},
+  };
+  
+  let totalShipping = 0;
+  
+  dayOrders.forEach(order => {
+    const c = order.charges || {};
+    breakdown.pickFees += (c.firstPick || 0) + (c.additionalPick || 0);
+    breakdown.boxCharges += c.box || 0;
+    breakdown.other += (c.reBoxing || 0) + (c.fbaForwarding || 0);
+    
+    metrics.firstPickCount += c.firstPickQty || 0;
+    metrics.additionalPickCount += c.additionalPickQty || 0;
+    
+    // Track by carrier
+    if (order.carrier) {
+      if (!metrics.carrierBreakdown[order.carrier]) metrics.carrierBreakdown[order.carrier] = { orders: 0, cost: 0 };
+      metrics.carrierBreakdown[order.carrier].orders++;
+    }
+    
+    // Track by state
+    if (order.state) {
+      if (!metrics.stateBreakdown[order.state]) metrics.stateBreakdown[order.state] = 0;
+      metrics.stateBreakdown[order.state]++;
+    }
+  });
+  
+  // Storage is NOT included in daily - it's a weekly/monthly aggregate charge
+  // Only order-level charges (pick fees, box charges, etc.) are included
+  
+  metrics.totalUnits = metrics.firstPickCount + metrics.additionalPickCount;
+  metrics.totalCost = breakdown.pickFees + breakdown.boxCharges + breakdown.other; // No storage
+  
+  if (metrics.orderCount > 0) {
+    metrics.avgPickCost = breakdown.pickFees / metrics.orderCount;
+    metrics.avgPackagingCost = breakdown.boxCharges / metrics.orderCount;
+    metrics.avgCostPerOrder = metrics.totalCost / metrics.orderCount;
+    metrics.avgUnitsPerOrder = metrics.totalUnits / metrics.orderCount;
+  }
+  
+  return { breakdown, metrics };
+};
+
+// Get 3PL data for a period (month/quarter/year) by aggregating from ledger
+const get3PLForPeriod = (ledger, periodKey) => {
+  if (!ledger || !ledger.orders) return null;
+  
+  // Parse period key to determine date range
+  let startDate, endDate;
+  
+  if (periodKey.match(/^\d{4}$/)) {
+    // Year: "2025"
+    startDate = new Date(parseInt(periodKey), 0, 1);
+    endDate = new Date(parseInt(periodKey), 11, 31);
+  } else if (periodKey.match(/^Q[1-4] \d{4}$/)) {
+    // Quarter: "Q3 2024"
+    const [q, year] = periodKey.split(' ');
+    const quarter = parseInt(q[1]) - 1;
+    startDate = new Date(parseInt(year), quarter * 3, 1);
+    endDate = new Date(parseInt(year), quarter * 3 + 3, 0);
+  } else if (periodKey.match(/^[A-Za-z]+ \d{4}$/)) {
+    // Month: "September 2025"
+    const months = ['january', 'february', 'march', 'april', 'may', 'june', 
+                    'july', 'august', 'september', 'october', 'november', 'december'];
+    const parts = periodKey.split(' ');
+    const monthIdx = months.indexOf(parts[0].toLowerCase());
+    const year = parseInt(parts[1]);
+    if (monthIdx >= 0) {
+      startDate = new Date(year, monthIdx, 1);
+      endDate = new Date(year, monthIdx + 1, 0);
+    }
+  }
+  
+  if (!startDate || !endDate) return null;
+  
+  // Filter orders within date range
+  const periodOrders = Object.values(ledger.orders).filter(o => {
+    const orderDate = new Date(o.shipDate + 'T00:00:00');
+    return orderDate >= startDate && orderDate <= endDate;
+  });
+  
+  if (periodOrders.length === 0) return null;
+  
+  const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
+  const metrics = {
+    totalCost: 0,
+    orderCount: periodOrders.length,
+    totalUnits: 0,
+    avgCostPerOrder: 0,
+    avgUnitsPerOrder: 0,
+  };
+  
+  periodOrders.forEach(order => {
+    const c = order.charges || {};
+    breakdown.pickFees += (c.firstPick || 0) + (c.additionalPick || 0);
+    breakdown.boxCharges += c.box || 0;
+    breakdown.other += (c.reBoxing || 0) + (c.fbaForwarding || 0);
+    metrics.totalUnits += (c.firstPickQty || 0) + (c.additionalPickQty || 0);
+  });
+  
+  // Add summary charges within date range
+  Object.values(ledger.summaryCharges || {}).forEach(charge => {
+    const chargeDate = new Date((charge.weekKey || '') + 'T00:00:00');
+    if (chargeDate >= startDate && chargeDate <= endDate) {
+      const chargeLower = (charge.chargeType || '').toLowerCase();
+      if (chargeLower.includes('storage')) breakdown.storage += charge.amount || 0;
+      else if (chargeLower.includes('shipping')) breakdown.shipping += charge.amount || 0;
+      else if (chargeLower.includes('receiving')) breakdown.receiving += charge.amount || 0;
+      else breakdown.other += charge.amount || 0;
+    }
+  });
+  
+  metrics.totalCost = breakdown.storage + breakdown.shipping + breakdown.pickFees + breakdown.boxCharges + breakdown.receiving + breakdown.other;
+  if (metrics.orderCount > 0) {
+    metrics.avgCostPerOrder = (metrics.totalCost - breakdown.storage) / metrics.orderCount;
+    metrics.avgUnitsPerOrder = metrics.totalUnits / metrics.orderCount;
+  }
+  
+  return { breakdown, metrics };
 };
 
 export default function Dashboard() {
@@ -213,7 +1188,6 @@ export default function Dashboard() {
   
   // Shopify Integration
   const [shopifyCredentials, setShopifyCredentials] = useState({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
-  const [qboCredentials, setQboCredentials] = useState({ clientId: '', clientSecret: '', realmId: '', connected: false, lastSync: null, accessToken: '', refreshToken: '' });
   const [shopifySyncStatus, setShopifySyncStatus] = useState({ loading: false, error: null, progress: '' });
   const [shopifySyncRange, setShopifySyncRange] = useState({ start: '', end: '' });
   const [shopifySyncPreview, setShopifySyncPreview] = useState(null);
@@ -784,10 +1758,6 @@ const handleLogout = async () => {
   
   // 10. CSV Export modal
   const [showExportModal, setShowExportModal] = useState(false);
-  const [showMetricsExport, setShowMetricsExport] = useState(false);
-  const [metricsExportRange, setMetricsExportRange] = useState('all'); // 'all', 'last-week', 'last-month', 'last-quarter', 'ytd', 'custom'
-  const [metricsExportCustomStart, setMetricsExportCustomStart] = useState('');
-  const [metricsExportCustomEnd, setMetricsExportCustomEnd] = useState('');
   
   // 12. Comparison Mode
   const [compareMode, setCompareMode] = useState(false);
@@ -1460,7 +2430,6 @@ allWeekKeys.forEach((weekKey) => {
     // Display preferences
     currencySymbol: '$',
     dateFormat: 'US', // 'US' (MM/DD/YYYY) or 'EU' (DD/MM/YYYY)
-    timezone: 'America/New_York', // Business day timezone (for day boundary calculations)
   });
   
   const clearPeriod3PLFiles = useCallback(() => {
@@ -1469,13 +2438,530 @@ allWeekKeys.forEach((weekKey) => {
   }, []);
 
 // US States with sales tax info - comprehensive list with economic nexus thresholds
-// US_STATES_TAX_INFO and STATE_FILING_FORMATS extracted to utils/taxData.js
+const US_STATES_TAX_INFO = {
+  AL: { name: 'Alabama', hasStateTax: true, stateRate: 0.04, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 250000, transactions: null }, marketplaceFacilitator: true, sst: true, note: 'Simplified Seller Use Tax (SSUT) program available' },
+  AK: { name: 'Alaska', hasStateTax: false, stateRate: 0, filingTypes: ['local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'No state tax, but must collect for ARSSTC member localities' },
+  AZ: { name: 'Arizona', hasStateTax: true, stateRate: 0.056, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'TPT license required' },
+  AR: { name: 'Arkansas', hasStateTax: true, stateRate: 0.065, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  CA: { name: 'California', hasStateTax: true, stateRate: 0.0725, filingTypes: ['state', 'district'], reportFormat: 'district', nexusThreshold: { sales: 500000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Highest threshold - $500K sales required' },
+  CO: { name: 'Colorado', hasStateTax: true, stateRate: 0.029, filingTypes: ['state', 'county', 'city', 'special'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Home rule cities (Denver, Aurora, etc.) require separate registration' },
+  CT: { name: 'Connecticut', hasStateTax: true, stateRate: 0.0635, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
+  DE: { name: 'Delaware', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
+  FL: { name: 'Florida', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false },
+  GA: { name: 'Georgia', hasStateTax: true, stateRate: 0.04, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  HI: { name: 'Hawaii', hasStateTax: true, stateRate: 0.04, shippingTaxable: true, filingTypes: ['state', 'county'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'GET (Gross Excise Tax) not traditional sales tax - applies to seller' },
+  ID: { name: 'Idaho', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  IL: { name: 'Illinois', hasStateTax: true, stateRate: 0.0625, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'ROT (Retailers Occupation Tax) - multiple local taxes' },
+  IN: { name: 'Indiana', hasStateTax: true, stateRate: 0.07, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  IA: { name: 'Iowa', hasStateTax: true, stateRate: 0.06, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  KS: { name: 'Kansas', hasStateTax: true, stateRate: 0.065, shippingTaxable: true, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  KY: { name: 'Kentucky', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  LA: { name: 'Louisiana', hasStateTax: true, stateRate: 0.0445, filingTypes: ['state', 'parish'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'Parish taxes filed through Louisiana Sales Tax Commission' },
+  ME: { name: 'Maine', hasStateTax: true, stateRate: 0.055, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
+  MD: { name: 'Maryland', hasStateTax: true, stateRate: 0.06, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false, note: 'Annual report & LLC fees required separately' },
+  MA: { name: 'Massachusetts', hasStateTax: true, stateRate: 0.0625, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false },
+  MI: { name: 'Michigan', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  MN: { name: 'Minnesota', hasStateTax: true, stateRate: 0.06875, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  MS: { name: 'Mississippi', hasStateTax: true, stateRate: 0.07, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 250000, transactions: null }, marketplaceFacilitator: true, sst: false },
+  MO: { name: 'Missouri', hasStateTax: true, stateRate: 0.04225, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false },
+  MT: { name: 'Montana', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
+  NE: { name: 'Nebraska', hasStateTax: true, stateRate: 0.055, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  NV: { name: 'Nevada', hasStateTax: true, stateRate: 0.0685, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  NH: { name: 'New Hampshire', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
+  NJ: { name: 'New Jersey', hasStateTax: true, stateRate: 0.06625, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  NM: { name: 'New Mexico', hasStateTax: true, stateRate: 0.05125, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Gross Receipts Tax (GRT) - not traditional sales tax' },
+  NY: { name: 'New York', hasStateTax: true, stateRate: 0.04, shippingTaxable: true, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 500000, transactions: 100 }, marketplaceFacilitator: true, sst: false, note: 'High threshold - $500K AND 100+ transactions required' },
+  NC: { name: 'North Carolina', hasStateTax: true, stateRate: 0.0475, shippingTaxable: true, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  ND: { name: 'North Dakota', hasStateTax: true, stateRate: 0.05, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  OH: { name: 'Ohio', hasStateTax: true, stateRate: 0.0575, shippingTaxable: true, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  OK: { name: 'Oklahoma', hasStateTax: true, stateRate: 0.045, filingTypes: ['state', 'county', 'city'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  OR: { name: 'Oregon', hasStateTax: false, stateRate: 0, filingTypes: [], reportFormat: 'none', nexusThreshold: null, marketplaceFacilitator: false, sst: false, note: 'No sales tax' },
+  PA: { name: 'Pennsylvania', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'Philadelphia & Allegheny County have additional local taxes' },
+  RI: { name: 'Rhode Island', hasStateTax: true, stateRate: 0.07, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  SC: { name: 'South Carolina', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  SD: { name: 'South Dakota', hasStateTax: true, stateRate: 0.045, shippingTaxable: true, filingTypes: ['state', 'municipal'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true, note: 'Origin of Wayfair decision' },
+  TN: { name: 'Tennessee', hasStateTax: true, stateRate: 0.07, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  TX: { name: 'Texas', hasStateTax: true, stateRate: 0.0625, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 500000, transactions: null }, marketplaceFacilitator: true, sst: false, note: 'High threshold - $500K sales required' },
+  UT: { name: 'Utah', hasStateTax: true, stateRate: 0.0485, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  VT: { name: 'Vermont', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  VA: { name: 'Virginia', hasStateTax: true, stateRate: 0.043, filingTypes: ['state', 'local'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
+  WA: { name: 'Washington', hasStateTax: true, stateRate: 0.065, shippingTaxable: true, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true, note: 'B&O tax also applies to some sellers' },
+  WV: { name: 'West Virginia', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  WI: { name: 'Wisconsin', hasStateTax: true, stateRate: 0.05, shippingTaxable: true, filingTypes: ['state', 'county'], reportFormat: 'county', nexusThreshold: { sales: 100000, transactions: null }, marketplaceFacilitator: true, sst: true },
+  WY: { name: 'Wyoming', hasStateTax: true, stateRate: 0.04, filingTypes: ['state', 'local'], reportFormat: 'jurisdiction', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: true },
+  DC: { name: 'District of Columbia', hasStateTax: true, stateRate: 0.06, shippingTaxable: true, filingTypes: ['state'], reportFormat: 'standard', nexusThreshold: { sales: 100000, transactions: 200 }, marketplaceFacilitator: true, sst: false },
+};
 
+// State-specific filing formats - defines exact fields needed for each state's return
+// Based on actual state filing requirements as of 2025
+const STATE_FILING_FORMATS = {
+  WV: {
+    name: 'West Virginia',
+    formName: 'WV/CST-200CU (Combined Sales & Use Tax Return)',
+    website: 'https://mytaxes.wvtax.gov/',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Total gross receipts/sales' },
+      { name: 'Line 2 - Deductions', key: 'deductions', description: 'Non-taxable sales, exemptions' },
+      { name: 'Line 3 - Net Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - Tax Rate', key: 'taxRate', description: '6.0%' },
+      { name: 'Line 5 - Tax Due', key: 'taxDue', description: 'Line 3 × 0.06' },
+      { name: 'Line 6 - Tax Collected', key: 'taxCollected', description: 'Actual tax collected from customers' },
+    ],
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      deductions: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxRate: '6.0%',
+      taxDue: (data.totalSales || data.sales || 0) * 0.06,
+      taxCollected: data.taxOwed || data.tax || 0,
+    }),
+  },
+  PA: {
+    name: 'Pennsylvania',
+    formName: 'PA-100 Sales, Use and Hotel Occupancy Tax Return',
+    website: 'https://www.revenue.pa.gov/OnlineServices/myPATH/',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Total sales price of taxable goods' },
+      { name: 'Line 2 - Sales Not Subject to Tax', key: 'exemptSales', description: 'Exempt sales (resale, manufacturing, etc.)' },
+      { name: 'Line 3 - Net Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - State Tax (6%)', key: 'stateTax', description: 'Line 3 × 0.06' },
+      { name: 'Line 5 - Local Tax (if applicable)', key: 'localTax', description: 'Philadelphia 2%, Allegheny 1%' },
+      { name: 'Line 6 - Total Tax Due', key: 'totalTax', description: 'Line 4 + Line 5' },
+    ],
+    note: 'Philadelphia adds 2% local tax, Allegheny County (Pittsburgh) adds 1%. Most remote sellers only owe state 6%.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.06,
+      localTax: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  MD: {
+    name: 'Maryland',
+    formName: 'Form 202 - Sales and Use Tax Return',
+    website: 'https://interactive.marylandtaxes.gov/',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Total sales of tangible personal property' },
+      { name: 'Line 2 - Exempt Sales', key: 'exemptSales', description: 'Sales for resale, exempt organizations' },
+      { name: 'Line 3 - Net Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - Tax Collected (6%)', key: 'taxCollected', description: 'Tax collected from customers' },
+    ],
+    note: 'Maryland has a single 6% rate statewide. No local taxes for remote sellers.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxCollected: data.taxOwed || data.tax || 0,
+    }),
+  },
+  VA: {
+    name: 'Virginia',
+    formName: 'Form ST-9 - Retail Sales and Use Tax Return',
+    website: 'https://www.tax.virginia.gov/',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Total gross sales' },
+      { name: 'Line 2 - Deductions', key: 'deductions', description: 'Exempt sales, sales for resale' },
+      { name: 'Line 3 - Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4a - State Tax (4.3%)', key: 'stateTax', description: 'Line 3 × 0.043' },
+      { name: 'Line 4b - Local Tax (1%)', key: 'localTax', description: 'Line 3 × 0.01' },
+      { name: 'Line 5 - Total Tax (5.3%)', key: 'totalTax', description: 'Line 4a + Line 4b' },
+    ],
+    note: 'Virginia has combined 5.3% rate (4.3% state + 1% local). Some areas have additional regional taxes.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      deductions: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.043,
+      localTax: (data.totalSales || data.sales || 0) * 0.01,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  TX: {
+    name: 'Texas',
+    formName: 'Form 01-117 - Texas Sales and Use Tax Return',
+    website: 'https://comptroller.texas.gov/taxes/sales/',
+    fields: [
+      { name: 'Item 1 - Total Sales', key: 'totalSales', description: 'Total receipts from all sales' },
+      { name: 'Item 2 - Taxable Sales', key: 'taxableSales', description: 'Sales subject to sales tax' },
+      { name: 'Item 3 - Taxable Purchases', key: 'taxablePurchases', description: 'Use tax on purchases (usually $0)' },
+      { name: 'Item 4 - Total Tax Due', key: 'totalTax', description: 'State (6.25%) + Local taxes' },
+    ],
+    note: 'Texas has 6.25% state rate. Local taxes vary by location (up to 2% additional). Report location of delivery for local tax.',
+    calculate: (data) => ({
+      totalSales: data.totalSales || data.sales || 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxablePurchases: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  FL: {
+    name: 'Florida',
+    formName: 'Form DR-15 - Sales and Use Tax Return',
+    website: 'https://floridarevenue.com/taxes/taxesfees/Pages/sales_tax.aspx',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Total gross sales' },
+      { name: 'Line 2 - Exempt Sales', key: 'exemptSales', description: 'Tax-exempt sales' },
+      { name: 'Line 3 - Taxable Amount', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - State Tax (6%)', key: 'stateTax', description: 'Line 3 × 0.06' },
+      { name: 'Line 5 - County Surtax', key: 'surtax', description: 'Discretionary sales surtax (varies by county)' },
+      { name: 'Line 6 - Total Tax Due', key: 'totalTax', description: 'Line 4 + Line 5' },
+    ],
+    note: 'Florida has 6% state rate plus county surtax (0-2.5%). Use customer shipping address to determine county.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.06,
+      surtax: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  CA: {
+    name: 'California',
+    formName: 'CDTFA-401 - State, Local, and District Sales and Use Tax Return',
+    website: 'https://onlineservices.cdtfa.ca.gov/',
+    fields: [
+      { name: 'Line 1 - Total Gross Sales', key: 'grossSales', description: 'Total of all sales' },
+      { name: 'Line 2 - Purchases Subject to Use Tax', key: 'useTaxPurchases', description: 'Usually $0 for sellers' },
+      { name: 'Line 3 - Total', key: 'totalSubject', description: 'Line 1 + Line 2' },
+      { name: 'Line 4 - Deductions', key: 'deductions', description: 'Nontaxable sales, exempt sales' },
+      { name: 'Line 5 - Total Taxable', key: 'taxableSales', description: 'Line 3 minus Line 4' },
+      { name: 'Line 6 - Tax Due', key: 'taxDue', description: 'Based on district tax rates' },
+    ],
+    note: 'CA requires district-level reporting. Base rate is 7.25% but varies by district (7.25%-10.75%). Use CDTFA online system.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      useTaxPurchases: 0,
+      totalSubject: data.totalSales || data.sales || 0,
+      deductions: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxDue: data.taxOwed || data.tax || 0,
+    }),
+  },
+  NY: {
+    name: 'New York',
+    formName: 'Form ST-100 - New York State and Local Sales and Use Tax Return',
+    website: 'https://www.tax.ny.gov/bus/st/stidx.htm',
+    fields: [
+      { name: 'Part 1 - Gross Sales', key: 'grossSales', description: 'Gross sales and services' },
+      { name: 'Part 1 - Non-Taxable Sales', key: 'nonTaxable', description: 'Exempt sales, clothing under $110' },
+      { name: 'Part 1 - Taxable Sales', key: 'taxableSales', description: 'Gross minus non-taxable' },
+      { name: 'Part 2 - State Tax (4%)', key: 'stateTax', description: 'Taxable × 0.04' },
+      { name: 'Part 2 - Local Tax', key: 'localTax', description: 'Varies by jurisdiction (0-4.875%)' },
+      { name: 'Total Tax Due', key: 'totalTax', description: 'State + Local' },
+    ],
+    note: 'NY exempts clothing/footwear under $110. NYC has 4.5% local tax. Use Schedule H for jurisdiction breakdown.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      nonTaxable: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.04,
+      localTax: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  OH: {
+    name: 'Ohio',
+    formName: 'UST 1 - Universal Sales Tax Return',
+    website: 'https://tax.ohio.gov/sales_and_use.aspx',
+    fields: [
+      { name: 'Line 1 - Gross Receipts', key: 'grossSales', description: 'Total gross receipts' },
+      { name: 'Line 2 - Exempt Sales', key: 'exemptSales', description: 'Non-taxable transactions' },
+      { name: 'Line 3 - Net Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - Tax Collected', key: 'taxCollected', description: 'Total tax collected' },
+    ],
+    note: 'Ohio has 5.75% state rate plus county taxes (0.75%-2.25%). Use county of delivery.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxCollected: data.taxOwed || data.tax || 0,
+    }),
+  },
+  NC: {
+    name: 'North Carolina',
+    formName: 'Form E-500 - Sales and Use Tax Return',
+    website: 'https://www.ncdor.gov/taxes-forms/sales-and-use-tax',
+    fields: [
+      { name: 'Line 1 - Gross Receipts', key: 'grossSales', description: 'Total gross receipts' },
+      { name: 'Line 2 - Exempt Receipts', key: 'exemptSales', description: 'Tax-exempt sales' },
+      { name: 'Line 3 - Net Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - State Tax (4.75%)', key: 'stateTax', description: 'Line 3 × 0.0475' },
+      { name: 'Line 5 - Local Tax (2-2.75%)', key: 'localTax', description: 'County tax rate varies' },
+      { name: 'Line 6 - Total Tax', key: 'totalTax', description: 'Line 4 + Line 5' },
+    ],
+    note: 'NC has 4.75% state + 2-2.75% county. Combined rates range 6.75%-7.5%. Use destination county.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.0475,
+      localTax: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  GA: {
+    name: 'Georgia',
+    formName: 'Form ST-3 - Sales and Use Tax Return',
+    website: 'https://gtc.dor.ga.gov/',
+    fields: [
+      { name: 'Line 1 - Gross Sales', key: 'grossSales', description: 'Gross sales, use, and withdrawals' },
+      { name: 'Line 2 - Deductions', key: 'deductions', description: 'Exempt and non-taxable sales' },
+      { name: 'Line 3 - Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - State Tax (4%)', key: 'stateTax', description: 'Line 3 × 0.04' },
+      { name: 'Line 5 - Local Tax', key: 'localTax', description: 'LOST/SPLOST varies by jurisdiction' },
+      { name: 'Line 6 - Total Tax', key: 'totalTax', description: 'Line 4 + Line 5' },
+    ],
+    note: 'GA has 4% state rate + 3-4% local option taxes. Combined rates 7-9%. File through Georgia Tax Center.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      deductions: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      stateTax: (data.totalSales || data.sales || 0) * 0.04,
+      localTax: 0,
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+  },
+  NJ: {
+    name: 'New Jersey',
+    formName: 'Form ST-50 - Sales and Use Tax Return',
+    website: 'https://www.state.nj.us/treasury/taxation/su.shtml',
+    fields: [
+      { name: 'Line 1 - Gross Receipts', key: 'grossSales', description: 'Total gross receipts' },
+      { name: 'Line 2 - Non-Taxable Sales', key: 'exemptSales', description: 'Exempt sales' },
+      { name: 'Line 3 - Taxable Sales', key: 'taxableSales', description: 'Line 1 minus Line 2' },
+      { name: 'Line 4 - Tax Due (6.625%)', key: 'taxDue', description: 'Line 3 × 0.06625' },
+    ],
+    note: 'NJ has single statewide 6.625% rate. No local taxes. Urban Enterprise Zones may have reduced rates.',
+    calculate: (data) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxDue: data.taxOwed || data.tax || 0,
+    }),
+  },
+  // Generic format for states without specific config
+  OK: {
+    name: 'Oklahoma',
+    formName: 'Form STS 20002 - Sales Tax Return',
+    website: 'https://oktap.tax.ok.gov/',
+    requiresJurisdictions: true,  // Flag for jurisdiction-level reporting
+    jurisdictionType: 'county',
+    fields: [
+      { name: 'State Tax (4.5%)', key: 'stateTax', description: 'Total state tax collected' },
+      { name: 'County/City Taxes', key: 'localTax', description: 'Breakdown by jurisdiction required' },
+      { name: 'Total Tax Due', key: 'totalTax', description: 'State + Local' },
+    ],
+    note: 'Oklahoma requires county/city breakdown. Use OkTAP portal to report by jurisdiction. Local rates vary (0-6.5% additional).',
+    calculate: (data, stateInfo) => ({
+      stateTax: (data.totalSales || data.sales || 0) * 0.045,
+      localTax: (data.taxOwed || data.tax || 0) - ((data.totalSales || data.sales || 0) * 0.045),
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+    exportFormat: 'jurisdiction', // Triggers jurisdiction-level CSV export
+  },
+  CO: {
+    name: 'Colorado',
+    formName: 'DR 0100 - Colorado Retail Sales Tax Return',
+    website: 'https://mytax.colorado.gov/',
+    requiresJurisdictions: true,
+    jurisdictionType: 'city/county',
+    fields: [
+      { name: 'State Tax (2.9%)', key: 'stateTax', description: 'State sales tax' },
+      { name: 'RTD/CD/FD Taxes', key: 'specialTax', description: 'Regional transit, cultural, football district taxes' },
+      { name: 'County Taxes', key: 'countyTax', description: 'Breakdown by county' },
+      { name: 'City/Local Taxes', key: 'cityTax', description: 'Home rule cities require separate filing!' },
+      { name: 'Total Tax Due', key: 'totalTax', description: 'All taxes' },
+    ],
+    note: 'Colorado home rule cities (Denver, Aurora, Colorado Springs, etc.) require SEPARATE registration and filing directly with the city. State-administered localities can be filed together.',
+    calculate: (data, stateInfo) => ({
+      stateTax: (data.totalSales || data.sales || 0) * 0.029,
+      specialTax: 0,
+      countyTax: 0,
+      cityTax: (data.taxOwed || data.tax || 0) - ((data.totalSales || data.sales || 0) * 0.029),
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+    exportFormat: 'jurisdiction',
+  },
+  KS: {
+    name: 'Kansas',
+    formName: 'ST-36 - Retailers Sales Tax Return',
+    website: 'https://www.ksrevenue.gov/custservsalestax.html',
+    requiresJurisdictions: true,
+    jurisdictionType: 'jurisdiction',
+    fields: [
+      { name: 'Gross Sales', key: 'grossSales', description: 'Total sales' },
+      { name: 'Exempt Sales', key: 'exemptSales', description: 'Non-taxable sales' },
+      { name: 'Taxable Sales', key: 'taxableSales', description: 'Gross minus exempt' },
+      { name: 'Tax by Jurisdiction', key: 'jurisdictionTax', description: 'Breakdown by city/county' },
+    ],
+    note: 'Kansas requires jurisdiction-level reporting. Use StreamlinedSalesTax.org or the Kansas WebFile system.',
+    calculate: (data, stateInfo) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      jurisdictionTax: data.taxOwed || data.tax || 0,
+    }),
+    exportFormat: 'jurisdiction',
+  },
+  LA: {
+    name: 'Louisiana',
+    formName: 'R-1029 - Louisiana Sales Tax Return',
+    website: 'https://latap.revenue.louisiana.gov/',
+    requiresJurisdictions: true,
+    jurisdictionType: 'parish',
+    fields: [
+      { name: 'State Tax (4.45%)', key: 'stateTax', description: 'State sales tax' },
+      { name: 'Parish Taxes', key: 'parishTax', description: 'Local parish taxes (vary widely)' },
+      { name: 'Total Tax Due', key: 'totalTax', description: 'State + Parish' },
+    ],
+    note: 'Louisiana requires parish-level reporting. Remote sellers can use the Louisiana Sales & Use Tax Commission single return for most parishes.',
+    calculate: (data, stateInfo) => ({
+      stateTax: (data.totalSales || data.sales || 0) * 0.0445,
+      parishTax: (data.taxOwed || data.tax || 0) - ((data.totalSales || data.sales || 0) * 0.0445),
+      totalTax: data.taxOwed || data.tax || 0,
+    }),
+    exportFormat: 'jurisdiction',
+  },
+  DEFAULT: {
+    name: 'Standard',
+    formName: 'State Sales Tax Return',
+    website: null,
+    fields: [
+      { name: 'Gross Sales', key: 'grossSales', description: 'Total sales shipped to state' },
+      { name: 'Exempt Sales', key: 'exemptSales', description: 'Non-taxable sales' },
+      { name: 'Net Taxable Sales', key: 'taxableSales', description: 'Gross minus exempt' },
+      { name: 'Tax Collected', key: 'taxCollected', description: 'Tax you collected on orders' },
+    ],
+    calculate: (data, stateInfo) => ({
+      grossSales: data.totalSales || data.sales || 0,
+      exemptSales: 0,
+      taxableSales: data.totalSales || data.sales || 0,
+      taxCollected: data.taxOwed || data.tax || 0,
+    }),
+  },
+};
 
 // Filing frequency due date calculator
-// getNextDueDate extracted to utils/salesTax.js
+const getNextDueDate = (frequency, stateCode) => {
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+  const currentDay = now.getDate();
+  
+  // Most states have 20th of month due dates, some vary
+  const dueDayOfMonth = 20;
+  
+  if (frequency === 'monthly') {
+    // Due 20th of following month
+    let dueMonth = currentMonth + 1;
+    let dueYear = currentYear;
+    if (dueMonth > 11) { dueMonth = 0; dueYear++; }
+    const dueDate = new Date(dueYear, dueMonth, dueDayOfMonth);
+    if (dueDate <= now) {
+      dueMonth++;
+      if (dueMonth > 11) { dueMonth = 0; dueYear++; }
+      return new Date(dueYear, dueMonth, dueDayOfMonth);
+    }
+    return dueDate;
+  } else if (frequency === 'quarterly') {
+    // Q1 (Jan-Mar) due Apr 20, Q2 (Apr-Jun) due Jul 20, Q3 (Jul-Sep) due Oct 20, Q4 (Oct-Dec) due Jan 20
+    const quarterEnds = [[3, 20], [6, 20], [9, 20], [0, 20]]; // [month, day]
+    const quarterYears = [0, 0, 0, 1]; // year offset
+    for (let i = 0; i < 4; i++) {
+      const [m, d] = quarterEnds[i];
+      const y = currentYear + quarterYears[i];
+      const dueDate = new Date(y, m, d);
+      if (dueDate > now) return dueDate;
+    }
+    return new Date(currentYear + 1, 3, 20);
+  } else if (frequency === 'semi-annual') {
+    // Jan-Jun due Jul 20, Jul-Dec due Jan 20
+    const h1Due = new Date(currentYear, 6, 20); // Jul 20
+    const h2Due = new Date(currentYear + 1, 0, 20); // Jan 20 next year
+    if (h1Due > now) return h1Due;
+    if (h2Due > now) return h2Due;
+    return new Date(currentYear + 1, 6, 20);
+  } else if (frequency === 'annual') {
+    // Due Jan 20 of following year
+    const dueDate = new Date(currentYear + 1, 0, 20);
+    if (dueDate <= now) return new Date(currentYear + 2, 0, 20);
+    return dueDate;
+  }
+  return new Date(currentYear, currentMonth + 1, 20);
+};
 
-// parseShopifyTaxReport extracted to utils/salesTax.js
+// Parse Shopify tax report - handles jurisdiction-based reports
+const parseShopifyTaxReport = (csvData, stateCode) => {
+  const stateInfo = US_STATES_TAX_INFO[stateCode];
+  const result = {
+    state: stateCode,
+    stateName: stateInfo?.name || stateCode,
+    periodStart: null,
+    periodEnd: null,
+    totalSales: 0,
+    totalTaxableSales: 0,
+    totalExemptSales: 0,
+    totalTaxCollected: 0,
+    stateTax: 0,
+    countyTax: 0,
+    cityTax: 0,
+    specialTax: 0,
+    jurisdictions: [],
+    byType: { state: [], county: [], city: [], special: [] }
+  };
+  
+  csvData.forEach(row => {
+    const jurisdiction = row['Tax jurisdiction'] || '';
+    const type = (row['Tax jurisdiction type'] || '').toLowerCase();
+    const county = (row['Tax county'] || '').trim();
+    const code = row['Tax jurisdiction code'] || '';
+    const rate = parseFloat(row['Tax rate'] || 0);
+    const totalSales = parseFloat(row['Total net item sales'] || 0);
+    const taxableSales = parseFloat(row['Total taxable item sales'] || 0);
+    const exemptSales = parseFloat(row['Total exempt and non-taxable item sales'] || 0);
+    const itemTax = parseFloat(row['Total item tax amount'] || 0);
+    const shippingTax = parseFloat(row['Total shipping tax amount'] || 0);
+    const totalTax = itemTax + shippingTax;
+    
+    result.totalSales += totalSales;
+    result.totalTaxableSales += taxableSales;
+    result.totalExemptSales += exemptSales;
+    result.totalTaxCollected += totalTax;
+    
+    const jurisdictionData = {
+      name: jurisdiction,
+      type,
+      county: county.replace(' -', '').trim(),
+      code,
+      rate,
+      totalSales,
+      taxableSales,
+      exemptSales,
+      taxAmount: totalTax
+    };
+    
+    result.jurisdictions.push(jurisdictionData);
+    
+    if (type === 'state') {
+      result.stateTax += totalTax;
+      result.byType.state.push(jurisdictionData);
+    } else if (type === 'county') {
+      result.countyTax += totalTax;
+      result.byType.county.push(jurisdictionData);
+    } else if (type === 'city') {
+      result.cityTax += totalTax;
+      result.byType.city.push(jurisdictionData);
+    } else {
+      result.specialTax += totalTax;
+      result.byType.special.push(jurisdictionData);
+    }
+  });
+  
+  return result;
+};
 
 const combinedData = useMemo(() => ({
   sales: allWeeksData,
@@ -1532,14 +3018,8 @@ const loadFromLocal = useCallback(() => {
     const r = lsGet(STORAGE_KEY);
     if (r) {
       const d = JSON.parse(r);
-      // Migrate any week keys that aren't Sundays (timezone bug fix)
-      const { migratedData, migrations } = migrateWeekKeys(d);
-      if (migrations.length > 0) {
-        console.log('Migrated week keys:', migrations);
-        lsSet(STORAGE_KEY, JSON.stringify(migratedData));
-      }
-      setAllWeeksData(migratedData);
-      const w = Object.keys(migratedData).sort().reverse();
+      setAllWeeksData(d);
+      const w = Object.keys(d).sort().reverse();
       if (w.length) { setSelectedWeek(w[0]); }
     }
   } catch {}
@@ -1602,16 +3082,7 @@ const loadFromLocal = useCallback(() => {
 
   try {
     const r = lsGet(INVENTORY_KEY);
-    if (r) {
-      const invData = JSON.parse(r);
-      // Filter out invalid SKUs (lowercase ddpe) from inventory items
-      Object.keys(invData).forEach(dateKey => {
-        if (invData[dateKey]?.items) {
-          invData[dateKey].items = invData[dateKey].items.filter(item => isValidSku(item.sku));
-        }
-      });
-      setInvHistory(invData);
-    }
+    if (r) setInvHistory(JSON.parse(r));
   } catch {}
 
   try {
@@ -1942,20 +3413,11 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     // Apply cloud data to state
     isLoadingDataRef.current = true;
     
-    // Migrate any week keys that aren't Sundays (timezone bug fix)
-    const { migratedData: migratedSales } = migrateWeekKeys(cloud.sales || {});
-    setAllWeeksData(migratedSales);
+    setAllWeeksData(cloud.sales || {});
     setAllDaysData(cloud.dailySales || {}); // Load daily data
-    const w = Object.keys(migratedSales).sort().reverse();
+    const w = Object.keys(cloud.sales || {}).sort().reverse();
     if (w.length) { setSelectedWeek(w[0]); }
-    // Filter out invalid SKUs (lowercase ddpe) from cloud inventory
-    const cloudInv = cloud.inventory || {};
-    Object.keys(cloudInv).forEach(dateKey => {
-      if (cloudInv[dateKey]?.items) {
-        cloudInv[dateKey].items = cloudInv[dateKey].items.filter(item => isValidSku(item.sku));
-      }
-    });
-    setInvHistory(cloudInv);
+    setInvHistory(cloud.inventory || {});
     setSavedCogs(cloud.cogs?.lookup || {});
     setCogsLastUpdated(cloud.cogs?.updatedAt || null);
     setAllPeriodsData(cloud.periods || {});
@@ -1988,17 +3450,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.theme) setTheme(cloud.theme);
     if (cloud.widgetConfig) setWidgetConfig(cloud.widgetConfig);
     if (cloud.productionPipeline) setProductionPipeline(cloud.productionPipeline);
-    // Merge 3PL data - prefer source with more orders to avoid losing local uploads
-    if (cloud.threeplLedger) {
-      const cloudOrders = Object.keys(cloud.threeplLedger.orders || {}).length;
-      const localOrders = Object.keys(threeplLedger?.orders || {}).length;
-      if (cloudOrders >= localOrders) {
-        setThreeplLedger(cloud.threeplLedger);
-      } else {
-        // Keep local 3PL data - it has more orders
-        console.log('Keeping local 3PL data with', localOrders, 'orders (cloud has', cloudOrders, ')');
-      }
-    }
+    if (cloud.threeplLedger) setThreeplLedger(cloud.threeplLedger);
     if (cloud.amazonCampaigns) setAmazonCampaigns(cloud.amazonCampaigns);
     
     // Load self-learning forecast data
@@ -3487,19 +4939,17 @@ const savePeriods = async (d) => {
         weeklyAgg[weekKey].amazon.adSpend += dayData.amazon.adSpend || 0;
         weeklyAgg[weekKey].amazon.netProfit += dayData.amazon.netProfit || 0;
         
-        // Aggregate SKU data - normalize SKU keys to uppercase
+        // Aggregate SKU data
         (dayData.amazon.skuData || []).forEach(sku => {
-          const normalizedSku = normalizeSku(sku.sku);
-          if (!normalizedSku) return;
-          if (!weeklyAgg[weekKey].amazon.skuData[normalizedSku]) {
-            weeklyAgg[weekKey].amazon.skuData[normalizedSku] = { ...sku, sku: normalizedSku, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+          if (!weeklyAgg[weekKey].amazon.skuData[sku.sku]) {
+            weeklyAgg[weekKey].amazon.skuData[sku.sku] = { ...sku, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
           }
-          weeklyAgg[weekKey].amazon.skuData[normalizedSku].unitsSold += sku.unitsSold || 0;
-          weeklyAgg[weekKey].amazon.skuData[normalizedSku].returns += sku.returns || 0;
-          weeklyAgg[weekKey].amazon.skuData[normalizedSku].netSales += sku.netSales || 0;
-          weeklyAgg[weekKey].amazon.skuData[normalizedSku].netProceeds += sku.netProceeds || 0;
-          weeklyAgg[weekKey].amazon.skuData[normalizedSku].adSpend += sku.adSpend || 0;
-          weeklyAgg[weekKey].amazon.skuData[normalizedSku].cogs += sku.cogs || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].unitsSold += sku.unitsSold || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].returns += sku.returns || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].netSales += sku.netSales || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].netProceeds += sku.netProceeds || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].adSpend += sku.adSpend || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].cogs += sku.cogs || 0;
         });
       }
       
@@ -3514,17 +4964,15 @@ const savePeriods = async (d) => {
         weeklyAgg[weekKey].shopify.discounts += dayData.shopify.discounts || 0;
         weeklyAgg[weekKey].shopify.netProfit += dayData.shopify.netProfit || 0;
         
-        // Aggregate SKU data - normalize SKU keys to uppercase
+        // Aggregate SKU data
         (dayData.shopify.skuData || []).forEach(sku => {
-          const normalizedSku = normalizeSku(sku.sku);
-          if (!normalizedSku) return;
-          if (!weeklyAgg[weekKey].shopify.skuData[normalizedSku]) {
-            weeklyAgg[weekKey].shopify.skuData[normalizedSku] = { ...sku, sku: normalizedSku, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+          if (!weeklyAgg[weekKey].shopify.skuData[sku.sku]) {
+            weeklyAgg[weekKey].shopify.skuData[sku.sku] = { ...sku, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
           }
-          weeklyAgg[weekKey].shopify.skuData[normalizedSku].unitsSold += sku.unitsSold || 0;
-          weeklyAgg[weekKey].shopify.skuData[normalizedSku].netSales += sku.netSales || 0;
-          weeklyAgg[weekKey].shopify.skuData[normalizedSku].discounts += sku.discounts || 0;
-          weeklyAgg[weekKey].shopify.skuData[normalizedSku].cogs += sku.cogs || 0;
+          weeklyAgg[weekKey].shopify.skuData[sku.sku].unitsSold += sku.unitsSold || 0;
+          weeklyAgg[weekKey].shopify.skuData[sku.sku].netSales += sku.netSales || 0;
+          weeklyAgg[weekKey].shopify.skuData[sku.sku].discounts += sku.discounts || 0;
+          weeklyAgg[weekKey].shopify.skuData[sku.sku].cogs += sku.cogs || 0;
         });
       }
     });
@@ -3686,9 +5134,9 @@ const savePeriods = async (d) => {
         dailyByWeek[weekKey].amazon.adSpend += dayData.amazon.adSpend || 0;
         dailyByWeek[weekKey].amazon.netProfit += dayData.amazon.netProfit || 0;
         
-        // Aggregate SKU data - normalize to uppercase
+        // Aggregate SKU data
         (dayData.amazon.skuData || []).forEach(sku => {
-          const skuKey = normalizeSku(sku.sku || sku.msku);
+          const skuKey = sku.sku || sku.msku;
           if (!skuKey) return;
           if (!dailyByWeek[weekKey].amazon.skuData[skuKey]) {
             dailyByWeek[weekKey].amazon.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
@@ -3711,9 +5159,9 @@ const savePeriods = async (d) => {
         dailyByWeek[weekKey].shopify.netProfit += dayData.shopify.netProfit || 0;
         dailyByWeek[weekKey].shopify.threeplCosts += dayData.shopify.threeplCosts || 0;
         
-        // Aggregate SKU data - normalize to uppercase
+        // Aggregate SKU data  
         (dayData.shopify.skuData || []).forEach(sku => {
-          const skuKey = normalizeSku(sku.sku);
+          const skuKey = sku.sku;
           if (!skuKey) return;
           if (!dailyByWeek[weekKey].shopify.skuData[skuKey]) {
             dailyByWeek[weekKey].shopify.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
@@ -4268,14 +5716,10 @@ const savePeriods = async (d) => {
     }
     setIsProcessing(true);
 
-    // Build cogsLookup - only include valid SKUs (uppercase DDPE, not lowercase ddpe)
-    const cogsLookup = {};
-    Object.entries(savedCogs).forEach(([sku, cost]) => {
-      if (isValidSku(sku)) cogsLookup[sku.trim()] = cost;
-    });
+    const cogsLookup = { ...savedCogs };
     if (invFiles.cogs) invFiles.cogs.forEach(r => { 
-      const s = (r['SKU'] || r['sku'] || '').trim();
-      if (isValidSku(s)) cogsLookup[s] = parseFloat(r['Cost Per Unit'] || 0); 
+      const s = r['SKU'] || r['sku']; 
+      if (s) cogsLookup[s] = parseFloat(r['Cost Per Unit'] || 0); 
     });
 
     // Build velocity from ALL available sales data sources
@@ -4299,21 +5743,19 @@ const savePeriods = async (d) => {
       
       last28.forEach(d => {
         const dayData = legacyDailyData[d];
-        // Amazon SKU data - filter out lowercase ddpe SKUs
+        // Amazon SKU data - store only under original SKU
         (dayData?.amazon?.skuData || []).forEach(item => {
-          if (!item.sku || !isValidSku(item.sku)) return;
-          const sku = item.sku.trim();
-          if (!amazonSkuVelocity[sku]) amazonSkuVelocity[sku] = 0;
+          if (!item.sku) return;
+          if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
           const units = item.unitsSold || item.units || 0;
-          amazonSkuVelocity[sku] += units / weeksEquiv;
+          amazonSkuVelocity[item.sku] += units / weeksEquiv;
         });
-        // Shopify SKU data - filter out lowercase ddpe SKUs
+        // Shopify SKU data - store only under original SKU
         (dayData?.shopify?.skuData || []).forEach(item => {
-          if (!item.sku || !isValidSku(item.sku)) return;
-          const sku = item.sku.trim();
-          if (!shopifySkuVelocity[sku]) shopifySkuVelocity[sku] = 0;
+          if (!item.sku) return;
+          if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
           const units = item.unitsSold || item.units || 0;
-          shopifySkuVelocity[sku] += units / weeksEquiv;
+          shopifySkuVelocity[item.sku] += units / weeksEquiv;
         });
       });
       
@@ -4365,31 +5807,29 @@ const savePeriods = async (d) => {
           }
         }
         
-        // Shopify SKU velocity - filter out lowercase ddpe SKUs
+        // Shopify SKU velocity - store only under original SKU
         if (weekData.shopify?.skuData) {
           const skuData = Array.isArray(weekData.shopify.skuData) 
             ? weekData.shopify.skuData 
             : Object.values(weekData.shopify.skuData);
           skuData.forEach(item => {
-            if (!item.sku || !isValidSku(item.sku)) return;
-            const sku = item.sku.trim();
-            if (!shopifySkuVelocity[sku]) shopifySkuVelocity[sku] = 0;
+            if (!item.sku) return;
+            if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
             const units = item.unitsSold || item.units || 0;
-            shopifySkuVelocity[sku] += units;
+            shopifySkuVelocity[item.sku] += units;
           });
         }
         
-        // Amazon SKU velocity from weekly data - filter out lowercase ddpe SKUs
+        // Amazon SKU velocity from weekly data - store only under original SKU
         if (weekData.amazon?.skuData) {
           const skuData = Array.isArray(weekData.amazon.skuData)
             ? weekData.amazon.skuData
             : Object.values(weekData.amazon.skuData);
           skuData.forEach(item => {
-            if (!item.sku || !isValidSku(item.sku)) return;
-            const sku = item.sku.trim();
-            if (!amazonSkuVelocity[sku]) amazonSkuVelocity[sku] = 0;
+            if (!item.sku) return;
+            if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
             const units = item.unitsSold || item.units || 0;
-            amazonSkuVelocity[sku] += units;
+            amazonSkuVelocity[item.sku] += units;
           });
         }
       });
@@ -4472,12 +5912,11 @@ const savePeriods = async (d) => {
             ? dayData.amazon.skuData
             : Object.values(dayData.amazon.skuData);
           skuData.forEach(item => {
-            if (!item.sku || !isValidSku(item.sku)) return;
-            const sku = item.sku.trim();
-            if (!dailyAmazonVel[sku]) dailyAmazonVel[sku] = 0;
+            if (!item.sku) return;
+            if (!dailyAmazonVel[item.sku]) dailyAmazonVel[item.sku] = 0;
             // Check multiple field names for units
             const units = item.unitsSold || item.units || item.Units || item.UNITS || item.quantity || 0;
-            dailyAmazonVel[sku] += units;
+            dailyAmazonVel[item.sku] += units;
           });
         }
         
@@ -4486,12 +5925,11 @@ const savePeriods = async (d) => {
             ? dayData.shopify.skuData
             : Object.values(dayData.shopify.skuData);
           skuData.forEach(item => {
-            if (!item.sku || !isValidSku(item.sku)) return;
-            const sku = item.sku.trim();
-            if (!dailyShopifyVel[sku]) dailyShopifyVel[sku] = 0;
+            if (!item.sku) return;
+            if (!dailyShopifyVel[item.sku]) dailyShopifyVel[item.sku] = 0;
             // Check multiple field names for units
             const units = item.unitsSold || item.units || item.Units || item.UNITS || item.quantity || 0;
-            dailyShopifyVel[sku] += units;
+            dailyShopifyVel[item.sku] += units;
           });
         }
       });
@@ -4531,32 +5969,30 @@ const savePeriods = async (d) => {
       sortedPeriods.forEach(periodKey => {
         const periodData = allPeriodsData[periodKey];
         
-        // Amazon SKU velocity from period data - filter out lowercase ddpe SKUs
+        // Amazon SKU velocity from period data
         if (periodData.amazon?.skuData) {
           const skuData = Array.isArray(periodData.amazon.skuData)
             ? periodData.amazon.skuData
             : Object.values(periodData.amazon.skuData);
           skuData.forEach(item => {
-            if (!item.sku || !isValidSku(item.sku)) return;
-            const sku = item.sku.trim();
+            if (!item.sku) return;
             // Divide monthly units by weeks per month to get weekly rate
             const weeklyUnits = (item.unitsSold || item.units || 0) / WEEKS_PER_MONTH;
-            if (!periodAmazonVel[sku]) periodAmazonVel[sku] = 0;
-            periodAmazonVel[sku] += weeklyUnits;
+            if (!periodAmazonVel[item.sku]) periodAmazonVel[item.sku] = 0;
+            periodAmazonVel[item.sku] += weeklyUnits;
           });
         }
         
-        // Shopify SKU velocity from period data - filter out lowercase ddpe SKUs
+        // Shopify SKU velocity from period data
         if (periodData.shopify?.skuData) {
           const skuData = Array.isArray(periodData.shopify.skuData)
             ? periodData.shopify.skuData
             : Object.values(periodData.shopify.skuData);
           skuData.forEach(item => {
-            if (!item.sku || !isValidSku(item.sku)) return;
-            const sku = item.sku.trim();
+            if (!item.sku) return;
             const weeklyUnits = (item.unitsSold || item.units || 0) / WEEKS_PER_MONTH;
-            if (!periodShopifyVel[sku]) periodShopifyVel[sku] = 0;
-            periodShopifyVel[sku] += weeklyUnits;
+            if (!periodShopifyVel[item.sku]) periodShopifyVel[item.sku] = 0;
+            periodShopifyVel[item.sku] += weeklyUnits;
           });
         }
       });
@@ -4612,9 +6048,8 @@ const savePeriods = async (d) => {
         if (data.success && data.items) {
           amzSource = data.source || 'amazon-sp-api';
           data.items.forEach(item => {
-            // Skip invalid SKUs (lowercase ddpe or empty)
-            if (!item.sku || !isValidSku(item.sku)) return;
-            const sku = item.sku.trim();
+            const sku = item.sku;
+            if (!sku) return;
             
             // Use FBA quantities (AWD is separate distribution inventory)
             const avail = item.fbaFulfillable || item.available || 0;
@@ -4622,13 +6057,14 @@ const savePeriods = async (d) => {
             const inb = item.fbaInbound || item.amazonInbound || 0;
             const total = avail + reserved;
             
-            const cost = cogsLookup[sku] || 0;
+            const cost = cogsLookup[sku] || cogsLookup[sku.toLowerCase()] || cogsLookup[sku.toUpperCase()] || 0;
             amzTotal += total;
             amzValue += total * cost;
             amzInbound += inb;
             
-            // Get velocity
-            const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
+            // Get velocity - try multiple case variants
+            const skuLower = sku.toLowerCase();
+            const amzVelFromWeekly = amazonSkuVelocity[sku] || amazonSkuVelocity[skuLower] || amazonSkuVelocity[sku.toUpperCase()] || 0;
             const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : 0;
             
             const itemData = { 
@@ -4641,7 +6077,8 @@ const savePeriods = async (d) => {
               amzWeeklyVel 
             };
             
-            // Store under normalized SKU
+            // Store only under original SKU (not multiple case variants)
+            // We'll build case-insensitive lookup later
             amzInv[sku] = itemData;
             
             // Track AWD separately
@@ -4668,23 +6105,22 @@ const savePeriods = async (d) => {
     if (Object.keys(amzInv).length === 0 && invFiles.amazon) {
       amzSource = 'file-upload';
       invFiles.amazon.forEach(r => {
-        const rawSku = r['sku'] || '';
-        // Skip invalid SKUs (lowercase ddpe or empty)
-        if (!rawSku || !isValidSku(rawSku)) return;
-        const sku = rawSku.trim();
-        const avail = parseInt(r['available'] || 0), inb = parseInt(r['inbound-quantity'] || 0);
+        const sku = r['sku'] || '', avail = parseInt(r['available'] || 0), inb = parseInt(r['inbound-quantity'] || 0);
         const res = parseInt(r['Total Reserved Quantity'] || 0), t30 = parseInt(r['units-shipped-t30'] || 0);
         const name = r['product-name'] || '', asin = r['asin'] || '';
-        const cost = cogsLookup[sku] || 0, total = avail + res;
+        const skuLower = sku.toLowerCase();
+        const cost = cogsLookup[sku] || cogsLookup[skuLower] || 0, total = avail + res;
         amzTotal += total; amzValue += total * cost; amzInbound += inb;
         
-        // Use weekly data velocity if available
-        const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
+        // Use weekly data velocity if available, otherwise fall back to t30 from file
+        const amzVelFromWeekly = amazonSkuVelocity[sku] || amazonSkuVelocity[skuLower] || 0;
         const amzVelFromFile = t30 / 4.3;
         const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : amzVelFromFile;
         
         const itemData = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel };
-        amzInv[sku] = itemData;
+        if (sku) {
+          amzInv[sku] = itemData;
+        }
       });
     }
 
@@ -4711,9 +6147,8 @@ const savePeriods = async (d) => {
         if (data.success && data.items) {
           tplSource = 'packiyo-direct';
           data.items.forEach(item => {
-            // Skip invalid SKUs (lowercase ddpe, empty, bundles, gift cards)
-            if (!item.sku || !isValidSku(item.sku) || item.sku.includes('Bundle') || item.name?.includes('Gift Card') || item.name?.includes('FREE')) return;
-            const sku = item.sku.trim();
+            const sku = item.sku;
+            if (!sku || sku.includes('Bundle') || item.name?.includes('Gift Card') || item.name?.includes('FREE')) return;
             
             const qty = item.quantity_on_hand || 0;
             const inb = item.quantity_inbound || 0;
@@ -4728,7 +6163,7 @@ const savePeriods = async (d) => {
             
             const itemData = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
             
-            // Store under SKU
+            // Store only under original SKU
             tplInv[sku] = itemData;
           });
           
@@ -4745,17 +6180,15 @@ const savePeriods = async (d) => {
     if (Object.keys(tplInv).length === 0 && invFiles.threepl) {
       tplSource = 'file-upload';
       invFiles.threepl.forEach(r => {
-        const rawSku = r['sku'] || '';
-        // Skip invalid SKUs (lowercase ddpe or empty)
-        if (!rawSku || !isValidSku(rawSku)) return;
-        const sku = rawSku.trim();
-        const name = r['name'] || '', qty = parseInt(r['quantity_on_hand'] || 0);
+        const sku = r['sku'] || '', name = r['name'] || '', qty = parseInt(r['quantity_on_hand'] || 0);
         const inb = parseInt(r['quantity_inbound'] || 0), cost = parseFloat(r['cost'] || 0) || cogsLookup[sku] || 0;
         if (sku.includes('Bundle') || name.includes('Gift Card') || name.includes('FREE') || qty === 0) return;
         tplTotal += qty; tplValue += qty * cost; tplInbound += inb;
         
         const itemData = { sku, name, total: qty, inbound: inb, cost };
-        tplInv[sku] = itemData;
+        if (sku) {
+          tplInv[sku] = itemData;
+        }
       });
     }
 
@@ -4782,9 +6215,8 @@ const savePeriods = async (d) => {
         if (data.success && data.items) {
           homeSource = 'shopify-sync';
           data.items.forEach(item => {
-            // Skip invalid SKUs (lowercase ddpe or empty)
-            if (!item.sku || !isValidSku(item.sku)) return;
-            const sku = item.sku.trim();
+            const sku = item.sku;
+            if (!sku) return;
             
             // Only get home/office location inventory (not 3PL locations)
             const homeQty = item.homeQty || 0;
@@ -4802,36 +6234,68 @@ const savePeriods = async (d) => {
     }
 
     // ===== COMBINE ALL INVENTORY SOURCES =====
-    // All SKUs are now normalized to uppercase via normalizeSku()
-    // No need for case-insensitive lookups anymore
+    // Build case-insensitive lookup maps for matching
+    const tplInvLower = {};
+    Object.entries(tplInv).forEach(([sku, data]) => {
+      tplInvLower[sku.toLowerCase()] = data;
+    });
+    const homeInvLower = {};
+    Object.entries(homeInv).forEach(([sku, data]) => {
+      homeInvLower[sku.toLowerCase()] = data;
+    });
+    const amzInvLower = {};
+    Object.entries(amzInv).forEach(([sku, data]) => {
+      amzInvLower[sku.toLowerCase()] = data;
+    });
+    const amzVelLower = {};
+    Object.entries(amazonSkuVelocity).forEach(([sku, vel]) => {
+      amzVelLower[sku.toLowerCase()] = vel;
+    });
+    const shopVelLower = {};
+    Object.entries(shopifySkuVelocity).forEach(([sku, vel]) => {
+      shopVelLower[sku.toLowerCase()] = vel;
+    });
     
     const allSkus = new Set([...Object.keys(amzInv), ...Object.keys(tplInv), ...Object.keys(homeInv)]);
     
-    console.log('Total unique SKUs (all normalized to uppercase):', allSkus.size);
+    // Deduplicate SKUs - keep only one version of each SKU (prefer original case)
+    const seenSkusLower = new Set();
+    const uniqueSkus = [];
+    allSkus.forEach(sku => {
+      const skuLower = sku.toLowerCase();
+      if (!seenSkusLower.has(skuLower)) {
+        seenSkusLower.add(skuLower);
+        uniqueSkus.push(sku);
+      }
+    });
+    
+    console.log('SKU deduplication: allSkus =', allSkus.size, ', uniqueSkus =', uniqueSkus.length);
     
     const items = [];
     let critical = 0, low = 0, healthy = 0, overstock = 0;
 
-    allSkus.forEach(sku => {
-      // All lookups are now uppercase
-      const a = amzInv[sku] || {};
-      const t = tplInv[sku] || {};
-      const h = homeInv[sku] || {};
+    uniqueSkus.forEach(sku => {
+      const skuLower = sku.toLowerCase();
+      
+      // Case-insensitive lookups for all inventory sources
+      const a = amzInv[sku] || amzInvLower[skuLower] || {};
+      const t = tplInv[sku] || tplInvLower[skuLower] || {};
+      const h = homeInv[sku] || homeInvLower[skuLower] || {};
       
       const aQty = a.total || 0;
       const tQty = t.total || 0;
       const hQty = h.total || 0;
       const totalQty = aQty + tQty + hQty;
       
-      const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || 0;
+      const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || cogsLookup[skuLower] || 0;
       
       // Get velocity from both weekly data AND Amazon inventory file
       // Priority: weekly sales data > t30 from inventory file
-      const amzVelFromWeekly = amazonSkuVelocity[sku] || 0;
+      const amzVelFromWeekly = amazonSkuVelocity[sku] || amzVelLower[skuLower] || 0;
       const amzVelFromInv = a.amzWeeklyVel || 0; // This comes from t30 in inventory file
       const amzVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : amzVelFromInv;
       
-      const shopVel = shopifySkuVelocity[sku] || 0;
+      const shopVel = shopifySkuVelocity[sku] || shopVelLower[skuLower] || 0;
       const totalVel = amzVel + shopVel;
       
       // Apply learned corrections
@@ -4886,7 +6350,7 @@ const savePeriods = async (d) => {
       }
       
       items.push({ 
-        sku: sku.toUpperCase(), // Always normalize to uppercase
+        sku, 
         name: a.name || t.name || h.name || sku, 
         asin: a.asin || '', 
         amazonQty: aQty, 
@@ -5823,16 +7287,8 @@ const savePeriods = async (d) => {
           reportType = 'weekly';
         } else if (daysDiff >= 28 && daysDiff <= 31) {
           reportType = 'monthly';
-        } else if (daysDiff >= 85 && daysDiff <= 95) {
-          reportType = 'quarterly';
-        } else if (daysDiff >= 360) {
-          reportType = 'yearly';
-        } else if (daysDiff <= 14) {
-          reportType = 'daily'; // Treat short ranges as daily
-        } else if (daysDiff <= 40) {
-          reportType = 'monthly';
         } else {
-          reportType = 'period'; // Custom period
+          reportType = daysDiff <= 14 ? 'daily' : daysDiff <= 40 ? 'monthly' : 'period';
         }
         
         // Calculate summary metrics
@@ -5881,11 +7337,7 @@ const savePeriods = async (d) => {
       dailyCount: parsedFiles.filter(f => f.reportType === 'daily').length,
       weeklyCount: parsedFiles.filter(f => f.reportType === 'weekly').length,
       monthlyCount: parsedFiles.filter(f => f.reportType === 'monthly').length,
-      quarterlyCount: parsedFiles.filter(f => f.reportType === 'quarterly').length,
-      yearlyCount: parsedFiles.filter(f => f.reportType === 'yearly').length,
-      periodCount: parsedFiles.filter(f => f.reportType === 'period').length,
       totalRevenue: parsedFiles.reduce((sum, f) => sum + (f.revenue || 0), 0),
-      totalFiles: parsedFiles.length,
       dateRange: parsedFiles.length > 0 ? {
         start: parsedFiles[0]?.dateRange?.start,
         end: parsedFiles[parsedFiles.length - 1]?.dateRange?.end,
@@ -5910,7 +7362,7 @@ const savePeriods = async (d) => {
     setAmazonBulkProcessing(true);
     const cogsLookup = getCogsLookup();
     
-    let dailyImported = 0, weeklyImported = 0, monthlyImported = 0, skippedDuplicates = 0;
+    let dailyImported = 0, weeklyImported = 0, monthlyImported = 0;
     const updatedDailyData = { ...allDaysData };
     const updatedWeeklyData = { ...allWeeksData };
     const updatedPeriodsData = { ...allPeriodsData };
@@ -5983,62 +7435,6 @@ const savePeriods = async (d) => {
         }
         
         console.log('Processing file:', fileData.name, 'reportType:', reportType, 'dateKey:', dateRange.endDate.toISOString().split('T')[0]);
-        
-        // Smart duplicate detection - check if we already have data for this period
-        let existingAmazonRev = 0;
-        let shouldSkip = false;
-        
-        if (reportType === 'daily') {
-          const dateKey = dateRange.endDate.toISOString().split('T')[0];
-          existingAmazonRev = updatedDailyData[dateKey]?.amazon?.revenue || 0;
-          // Skip if existing has more revenue (more complete data)
-          if (existingAmazonRev > 0 && existingAmazonRev >= amzRev * 0.99) {
-            console.log(`Skipping ${dateKey} - existing Amazon rev $${existingAmazonRev.toFixed(2)} >= new $${amzRev.toFixed(2)}`);
-            shouldSkip = true;
-          }
-        } else if (reportType === 'weekly') {
-          const weekKey = dateRange.endDate.toISOString().split('T')[0];
-          existingAmazonRev = updatedWeeklyData[weekKey]?.amazon?.revenue || 0;
-          if (existingAmazonRev > 0 && existingAmazonRev >= amzRev * 0.99) {
-            console.log(`Skipping week ${weekKey} - existing Amazon rev $${existingAmazonRev.toFixed(2)} >= new $${amzRev.toFixed(2)}`);
-            shouldSkip = true;
-          }
-        } else if (reportType === 'monthly') {
-          const monthLabel = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-          existingAmazonRev = updatedPeriodsData[monthLabel]?.amazon?.revenue || 0;
-          if (existingAmazonRev > 0 && existingAmazonRev >= amzRev * 0.99) {
-            console.log(`Skipping ${monthLabel} - existing Amazon rev $${existingAmazonRev.toFixed(2)} >= new $${amzRev.toFixed(2)}`);
-            shouldSkip = true;
-          }
-        } else if (reportType === 'yearly') {
-          // Check with the same label format used during import
-          const startYear = dateRange.startDate.getFullYear();
-          const endYear = dateRange.endDate.getFullYear();
-          let yearLabel;
-          if (startYear === endYear) {
-            yearLabel = `${startYear} Full Year`;
-          } else {
-            const startStr = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-            const endStr = dateRange.endDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-            yearLabel = `${startStr} - ${endStr}`;
-          }
-          existingAmazonRev = updatedPeriodsData[yearLabel]?.amazon?.revenue || 0;
-          if (existingAmazonRev > 0 && existingAmazonRev >= amzRev * 0.99) {
-            console.log(`Skipping ${yearLabel} - existing Amazon rev $${existingAmazonRev.toFixed(2)} >= new $${amzRev.toFixed(2)}`);
-            shouldSkip = true;
-          }
-        }
-        
-        // If new data has significantly more revenue, update; otherwise skip
-        if (shouldSkip) {
-          console.log(`Duplicate detected - keeping existing data (higher or equal revenue)`);
-          skippedDuplicates++;
-          continue;
-        }
-        
-        if (existingAmazonRev > 0) {
-          console.log(`Updating with new data - new rev $${amzRev.toFixed(2)} > existing $${existingAmazonRev.toFixed(2)}`);
-        }
         
         if (reportType === 'daily') {
           // Import as daily data
@@ -6125,7 +7521,6 @@ const savePeriods = async (d) => {
           
           updatedPeriodsData[monthLabel] = {
             label: monthLabel,
-            type: 'monthly',
             createdAt: new Date().toISOString(),
             amazon: {
               revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs,
@@ -6146,66 +7541,6 @@ const savePeriods = async (d) => {
             },
           };
           monthlyImported++;
-        } else if (reportType === 'quarterly' || reportType === 'yearly' || reportType === 'period') {
-          // Import as period data with appropriate label
-          let periodLabel;
-          if (reportType === 'yearly') {
-            // Use date range for yearly to avoid conflicts, e.g., "2025 Full Year" or "Jan 2025 - Jan 2026"
-            const startYear = dateRange.startDate.getFullYear();
-            const endYear = dateRange.endDate.getFullYear();
-            if (startYear === endYear) {
-              periodLabel = `${startYear} Full Year`;
-            } else {
-              const startStr = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-              const endStr = dateRange.endDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-              periodLabel = `${startStr} - ${endStr}`;
-            }
-          } else if (reportType === 'quarterly') {
-            // Calculate quarter, e.g., "Q1 2025"
-            const quarter = Math.floor(dateRange.startDate.getMonth() / 3) + 1;
-            periodLabel = `Q${quarter} ${dateRange.startDate.getFullYear()}`;
-          } else {
-            // Custom period - use date range, e.g., "Jan 1 - Mar 15, 2025"
-            const startStr = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-            const endStr = dateRange.endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-            periodLabel = `${startStr} - ${endStr}`;
-          }
-          
-          const existingPeriodShopify = updatedPeriodsData[periodLabel]?.shopify || { revenue: 0, units: 0, cogs: 0, netProfit: 0, adSpend: 0, skuData: [] };
-          const periodTotalRev = amzRev + (existingPeriodShopify.revenue || 0);
-          const periodTotalUnits = amzUnits + (existingPeriodShopify.units || 0);
-          const periodTotalProfit = amzProfit + (existingPeriodShopify.netProfit || 0);
-          const periodTotalCogs = amzCogs + (existingPeriodShopify.cogs || 0);
-          const periodTotalAdSpend = amzAds + (existingPeriodShopify.adSpend || existingPeriodShopify.metaSpend || 0) + (existingPeriodShopify.googleSpend || 0);
-          
-          updatedPeriodsData[periodLabel] = {
-            label: periodLabel,
-            type: reportType,
-            createdAt: new Date().toISOString(),
-            dateRange: {
-              start: dateRange.start,
-              end: dateRange.end,
-              days: dateRange.daysDiff,
-            },
-            amazon: {
-              revenue: amzRev, netSales: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs,
-              fees: amzFees, adSpend: amzAds, netProfit: amzProfit,
-              margin: amzRev > 0 ? (amzProfit / amzRev) * 100 : 0,
-              skuData: amazonSkus,
-            },
-            shopify: existingPeriodShopify,
-            total: {
-              revenue: periodTotalRev,
-              units: periodTotalUnits,
-              netProfit: periodTotalProfit,
-              cogs: periodTotalCogs,
-              adSpend: periodTotalAdSpend,
-              netMargin: periodTotalRev > 0 ? (periodTotalProfit / periodTotalRev) * 100 : 0,
-              amazonShare: periodTotalRev > 0 ? (amzRev / periodTotalRev) * 100 : 0,
-              shopifyShare: periodTotalRev > 0 ? ((existingPeriodShopify.revenue || 0) / periodTotalRev) * 100 : 0,
-            },
-          };
-          monthlyImported++; // Count all period types together
         } else {
           console.warn('Unknown report type:', reportType, 'for file:', fileData.name);
         }
@@ -6272,58 +7607,47 @@ const savePeriods = async (d) => {
       }
       
       console.log('All saves complete, clearing upload state...');
-      
-      // Clear upload state first
       setAmazonBulkFiles([]);
       setAmazonBulkParsed(null);
       
       const messages = [];
       if (dailyImported > 0) messages.push(`${dailyImported} daily`);
       if (weeklyImported > 0) messages.push(`${weeklyImported} weekly`);
-      if (monthlyImported > 0) messages.push(`${monthlyImported} monthly/period`);
-      
-      // Build success message
-      let toastMsg = '';
-      let toastType = 'success';
+      if (monthlyImported > 0) messages.push(`${monthlyImported} monthly`);
       
       if (messages.length > 0) {
-        toastMsg = `✅ Imported ${messages.join(', ')} report${dailyImported + weeklyImported + monthlyImported > 1 ? 's' : ''}!`;
-        if (skippedDuplicates > 0) {
-          toastMsg += ` (${skippedDuplicates} duplicate${skippedDuplicates > 1 ? 's' : ''} skipped)`;
-        }
-      } else if (skippedDuplicates > 0) {
-        toastMsg = `All ${skippedDuplicates} file${skippedDuplicates > 1 ? 's' : ''} skipped - data already exists.`;
-        toastType = 'info';
+        setToast({ 
+          message: `Imported ${messages.join(', ')} report${dailyImported + weeklyImported + monthlyImported > 1 ? 's' : ''}!`, 
+          type: 'success' 
+        });
       } else {
-        toastMsg = 'No data was imported. Check console for details.';
-        toastType = 'warning';
+        setToast({ 
+          message: 'No data was imported. Check console for details.', 
+          type: 'warning' 
+        });
       }
       
-      console.log('Import complete:', toastMsg);
-      
-      // Use setTimeout to break out of any React batching issues
-      setTimeout(() => {
-        setToast({ message: toastMsg, type: toastType });
-        // Use functional update to ensure React detects the change
-        setAmazonBulkProcessing(prev => {
-          console.log('Setting amazonBulkProcessing from', prev, 'to false');
-          return false;
-        });
-        console.log('Import finished successfully - processing state cleared');
-      }, 0);
+      // Navigate to appropriate view
+      console.log('About to navigate. weeklyImported:', weeklyImported, 'dailyImported:', dailyImported);
+      if (weeklyImported > 0) {
+        const latestWeek = Object.keys(updatedWeeklyData).sort().reverse()[0];
+        setSelectedWeek(latestWeek);
+        setView('weekly');
+      } else if (dailyImported > 0) {
+        const latestDay = Object.keys(updatedDailyData).filter(k => hasDailySalesData(updatedDailyData[k])).sort().reverse()[0];
+        if (latestDay) setSelectedDay(latestDay);
+        setView('daily');
+      } else if (monthlyImported > 0) {
+        setView('periods');
+      }
+      console.log('Navigation complete');
     } catch (err) {
       console.error('Bulk upload error:', err);
       console.error('Error stack:', err.stack);
       setToast({ message: 'Error processing files: ' + err.message, type: 'error' });
-      setAmazonBulkProcessing(false);
     } finally {
-      // Ensure processing is stopped no matter what
-      setTimeout(() => {
-        setAmazonBulkProcessing(prev => {
-          console.log('Finally: Setting amazonBulkProcessing from', prev, 'to false');
-          return false;
-        });
-      }, 100);
+      console.log('Finally block executing - setting processing to false');
+      setAmazonBulkProcessing(false);
     }
   }, [amazonBulkFiles, getCogsLookup, allDaysData, allWeeksData, allPeriodsData, save]);
   
@@ -6800,11 +8124,116 @@ const savePeriods = async (d) => {
       setIsProcessing(false);
     }
   }, [allWeeksData, allDaysData, allPeriodsData, save, combinedData]);
-  // Aggregation functions - using utilities from utils/aggregation.js
-  const getMonths = () => getMonthsUtil(allWeeksData);
-  const getYears = () => getYearsUtil(allWeeksData);
-  const getMonthlyData = (ym) => getMonthlyDataUtil(ym, allWeeksData, threeplLedger, get3PLForWeek);
-  const getYearlyData = (year) => getYearlyDataUtil(year, allWeeksData, threeplLedger, get3PLForWeek);
+
+  const getMonths = () => { const m = new Set(); Object.keys(allWeeksData).forEach(w => { const d = new Date(w+'T00:00:00'); m.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`); }); return Array.from(m).sort().reverse(); };
+  const getYears = () => { const y = new Set(); Object.keys(allWeeksData).forEach(w => { y.add(new Date(w+'T00:00:00').getFullYear()); }); return Array.from(y).sort().reverse(); };
+
+  const getMonthlyData = (ym) => {
+    const [y, m] = ym.split('-').map(Number);
+    const weeks = Object.entries(allWeeksData).filter(([w]) => { const d = new Date(w+'T00:00:00'); return d.getFullYear() === y && d.getMonth()+1 === m; });
+    if (!weeks.length) return null;
+    const agg = { weeks: weeks.map(([w]) => w), 
+      amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0 }, 
+      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, threeplBreakdown: { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 }, threeplMetrics: { orderCount: 0, totalUnits: 0 } }, 
+      total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 }};
+    weeks.forEach(([w, d]) => {
+      // Get ledger 3PL for this week
+      const ledger3PL = get3PLForWeek(threeplLedger, w);
+      const weekThreeplCost = ledger3PL?.metrics?.totalCost || d.shopify?.threeplCosts || 0;
+      const weekThreeplBreakdown = ledger3PL?.breakdown || d.shopify?.threeplBreakdown || {};
+      const weekThreeplMetrics = ledger3PL?.metrics || d.shopify?.threeplMetrics || {};
+      
+      agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.returns += d.amazon?.returns || 0;
+      agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += d.amazon?.netProfit || 0;
+      agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0;
+      agg.shopify.threeplCosts += weekThreeplCost; agg.shopify.adSpend += d.shopify?.adSpend || 0; 
+      agg.shopify.metaSpend += d.shopify?.metaSpend || 0; agg.shopify.googleSpend += d.shopify?.googleSpend || 0;
+      agg.shopify.discounts += d.shopify?.discounts || 0;
+      // Recalculate shopify profit with ledger 3PL
+      const shopProfit = (d.shopify?.revenue || 0) - (d.shopify?.cogs || 0) - weekThreeplCost - (d.shopify?.adSpend || 0);
+      agg.shopify.netProfit += shopProfit;
+      // Aggregate 3PL breakdown
+      agg.shopify.threeplBreakdown.storage += weekThreeplBreakdown.storage || 0;
+      agg.shopify.threeplBreakdown.shipping += weekThreeplBreakdown.shipping || 0;
+      agg.shopify.threeplBreakdown.pickFees += weekThreeplBreakdown.pickFees || 0;
+      agg.shopify.threeplBreakdown.boxCharges += weekThreeplBreakdown.boxCharges || 0;
+      agg.shopify.threeplBreakdown.receiving += weekThreeplBreakdown.receiving || 0;
+      agg.shopify.threeplBreakdown.other += weekThreeplBreakdown.other || 0;
+      agg.shopify.threeplMetrics.orderCount += weekThreeplMetrics.orderCount || 0;
+      agg.shopify.threeplMetrics.totalUnits += weekThreeplMetrics.totalUnits || 0;
+      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0; 
+      agg.total.netProfit += (d.amazon?.netProfit || 0) + shopProfit;
+    });
+    // Calculate metrics
+    agg.shopify.threeplMetrics.avgCostPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? (agg.shopify.threeplCosts - agg.shopify.threeplBreakdown.storage) / agg.shopify.threeplMetrics.orderCount : 0;
+    agg.shopify.threeplMetrics.avgUnitsPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? agg.shopify.threeplMetrics.totalUnits / agg.shopify.threeplMetrics.orderCount : 0;
+    agg.amazon.margin = agg.amazon.revenue > 0 ? (agg.amazon.netProfit/agg.amazon.revenue)*100 : 0;
+    agg.amazon.aov = agg.amazon.units > 0 ? agg.amazon.revenue/agg.amazon.units : 0;
+    agg.amazon.roas = agg.amazon.adSpend > 0 ? agg.amazon.revenue/agg.amazon.adSpend : 0;
+    agg.amazon.returnRate = agg.amazon.units > 0 ? (agg.amazon.returns/agg.amazon.units)*100 : 0;
+    agg.shopify.netMargin = agg.shopify.revenue > 0 ? (agg.shopify.netProfit/agg.shopify.revenue)*100 : 0;
+    agg.shopify.aov = agg.shopify.units > 0 ? agg.shopify.revenue/agg.shopify.units : 0;
+    agg.shopify.roas = agg.shopify.adSpend > 0 ? agg.shopify.revenue/agg.shopify.adSpend : 0;
+    agg.total.netMargin = agg.total.revenue > 0 ? (agg.total.netProfit/agg.total.revenue)*100 : 0;
+    agg.total.amazonShare = agg.total.revenue > 0 ? (agg.amazon.revenue/agg.total.revenue)*100 : 0;
+    agg.total.shopifyShare = agg.total.revenue > 0 ? (agg.shopify.revenue/agg.total.revenue)*100 : 0;
+    return agg;
+  };
+
+  const getYearlyData = (year) => {
+    const weeks = Object.entries(allWeeksData).filter(([w]) => new Date(w+'T00:00:00').getFullYear() === year);
+    if (!weeks.length) return null;
+    const agg = { weeks: weeks.map(([w]) => w), 
+      amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0 }, 
+      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, threeplBreakdown: { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 }, threeplMetrics: { orderCount: 0, totalUnits: 0 } }, 
+      total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 }, monthlyBreakdown: {}};
+    weeks.forEach(([w, d]) => {
+      const dt = new Date(w+'T00:00:00'); const mk = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
+      if (!agg.monthlyBreakdown[mk]) agg.monthlyBreakdown[mk] = { revenue: 0, netProfit: 0 };
+      
+      // Get ledger 3PL for this week
+      const ledger3PL = get3PLForWeek(threeplLedger, w);
+      const weekThreeplCost = ledger3PL?.metrics?.totalCost || d.shopify?.threeplCosts || 0;
+      const weekThreeplBreakdown = ledger3PL?.breakdown || d.shopify?.threeplBreakdown || {};
+      const weekThreeplMetrics = ledger3PL?.metrics || d.shopify?.threeplMetrics || {};
+      
+      agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.returns += d.amazon?.returns || 0;
+      agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += d.amazon?.netProfit || 0;
+      agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0;
+      agg.shopify.threeplCosts += weekThreeplCost; agg.shopify.adSpend += d.shopify?.adSpend || 0;
+      agg.shopify.metaSpend += d.shopify?.metaSpend || 0; agg.shopify.googleSpend += d.shopify?.googleSpend || 0;
+      agg.shopify.discounts += d.shopify?.discounts || 0;
+      // Recalculate shopify profit with ledger 3PL
+      const shopProfit = (d.shopify?.revenue || 0) - (d.shopify?.cogs || 0) - weekThreeplCost - (d.shopify?.adSpend || 0);
+      agg.shopify.netProfit += shopProfit;
+      // Aggregate 3PL breakdown
+      agg.shopify.threeplBreakdown.storage += weekThreeplBreakdown.storage || 0;
+      agg.shopify.threeplBreakdown.shipping += weekThreeplBreakdown.shipping || 0;
+      agg.shopify.threeplBreakdown.pickFees += weekThreeplBreakdown.pickFees || 0;
+      agg.shopify.threeplBreakdown.boxCharges += weekThreeplBreakdown.boxCharges || 0;
+      agg.shopify.threeplBreakdown.receiving += weekThreeplBreakdown.receiving || 0;
+      agg.shopify.threeplBreakdown.other += weekThreeplBreakdown.other || 0;
+      agg.shopify.threeplMetrics.orderCount += weekThreeplMetrics.orderCount || 0;
+      agg.shopify.threeplMetrics.totalUnits += weekThreeplMetrics.totalUnits || 0;
+      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0;
+      agg.total.netProfit += (d.amazon?.netProfit || 0) + shopProfit;
+      agg.monthlyBreakdown[mk].revenue += d.total?.revenue || 0; agg.monthlyBreakdown[mk].netProfit += (d.amazon?.netProfit || 0) + shopProfit;
+    });
+    // Calculate metrics
+    agg.shopify.threeplMetrics.avgCostPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? (agg.shopify.threeplCosts - agg.shopify.threeplBreakdown.storage) / agg.shopify.threeplMetrics.orderCount : 0;
+    agg.shopify.threeplMetrics.avgUnitsPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? agg.shopify.threeplMetrics.totalUnits / agg.shopify.threeplMetrics.orderCount : 0;
+    agg.amazon.margin = agg.amazon.revenue > 0 ? (agg.amazon.netProfit/agg.amazon.revenue)*100 : 0;
+    agg.amazon.aov = agg.amazon.units > 0 ? agg.amazon.revenue/agg.amazon.units : 0;
+    agg.amazon.roas = agg.amazon.adSpend > 0 ? agg.amazon.revenue/agg.amazon.adSpend : 0;
+    agg.amazon.returnRate = agg.amazon.units > 0 ? (agg.amazon.returns/agg.amazon.units)*100 : 0;
+    agg.shopify.netMargin = agg.shopify.revenue > 0 ? (agg.shopify.netProfit/agg.shopify.revenue)*100 : 0;
+    agg.shopify.aov = agg.shopify.units > 0 ? agg.shopify.revenue/agg.shopify.units : 0;
+    agg.shopify.roas = agg.shopify.adSpend > 0 ? agg.shopify.revenue/agg.shopify.adSpend : 0;
+    agg.total.netMargin = agg.total.revenue > 0 ? (agg.total.netProfit/agg.total.revenue)*100 : 0;
+    agg.total.amazonShare = agg.total.revenue > 0 ? (agg.amazon.revenue/agg.total.revenue)*100 : 0;
+    agg.total.shopifyShare = agg.total.revenue > 0 ? (agg.shopify.revenue/agg.total.revenue)*100 : 0;
+    return agg;
+  };
 
   // COMPLETE BACKUP - includes ALL dashboard data
   const exportAll = () => { 
@@ -7464,9 +8893,134 @@ const savePeriods = async (d) => {
   // ============ END ENHANCED FORECAST ============
 
   // AMAZON FORECAST - Parse and store Amazon's forecast data
+  const processAmazonForecast = (csvData) => {
+    if (!csvData || csvData.length === 0) return null;
+    
+    // Get date range from first row
+    const startDateStr = csvData[0]['Start date'];
+    const endDateStr = csvData[0]['End date'];
+    
+    if (!startDateStr || !endDateStr) return null;
+    
+    const startDate = new Date(startDateStr);
+    const endDate = new Date(endDateStr);
+    const daysDiff = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24));
+    
+    // Aggregate forecast data
+    let totalUnits = 0, totalSales = 0, totalProceeds = 0, totalAds = 0;
+    const skuForecasts = {};
+    
+    csvData.forEach(r => {
+      const sku = r['MSKU'] || '';
+      const units = parseInt(r['Net units sold'] || r['Units sold'] || 0);
+      const sales = parseFloat(r['Net sales'] || r['Sales'] || 0);
+      const proceeds = parseFloat(r['Net proceeds total'] || 0);
+      const ads = parseFloat(r['Sponsored Products charge total'] || 0);
+      const cogs = parseFloat(r['Cost of goods sold per unit'] || 0);
+      
+      if (units > 0 || sales > 0) {
+        totalUnits += units;
+        totalSales += sales;
+        totalProceeds += proceeds;
+        totalAds += ads;
+        
+        if (sku) {
+          skuForecasts[sku] = {
+            sku,
+            units,
+            sales,
+            proceeds,
+            ads,
+            cogsPerUnit: cogs,
+            profitPerUnit: units > 0 ? proceeds / units : 0,
+          };
+        }
+      }
+    });
+    
+    // If this is a 30-day forecast (28-31 days), break it into weekly forecasts
+    const isMontlyForecast = daysDiff >= 25 && daysDiff <= 35;
+    const weeksInForecast = Math.ceil(daysDiff / 7);
+    
+    if (isMontlyForecast) {
+      // Return multiple weekly forecasts
+      const weeklyForecasts = {};
+      const weeklyUnits = Math.round(totalUnits / weeksInForecast);
+      const weeklySales = totalSales / weeksInForecast;
+      const weeklyProceeds = totalProceeds / weeksInForecast;
+      const weeklyAds = totalAds / weeksInForecast;
+      
+      // Generate a forecast for each week in the period
+      for (let i = 0; i < weeksInForecast; i++) {
+        const weekStart = new Date(startDate);
+        weekStart.setDate(weekStart.getDate() + (i * 7));
+        const weekKey = getSunday(weekStart);
+        
+        weeklyForecasts[weekKey] = {
+          weekEnding: weekKey,
+          startDate: startDateStr,
+          endDate: endDateStr,
+          uploadedAt: new Date().toISOString(),
+          sourceType: '30-day-split',
+          weekNumber: i + 1,
+          totalWeeks: weeksInForecast,
+          totals: {
+            units: weeklyUnits,
+            sales: weeklySales,
+            proceeds: weeklyProceeds,
+            ads: weeklyAds,
+            profitPerUnit: weeklyUnits > 0 ? weeklyProceeds / weeklyUnits : 0,
+          },
+          skus: Object.fromEntries(Object.entries(skuForecasts).map(([sku, data]) => [sku, {
+            ...data,
+            units: Math.round(data.units / weeksInForecast),
+            sales: data.sales / weeksInForecast,
+            proceeds: data.proceeds / weeksInForecast,
+            ads: data.ads / weeksInForecast,
+          }])),
+          skuCount: Object.keys(skuForecasts).length,
+          // Also store the monthly total for reference
+          monthlyTotal: {
+            units: totalUnits,
+            sales: totalSales,
+            proceeds: totalProceeds,
+            ads: totalAds,
+          },
+        };
+      }
+      
+      return {
+        type: 'monthly',
+        forecasts: weeklyForecasts,
+        period: { startDate: startDateStr, endDate: endDateStr, days: daysDiff },
+        monthlyTotal: { units: totalUnits, sales: totalSales, proceeds: totalProceeds, ads: totalAds },
+      };
+    }
+    
+    // Standard weekly forecast
+    const weekKey = getSunday(endDate);
+    return {
+      type: 'weekly',
+      forecast: {
+        weekEnding: weekKey,
+        startDate: startDateStr,
+        endDate: endDateStr,
+        uploadedAt: new Date().toISOString(),
+        sourceType: 'weekly',
+        totals: {
+          units: totalUnits,
+          sales: totalSales,
+          proceeds: totalProceeds,
+          ads: totalAds,
+          profitPerUnit: totalUnits > 0 ? totalProceeds / totalUnits : 0,
+        },
+        skus: skuForecasts,
+        skuCount: Object.keys(skuForecasts).length,
+      },
+    };
+  };
 
-  // processAmazonForecast extracted to utils/forecast.js
-
+  // Compare Amazon forecast vs actual results - comprehensive analysis with fuzzy matching
   const getAmazonForecastComparison = useMemo(() => {
     const comparisons = [];
     
@@ -9811,10 +11365,32 @@ Analyze the data and respond with ONLY this JSON:
   
   // ============ END MODULAR AI FORECAST SYSTEM ============
 
+  // 7. BREAK-EVEN CALCULATOR
+  const calculateBreakEven = (adSpend, cogs, price, conversionRate) => {
+    if (!price || price <= cogs) return null;
+    const profitPerUnit = price - cogs;
+    const unitsToBreakEven = Math.ceil(adSpend / profitPerUnit);
+    const clicksNeeded = conversionRate > 0 ? Math.ceil(unitsToBreakEven / (conversionRate / 100)) : 0;
+    const revenueAtBreakEven = unitsToBreakEven * price;
+    const roasAtBreakEven = adSpend > 0 ? revenueAtBreakEven / adSpend : 0;
+    return { unitsToBreakEven, clicksNeeded, revenueAtBreakEven, roasAtBreakEven, profitPerUnit };
+  };
 
-  // calculateBreakEven extracted to utils/calculations.js
-  // exportToCSV extracted to utils/export.js
-
+  // 10. CSV EXPORT functions
+  const exportToCSV = (data, filename, headers) => {
+    const csvContent = [
+      headers.join(','),
+      ...data.map(row => headers.map(h => {
+        const val = row[h] ?? '';
+        return typeof val === 'string' && val.includes(',') ? `"${val}"` : val;
+      }).join(','))
+    ].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${filename}_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+  };
 
   const exportWeeklyDataCSV = () => {
     const sortedWeeks = Object.keys(allWeeksData).sort();
@@ -9885,331 +11461,6 @@ Analyze the data and respond with ONLY this JSON:
     }));
     exportToCSV(data, 'inventory', ['SKU', 'Location', 'Units', 'COGS', 'Value']);
   };
-
-  // Comprehensive Metrics Export - export key metrics for a date range
-  const exportMetricsForRange = useCallback((format = 'csv') => {
-    // Calculate date range based on selection
-    const today = new Date();
-    let startDate, endDate;
-    
-    switch (metricsExportRange) {
-      case 'all':
-        // Get earliest and latest dates from all data
-        const allDates = [
-          ...Object.keys(allDaysData),
-          ...Object.keys(allWeeksData),
-        ].filter(d => d && d.match(/^\d{4}-\d{2}-\d{2}$/)).sort();
-        startDate = allDates.length > 0 ? new Date(allDates[0]) : new Date(2024, 0, 1);
-        endDate = allDates.length > 0 ? new Date(allDates[allDates.length - 1]) : today;
-        break;
-      case 'this-week':
-        // Current week: Monday through today (week to date)
-        const todayDow = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
-        // Calculate days since Monday (if Sunday, it's 6 days since Monday)
-        const daysSinceMonday = todayDow === 0 ? 6 : todayDow - 1;
-        startDate = new Date(today);
-        startDate.setDate(today.getDate() - daysSinceMonday); // Go back to Monday
-        endDate = new Date(today); // Through today
-        break;
-      case 'last-week':
-        // Get the most recent completed week (Monday to Sunday)
-        const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
-        // If today is Sunday, go back to previous Sunday; otherwise go back to last Sunday
-        const daysToLastSunday = dayOfWeek === 0 ? 7 : dayOfWeek;
-        endDate = new Date(today);
-        endDate.setDate(today.getDate() - daysToLastSunday); // Last Sunday
-        startDate = new Date(endDate);
-        startDate.setDate(endDate.getDate() - 6); // Monday of that week
-        break;
-      case 'last-month':
-        startDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        endDate = new Date(today.getFullYear(), today.getMonth(), 0);
-        break;
-      case 'last-quarter':
-        const currentQuarter = Math.floor(today.getMonth() / 3);
-        const lastQuarter = currentQuarter === 0 ? 3 : currentQuarter - 1;
-        const lastQuarterYear = currentQuarter === 0 ? today.getFullYear() - 1 : today.getFullYear();
-        startDate = new Date(lastQuarterYear, lastQuarter * 3, 1);
-        endDate = new Date(lastQuarterYear, (lastQuarter + 1) * 3, 0);
-        break;
-      case 'ytd':
-        startDate = new Date(today.getFullYear(), 0, 1);
-        endDate = today;
-        break;
-      case 'custom':
-        startDate = metricsExportCustomStart ? new Date(metricsExportCustomStart) : new Date(today.getFullYear(), 0, 1);
-        endDate = metricsExportCustomEnd ? new Date(metricsExportCustomEnd) : today;
-        break;
-      default:
-        startDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        endDate = new Date(today.getFullYear(), today.getMonth(), 0);
-    }
-    
-    const startStr = startDate.toISOString().split('T')[0];
-    const endStr = endDate.toISOString().split('T')[0];
-    
-    // Aggregate data from all sources
-    let totalRevenue = 0, amazonRevenue = 0, shopifyRevenue = 0;
-    let totalUnits = 0, amazonUnits = 0, shopifyUnits = 0;
-    let totalProfit = 0, amazonProfit = 0, shopifyProfit = 0;
-    let totalCogs = 0, amazonCogs = 0, shopifyCogs = 0;
-    let totalAdSpend = 0, amazonAdSpend = 0, metaAdSpend = 0, googleAdSpend = 0;
-    let totalReturns = 0, amazonReturns = 0, shopifyReturns = 0;
-    let daysWithData = 0;
-    const skuMetrics = {};
-    const dailyBreakdown = [];
-    
-    // Process daily data
-    Object.entries(allDaysData).forEach(([date, day]) => {
-      if (date >= startStr && date <= endStr) {
-        daysWithData++;
-        const amz = day.amazon || {};
-        const shop = day.shopify || {};
-        
-        amazonRevenue += amz.revenue || 0;
-        shopifyRevenue += shop.revenue || 0;
-        amazonUnits += amz.units || 0;
-        shopifyUnits += shop.units || 0;
-        amazonProfit += amz.netProfit || 0;
-        shopifyProfit += shop.netProfit || 0;
-        amazonCogs += amz.cogs || 0;
-        shopifyCogs += shop.cogs || 0;
-        amazonAdSpend += amz.adSpend || 0;
-        metaAdSpend += shop.metaSpend || shop.adSpend || 0;
-        googleAdSpend += shop.googleSpend || 0;
-        amazonReturns += amz.returns || 0;
-        shopifyReturns += shop.returns || 0;
-        
-        dailyBreakdown.push({
-          date,
-          amazonRevenue: amz.revenue || 0,
-          shopifyRevenue: shop.revenue || 0,
-          totalRevenue: (amz.revenue || 0) + (shop.revenue || 0),
-          amazonProfit: amz.netProfit || 0,
-          shopifyProfit: shop.netProfit || 0,
-          totalProfit: (amz.netProfit || 0) + (shop.netProfit || 0),
-          amazonUnits: amz.units || 0,
-          shopifyUnits: shop.units || 0,
-          amazonAdSpend: amz.adSpend || 0,
-          metaAdSpend: shop.metaSpend || shop.adSpend || 0,
-          googleAdSpend: shop.googleSpend || 0,
-        });
-        
-        // Aggregate SKU data
-        [...(amz.skuData || []), ...(shop.skuData || [])].forEach(s => {
-          if (!skuMetrics[s.sku]) {
-            skuMetrics[s.sku] = { sku: s.sku, name: savedProductNames[s.sku] || s.name || s.sku, units: 0, revenue: 0, profit: 0, adSpend: 0, channel: s.netProceeds !== undefined ? 'Amazon' : 'Shopify' };
-          }
-          skuMetrics[s.sku].units += s.unitsSold || 0;
-          skuMetrics[s.sku].revenue += s.netSales || 0;
-          skuMetrics[s.sku].profit += s.netProceeds || (s.netSales || 0) - (s.cogs || 0);
-          skuMetrics[s.sku].adSpend += s.adSpend || 0;
-        });
-      }
-    });
-    
-    // Process weekly data if no daily data
-    if (daysWithData === 0) {
-      Object.entries(allWeeksData).forEach(([weekEnd, week]) => {
-        if (weekEnd >= startStr && weekEnd <= endStr) {
-          const amz = week.amazon || {};
-          const shop = week.shopify || {};
-          
-          amazonRevenue += amz.revenue || 0;
-          shopifyRevenue += shop.revenue || 0;
-          amazonUnits += amz.units || 0;
-          shopifyUnits += shop.units || 0;
-          amazonProfit += amz.netProfit || 0;
-          shopifyProfit += shop.netProfit || 0;
-          amazonCogs += amz.cogs || 0;
-          shopifyCogs += shop.cogs || 0;
-          amazonAdSpend += amz.adSpend || 0;
-          metaAdSpend += shop.metaSpend || shop.adSpend || 0;
-          googleAdSpend += shop.googleSpend || 0;
-          amazonReturns += amz.returns || 0;
-          
-          // Aggregate SKU data
-          [...(amz.skuData || []), ...(shop.skuData || [])].forEach(s => {
-            if (!skuMetrics[s.sku]) {
-              skuMetrics[s.sku] = { sku: s.sku, name: savedProductNames[s.sku] || s.name || s.sku, units: 0, revenue: 0, profit: 0, adSpend: 0, channel: s.netProceeds !== undefined ? 'Amazon' : 'Shopify' };
-            }
-            skuMetrics[s.sku].units += s.unitsSold || 0;
-            skuMetrics[s.sku].revenue += s.netSales || 0;
-            skuMetrics[s.sku].profit += s.netProceeds || (s.netSales || 0) - (s.cogs || 0);
-            skuMetrics[s.sku].adSpend += s.adSpend || 0;
-          });
-        }
-      });
-    }
-    
-    // Calculate totals
-    totalRevenue = amazonRevenue + shopifyRevenue;
-    totalUnits = amazonUnits + shopifyUnits;
-    totalProfit = amazonProfit + shopifyProfit;
-    totalCogs = amazonCogs + shopifyCogs;
-    totalAdSpend = amazonAdSpend + metaAdSpend + googleAdSpend;
-    totalReturns = amazonReturns + shopifyReturns;
-    
-    // Calculate derived metrics
-    const totalMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
-    const amazonMargin = amazonRevenue > 0 ? (amazonProfit / amazonRevenue) * 100 : 0;
-    const shopifyMargin = shopifyRevenue > 0 ? (shopifyProfit / shopifyRevenue) * 100 : 0;
-    const totalROAS = totalAdSpend > 0 ? totalRevenue / totalAdSpend : 0;
-    const amazonROAS = amazonAdSpend > 0 ? amazonRevenue / amazonAdSpend : 0;
-    const metaROAS = metaAdSpend > 0 ? shopifyRevenue / metaAdSpend : 0;
-    const amazonShare = totalRevenue > 0 ? (amazonRevenue / totalRevenue) * 100 : 0;
-    const shopifyShare = totalRevenue > 0 ? (shopifyRevenue / totalRevenue) * 100 : 0;
-    const returnRate = totalUnits > 0 ? (totalReturns / totalUnits) * 100 : 0;
-    const avgOrderValue = totalUnits > 0 ? totalRevenue / totalUnits : 0;
-    
-    // Build export data
-    const summaryMetrics = {
-      reportPeriod: `${startStr} to ${endStr}`,
-      generatedAt: new Date().toISOString(),
-      
-      // Revenue
-      totalRevenue: Math.round(totalRevenue * 100) / 100,
-      amazonRevenue: Math.round(amazonRevenue * 100) / 100,
-      shopifyRevenue: Math.round(shopifyRevenue * 100) / 100,
-      amazonRevenueShare: Math.round(amazonShare * 10) / 10,
-      shopifyRevenueShare: Math.round(shopifyShare * 10) / 10,
-      
-      // Units
-      totalUnitsSold: totalUnits,
-      amazonUnits: amazonUnits,
-      shopifyUnits: shopifyUnits,
-      avgOrderValue: Math.round(avgOrderValue * 100) / 100,
-      
-      // Profit & Margins
-      totalProfit: Math.round(totalProfit * 100) / 100,
-      amazonProfit: Math.round(amazonProfit * 100) / 100,
-      shopifyProfit: Math.round(shopifyProfit * 100) / 100,
-      totalMargin: Math.round(totalMargin * 10) / 10,
-      amazonMargin: Math.round(amazonMargin * 10) / 10,
-      shopifyMargin: Math.round(shopifyMargin * 10) / 10,
-      
-      // COGS
-      totalCogs: Math.round(totalCogs * 100) / 100,
-      amazonCogs: Math.round(amazonCogs * 100) / 100,
-      shopifyCogs: Math.round(shopifyCogs * 100) / 100,
-      
-      // Ad Spend & ROAS
-      totalAdSpend: Math.round(totalAdSpend * 100) / 100,
-      amazonAdSpend: Math.round(amazonAdSpend * 100) / 100,
-      metaAdSpend: Math.round(metaAdSpend * 100) / 100,
-      googleAdSpend: Math.round(googleAdSpend * 100) / 100,
-      totalROAS: Math.round(totalROAS * 100) / 100,
-      amazonROAS: Math.round(amazonROAS * 100) / 100,
-      metaROAS: Math.round(metaROAS * 100) / 100,
-      
-      // Returns
-      totalReturns: totalReturns,
-      returnRate: Math.round(returnRate * 10) / 10,
-    };
-    
-    // Top SKUs by revenue
-    const topSkus = Object.values(skuMetrics)
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 20)
-      .map(s => ({
-        sku: s.sku,
-        name: s.name,
-        channel: s.channel,
-        units: s.units,
-        revenue: Math.round(s.revenue * 100) / 100,
-        profit: Math.round(s.profit * 100) / 100,
-        margin: s.revenue > 0 ? Math.round((s.profit / s.revenue) * 1000) / 10 : 0,
-        adSpend: Math.round(s.adSpend * 100) / 100,
-      }));
-    
-    if (format === 'json') {
-      // Export as JSON
-      const exportData = {
-        summary: summaryMetrics,
-        topSkus: topSkus,
-        dailyBreakdown: dailyBreakdown.length > 0 ? dailyBreakdown : undefined,
-      };
-      
-      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `metrics_${startStr}_to_${endStr}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } else {
-      // Export as CSV - create multiple sections
-      let csvContent = '';
-      
-      // Summary section
-      csvContent += 'SUMMARY METRICS\n';
-      csvContent += 'Metric,Value\n';
-      csvContent += `Report Period,"${summaryMetrics.reportPeriod}"\n`;
-      csvContent += `Generated At,"${summaryMetrics.generatedAt}"\n`;
-      csvContent += '\n';
-      csvContent += 'REVENUE\n';
-      csvContent += `Total Revenue,$${summaryMetrics.totalRevenue.toLocaleString()}\n`;
-      csvContent += `Amazon Revenue,$${summaryMetrics.amazonRevenue.toLocaleString()}\n`;
-      csvContent += `Shopify Revenue,$${summaryMetrics.shopifyRevenue.toLocaleString()}\n`;
-      csvContent += `Amazon Share,${summaryMetrics.amazonRevenueShare}%\n`;
-      csvContent += `Shopify Share,${summaryMetrics.shopifyRevenueShare}%\n`;
-      csvContent += '\n';
-      csvContent += 'UNITS\n';
-      csvContent += `Total Units Sold,${summaryMetrics.totalUnitsSold.toLocaleString()}\n`;
-      csvContent += `Amazon Units,${summaryMetrics.amazonUnits.toLocaleString()}\n`;
-      csvContent += `Shopify Units,${summaryMetrics.shopifyUnits.toLocaleString()}\n`;
-      csvContent += `Avg Order Value,$${summaryMetrics.avgOrderValue}\n`;
-      csvContent += '\n';
-      csvContent += 'PROFIT & MARGINS\n';
-      csvContent += `Total Profit,$${summaryMetrics.totalProfit.toLocaleString()}\n`;
-      csvContent += `Amazon Profit,$${summaryMetrics.amazonProfit.toLocaleString()}\n`;
-      csvContent += `Shopify Profit,$${summaryMetrics.shopifyProfit.toLocaleString()}\n`;
-      csvContent += `Total Margin,${summaryMetrics.totalMargin}%\n`;
-      csvContent += `Amazon Margin,${summaryMetrics.amazonMargin}%\n`;
-      csvContent += `Shopify Margin,${summaryMetrics.shopifyMargin}%\n`;
-      csvContent += '\n';
-      csvContent += 'AD SPEND & ROAS\n';
-      csvContent += `Total Ad Spend,$${summaryMetrics.totalAdSpend.toLocaleString()}\n`;
-      csvContent += `Amazon Ad Spend,$${summaryMetrics.amazonAdSpend.toLocaleString()}\n`;
-      csvContent += `Meta Ad Spend,$${summaryMetrics.metaAdSpend.toLocaleString()}\n`;
-      csvContent += `Google Ad Spend,$${summaryMetrics.googleAdSpend.toLocaleString()}\n`;
-      csvContent += `Total ROAS,${summaryMetrics.totalROAS}x\n`;
-      csvContent += `Amazon ROAS,${summaryMetrics.amazonROAS}x\n`;
-      csvContent += `Meta ROAS,${summaryMetrics.metaROAS}x\n`;
-      csvContent += '\n';
-      csvContent += 'RETURNS\n';
-      csvContent += `Total Returns,${summaryMetrics.totalReturns}\n`;
-      csvContent += `Return Rate,${summaryMetrics.returnRate}%\n`;
-      csvContent += '\n\n';
-      
-      // Top SKUs section
-      csvContent += 'TOP 20 SKUS BY REVENUE\n';
-      csvContent += 'SKU,Product Name,Channel,Units,Revenue,Profit,Margin %,Ad Spend\n';
-      topSkus.forEach(s => {
-        csvContent += `"${s.sku}","${s.name}","${s.channel}",${s.units},$${s.revenue},$${s.profit},${s.margin}%,$${s.adSpend}\n`;
-      });
-      
-      // Daily breakdown if available
-      if (dailyBreakdown.length > 0) {
-        csvContent += '\n\nDAILY BREAKDOWN\n';
-        csvContent += 'Date,Amazon Revenue,Shopify Revenue,Total Revenue,Amazon Profit,Shopify Profit,Total Profit,Amazon Units,Shopify Units,Amazon Ad Spend,Meta Ad Spend,Google Ad Spend\n';
-        dailyBreakdown.forEach(d => {
-          csvContent += `${d.date},$${d.amazonRevenue.toFixed(2)},$${d.shopifyRevenue.toFixed(2)},$${d.totalRevenue.toFixed(2)},$${d.amazonProfit.toFixed(2)},$${d.shopifyProfit.toFixed(2)},$${d.totalProfit.toFixed(2)},${d.amazonUnits},${d.shopifyUnits},$${d.amazonAdSpend.toFixed(2)},$${d.metaAdSpend.toFixed(2)},$${d.googleAdSpend.toFixed(2)}\n`;
-        });
-      }
-      
-      const blob = new Blob([csvContent], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `metrics_${startStr}_to_${endStr}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-    
-    setToast({ message: `Exported metrics for ${startStr} to ${endStr}`, type: 'success' });
-    setShowMetricsExport(false);
-  }, [metricsExportRange, metricsExportCustomStart, metricsExportCustomEnd, allDaysData, allWeeksData, savedProductNames]);
 
   // UI Components
   const FileBox = ({ type, label, desc, req, isInv }) => {
@@ -10512,9 +11763,9 @@ Analyze the data and respond with ONLY this JSON:
       processSkusForPeriod(amz.skuData, 'Amazon');
       processSkusForPeriod(shop.skuData, 'Shopify');
       
-      // Also build SKU-level breakdown for detailed queries (with channel tracking)
+      // Also build SKU-level breakdown for detailed queries
       const skuBreakdown = {};
-      const buildSkuBreakdown = (skuData, channel) => {
+      const buildSkuBreakdown = (skuData) => {
         (skuData || []).forEach(s => {
           const sku = s.sku || s.msku || '';
           if (!sku) return;
@@ -10522,21 +11773,14 @@ Analyze the data and respond with ONLY this JSON:
           const revenue = s.netSales || s.revenue || 0;
           const units = s.unitsSold || s.units || 0;
           if (!skuBreakdown[sku]) {
-            skuBreakdown[sku] = { name, revenue: 0, units: 0, amazonRevenue: 0, shopifyRevenue: 0, channel: channel };
+            skuBreakdown[sku] = { name, revenue: 0, units: 0 };
           }
           skuBreakdown[sku].revenue += revenue;
           skuBreakdown[sku].units += units;
-          if (channel === 'Amazon') {
-            skuBreakdown[sku].amazonRevenue += revenue;
-          } else {
-            skuBreakdown[sku].shopifyRevenue += revenue;
-          }
-          // Update primary channel based on where most revenue comes from
-          skuBreakdown[sku].channel = skuBreakdown[sku].amazonRevenue > skuBreakdown[sku].shopifyRevenue ? 'Amazon' : 'Shopify';
         });
       };
-      buildSkuBreakdown(amz.skuData, 'Amazon');
-      buildSkuBreakdown(shop.skuData, 'Shopify');
+      buildSkuBreakdown(amz.skuData);
+      buildSkuBreakdown(shop.skuData);
       
       return {
         period: label,
@@ -10829,20 +12073,13 @@ Analyze the data and respond with ONLY this JSON:
             category: catalogEntry?.category || 'Other',
             totalRevenue: 0,
             totalUnits: 0,
-            amazonRevenue: 0,
-            amazonUnits: 0,
-            shopifyRevenue: 0,
-            shopifyUnits: 0,
             byPeriod: {},
             byWeek: {},
           };
         }
         skuMasterData[sku].totalRevenue += data.revenue || 0;
         skuMasterData[sku].totalUnits += data.units || 0;
-        // Track channel from period skuBreakdown (which now has channel info)
-        skuMasterData[sku].amazonRevenue += data.amazonRevenue || 0;
-        skuMasterData[sku].shopifyRevenue += data.shopifyRevenue || 0;
-        skuMasterData[sku].byPeriod[period.period] = { revenue: data.revenue, units: data.units, channel: data.channel };
+        skuMasterData[sku].byPeriod[period.period] = { revenue: data.revenue, units: data.units };
       });
     });
     
@@ -10866,10 +12103,6 @@ Analyze the data and respond with ONLY this JSON:
               category: catalogEntry?.category || 'Other',
               totalRevenue: 0,
               totalUnits: 0,
-              amazonRevenue: 0,
-              amazonUnits: 0,
-              shopifyRevenue: 0,
-              shopifyUnits: 0,
               byPeriod: {},
               byWeek: {},
             };
@@ -10880,16 +12113,6 @@ Analyze the data and respond with ONLY this JSON:
           }
           skuMasterData[sku].byWeek[week].revenue += revenue;
           skuMasterData[sku].byWeek[week].units += units;
-          
-          // Track channel revenue/units
-          if (channel === 'Amazon') {
-            skuMasterData[sku].amazonRevenue += revenue;
-            skuMasterData[sku].amazonUnits += units;
-          } else {
-            skuMasterData[sku].shopifyRevenue += revenue;
-            skuMasterData[sku].shopifyUnits += units;
-          }
-          
           // Only add to totals if not already counted in periods
           if (Object.keys(skuMasterData[sku].byPeriod).length === 0) {
             skuMasterData[sku].totalRevenue += revenue;
@@ -11779,281 +13002,6 @@ Analyze the data and respond with ONLY this JSON:
     
     try {
       const ctx = prepareDataContext();
-      const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
-      
-      // ========== BUILD VERIFIED FACTS DIRECTLY FROM SOURCE DATA ==========
-      // DATA SOURCE STRATEGY:
-      // - SHOPIFY (all years): Use WEEKLY SKU data (complete daily/weekly data via API)
-      // - AMAZON 2025: Use PERIOD SKU data (monthly aggregates - best available)
-      // - AMAZON 2026: Use WEEKLY SKU data (daily data available)
-      
-      const computedSkuTotals = {};
-      
-      // Get COGS lookup table
-      const cogsLookup = savedCogs || {};
-      
-      // STEP 1: Get AMAZON data from PERIODS
-      // Use the CONSOLIDATED year entries (e.g., "2025") as they have complete data
-      // Individual monthly entries may be incomplete
-      Object.entries(allPeriodsData).forEach(([periodKey, periodData]) => {
-        // For 2025, use ONLY the consolidated "2025" entry (not monthly)
-        // For 2024, use ONLY the consolidated "2024" entry (not quarterly)
-        if (periodKey.includes('-')) return; // Skip monthly/quarterly entries like "january-2025"
-        if (!['2024', '2025'].includes(periodKey)) return;
-        
-        // Process Amazon SKUs from period data
-        (periodData.amazon?.skuData || []).forEach(sku => {
-          const skuId = sku.sku || sku.msku || '';
-          if (!skuId) return;
-          const rev = sku.netSales || sku.revenue || 0;
-          const units = sku.unitsSold || sku.units || 0;
-          const cogs = sku.cogs || 0;
-          const netProceeds = sku.netProceeds || 0;
-          const adSpend = sku.adSpend || 0;
-          const returns = sku.returns || 0;
-          
-          if (!computedSkuTotals[skuId]) {
-            computedSkuTotals[skuId] = { 
-              sku: skuId, 
-              name: savedProductNames[skuId] || sku.name || skuId,
-              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
-              cogs: 0, netProceeds: 0, adSpend: 0, returns: 0
-            };
-          }
-          computedSkuTotals[skuId].revenue += rev;
-          computedSkuTotals[skuId].units += units;
-          computedSkuTotals[skuId].amazonRev += rev;
-          computedSkuTotals[skuId].cogs += cogs;
-          computedSkuTotals[skuId].netProceeds += netProceeds;
-          computedSkuTotals[skuId].adSpend += adSpend;
-          computedSkuTotals[skuId].returns += returns;
-        });
-        
-        // Also process Shopify SKUs from consolidated period data
-        (periodData.shopify?.skuData || []).forEach(sku => {
-          const skuId = sku.sku || sku.title || '';
-          if (!skuId) return;
-          const rev = sku.netSales || sku.revenue || 0;
-          const units = sku.unitsSold || sku.units || 0;
-          
-          if (!computedSkuTotals[skuId]) {
-            computedSkuTotals[skuId] = { 
-              sku: skuId, 
-              name: savedProductNames[skuId] || sku.name || skuId,
-              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
-              cogs: 0, netProceeds: 0, adSpend: 0, returns: 0
-            };
-          }
-          computedSkuTotals[skuId].revenue += rev;
-          computedSkuTotals[skuId].units += units;
-          computedSkuTotals[skuId].shopifyRev += rev;
-          // Shopify COGS calculated from lookup in step 3
-        });
-      });
-      
-      // STEP 2: Get 2026 data from WEEKLY (daily data available for 2026)
-      // 2024 and 2025 data already loaded from consolidated period entries above
-      const sortedWeeks = Object.keys(allWeeksData).sort();
-      
-      sortedWeeks.forEach(weekKey => {
-        // Only process 2026 weekly data (2025 comes from consolidated period)
-        if (!weekKey.startsWith('2026')) return;
-        
-        const weekData = allWeeksData[weekKey];
-        if (!weekData) return;
-        
-        // Process Shopify SKUs from 2026 weekly data
-        (weekData.shopify?.skuData || []).forEach(sku => {
-          const skuId = sku.sku || sku.title || '';
-          if (!skuId) return;
-          const rev = sku.netSales || sku.revenue || 0;
-          const units = sku.unitsSold || sku.units || 0;
-          
-          if (!computedSkuTotals[skuId]) {
-            computedSkuTotals[skuId] = { 
-              sku: skuId, 
-              name: savedProductNames[skuId] || sku.name || skuId,
-              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
-              cogs: 0, netProceeds: 0, adSpend: 0, returns: 0
-            };
-          }
-          computedSkuTotals[skuId].revenue += rev;
-          computedSkuTotals[skuId].units += units;
-          computedSkuTotals[skuId].shopifyRev += rev;
-        });
-        
-        // Process Amazon SKUs from 2026 weekly data
-        (weekData.amazon?.skuData || []).forEach(sku => {
-          const skuId = sku.sku || sku.msku || '';
-          if (!skuId) return;
-          const rev = sku.netSales || sku.revenue || 0;
-          const units = sku.unitsSold || sku.units || 0;
-          const cogs = sku.cogs || 0;
-          const netProceeds = sku.netProceeds || 0;
-          const adSpend = sku.adSpend || 0;
-          
-          if (!computedSkuTotals[skuId]) {
-            computedSkuTotals[skuId] = { 
-              sku: skuId, 
-              name: savedProductNames[skuId] || sku.name || skuId,
-              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
-              cogs: 0, netProceeds: 0, adSpend: 0, returns: 0
-            };
-          }
-          computedSkuTotals[skuId].revenue += rev;
-          computedSkuTotals[skuId].units += units;
-          computedSkuTotals[skuId].amazonRev += rev;
-          computedSkuTotals[skuId].cogs += cogs;
-          computedSkuTotals[skuId].netProceeds += netProceeds;
-          computedSkuTotals[skuId].adSpend += adSpend;
-        });
-      });
-      
-      // STEP 3: Calculate profit for each SKU
-      // IMPORTANT: For Amazon, netProceeds IS the profit (already has fees AND COGS deducted)
-      // For Shopify, we need to subtract COGS from revenue
-      Object.values(computedSkuTotals).forEach(sku => {
-        // For Shopify SKUs without COGS data, use lookup table
-        if (sku.shopifyRev > 0 && sku.cogs === 0 && sku.units > 0) {
-          const lookupKey = sku.sku.replace('Shop', '').replace('SHOP', '');
-          const unitCogs = cogsLookup[sku.sku] || cogsLookup[lookupKey] || 0;
-          sku.cogs = unitCogs * sku.units;
-        }
-        
-        // Calculate profit:
-        // - Amazon: netProceeds IS the profit (already has all fees + COGS deducted)
-        // - Shopify: revenue - COGS
-        if (sku.amazonRev > 0 && sku.netProceeds > 0) {
-          // Amazon data - netProceeds is already the final profit
-          sku.profit = sku.netProceeds;
-        } else if (sku.shopifyRev > 0) {
-          // Shopify - subtract COGS from revenue
-          sku.profit = sku.shopifyRev - sku.cogs;
-        } else {
-          // Fallback
-          sku.profit = sku.revenue - sku.cogs;
-        }
-        sku.margin = sku.revenue > 0 ? ((sku.profit / sku.revenue) * 100) : 0;
-      });
-      
-      // Sort by revenue and add channel
-      const sortedSkuList = Object.values(computedSkuTotals)
-        .map(s => ({
-          ...s,
-          channel: s.amazonRev > s.shopifyRev ? 'Amazon' : 'Shopify'
-        }))
-        .sort((a, b) => b.revenue - a.revenue);
-      
-      // Compute period totals directly
-      const periodTotals = {};
-      const yearTotals = { '2024': 0, '2025': 0, '2026': 0 };
-      Object.entries(allPeriodsData).forEach(([periodKey, periodData]) => {
-        const rev = periodData.total?.revenue || 0;
-        if (rev > 0) {
-          periodTotals[periodKey] = rev;
-          // Aggregate by year
-          if (periodKey.includes('2024') && !periodKey.match(/^\d{4}$/)) yearTotals['2024'] += rev;
-          else if (periodKey.includes('2025') && periodKey !== '2025') yearTotals['2025'] += rev;
-          else if (periodKey.includes('2026') && periodKey !== '2026') yearTotals['2026'] += rev;
-        }
-      });
-      
-      // Compute weekly totals
-      const weekTotals = {};
-      let totalWeeklyRevenue = 0;
-      Object.entries(allWeeksData).forEach(([weekKey, weekData]) => {
-        const rev = weekData.total?.revenue || 0;
-        if (rev > 0) {
-          weekTotals[weekKey] = rev;
-          totalWeeklyRevenue += rev;
-        }
-      });
-      
-      const verifiedFacts = {
-        // Complete SKU rankings (all 30 products)
-        allSkus: sortedSkuList.map(s => ({
-          sku: s.sku,
-          name: s.name,
-          revenue: Math.round(s.revenue * 100) / 100,
-          units: s.units,
-          channel: s.channel,
-          cogs: Math.round(s.cogs * 100) / 100,
-          adSpend: Math.round(s.adSpend * 100) / 100,
-          profit: Math.round(s.profit * 100) / 100,
-          margin: Math.round(s.margin * 10) / 10
-        })),
-        
-        // Pre-formatted answers
-        worstSelling5: sortedSkuList.slice(-5).reverse().map((s, i) => ({
-          rank: i + 1,
-          sku: s.sku,
-          name: s.name,
-          revenue: Math.round(s.revenue * 100) / 100,
-          units: s.units,
-          channel: s.channel,
-          cogs: Math.round(s.cogs * 100) / 100,
-          adSpend: Math.round(s.adSpend * 100) / 100,
-          profit: Math.round(s.profit * 100) / 100,
-          margin: Math.round(s.margin * 10) / 10
-        })),
-        bestSelling5: sortedSkuList.slice(0, 5).map((s, i) => ({
-          rank: i + 1,
-          sku: s.sku,
-          name: s.name,
-          revenue: Math.round(s.revenue * 100) / 100,
-          units: s.units,
-          channel: s.channel,
-          cogs: Math.round(s.cogs * 100) / 100,
-          adSpend: Math.round(s.adSpend * 100) / 100,
-          profit: Math.round(s.profit * 100) / 100,
-          margin: Math.round(s.margin * 10) / 10
-        })),
-        
-        // Most/Least profitable
-        mostProfitable5: [...sortedSkuList].sort((a, b) => b.profit - a.profit).slice(0, 5).map((s, i) => ({
-          rank: i + 1,
-          sku: s.sku,
-          name: s.name,
-          revenue: Math.round(s.revenue * 100) / 100,
-          units: s.units,
-          channel: s.channel,
-          cogs: Math.round(s.cogs * 100) / 100,
-          adSpend: Math.round(s.adSpend * 100) / 100,
-          profit: Math.round(s.profit * 100) / 100,
-          margin: Math.round(s.margin * 10) / 10
-        })),
-        leastProfitable5: [...sortedSkuList].sort((a, b) => a.profit - b.profit).slice(0, 5).map((s, i) => ({
-          rank: i + 1,
-          sku: s.sku,
-          name: s.name,
-          revenue: Math.round(s.revenue * 100) / 100,
-          units: s.units,
-          channel: s.channel,
-          cogs: Math.round(s.cogs * 100) / 100,
-          adSpend: Math.round(s.adSpend * 100) / 100,
-          profit: Math.round(s.profit * 100) / 100,
-          margin: Math.round(s.margin * 10) / 10
-        })),
-        
-        // Yearly totals
-        yearTotals: yearTotals,
-        
-        // Period totals
-        periodTotals: periodTotals,
-        
-        // Summary stats
-        totalRevenue: Object.values(yearTotals).reduce((a, b) => a + b, 0),
-        totalProfit: sortedSkuList.reduce((sum, s) => sum + s.profit, 0),
-        totalCogs: sortedSkuList.reduce((sum, s) => sum + s.cogs, 0),
-        totalAdSpend: sortedSkuList.reduce((sum, s) => sum + s.adSpend, 0),
-        totalProducts: sortedSkuList.length,
-        totalPeriods: Object.keys(periodTotals).length,
-        totalWeeks: Object.keys(weekTotals).length,
-        
-        // Last week / month (for quick reference)
-        lastWeek: ctx.lastWeekByCategory || {},
-        currentMonth: ctx.currentMonthByCategory || {},
-      };
       
       // Build alerts summary for AI
       const alertsSummary = [];
@@ -12149,283 +13097,982 @@ Analyze the data and respond with ONLY this JSON:
       // Include week notes
       const notesData = Object.entries(weekNotes).filter(([k, v]) => v).map(([week, note]) => ({ week, note }));
       
-      // Build verified facts as JSON for the prompt
-      const verifiedFactsJSON = JSON.stringify(verifiedFacts, null, 0);
-      
-      // Build comprehensive raw data for Claude to analyze ANY question
-      const rawDataForAI = {
-        // All SKU data with complete metrics
-        allSkus: verifiedFacts.allSkus,
-        
-        // Period data (monthly/quarterly aggregates with SKU breakdowns)
-        periods: Object.fromEntries(
-          Object.entries(allPeriodsData)
-            .filter(([k, v]) => v.total?.revenue > 0)
-            .map(([k, v]) => [k, {
-              revenue: v.total?.revenue || 0,
-              profit: v.total?.netProfit || 0,
-              units: v.total?.units || 0,
-              amazon: {
-                revenue: v.amazon?.netSales || v.amazon?.revenue || 0,
-                profit: v.amazon?.netProfit || 0,
-                units: v.amazon?.units || 0,
-                skuData: (v.amazon?.skuData || []).map(s => ({
-                  sku: s.sku,
-                  revenue: s.netSales || s.revenue || 0,
-                  units: s.unitsSold || s.units || 0,
-                  cogs: s.cogs || 0,
-                  netProceeds: s.netProceeds || 0,
-                  adSpend: s.adSpend || 0,
-                  returns: s.returns || 0,
-                }))
-              },
-              shopify: {
-                revenue: v.shopify?.netSales || v.shopify?.revenue || 0,
-                profit: v.shopify?.netProfit || 0,
-                units: v.shopify?.units || 0,
-                skuData: (v.shopify?.skuData || []).map(s => ({
-                  sku: s.sku,
-                  revenue: s.netSales || s.revenue || 0,
-                  units: s.unitsSold || s.units || 0,
-                  cogs: s.cogs || 0,
-                }))
-              }
-            }])
-        ),
-        
-        // Weekly data (last 20 weeks with SKU breakdowns)
-        weeks: Object.fromEntries(
-          Object.entries(allWeeksData)
-            .filter(([k]) => k.startsWith('202'))
-            .sort(([a], [b]) => b.localeCompare(a))
-            .slice(0, 20)
-            .map(([k, v]) => [k, {
-              revenue: v.total?.revenue || 0,
-              profit: v.total?.netProfit || 0,
-              units: v.total?.units || 0,
-              amazon: {
-                revenue: v.amazon?.netSales || v.amazon?.revenue || 0,
-                units: v.amazon?.units || 0,
-                skuData: (v.amazon?.skuData || []).slice(0, 30).map(s => ({
-                  sku: s.sku || s.msku,
-                  revenue: s.netSales || s.revenue || 0,
-                  units: s.unitsSold || s.units || 0,
-                }))
-              },
-              shopify: {
-                revenue: v.shopify?.netSales || v.shopify?.revenue || 0,
-                units: v.shopify?.units || 0,
-                skuData: (v.shopify?.skuData || []).slice(0, 30).map(s => ({
-                  sku: s.sku,
-                  revenue: s.netSales || s.revenue || 0,
-                  units: s.unitsSold || s.units || 0,
-                }))
-              }
-            }])
-        ),
-        
-        // Daily data (last 30 days)
-        dailyData: Object.fromEntries(
-          Object.entries(allDaysData)
-            .filter(([k]) => k.startsWith('202'))
-            .sort(([a], [b]) => b.localeCompare(a))
-            .slice(0, 30)
-            .map(([k, v]) => [k, {
-              revenue: v.total?.revenue || 0,
-              units: v.total?.units || 0,
-              amazon: { revenue: v.amazon?.netSales || 0, units: v.amazon?.units || 0 },
-              shopify: { revenue: v.shopify?.netSales || 0, units: v.shopify?.units || 0 },
-            }])
-        ),
-        
-        // COGS lookup table
-        cogs: savedCogs || {},
-        
-        // Product name mapping
-        productNames: savedProductNames || {},
-        
-        // Product catalog with categories
-        productCatalog: ctx.productCatalog || [],
-        
-        // Inventory status
-        inventory: ctx.inventory || {},
-        
-        // Current goals
-        goals: goals || {},
-        
-        // Yearly totals
-        yearTotals: verifiedFacts.yearTotals,
-        
-        // Pre-computed timeframe summaries
-        timeframes: {
-          lastWeek: ctx.lastWeekByCategory || null,
-          last2Weeks: ctx.last2WeeksByCategory || null,
-          last4Weeks: ctx.last4WeeksByCategory || null,
-          currentMonth: ctx.currentMonthByCategory || null,
-          allTime: ctx.allTimeByCategory || null,
-        },
-        
-        // 3PL fulfillment data
-        threePL: {
-          totalOrders: Object.keys(threeplLedger.orders || {}).length,
-          recentOrders: Object.entries(threeplLedger.orders || {})
-            .slice(-20)
-            .map(([id, o]) => ({
-              id,
-              date: o.shipDate,
-              totalCost: (o.charges?.firstPick || 0) + (o.charges?.additionalPick || 0) + (o.charges?.box || 0),
-            })),
-          avgCostPerOrder: (() => {
-            const orders = Object.values(threeplLedger.orders || {});
-            if (orders.length === 0) return 0;
-            const total = orders.reduce((s, o) => s + (o.charges?.firstPick || 0) + (o.charges?.additionalPick || 0) + (o.charges?.box || 0), 0);
-            return total / orders.length;
-          })(),
-        },
-        
-        // Amazon advertising campaigns
-        adCampaigns: (amazonCampaigns?.campaigns || []).slice(0, 20).map(c => ({
-          name: c.name,
-          type: c.type,
-          spend: c.spend || 0,
-          sales: c.sales || 0,
-          acos: c.acos || 0,
-          clicks: c.clicks || 0,
-          impressions: c.impressions || 0,
-        })),
-        
-        // Summary metrics
-        summary: {
-          totalRevenue: verifiedFacts.totalRevenue,
-          totalProfit: verifiedFacts.totalProfit,
-          totalCogs: verifiedFacts.totalCogs,
-          totalAdSpend: verifiedFacts.totalAdSpend,
-          totalProducts: verifiedFacts.totalProducts,
-          overallMargin: verifiedFacts.totalRevenue > 0 ? (verifiedFacts.totalProfit / verifiedFacts.totalRevenue * 100).toFixed(1) : 0,
-        }
-      };
-      
-      const systemPrompt = `You are an expert e-commerce analyst for "${ctx.storeName}". You have COMPLETE access to all business data and can answer ANY question about it.
+      const systemPrompt = `You are an expert e-commerce analyst and business advisor for "${ctx.storeName}". You have access to ALL uploaded sales data and can answer questions about any aspect of the business.
 
-═══════════════════════════════════════════════════════════════════
-IMPORTANT: WEEK DEFINITION
-═══════════════════════════════════════════════════════════════════
-In this system, a "week" is ALWAYS Monday through Sunday.
-- Weeks are keyed/stored by their ending Sunday date (e.g., "2026-01-26" = week of Mon Jan 20 - Sun Jan 26)
-- "Last week" means the most recent completed Monday-Sunday period
-- "Week to date" or "this week" means Monday through today
+🚨🚨🚨 CRITICAL DATA AVAILABILITY RULES - READ FIRST 🚨🚨🚨
 
-═══════════════════════════════════════════════════════════════════
-DATA DICTIONARY - All available data sources:
-═══════════════════════════════════════════════════════════════════
+${ctx.dataAvailability?.instructions || ''}
 
-**allSkus** - Complete list of all ${verifiedFacts.allSkus.length} products with:
-  sku, name, revenue, units, profit, margin, cogs, adSpend, channel
+**DATA AVAILABILITY STATUS:**
+- Amazon: ${ctx.dataAvailability?.amazon?.dailyDataDates || 0} days of daily data, ${ctx.dataAvailability?.amazon?.periodDataCount || 0} period records
+${ctx.dataAvailability?.amazon?.hasDailyGaps ? `  ⚠️ GAPS COVERED BY: ${ctx.dataAvailability.amazon.gapsCoveredBy?.join(', ') || 'monthly data'}` : ''}
+- Shopify: ${ctx.dataAvailability?.shopify?.dailyDataDates || 0} days of daily data
 
-**periods** - Monthly (2025) and quarterly (2024) aggregates:
-  - Each period: revenue, profit, units, amazon/shopify channel breakdown
-  - SKU-level data: revenue, units, cogs, netProceeds, adSpend, returns
+**UNIFIED ALL-TIME TOTALS (USE THESE - includes period data):**
+${ctx.unifiedMetrics ? `
+- Amazon Revenue: $${ctx.unifiedMetrics.allTime?.amazon?.revenue?.toFixed(2) || 0}
+- Shopify Revenue: $${ctx.unifiedMetrics.allTime?.shopify?.revenue?.toFixed(2) || 0}
+- TOTAL Revenue: $${ctx.unifiedMetrics.allTime?.total?.revenue?.toFixed(2) || 0}
+- TOTAL Profit: $${ctx.unifiedMetrics.allTime?.total?.profit?.toFixed(2) || 0}
 
-**weeks** - Last 20 weeks of data with SKU breakdowns
+By Year:
+${Object.entries(ctx.unifiedMetrics.byYear || {}).map(([year, data]) => 
+  `  ${year}: Amazon $${data.amazon?.revenue?.toFixed(0) || 0} | Shopify $${data.shopify?.revenue?.toFixed(0) || 0} | Total $${data.total?.revenue?.toFixed(0) || 0}`
+).join('\n')}
 
-**dailyData** - Last 30 days of daily sales
+Proper Averages (only from days WITH data):
+- Daily Avg Revenue: $${ctx.unifiedMetrics.averages?.dailyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.dailyRevenue?.daysUsed || 0} days with actual data)
+- Weekly Avg Revenue: $${ctx.unifiedMetrics.averages?.weeklyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.weeklyRevenue?.weeksUsed || 0} weeks)
+- Monthly Avg Revenue: $${ctx.unifiedMetrics.averages?.monthlyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.monthlyRevenue?.monthsUsed || 0} months)
+` : 'Unified metrics not available'}
 
-**cogs** - Cost of Goods Sold per unit by SKU
+🚨🚨🚨 TIMEFRAME QUERIES - USE PRE-COMPUTED DATA 🚨🚨🚨
+When user asks about a TIMEFRAME (last week, last month, etc.) you MUST use the PRE-COMPUTED data below.
+DO NOT use skuAnalysis - that's ALL-TIME data and will give WRONG answers for timeframe questions!
 
-**productNames** - SKU → product name mapping
+| User asks about... | ONLY USE THIS DATA |
+|-------------------|-------------------|
+| "last week" | lastWeekByCategory (below) |
+| "last 2 weeks" | last2WeeksByCategory (below) |
+| "last month" / "last 4 weeks" | last4WeeksByCategory (below) |
+| "this month" / "January" / "MTD" / "Jan 1-25" | currentMonthByCategory AND/OR CUSTOM DATE RANGE DATA (below) |
+| "between X and Y" / specific dates | CUSTOM DATE RANGE DATA (below) |
+| "all time" / "total" | allTimeByCategory (below) |
 
-**productCatalog** - Products with categories (Lip Balm, Tallow Balm, etc.)
+🎯 FOR DATE-SPECIFIC QUESTIONS LIKE "Jan 1-25" or "between Jan 1 and Jan 25":
+→ USE the "CUSTOM DATE RANGE DATA" section below - it has PRE-COMPUTED Jan 2026 aggregates
+→ The data shows EXACT Amazon vs Shopify breakdown by SKU
 
-**inventory** - Current stock levels, reorder alerts, velocity
+For category questions (e.g., "how much lip balm this month?"):
+→ Look up: currentMonthByCategory.byCategory["Lip Balm"]
+→ OR use CUSTOM DATE RANGE DATA for LIP BALM 3-PACKS breakdown
 
-**goals** - Weekly/monthly revenue and profit targets
+⚠️ IMPORTANT: currentMonthByCategory has SEPARATE Amazon vs Shopify counts!
+→ If user asks "Amazon lip balm units", use amazonUnits from the category
+→ If user asks "total lip balm units", add Amazon + Shopify
 
-**yearTotals** - Revenue by year (2024, 2025, 2026)
+⛔ NEVER use skuAnalysis for timeframe questions - it contains ALL-TIME totals
+⛔ NEVER sum from skuByWeek array - those are historical weeks
+⛔ NEVER use weekly skuData for Jan 2026 - it's MISSING Amazon SKU breakdown
+✅ ALWAYS use DAILY data aggregates (currentMonthByCategory or CUSTOM DATE RANGE DATA) for Jan 2026
+✅ ALWAYS use unifiedMetrics for all-time totals (includes Amazon 2025 period data)
+✅ For "Jan 1-25" questions → USE CUSTOM DATE RANGE DATA section
 
-**timeframes** - Pre-computed summaries:
-  - lastWeek, last2Weeks, last4Weeks, currentMonth, allTime
-  - Each has: totalRevenue, totalProfit, totalUnits, byCategory breakdown
+IMPORTANT PROFIT CALCULATION NOTES:
+- Amazon "Net Proceeds" IS the profit - it already has COGS, fees, and ad spend deducted
+- Shopify profit = Net Sales - COGS (discounts already deducted from Net Sales)
+- Do NOT double-count COGS or ad spend when calculating Amazon profit
 
-**threePL** - Fulfillment data:
-  - totalOrders, recentOrders, avgCostPerOrder
+STORE: ${ctx.storeName}
+DATA RANGE: ${ctx.dataRange.weeksTracked} weeks tracked (${ctx.dataRange.oldestWeek || 'N/A'} to ${ctx.dataRange.newestWeek || 'N/A'})
 
-**adCampaigns** - Amazon advertising:
-  - name, type, spend, sales, acos, clicks, impressions
+=== KEY METRICS (All Time) ===
+- Total Revenue: $${ctx.insights.allTimeRevenue.toFixed(2)}
+- Total Profit: $${ctx.insights.allTimeProfit.toFixed(2)}
+- Total Units Sold: ${ctx.insights.allTimeUnits}
+- Overall Margin: ${ctx.insights.overallMargin.toFixed(1)}%
+- Avg Profit/Unit: $${ctx.insights.overallProfitPerUnit.toFixed(2)}
+- Avg Weekly Revenue: $${ctx.insights.avgWeeklyRevenue.toFixed(2)}
+- Avg Weekly Profit: $${ctx.insights.avgWeeklyProfit.toFixed(2)}
+- Avg Daily Revenue: $${ctx.insights.avgDailyRevenue?.toFixed(2) || 0}
+- Avg Daily Profit: $${ctx.insights.avgDailyProfit?.toFixed(2) || 0}
 
-**summary** - Overall totals: revenue, profit, COGS, ad spend, margin
+=== DAILY DATA (Last 14 days for granular analysis) ===
+${ctx.dailyData?.length > 0 ? `
+Days tracked: ${ctx.dataRange.daysTracked}
+Recent daily trend (last 7 days vs prior 7 days): ${ctx.dailyTrend?.toFixed(1) || 0}%
+${JSON.stringify(ctx.dailyData)}
+` : 'No daily data uploaded yet'}
 
-═══════════════════════════════════════════════════════════════════
-COMPLETE RAW DATA:
-═══════════════════════════════════════════════════════════════════
+=== DAY-OF-WEEK PATTERNS (AI Learning) ===
+${ctx.dayOfWeekPatterns && Object.keys(ctx.dayOfWeekPatterns).length > 0 ? `
+Best performing days and average revenue/profit by day of week:
+${JSON.stringify(ctx.dayOfWeekPatterns)}
+Use this to identify optimal days for promotions, ad spend, and inventory planning.
+` : 'Not enough daily data for day-of-week analysis'}
 
-${JSON.stringify(rawDataForAI, null, 2)}
+=== RECENT TREND (Last 4 weeks vs Prior 4 weeks) ===
+- Recent Revenue: $${ctx.insights.recentVsPrior.recentRevenue.toFixed(2)}
+- Prior Revenue: $${ctx.insights.recentVsPrior.priorRevenue.toFixed(2)}
+- Revenue Change: ${ctx.insights.recentVsPrior.revenueChange.toFixed(1)}%
+- Recent Profit: $${ctx.insights.recentVsPrior.recentProfit.toFixed(2)}
+- Prior Profit: $${ctx.insights.recentVsPrior.priorProfit.toFixed(2)}
+- Profit Change: ${ctx.insights.recentVsPrior.profitChange.toFixed(1)}%
 
-═══════════════════════════════════════════════════════════════════
-HOW TO ANSWER ANY QUESTION:
-═══════════════════════════════════════════════════════════════════
+=== FORECAST (Next 4 Weeks Projection) ===
+${forecastData ? `
+- Projected Monthly Revenue: $${forecastData.nextMonth.revenue.toFixed(2)}
+- Projected Monthly Profit: $${forecastData.nextMonth.profit.toFixed(2)}
+- Projected Monthly Units: ${forecastData.nextMonth.units}
+- Trend Direction: ${forecastData.trend.revenue} (${forecastData.trend.revenueChange.toFixed(1)}% per week)
+- Forecast Confidence: ${forecastData.confidence}%
+- Weekly Projections: ${JSON.stringify(forecastData.weekly)}
+` : 'Not enough data for forecast (need 4+ weeks)'}
 
-Analyze the data above to answer questions. Examples:
+=== 🧠 MULTI-SIGNAL AI FORECAST (PRIMARY - Use this for predictions) ===
+${multiSignalForecast ? `
+This is the most accurate forecast - it's the same one shown on the dashboard widget.
 
-PRODUCT QUESTIONS:
-• "What are my worst/best selling products?" → Sort allSkus by revenue
-• "Break down profit on tallow balms" → Filter allSkus by category, sum profit/cogs/adSpend
-• "Which products are losing money?" → Filter allSkus where profit < 0
-• "What's my margin on lip balms?" → Filter by category, calculate profit/revenue
+**NEXT WEEK PREDICTION:**
+- Revenue: $${multiSignalForecast.nextWeek?.predictedRevenue?.toFixed(2) || 0}
+- Profit: $${multiSignalForecast.nextWeek?.predictedProfit?.toFixed(2) || 0}
+- Units: ${multiSignalForecast.nextWeek?.predictedUnits || 0}
+- Confidence: ${multiSignalForecast.nextWeek?.confidence || 'N/A'}
 
-TIME PERIOD QUESTIONS:
-• "How did I do last week?" → Use timeframes.lastWeek
-• "What about December 2025?" → Use periods["december-2025"]
-• "Show me the last 30 days" → Use dailyData
-• "Compare this month to last month" → Use timeframes.currentMonth vs timeframes.last4Weeks
+**4-WEEK OUTLOOK:**
+${JSON.stringify(multiSignalForecast.next4Weeks)}
 
-CHANNEL QUESTIONS:
-• "Compare Amazon vs Shopify" → Sum revenue by channel from allSkus
-• "Amazon sales last week" → Use timeframes.lastWeek.amazonRevenue
+**SIGNALS USED:**
+- Daily Average (7 days): $${multiSignalForecast.signals.dailyAvg7?.toFixed(2) || 0}/day
+- Momentum (7d vs prior 7d): ${multiSignalForecast.signals.momentum?.toFixed(1) || 0}%
+- Profit Margin: ${((multiSignalForecast.signals.avgProfitMargin || 0) * 100).toFixed(1)}%
 
-OPERATIONAL QUESTIONS:
-• "What should I reorder?" → Check inventory.lowStockItems
-• "What are my fulfillment costs?" → Use threePL data
-• "How are my ads performing?" → Use adCampaigns data
-• "Am I hitting my goals?" → Compare timeframes vs goals
+**DATA SOURCES:**
+- Daily data points: ${multiSignalForecast.dataPoints.dailyDays || multiSignalForecast.dataPoints.daysAnalyzed || 0} days
+- Weekly data points: ${multiSignalForecast.dataPoints.weeklyWeeks || multiSignalForecast.dataPoints.weeksAnalyzed || 0} weeks  
+- Amazon forecasts: ${multiSignalForecast.dataPoints.amazonForecastWeeks || 0} weeks
 
-TREND QUESTIONS:
-• "Show weekly trends" → Analyze weeks data chronologically
-• "Year over year comparison" → Compare yearTotals
-• "What's growing/declining?" → Compare recent periods to prior
+**METHODOLOGY:** ${multiSignalForecast.methodology}
 
-PRODUCT CATEGORIES (from productCatalog):
-${ctx.productCatalog?.slice(0, 20).map(p => `- ${p.name} (${p.sku}) → ${p.category}`).join('\n') || 'No catalog data'}
+Last updated: ${multiSignalForecast.generatedAt || 'Not yet generated'}
+` : 'Multi-Signal forecast not yet generated. User should click "Refresh Forecast" on dashboard.'}
 
-CATEGORY → SKU MAPPING:
-${(() => {
-  const cats = {};
-  (ctx.productCatalog || []).forEach(p => {
-    if (!cats[p.category]) cats[p.category] = [];
-    cats[p.category].push(p.sku);
-  });
-  return Object.entries(cats).map(([cat, skus]) => `${cat}: ${skus.join(', ')}`).join('\n');
-})() || 'No category data'}
+=== 📊 FORECAST ACCURACY LEARNING (Compare predictions to actuals) ===
+${forecastAccuracy.summary ? `
+**ACCURACY SUMMARY (from past forecasts vs actuals):**
+- Samples with actual data: ${forecastAccuracy.summary.samplesWithActuals || 0}
+- Average Accuracy: ${forecastAccuracy.summary.avgAccuracy || 'N/A'}
+- Bias: ${forecastAccuracy.summary.avgBias || 'N/A'}
 
-═══════════════════════════════════════════════════════════════════
-ALERTS & INSIGHTS:
-═══════════════════════════════════════════════════════════════════
+**RECENT FORECAST vs ACTUAL COMPARISONS:**
+${forecastAccuracy.summary.recentTrend ? JSON.stringify(forecastAccuracy.summary.recentTrend, null, 2) : 'No recent comparisons yet'}
+
+⚠️ LEARNING INSTRUCTIONS:
+- If bias is consistently positive (actuals > forecast), predictions are too conservative - adjust up
+- If bias is consistently negative (actuals < forecast), predictions are too optimistic - adjust down
+- Use the accuracy % to determine confidence level in your predictions
+- Factor in the specific error patterns when making new predictions
+` : 'No forecast accuracy data yet. As weeks complete and actuals are uploaded, I will learn from prediction errors.'}
+
+**FULL ACCURACY HISTORY (last 20 records):**
+${forecastAccuracy.records.length > 0 ? JSON.stringify(forecastAccuracy.records.slice(-10)) : 'No records yet'}
+
+=== GOALS ===
+- Weekly Revenue Target: $${ctx.goals.weeklyRevenue || 0}
+- Weekly Profit Target: $${ctx.goals.weeklyProfit || 0}
+- Monthly Revenue Target: $${ctx.goals.monthlyRevenue || 0}
+- Monthly Profit Target: $${ctx.goals.monthlyProfit || 0}
+${ctx.goals.weeklyRevenue > 0 && ctx.weeklyData.length > 0 ? `- Last Week vs Goal: ${ctx.weeklyData[ctx.weeklyData.length-1]?.totalRevenue >= ctx.goals.weeklyRevenue ? 'MET' : 'MISSED'}` : ''}
+
+=== ALERTS ===
 ${alertsSummary.length > 0 ? alertsSummary.join('\n') : 'No active alerts'}
 
-═══════════════════════════════════════════════════════════════════
-GUIDELINES:
-═══════════════════════════════════════════════════════════════════
+=== PRODUCT CATALOG (SKU ↔ Product Name mapping) ===
+Use this to translate between product names and SKUs:
+${JSON.stringify(ctx.productCatalog)}
 
-1. ALWAYS use the actual data provided - never make up numbers
-2. Show your work - reference which data source you're using
-3. Be specific - include SKUs, exact dollar amounts, percentages
-4. For category questions, map to SKUs first, then aggregate the data
-5. If data doesn't exist for a question, say so clearly
-6. Format currency nicely (e.g., $12,345.67)
-7. When showing product lists, include both SKU and name
-8. Calculate derived metrics (margins, growth rates) from the raw data
+=== QUICK LOOKUP: Product Names → SKUs ===
+${ctx.productCatalog?.slice(0, 15).map(p => `"${p.name.substring(0, 40)}..." → ${p.sku} [${p.category}]`).join('\n') || 'No catalog'}
 
-You have ALL the data - analyze it to answer any business question!`;
+=== SKUs BY CATEGORY (for category queries) ===
+${Object.entries(ctx.skusByCategory || {}).map(([cat, skus]) => `${cat}: ${skus.join(', ')}`).join('\n') || 'No categories'}
 
+=== 📦 SKU MASTER DATA (PRIMARY DATA SOURCE - USE THIS) ===
+IMPORTANT: This is the authoritative SKU-level data. Use SKUs as the primary identifier for all analysis.
+
+**TOP 20 SKUs BY REVENUE (all-time across periods + weeks):**
+${ctx.skuMasterData?.slice(0, 20).map(s => 
+  `${s.sku}: "${s.name}" [${s.category}] - $${s.totalRevenue.toFixed(0)} rev, ${s.totalUnits} units`
+).join('\n') || 'No SKU data'}
+
+**SKU BREAKDOWN BY 2025 MONTH:**
+${(() => {
+  const byMonth = {};
+  ctx.skuMasterData?.forEach(s => {
+    Object.entries(s.byPeriod || {}).forEach(([period, data]) => {
+      if (!byMonth[period]) byMonth[period] = [];
+      if (data.revenue > 0) byMonth[period].push({ sku: s.sku, name: s.name, category: s.category, revenue: data.revenue, units: data.units });
+    });
+  });
+  return Object.entries(byMonth)
+    .filter(([p]) => p.includes('2025') || p.includes('-2025'))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(0, 6)
+    .map(([period, skus]) => {
+      const top3 = skus.sort((a, b) => b.revenue - a.revenue).slice(0, 3);
+      return `${period}: ${top3.map(s => `${s.sku}=$${s.revenue.toFixed(0)}`).join(', ')}`;
+    }).join('\n') || 'No period data';
+})()}
+
+**CATEGORY TOTALS FROM SKU DATA:**
+${(() => {
+  const cats = {};
+  ctx.skuMasterData?.forEach(s => {
+    if (!cats[s.category]) cats[s.category] = { revenue: 0, units: 0, skuCount: 0 };
+    cats[s.category].revenue += s.totalRevenue;
+    cats[s.category].units += s.totalUnits;
+    cats[s.category].skuCount++;
+  });
+  return Object.entries(cats)
+    .sort(([,a], [,b]) => b.revenue - a.revenue)
+    .map(([cat, d]) => `${cat}: $${d.revenue.toFixed(0)} revenue, ${d.units} units (${d.skuCount} SKUs)`)
+    .join('\n') || 'No category data';
+})()}
+
+🔑 SKU-CENTRIC ANALYSIS RULES:
+- ALWAYS use SKU codes (e.g., DDPE0004Shop) as primary identifiers
+- Look up product names from productCatalog when needed for display
+- For category questions, find SKUs in that category and sum their data
+- For period questions, use skuMasterData[x].byPeriod[period]
+- For week questions, use skuMasterData[x].byWeek[week]
+
+=== 🎯🎯🎯 PRE-COMPUTED TIMEFRAME DATA - USE THIS FOR TIMEFRAME QUESTIONS 🎯🎯🎯 ===
+
+**LAST WEEK (${ctx.lastWeekByCategory?.weekLabel || 'No data'}):** ← USE THIS FOR "last week" questions
+${ctx.lastWeekByCategory ? `
+Week: ${ctx.lastWeekByCategory.weekEnding}
+Total Revenue: $${ctx.lastWeekByCategory.totalRevenue.toFixed(2)}
+Total Profit: $${ctx.lastWeekByCategory.totalProfit.toFixed(2)}
+Total Units: ${ctx.lastWeekByCategory.totalUnits}
+BY CATEGORY: ${JSON.stringify(ctx.lastWeekByCategory.byCategory)}
+` : 'No data'}
+
+**LAST 2 WEEKS (${ctx.last2WeeksByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "last 2 weeks" questions
+${ctx.last2WeeksByCategory ? `
+Weeks included: ${ctx.last2WeeksByCategory.weeks?.join(', ')}
+Total Revenue: $${ctx.last2WeeksByCategory.totalRevenue.toFixed(2)}
+Total Profit: $${ctx.last2WeeksByCategory.totalProfit.toFixed(2)}
+Total Units: ${ctx.last2WeeksByCategory.totalUnits}
+BY CATEGORY: ${JSON.stringify(ctx.last2WeeksByCategory.byCategory)}
+` : 'No data'}
+
+**LAST 4 WEEKS / LAST MONTH (${ctx.last4WeeksByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "last month" questions
+${ctx.last4WeeksByCategory ? `
+Weeks included: ${ctx.last4WeeksByCategory.weeks?.join(', ')}
+Total Revenue: $${ctx.last4WeeksByCategory.totalRevenue.toFixed(2)}
+Total Profit: $${ctx.last4WeeksByCategory.totalProfit.toFixed(2)}
+Total Units: ${ctx.last4WeeksByCategory.totalUnits}
+BY CATEGORY: ${JSON.stringify(ctx.last4WeeksByCategory.byCategory)}
+` : 'No data'}
+
+**🆕 CURRENT MONTH MTD (${ctx.currentMonthByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "this month", "January", "MTD" questions
+${ctx.currentMonthByCategory ? `
+Data Source: ${ctx.currentMonthByCategory.dataSource} (${ctx.currentMonthByCategory.daysOrWeeksIncluded})
+AMAZON: $${ctx.currentMonthByCategory.amazonRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.amazonUnits || 0} units
+SHOPIFY: $${ctx.currentMonthByCategory.shopifyRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.shopifyUnits || 0} units
+TOTAL: $${ctx.currentMonthByCategory.totalRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.totalUnits || 0} units
+BY CATEGORY (units): ${JSON.stringify(Object.fromEntries(Object.entries(ctx.currentMonthByCategory.byCategory || {}).map(([cat, data]) => [cat, { total: data.units, amazon: data.amazonUnits, shopify: data.shopifyUnits }])))}
+TOP SKUs BY UNITS: ${JSON.stringify((ctx.currentMonthByCategory.bySku || []).slice(0, 15).map(s => ({ sku: s.sku, name: s.name, channel: s.channel, units: s.units })))}
+` : 'No daily or weekly data for current month - User should upload Amazon/Shopify reports via Upload tab'}
+
+**⚠️ DATA AVAILABILITY CHECK:**
+Daily data days: ${Object.keys(allDaysData || {}).length}
+Days with Amazon skuData: ${Object.keys(allDaysData || {}).filter(d => (allDaysData[d]?.amazon?.skuData || []).length > 0).length}
+Days with Shopify skuData: ${Object.keys(allDaysData || {}).filter(d => (allDaysData[d]?.shopify?.skuData || []).length > 0).length}
+Latest daily data: ${sortedDays[sortedDays.length - 1] || 'none'}
+Jan 2026 daily days: ${sortedDays.filter(d => d.startsWith('2026-01')).length}
+
+**📅 CUSTOM DATE RANGE DATA (For "Jan 1-25", "between X and Y" type questions):**
+${(() => {
+  // Pre-compute Jan 2026 aggregates since it's the most likely question
+  const jan2026Days = sortedDays.filter(d => d >= '2026-01-01' && d <= '2026-01-25');
+  if (jan2026Days.length === 0) return 'No Jan 2026 daily data available';
+  
+  const skuTotals = {};
+  let amzTotal = 0, shopTotal = 0;
+  
+  jan2026Days.forEach(dayKey => {
+    const dayData = allDaysData[dayKey];
+    if (!dayData) return;
+    
+    (dayData.amazon?.skuData || []).forEach(s => {
+      const sku = s.sku || s.msku || '';
+      const units = s.unitsSold || s.units || 0;
+      if (!skuTotals[sku]) skuTotals[sku] = { amazon: 0, shopify: 0, name: savedProductNames[sku] || s.name || sku };
+      skuTotals[sku].amazon += units;
+      amzTotal += units;
+    });
+    
+    (dayData.shopify?.skuData || []).forEach(s => {
+      const sku = s.sku || '';
+      const units = s.unitsSold || s.units || 0;
+      if (!skuTotals[sku]) skuTotals[sku] = { amazon: 0, shopify: 0, name: savedProductNames[sku] || s.name || sku };
+      skuTotals[sku].shopify += units;
+      shopTotal += units;
+    });
+  });
+  
+  // Get lip balm SKUs (DDPE*)
+  const lipBalmSkus = Object.entries(skuTotals)
+    .filter(([sku]) => sku.startsWith('DDPE') && (sku.includes('0001') || sku.includes('0002') || sku.includes('0003') || sku.includes('0004')))
+    .sort((a, b) => (b[1].amazon + b[1].shopify) - (a[1].amazon + a[1].shopify));
+  
+  return `
+JAN 1-25, 2026 (${jan2026Days.length} days of daily data):
+- Total Amazon units: ${amzTotal}
+- Total Shopify units: ${shopTotal}
+
+LIP BALM 3-PACKS (DDPE0001-0004) for Jan 1-25:
+${lipBalmSkus.map(([sku, d]) => `  ${sku} (${d.name?.substring(0, 40) || sku}): Amazon ${d.amazon}, Shopify ${d.shopify}, TOTAL ${d.amazon + d.shopify}`).join('\n')}
+`;
+})()}
+
+**ALL TIME (${ctx.allTimeByCategory?.weeks || 0} weeks):** ← USE THIS FOR "all time/total" questions
+${ctx.allTimeByCategory ? `
+Total Revenue: $${ctx.allTimeByCategory.totalRevenue.toFixed(2)}
+Total Profit: $${ctx.allTimeByCategory.totalProfit.toFixed(2)}
+Total Units: ${ctx.allTimeByCategory.totalUnits}
+BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
+` : 'No data'}
+
+⚠️ REMINDER: For "how much X sold last week" → use lastWeekByCategory.byCategory["X"]
+⚠️ FOR JANUARY 2026 / DATE RANGE QUESTIONS → use CUSTOM DATE RANGE DATA above (has pre-computed Jan 1-25 totals)
+⚠️ DO NOT use skuAnalysis or weekly skuData for Jan 2026 - they're missing Amazon data!
+
+🗓️ FOR HISTORICAL QUESTIONS (2025 monthly, 2024 quarterly):
+- "How did we do in January 2025?" → Use PERIOD DATA section above
+- "What was Q3 2024 revenue?" → Use PERIOD DATA section above
+- "Compare 2024 vs 2025" → Use YoY INSIGHTS + PERIOD DATA
+- The period data contains monthly 2025 totals and quarterly 2024 totals
+
+🏷️ FOR CATEGORY QUESTIONS (e.g., "how much lip balm sold?"):
+- User says category name → Find SKUs: skusByCategory["Lip Balm"] = ["DDPE0001Shop", "DDPE0002Shop", ...]
+- Sum data from skuMasterData for each of those SKUs
+- Show breakdown by SKU in response: "DDPE0001Shop (Unscented): $X, DDPE0002Shop (Peppermint): $Y..."
+
+📦 FOR SPECIFIC PRODUCT QUESTIONS (e.g., "how did assorted pack do?" or "DDPE0004Shop sales"):
+- If SKU given → Look up directly in skuMasterData
+- If product name given → Search productCatalog for match → Get SKU → Look up in skuMasterData
+- Show: "DDPE0004Shop (Grass-Fed Tallow Lip Balm 3-Pack – Assorted): $285,000 total, 21,000 units"
+
+🗓️ FOR PERIOD QUESTIONS (e.g., "lip balm in January 2025"):
+- Resolve product/category to SKUs first
+- Then look up each SKU's byPeriod["january-2025"] data
+- Sum and display with SKU breakdown
+
+🔑 REMEMBER: Internally always use SKUs - they're unique identifiers. Product names are for user-friendly display.
+
+=== WEEKLY DATA (most recent 12 weeks) ===
+${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
+
+=== PERIOD DATA (Quarterly/Monthly/Yearly Historical) ===
+${ctx.periodData.length > 0 ? `Total periods tracked: ${ctx.periodData.filter(p => p.totalRevenue > 0).length} (with data)
+
+📅 2025 MONTHLY TOTALS:
+${ctx.periodData.filter(p => (p.period.includes('2025') || p.period.includes('-2025')) && p.type === 'monthly' && p.totalRevenue > 0).map(p => 
+  `${p.period}: $${p.totalRevenue.toFixed(0)} rev, ${p.totalUnits} units, ${p.margin.toFixed(1)}% margin`
+).join('\n') || 'No 2025 monthly periods'}
+
+📅 2024 QUARTERLY TOTALS:
+${ctx.periodData.filter(p => (p.period.includes('2024') || p.period.includes('-2024')) && p.type === 'quarterly' && p.totalRevenue > 0).map(p => 
+  `${p.period}: $${p.totalRevenue.toFixed(0)} rev, ${p.totalUnits} units`
+).join('\n') || 'No 2024 quarterly periods'}
+
+NOTE: For SKU-level breakdown by period, use the SKU MASTER DATA section above.
+` : 'No historical period data uploaded yet'}
+
+=== YEAR-OVER-YEAR INSIGHTS ===
+${ctx.yoyInsights?.length > 0 ? JSON.stringify(ctx.yoyInsights) : 'No comparable year-over-year data available yet'}
+
+=== 2025 MONTHLY TREND ===
+${ctx.monthlyTrend2025?.length > 0 ? JSON.stringify(ctx.monthlyTrend2025) : 'No 2025 monthly data'}
+
+=== SEASONALITY INSIGHTS ===
+${ctx.periodData.length > 0 ? (() => {
+  const months = ctx.periodData.filter(p => p.type === 'monthly');
+  if (months.length < 3) return 'Not enough monthly data for seasonality analysis';
+  const sorted = [...months].sort((a, b) => b.totalRevenue - a.totalRevenue);
+  const best = sorted[0];
+  const worst = sorted[sorted.length - 1];
+  const avgRev = months.reduce((s, m) => s + m.totalRevenue, 0) / months.length;
+  return 'Best Month: ' + best.label + ' ($' + best.totalRevenue.toFixed(0) + ')\n' +
+         'Worst Month: ' + worst.label + ' ($' + worst.totalRevenue.toFixed(0) + ')\n' +
+         'Avg Monthly Revenue: $' + avgRev.toFixed(0) + '\n' +
+         'Peak vs Avg: ' + ((best.totalRevenue / avgRev - 1) * 100).toFixed(0) + '% above average';
+})() : 'No seasonality data'}
+
+=== SEASONAL PATTERNS (AI Learning) ===
+${ctx.seasonalPatterns ? `
+Monthly Performance Patterns (for forecasting):
+${JSON.stringify(ctx.seasonalPatterns.byMonth)}
+Overall Monthly Average: $${ctx.seasonalPatterns.overallMonthlyAvg?.toFixed(0) || 0}
+Strong Months (>10% above avg): ${ctx.seasonalPatterns.strongMonths?.join(', ') || 'None identified yet'}
+Weak Months (<10% below avg): ${ctx.seasonalPatterns.weakMonths?.join(', ') || 'None identified yet'}
+
+Use seasonal indices when forecasting:
+- Index > 1.0 = Above average month (expect higher sales)
+- Index < 1.0 = Below average month (expect lower sales)
+- Apply: Expected Revenue = Base Forecast × Seasonal Index
+` : 'Not enough historical data for seasonal pattern analysis'}
+
+=== DATA QUALITY & TRIANGULATION ===
+${ctx.dataTriangulation ? `
+Data Quality Score: ${ctx.dataTriangulation.dataQualityScore}/100
+- 25 pts: 12+ weeks sales history
+- 20 pts: 30+ days daily data
+- 20 pts: 100+ banking transactions
+- 15 pts: 10+ SKUs with COGS
+- 10 pts: AI learning active (4+ samples)
+- 10 pts: Amazon forecasts uploaded
+
+Multiple Data Sources: ${ctx.dataTriangulation.hasMultipleSources ? 'YES - Can cross-validate sales vs banking' : 'NO - Limited to single source'}
+
+${ctx.dataTriangulation.hasMultipleSources && Object.keys(ctx.dataTriangulation.salesVsBanking || {}).length > 0 ? `
+Sales vs Banking Comparison (cross-validation):
+${Object.entries(ctx.dataTriangulation.salesVsBanking).slice(-6).map(([month, data]) => 
+  `- ${month}: Sales $${data.salesRevenue?.toFixed(0) || 0} → Bank Deposits $${data.bankDeposits?.toFixed(0) || 0} (${(data.depositRatio * 100).toFixed(0)}% deposit ratio)`
+).join('\n')}
+
+Note: Deposit ratio < 100% is normal (marketplace fees taken before payout)
+Typical healthy range: 70-85% for Amazon, 95-98% for Shopify
+` : ''}
+` : 'Data triangulation not available'}
+
+=== WEEK NOTES (user annotations) ===
+${notesData.length > 0 ? JSON.stringify(notesData) : 'No notes added'}
+
+=== ⛔⛔⛔ ALL-TIME SKU DATA BELOW - DO NOT USE FOR TIMEFRAME QUESTIONS ⛔⛔⛔ ===
+The data below is ALL-TIME totals. For "last week", "last month" etc. use the PRE-COMPUTED TIMEFRAME DATA sections above!
+
+=== TOP SKUS BY REVENUE (ALL-TIME totals - NOT for timeframe questions) ===
+${JSON.stringify(ctx.skuAnalysis.slice(0, 15))}
+
+=== SKUS WITH DECLINING PROFITABILITY (ALL-TIME) ===
+${JSON.stringify(ctx.decliningSkus)}
+
+=== SKUS WITH IMPROVING PROFITABILITY (ALL-TIME) ===
+${JSON.stringify(ctx.improvingSkus)}
+
+=== INVENTORY STATUS ===
+${ctx.inventory ? `As of ${ctx.inventory.asOfDate}: ${ctx.inventory.totalUnits?.toLocaleString() || 0} total units, $${ctx.inventory.totalValue?.toLocaleString() || 0} value
+Amazon: ${ctx.inventory.amazonUnits?.toLocaleString() || 0} units | 3PL: ${ctx.inventory.threeplUnits?.toLocaleString() || 0} units
+
+HEALTH BREAKDOWN:
+- Critical (will stock out soon): ${ctx.inventory.healthBreakdown?.critical || 0} SKUs
+- Low Stock: ${ctx.inventory.healthBreakdown?.low || 0} SKUs  
+- Healthy: ${ctx.inventory.healthBreakdown?.healthy || 0} SKUs
+- Overstock: ${ctx.inventory.healthBreakdown?.overstock || 0} SKUs
+` : 'No inventory data'}
+
+=== 🚨 URGENT REORDER (Past reorder date!) ===
+${ctx.inventory?.urgentReorder?.length > 0 ? ctx.inventory.urgentReorder.map(i => 
+  `- ${i.sku}: ${i.daysOverdue} days overdue! Stockout: ${i.stockoutDate}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk, Suggested Order: ${i.suggestedOrderQty} units`
+).join('\n') : 'None - all items are on schedule'}
+
+=== ⚠️ NEEDS REORDER SOON (within 14 days) ===
+${ctx.inventory?.needsReorderSoon?.length > 0 ? ctx.inventory.needsReorderSoon.map(i =>
+  `- ${i.sku}: Order in ${i.daysUntilMustOrder} days, Current: ${i.currentQty}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk, Lead Time: ${i.leadTimeDays}d, Suggested: ${i.suggestedOrderQty} units`
+).join('\n') : 'None - no immediate reorders needed'}
+
+=== 🔴 CRITICAL STOCK (will run out soon) ===
+${ctx.inventory?.criticalItems?.length > 0 ? ctx.inventory.criticalItems.map(i =>
+  `- ${i.sku} (${i.name?.slice(0,40)}...): ${i.totalQty} units, ${i.daysOfSupply} days supply, Stockout: ${i.stockoutDate}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk`
+).join('\n') : 'None'}
+
+=== 🟡 LOW STOCK ===
+${ctx.inventory?.lowStockItems?.length > 0 ? ctx.inventory.lowStockItems.slice(0, 10).map(i =>
+  `- ${i.sku}: ${i.totalQty} units, ${i.daysOfSupply} days supply, Reorder by: ${i.reorderByDate}`
+).join('\n') : 'None'}
+
+=== 📈 TOP MOVERS (Highest Velocity) ===
+${ctx.inventory?.topMovers?.length > 0 ? ctx.inventory.topMovers.map(i =>
+  `- ${i.sku}: ${i.weeklyVelocity?.toFixed(1)} units/wk (AMZ: ${i.amazonVelocity?.toFixed(1)}, Shop: ${i.shopifyVelocity?.toFixed(1)}), ${i.daysOfSupply} days supply, Stock: ${i.totalQty}`
+).join('\n') : 'No velocity data'}
+
+=== 📦 OVERSTOCK (excess inventory tying up capital) ===
+${ctx.inventory?.overstockItems?.length > 0 ? ctx.inventory.overstockItems.slice(0, 5).map(i =>
+  `- ${i.sku}: ${i.daysOfSupply} days supply (${(i.daysOfSupply/30).toFixed(1)} months!), ${i.totalQty} units, $${i.totalValue?.toFixed(0)} tied up, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk`
+).join('\n') : 'None identified'}
+
+=== VELOCITY BY CHANNEL ===
+${ctx.inventory?.velocityByChannel ? `
+- Amazon: ${ctx.inventory.velocityByChannel.amazonTotal?.toFixed(0)} units/week
+- Shopify: ${ctx.inventory.velocityByChannel.shopifyTotal?.toFixed(0)} units/week
+- Total: ${(ctx.inventory.velocityByChannel.amazonTotal + ctx.inventory.velocityByChannel.shopifyTotal)?.toFixed(0)} units/week
+` : 'No velocity data'}
+
+=== 📊 VELOCITY TRENDS (Last 2 weeks vs Prior 2 weeks) ===
+${ctx.inventory?.velocityTrends?.accelerating?.length > 0 ? `
+🚀 ACCELERATING (velocity increasing >15%):
+${ctx.inventory.velocityTrends.accelerating.map(v => 
+  `- ${v.sku}: ${v.trendPercent} increase (was ${v.priorAvgWeekly?.toFixed(1)}/wk → now ${v.recentAvgWeekly?.toFixed(1)}/wk)`
+).join('\n')}
+` : ''}
+${ctx.inventory?.velocityTrends?.declining?.length > 0 ? `
+📉 DECLINING (velocity decreasing >15%):
+${ctx.inventory.velocityTrends.declining.map(v => 
+  `- ${v.sku}: ${v.trendPercent} decrease (was ${v.priorAvgWeekly?.toFixed(1)}/wk → now ${v.recentAvgWeekly?.toFixed(1)}/wk)`
+).join('\n')}
+` : ''}
+${!ctx.inventory?.velocityTrends?.accelerating?.length && !ctx.inventory?.velocityTrends?.declining?.length ? 'All SKUs have stable velocity (±15%)' : ''}
+
+=== INVENTORY FORECASTING CAPABILITIES ===
+When user asks about inventory, you can:
+1. **Stockout Risk**: Identify which SKUs will run out and when
+2. **Reorder Recommendations**: When to order and how much based on lead times + velocity
+3. **Capital Efficiency**: Identify overstock items tying up cash
+4. **Velocity Trends**: Which products are speeding up vs slowing down
+5. **Channel Mix**: Compare Amazon vs Shopify sales velocity
+
+For reorder calculations, use:
+- Days of Supply = Current Inventory / (Weekly Velocity / 7)
+- Reorder Point = Lead Time Days + Safety Buffer
+- Suggested Order Qty = Weekly Velocity × (Lead Time + Target Days of Supply)
+
+=== INVENTORY FORECASTING ===
+${(() => {
+  // Calculate velocity and days of supply from weekly data
+  const sortedWeeks = Object.keys(allWeeksData).sort().slice(-8);
+  if (sortedWeeks.length < 2) return 'Not enough weekly data for inventory forecasting';
+  
+  const weeklyUnits = sortedWeeks.map(w => allWeeksData[w]?.total?.units || 0);
+  const avgWeeklyVelocity = weeklyUnits.reduce((s, u) => s + u, 0) / weeklyUnits.length;
+  
+  // Get SKU-level velocity
+  const skuVelocity = {};
+  sortedWeeks.forEach(w => {
+    const shopify = allWeeksData[w]?.shopify?.skuData || [];
+    const amazon = allWeeksData[w]?.amazon?.skuData || [];
+    [...shopify, ...amazon].forEach(s => {
+      const sku = s.sku || s.msku;
+      if (!skuVelocity[sku]) skuVelocity[sku] = [];
+      skuVelocity[sku].push(s.unitsSold || s.units || 0);
+    });
+  });
+  
+  const topVelocity = Object.entries(skuVelocity)
+    .map(([sku, weeks]) => ({ sku, avgPerWeek: weeks.reduce((s,u) => s+u, 0) / weeks.length }))
+    .sort((a, b) => b.avgPerWeek - a.avgPerWeek)
+    .slice(0, 10);
+  
+  return 'Avg Weekly Unit Velocity: ' + avgWeeklyVelocity.toFixed(0) + ' units/week\n' +
+    'Top SKUs by Velocity: ' + JSON.stringify(topVelocity.slice(0, 5)) + '\n' +
+    'Use this to calculate: Days of Supply = Current Inventory / (Weekly Velocity / 7)';
+})()}
+
+=== SALES TAX ===
+${ctx.salesTax?.nexusStates?.length > 0 ? `Nexus states: ${JSON.stringify(ctx.salesTax.nexusStates)}` : 'No nexus states configured'}
+Total sales tax paid all-time: $${ctx.salesTax?.totalPaidAllTime?.toFixed(2) || 0}
+
+=== UPCOMING BILLS & INVOICES ===
+${(() => {
+  const unpaid = invoices.filter(i => !i.paid);
+  if (unpaid.length === 0) return 'No upcoming bills';
+  const total = unpaid.reduce((s, i) => s + i.amount, 0);
+  return `Upcoming bills (${unpaid.length} total, $${total.toFixed(2)}):
+${JSON.stringify(unpaid.map(i => ({ vendor: i.vendor, amount: i.amount, dueDate: i.dueDate, category: i.category, daysUntilDue: Math.ceil((new Date(i.dueDate) - new Date()) / (1000 * 60 * 60 * 24)) })))}`;
+})()}
+
+=== AMAZON FORECASTS (from Amazon's projections) ===
+${upcomingAmazonForecasts.length > 0 ? `
+Upcoming Amazon projections:
+${JSON.stringify(upcomingAmazonForecasts.map(f => ({ weekEnding: f.weekEnding, projectedRevenue: f.totals?.sales || f.totalSales || 0, projectedUnits: f.totals?.units || f.totalUnits || 0, projectedProfit: f.totals?.proceeds || f.totalProceeds || 0, skuCount: f.skuCount || 0 })))}
+` : 'No upcoming Amazon forecasts uploaded'}
+
+${getAmazonForecastComparison.length > 0 ? `
+Forecast vs Actual Accuracy (Amazon) - ${getAmazonForecastComparison.length} weeks tracked:
+${JSON.stringify(getAmazonForecastComparison.slice(0, 8).map(c => ({ 
+  week: c.weekEnding, 
+  forecastRev: c.forecast.revenue, 
+  actualRev: c.actual.revenue, 
+  variance: c.variance.revenuePercent.toFixed(1) + '%',
+  accuracy: c.accuracy.toFixed(1) + '%',
+  status: c.status 
+})))}
+` : ''}
+
+${forecastAccuracyMetrics ? `
+FORECAST ACCURACY INSIGHTS:
+- Overall Accuracy: ${forecastAccuracyMetrics.avgAccuracy.toFixed(1)}% (based on ${forecastAccuracyMetrics.totalWeeks} weeks)
+- Beat forecast ${forecastAccuracyMetrics.beatCount} times, Missed ${forecastAccuracyMetrics.missedCount} times
+- Average Revenue Variance: ${forecastAccuracyMetrics.avgRevenueVariance > 0 ? '+' : ''}${forecastAccuracyMetrics.avgRevenueVariance.toFixed(1)}%
+- Forecast Bias: ${forecastAccuracyMetrics.biasDescription}
+- Recent 4-week Accuracy: ${forecastAccuracyMetrics.recentAccuracy.toFixed(1)}%
+- Accuracy Trend: ${forecastAccuracyMetrics.accuracyTrend > 0 ? 'Improving' : forecastAccuracyMetrics.accuracyTrend < 0 ? 'Declining' : 'Stable'} (${forecastAccuracyMetrics.accuracyTrend > 0 ? '+' : ''}${forecastAccuracyMetrics.accuracyTrend.toFixed(1)}%)
+${forecastAccuracyMetrics.bestWeek ? `- Best Predicted Week: ${forecastAccuracyMetrics.bestWeek.weekEnding} (${forecastAccuracyMetrics.bestWeek.accuracy.toFixed(1)}% accurate)` : ''}
+${forecastAccuracyMetrics.worstWeek ? `- Worst Predicted Week: ${forecastAccuracyMetrics.worstWeek.weekEnding} (${forecastAccuracyMetrics.worstWeek.accuracy.toFixed(1)}% accurate)` : ''}
+` : ''}
+
+${mlTrainingData ? `
+ML CORRECTION MODEL (based on ${mlTrainingData.summary.totalSamples} samples):
+- Amazon Bias: ${mlTrainingData.summary.bias > 0 ? 'Under-forecasts' : 'Over-forecasts'} by ${Math.abs(mlTrainingData.summary.bias).toFixed(1)}% on average
+- Correction Factor: ${mlTrainingData.summary.correctionFactor.toFixed(3)}x (multiply Amazon forecast by this)
+- Prediction Variance: ±${mlTrainingData.summary.stdDev.toFixed(1)}%
+- When user asks about expected revenue, apply correction: Amazon Forecast × ${mlTrainingData.summary.correctionFactor.toFixed(3)} = Adjusted Forecast
+` : ''}
+
+${forecastCorrections.samplesUsed >= 2 ? `
+SELF-LEARNING FORECAST SYSTEM:
+- Learning Status: ${forecastCorrections.confidence >= 30 ? 'ACTIVE' : 'TRAINING'} (${forecastCorrections.confidence.toFixed(0)}% confidence)
+- Samples Used: ${forecastCorrections.samplesUsed} weeks of forecast-vs-actual comparisons
+- Revenue Correction Factor: ${forecastCorrections.overall.revenue.toFixed(3)}x
+- Units Correction Factor: ${forecastCorrections.overall.units.toFixed(3)}x  
+- Profit Correction Factor: ${forecastCorrections.overall.profit.toFixed(3)}x
+- SKUs with Custom Corrections: ${Object.keys(forecastCorrections.bySku).length}
+- Last Updated: ${forecastCorrections.lastUpdated || 'Never'}
+- Note: When confidence >= 30%, forecasts are auto-adjusted using learned corrections
+` : `
+SELF-LEARNING FORECAST SYSTEM:
+- Status: COLLECTING DATA (need more samples)
+- Current Samples: ${forecastCorrections.samplesUsed}
+- Required: At least 2 weeks of forecast-vs-actual comparisons
+- To enable: Upload Amazon forecasts BEFORE week ends, then upload actual sales AFTER week ends
+`}
+
+${pendingForecasts.length > 0 ? `
+PENDING FORECASTS (awaiting actual data):
+${pendingForecasts.map(pf => `- Week ${pf.weekEnding}: ${(pf.forecast.totals?.sales || pf.forecast.totalSales || 0).toFixed(0)} forecasted (${pf.isPast ? 'PAST - needs actuals uploaded' : pf.daysUntil + ' days until week ends'})`).join('\n')}
+` : ''}
+
+=== PRODUCTION PIPELINE (incoming inventory) ===
+${productionPipeline.length > 0 ? `
+${productionPipeline.length} production orders in pipeline (${formatNumber(productionPipeline.reduce((s, p) => s + (p.quantity || 0), 0))} total units):
+${JSON.stringify(productionPipeline.map(p => ({ 
+  sku: p.sku, 
+  product: p.productName, 
+  quantity: p.quantity, 
+  expectedDate: p.expectedDate, 
+  status: p.status,
+  daysUntil: p.expectedDate ? Math.ceil((new Date(p.expectedDate) - new Date()) / (1000 * 60 * 60 * 24)) : null
+})))}
+` : 'No production orders in pipeline'}
+
+=== 3PL FULFILLMENT COSTS ===
+${(() => {
+  const ledgerOrders = Object.values(threeplLedger.orders || {});
+  if (ledgerOrders.length === 0) return 'No 3PL data uploaded yet';
+  
+  // Calculate totals from ledger
+  const allWeeks = [...new Set(ledgerOrders.map(o => o.weekKey))].sort();
+  const totalOrders = ledgerOrders.length;
+  let totalCost = 0;
+  let totalUnits = 0;
+  
+  ledgerOrders.forEach(o => {
+    const c = o.charges || {};
+    totalCost += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0) + (c.reBoxing || 0) + (c.fbaForwarding || 0);
+    totalUnits += (c.firstPickQty || 0) + (c.additionalPickQty || 0);
+  });
+  
+  // Get summary charges (storage, shipping, etc.)
+  Object.values(threeplLedger.summaryCharges || {}).forEach(c => {
+    totalCost += c.amount || 0;
+  });
+  
+  // Recent weeks data
+  const recentWeeks = allWeeks.slice(-8);
+  const weeklyTotals = recentWeeks.map(w => {
+    const weekOrders = ledgerOrders.filter(o => o.weekKey === w);
+    let weekCost = 0;
+    weekOrders.forEach(o => {
+      const c = o.charges || {};
+      weekCost += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0);
+    });
+    return { week: w, orders: weekOrders.length, cost: weekCost };
+  });
+  
+  // Calculate trend
+  const avgCostPerOrder = totalOrders > 0 ? totalCost / totalOrders : 0;
+  
+  return '3PL Summary (from bulk uploads):\n' +
+    '- Total Orders Tracked: ' + totalOrders + '\n' +
+    '- Total 3PL Cost: $' + totalCost.toFixed(2) + '\n' +
+    '- Avg Cost Per Order: $' + avgCostPerOrder.toFixed(2) + '\n' +
+    '- Total Units Shipped: ' + totalUnits + '\n' +
+    '- Weeks with Data: ' + allWeeks.length + ' (' + (allWeeks[0] || 'N/A') + ' to ' + (allWeeks[allWeeks.length-1] || 'N/A') + ')\n\n' +
+    'Recent Weekly 3PL Costs:\n' + JSON.stringify(weeklyTotals) + '\n\n' +
+    'LOOK FOR:\n' +
+    '- Rising avg cost per order (margin erosion)\n' +
+    '- Storage cost spikes\n' +
+    '- Shipping cost increases\n' +
+    '- Changes in units per order affecting fulfillment efficiency';
+})()}
+
+=== FORECAST DIVERGENCE ANALYSIS ===
+${(() => {
+  // Compare our projection vs Amazon's forecast
+  const upcomingAmazon = Object.entries(amazonForecasts)
+    .filter(([weekKey]) => new Date(weekKey) > new Date())
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  
+  if (upcomingAmazon.length === 0) return 'No upcoming Amazon forecasts to compare';
+  
+  const sortedWeeks = Object.keys(allWeeksData).sort();
+  if (sortedWeeks.length === 0) return 'No historical data for our projection';
+  
+  const weeklyRevenues = sortedWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
+  const ourAvg = weeklyRevenues.reduce((s, v) => s + v, 0) / weeklyRevenues.length;
+  
+  let analysis = 'FORECAST COMPARISON:\n';
+  upcomingAmazon.slice(0, 4).forEach(([weekKey, forecast]) => {
+    const amazonProjected = forecast.totals?.sales || 0;
+    const divergence = ourAvg > 0 ? ((amazonProjected - ourAvg) / ourAvg * 100) : 0;
+    const direction = divergence > 10 ? '📈 ABOVE' : divergence < -10 ? '📉 BELOW' : '≈ ALIGNED';
+    analysis += `Week ${weekKey}: Amazon=$${amazonProjected.toFixed(0)} vs Our Avg=$${ourAvg.toFixed(0)} → ${direction} (${divergence > 0 ? '+' : ''}${divergence.toFixed(0)}%)\n`;
+  });
+  
+  // Add recommendation
+  const firstAmazon = upcomingAmazon[0]?.[1]?.totals?.sales || 0;
+  const divergence = ourAvg > 0 ? ((firstAmazon - ourAvg) / ourAvg * 100) : 0;
+  if (divergence > 20) {
+    analysis += '\n⚠️ SIGNIFICANT DIVERGENCE: Amazon forecasts much higher than historical average. Could indicate upcoming demand surge OR Amazon being optimistic.';
+  } else if (divergence < -20) {
+    analysis += '\n⚠️ SIGNIFICANT DIVERGENCE: Amazon forecasts lower than historical average. Could indicate demand slowdown OR seasonality adjustment.';
+  } else {
+    analysis += '\nForecasts are reasonably aligned.';
+  }
+  
+  return analysis;
+})()}
+
+=== FORECAST UPLOAD STATUS ===
+${(() => {
+  const uploads = forecastMeta?.lastUploads || {};
+  const status = [];
+  ['7day', '30day', '60day'].forEach(type => {
+    const last = uploads[type];
+    if (last) {
+      const days = Math.floor((new Date() - new Date(last)) / (1000 * 60 * 60 * 24));
+      const threshold = type === '7day' ? 7 : type === '30day' ? 30 : 60;
+      const isStale = days >= threshold;
+      status.push(`${type}: ${days} days ago ${isStale ? '(NEEDS REFRESH)' : ''}`);
+    } else {
+      status.push(`${type}: Never uploaded`);
+    }
+  });
+  return status.join('\n');
+})()}
+
+=== AMAZON PPC CAMPAIGNS ===
+${amazonCampaigns.campaigns?.length > 0 ? `
+Last Updated: ${amazonCampaigns.lastUpdated ? new Date(amazonCampaigns.lastUpdated).toLocaleDateString() : 'N/A'}
+Total Campaigns: ${amazonCampaigns.summary?.totalCampaigns || 0} (${amazonCampaigns.summary?.enabledCount || 0} enabled, ${amazonCampaigns.summary?.pausedCount || 0} paused)
+
+CAMPAIGN PERFORMANCE SUMMARY:
+- Total Spend: $${(amazonCampaigns.summary?.totalSpend || 0).toFixed(2)}
+- Total Sales: $${(amazonCampaigns.summary?.totalSales || 0).toFixed(2)}
+- Total Orders: ${amazonCampaigns.summary?.totalOrders || 0}
+- ROAS: ${(amazonCampaigns.summary?.roas || 0).toFixed(2)}x
+- ACOS: ${(amazonCampaigns.summary?.acos || 0).toFixed(1)}%
+- Avg CPC: $${(amazonCampaigns.summary?.avgCpc || 0).toFixed(2)}
+- Conversion Rate: ${(amazonCampaigns.summary?.convRate || 0).toFixed(2)}%
+
+BY CAMPAIGN TYPE:
+- Sponsored Products (SP): ${Array.isArray(amazonCampaigns.summary?.byType?.SP) ? amazonCampaigns.summary.byType.SP.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SP) ? amazonCampaigns.summary.byType.SP.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
+- Sponsored Brands (SB): ${Array.isArray(amazonCampaigns.summary?.byType?.SB) ? amazonCampaigns.summary.byType.SB.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SB) ? amazonCampaigns.summary.byType.SB.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
+- Sponsored Display (SD): ${Array.isArray(amazonCampaigns.summary?.byType?.SD) ? amazonCampaigns.summary.byType.SD.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SD) ? amazonCampaigns.summary.byType.SD.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
+
+TOP 10 CAMPAIGNS BY SPEND:
+${amazonCampaigns.campaigns?.slice().sort((a,b) => (b.spend || 0) - (a.spend || 0)).slice(0,10).map(c => 
+  `- ${(c.name || 'Unknown').substring(0,50)}${(c.name || '').length > 50 ? '...' : ''}: $${(c.spend || 0).toFixed(0)} spend, $${(c.sales || 0).toFixed(0)} sales, ${(c.roas || 0).toFixed(2)}x ROAS, ${(c.acos || 0).toFixed(0)}% ACOS`
+).join('\n')}
+
+TOP 5 CAMPAIGNS BY ROAS (>$100 spend):
+${amazonCampaigns.campaigns?.filter(c => c.spend > 100 && c.state === 'ENABLED').sort((a,b) => b.roas - a.roas).slice(0,5).map(c => 
+  `- ${c.name.substring(0,40)}...: ${c.roas.toFixed(2)}x ROAS, $${c.spend.toFixed(0)} spend`
+).join('\n') || 'No qualifying campaigns'}
+
+CAMPAIGNS NEEDING ATTENTION (Low ROAS, >$100 spend):
+${amazonCampaigns.campaigns?.filter(c => c.spend > 100 && c.roas < 2 && c.state === 'ENABLED').sort((a,b) => a.roas - b.roas).slice(0,5).map(c => 
+  `- ${c.name.substring(0,40)}...: ${c.roas.toFixed(2)}x ROAS, ${c.acos.toFixed(0)}% ACOS - consider pausing or optimizing`
+).join('\n') || 'All campaigns performing adequately'}
+
+${amazonCampaigns.history?.length > 1 ? `
+WEEK-OVER-WEEK TREND (${amazonCampaigns.history.length} weeks tracked):
+${(() => {
+  const current = amazonCampaigns.history[0]?.summary;
+  const prior = amazonCampaigns.history[1]?.summary;
+  if (!current || !prior) return 'Insufficient history';
+  const spendChange = prior.totalSpend > 0 ? ((current.totalSpend - prior.totalSpend) / prior.totalSpend * 100) : 0;
+  const salesChange = prior.totalSales > 0 ? ((current.totalSales - prior.totalSales) / prior.totalSales * 100) : 0;
+  const roasChange = current.roas - prior.roas;
+  return `Spend: $${current.totalSpend.toFixed(0)} (${spendChange >= 0 ? '+' : ''}${spendChange.toFixed(1)}% WoW)
+Sales: $${current.totalSales.toFixed(0)} (${salesChange >= 0 ? '+' : ''}${salesChange.toFixed(1)}% WoW)
+ROAS: ${current.roas.toFixed(2)}x (${roasChange >= 0 ? '+' : ''}${roasChange.toFixed(2)} WoW)`;
+})()}
+` : ''}
+
+${amazonCampaigns.analytics?.dayOfWeekInsights?.length > 0 ? `
+📅 DAY-OF-WEEK PERFORMANCE (Amazon Ads):
+${amazonCampaigns.analytics.dayOfWeekInsights.map(d => 
+  `- ${d.day}: ROAS ${d.avgRoas?.toFixed(2)}x, ACOS ${d.avgAcos?.toFixed(1)}%, Avg Spend $${d.avgSpend?.toFixed(0)}, Avg Orders ${d.avgConversions?.toFixed(1)} (${d.sampleSize} samples)`
+).join('\n')}
+
+🏆 Best Day: ${amazonCampaigns.analytics.bestPerformingDay?.day} (${amazonCampaigns.analytics.bestPerformingDay?.avgRoas?.toFixed(2)}x ROAS)
+📉 Worst Day: ${amazonCampaigns.analytics.worstPerformingDay?.day} (${amazonCampaigns.analytics.worstPerformingDay?.avgRoas?.toFixed(2)}x ROAS)
+
+💡 OPTIMIZATION INSIGHT: Consider increasing ad spend on ${amazonCampaigns.analytics.bestPerformingDay?.day}s and reducing on ${amazonCampaigns.analytics.worstPerformingDay?.day}s to improve overall ROAS.
+` : ''}
+
+${amazonCampaigns.analytics?.monthlyTrends?.length > 0 ? `
+📈 MONTHLY AD TRENDS:
+${amazonCampaigns.analytics.monthlyTrends.slice(-6).map(m => 
+  `- ${m.month}: $${m.spend?.toFixed(0)} spend → $${m.revenue?.toFixed(0)} ad rev, ${m.roas?.toFixed(2)}x ROAS, ${m.acos?.toFixed(1)}% ACOS`
+).join('\n')}
+` : ''}
+` : 'No Amazon campaign data uploaded yet. User can upload Amazon Ads campaign report CSV.'}
+
+=== DTC ADVERTISING (Meta + Google) ===
+${ctx.dailyAdsData ? `
+**LAST 7 DAYS:**
+- Meta Spend: $${ctx.dailyAdsData.last7Days.metaSpend?.toFixed(2) || 0}
+- Google Spend: $${ctx.dailyAdsData.last7Days.googleSpend?.toFixed(2) || 0}
+- Total DTC Ads: $${ctx.dailyAdsData.last7Days.totalSpend?.toFixed(2) || 0}
+- Avg Daily Spend: $${ctx.dailyAdsData.last7Days.avgDailySpend?.toFixed(2) || 0}
+- Days with Data: ${ctx.dailyAdsData.last7Days.daysWithData || 0}
+
+**LAST 30 DAYS:**
+- Meta Spend: $${ctx.dailyAdsData.last30Days.metaSpend?.toFixed(2) || 0}
+- Google Spend: $${ctx.dailyAdsData.last30Days.googleSpend?.toFixed(2) || 0}
+- Total DTC Ads: $${ctx.dailyAdsData.last30Days.totalSpend?.toFixed(2) || 0}
+- Avg Daily Spend: $${ctx.dailyAdsData.last30Days.avgDailySpend?.toFixed(2) || 0}
+- Days with Data: ${ctx.dailyAdsData.last30Days.daysWithData || 0}
+${ctx.dailyAdsData.last30Days.ctr > 0 ? `- CTR: ${ctx.dailyAdsData.last30Days.ctr}%
+- Avg CPC: $${ctx.dailyAdsData.last30Days.cpc}` : ''}
+
+**WEEKLY BREAKDOWN:**
+${ctx.dailyAdsData.byWeek?.length > 0 ? ctx.dailyAdsData.byWeek.map(w => 
+  `- ${w.week}: Meta $${w.metaSpend?.toFixed(0)}, Google $${w.googleSpend?.toFixed(0)}, Total $${w.totalSpend?.toFixed(0)}`
+).join('\n') : 'No weekly ad data available'}
+
+💡 NOTE: DTC ads data comes from daily uploads. If a week shows missing ads in alerts, it means no ads CSV was uploaded for those days.
+` : 'No DTC (Meta/Google) ads data uploaded yet. User can upload Meta/Google ads reports via Upload tab → Bulk Ads Upload.'}
+
+=== AI LEARNING STATUS ===
+${ctx.aiLearning ? `
+Forecast Correction Factors (learned from comparing predictions to actuals):
+- Revenue Multiplier: ${ctx.aiLearning.forecastCorrections.revenueMultiplier.toFixed(3)}x
+- Units Multiplier: ${ctx.aiLearning.forecastCorrections.unitsMultiplier.toFixed(3)}x
+- Learning Confidence: ${ctx.aiLearning.forecastCorrections.confidence.toFixed(0)}%
+- Samples Used: ${ctx.aiLearning.forecastCorrections.samplesUsed}
+
+Prediction History:
+- Total Predictions Made: ${ctx.aiLearning.predictionHistory.totalPredictions}
+- Verified with Actuals: ${ctx.aiLearning.predictionHistory.verifiedPredictions}
+- Recent Accuracy: ${ctx.aiLearning.predictionHistory.recentAccuracy ? ctx.aiLearning.predictionHistory.recentAccuracy.toFixed(1) + '%' : 'Still learning'}
+
+${ctx.aiLearning.recentPredictions.length > 0 ? `Recent Predictions vs Actuals:
+${ctx.aiLearning.recentPredictions.map(p => 
+  `- ${p.type} (${p.period}): Predicted $${p.predicted?.toFixed(0) || 'N/A'}, Actual $${p.actual?.toFixed(0) || 'pending'}, Error: ${p.error ? p.error.toFixed(1) + '%' : 'awaiting actual'}`
+).join('\n')}` : 'No predictions tracked yet'}
+
+USE THIS LEARNING: When forecasting, apply the correction factors if confidence > 30%. This helps adjust for systematic biases in predictions.
+` : 'AI Learning not yet initialized'}
+
+=== WHAT YOU CAN HELP WITH ===
+- Analyze sales trends and patterns (weekly, monthly, quarterly, yearly)
+- Year-over-year comparisons (2024 vs 2025, Q1 vs Q1, etc.)
+- Quarterly and monthly trend analysis
+- Compare performance across weeks, months, quarters, years, products
+- Identify best/worst performing SKUs and their trends over time
+- Track progress toward goals
+- Explain profit margins and calculations
+- Forecast future revenue based on historical trends
+- Compare Amazon's projections vs actual performance
+
+📦 INVENTORY & REORDER PLANNING:
+- Identify which SKUs will stock out and when
+- Recommend when to place reorders based on lead times
+- Calculate suggested order quantities
+- Identify overstock items tying up capital
+- Analyze velocity trends (which products are speeding up vs slowing down)
+- Channel mix analysis for inventory planning (Amazon vs Shopify velocity)
+
+📊 ADVERTISING OPTIMIZATION:
+- Analyze Amazon PPC performance (ROAS, ACOS, TACOS)
+- Day-of-week performance analysis (best/worst days to advertise)
+- Campaign-level recommendations (pause, increase spend, optimize)
+- Monthly and weekly ad spend trends
+- Identify high-potential campaigns to scale
+
+💰 FINANCIAL ANALYSIS:
+- Answer questions about specific products by name or SKU
+- Sales tax obligations by state
+- Upcoming bills and cash flow planning
+- Production pipeline tracking and timing
+- Seasonality analysis (which months/quarters perform best)
+- Cost structure analysis (COGS, fees, ads as % of revenue over time)
+- 3PL cost analysis (avg cost per order, storage trends, shipping cost changes)
+- Identify rising fulfillment costs that may be eroding margins
+- Compare 3PL efficiency across time periods
+- Amazon PPC campaign analysis (ROAS, ACOS by campaign, top/bottom performers)
+- Campaign optimization recommendations (which campaigns to pause, scale, or optimize)
+- Week-over-week campaign performance changes
+- Campaign type comparison (SP vs SB vs SD effectiveness)
+- **BANKING/CASH FLOW ANALYSIS** - analyze real bank transactions to find waste, forecast EOY profit
+
+=== BANKING & CASH FLOW DATA ===
+${ctx.banking ? `
+Banking data available from ${ctx.banking.dateRange?.start} to ${ctx.banking.dateRange?.end}
+Total transactions: ${ctx.banking.transactionCount}
+Last upload: ${ctx.banking.lastUpload ? new Date(ctx.banking.lastUpload).toLocaleString() : 'Unknown'}
+
+MONTHLY CASH FLOW (last 12 months):
+${ctx.banking.monthlySnapshots.map(m => 
+  `- ${m.month}: Income $${m.income?.toFixed(0) || 0}, Expenses $${m.expenses?.toFixed(0) || 0}, Net $${m.net?.toFixed(0) || 0}`
+).join('\n')}
+
+TOP EXPENSE CATEGORIES:
+${ctx.banking.topExpenseCategories.map((c, i) => 
+  `${i + 1}. ${c.name}: $${c.total?.toFixed(0) || 0} (${c.count} transactions)`
+).join('\n')}
+
+TOP INCOME SOURCES:
+${ctx.banking.topIncomeCategories.map((c, i) => 
+  `${i + 1}. ${c.name}: $${c.total?.toFixed(0) || 0} (${c.count} transactions)`
+).join('\n')}
+
+ACCOUNTS:
+${ctx.banking.accounts.map(a => 
+  `- ${a.name}: ${a.transactions} txns, In: $${a.totalIn?.toFixed(0) || 0}, Out: $${a.totalOut?.toFixed(0) || 0}`
+).join('\n')}
+
+You can help with:
+- Identifying where money is being wasted (unusual expense patterns, rising costs)
+- Projecting end-of-year profit based on monthly trends
+- Calculating true business profitability (income - all expenses)
+- Comparing expense categories over time to find cost creep
+- Analyzing cash flow patterns and forecasting cash needs
+- Identifying the biggest expense drivers
+` : 'No banking data uploaded yet. User can upload QBO Transaction Detail by Account CSV.'}
+
+Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. When comparing periods, always show the actual numbers and % change. If the user asks about data you don't have, let them know what they need to upload.
+
+=== 🧠 AI LEARNING INSTRUCTIONS ===
+You have access to the MULTI-SIGNAL AI FORECAST which is the most accurate forecast available. Use it as your PRIMARY source for predictions.
+
+**PRODUCT IDENTIFICATION (CRITICAL):**
+- Users may ask using EITHER product name ("lip balm", "assorted 3-pack") OR SKU ("DDPE0004Shop")
+- ALWAYS resolve to SKU internally for data lookup
+- When user says "lip balm" → find SKUs in skusByCategory["Lip Balm"] → aggregate skuMasterData for those SKUs
+- When user says "DDPE0004Shop" → look up directly in skuMasterData
+- When user says "assorted pack" → search productCatalog for matching name → get SKU → look up in skuMasterData
+- In responses, show BOTH: "DDPE0004Shop (Assorted 3-Pack Lip Balm): $X revenue"
+
+**FOR SKU-LEVEL ANALYSIS:**
+1. Use skuMasterData as the authoritative source for all SKU data
+2. Each SKU has: totalRevenue, totalUnits, byPeriod (monthly), byWeek (recent weeks)
+3. For category totals, sum data from all SKUs in that category
+4. For period-specific questions, use skuMasterData[sku].byPeriod["january-2025"]
+
+**FOR PREDICTIONS:**
+1. Always use the Multi-Signal AI Forecast data (if available) for weekly predictions
+2. Check the FORECAST ACCURACY LEARNING section to understand how past predictions performed
+3. Apply any correction bias you observe (e.g., if forecasts are consistently 5% low, adjust up 5%)
+4. Consider momentum - if daily trends show acceleration/deceleration, factor this in
+
+**FOR ANALYSIS:**
+1. Cross-reference sales data with banking data when available to validate accuracy
+2. Use seasonal patterns to contextualize current performance
+3. Reference the day-of-week patterns for tactical recommendations
+
+**FOR CONSISTENCY:**
+1. Your predictions should align with the Multi-Signal AI Forecast shown on the dashboard
+2. If asked "what will next week's revenue be?", use the Multi-Signal next week prediction
+3. Be transparent about confidence levels and data quality
+4. Always show SKU codes alongside product names in responses for clarity
+
+The goal is for you to learn from the forecast vs actual comparisons over time and become increasingly accurate.`;
 
       const aiResponse = await callAI({
         system: systemPrompt,
@@ -12971,44 +14618,317 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   };
 
   // Weekly Report UI Modal
-  // Weekly Report UI - extracted to WeeklyReportModal component
-  const weeklyReportUI = (
-    <WeeklyReportModal
-      showWeeklyReport={showWeeklyReport}
-      setShowWeeklyReport={setShowWeeklyReport}
-      reportType={reportType}
-      setReportType={setReportType}
-      currentReport={currentReport}
-      setCurrentReport={setCurrentReport}
-      reportError={reportError}
-      setReportError={setReportError}
-      generatingReport={generatingReport}
-      generateReport={generateReport}
-      downloadReport={downloadReport}
-      weeklyReports={weeklyReports}
-      selectedReportPeriod={selectedReportPeriod}
-      setSelectedReportPeriod={setSelectedReportPeriod}
-      allWeeksData={allWeeksData}
-      allPeriodsData={allPeriodsData}
-      formatCurrency={formatCurrency}
-    />
+  const weeklyReportUI = showWeeklyReport && (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div className={`p-6 flex items-center justify-between flex-shrink-0 ${
+          reportType === 'weekly' ? 'bg-gradient-to-r from-emerald-600 to-teal-600' :
+          reportType === 'monthly' ? 'bg-gradient-to-r from-blue-600 to-indigo-600' :
+          reportType === 'quarterly' ? 'bg-gradient-to-r from-violet-600 to-purple-600' :
+          'bg-gradient-to-r from-amber-600 to-orange-600'
+        }`}>
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl">
+              {reportType === 'weekly' ? '📅' : reportType === 'monthly' ? '📊' : reportType === 'quarterly' ? '📈' : '🏆'}
+            </div>
+            <div>
+              <h2 className="text-white text-xl font-bold">{reportType.charAt(0).toUpperCase() + reportType.slice(1)} Intelligence Report</h2>
+              <p className="text-white/70 text-sm">{currentReport?.periodLabel || 'AI-powered business analysis'}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {currentReport && (
+              <button onClick={() => downloadReport(currentReport)} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-white text-sm flex items-center gap-2">
+                <Download className="w-4 h-4" />Download
+              </button>
+            )}
+            <button onClick={() => { setShowWeeklyReport(false); setCurrentReport(null); setReportError(null); }} className="p-2 hover:bg-white/20 rounded-lg text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-slate-800/50 border-b border-slate-700 px-4 py-2 flex flex-wrap gap-2 items-center justify-between">
+          <div className="flex gap-2">
+            {['weekly', 'monthly', 'quarterly', 'annual'].map(type => (
+              <button
+                key={type}
+                onClick={() => { setReportType(type); setSelectedReportPeriod(null); setCurrentReport(weeklyReports[type]?.reports?.[0] || null); setReportError(null); }}
+                className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5 ${reportType === type ? 'bg-white/20 text-white font-medium' : 'text-slate-400 hover:bg-white/10'}`}
+              >
+                {type === 'weekly' ? '📅' : type === 'monthly' ? '📊' : type === 'quarterly' ? '📈' : '🏆'}
+                {type.charAt(0).toUpperCase() + type.slice(1)}
+                {weeklyReports[type]?.reports?.length > 0 && <span className="w-2 h-2 rounded-full bg-emerald-400"></span>}
+              </button>
+            ))}
+          </div>
+          
+          {/* Period Selector */}
+          {(() => {
+            const sortedWeeks = Object.keys(allWeeksData).sort().reverse();
+            const sortedPeriods = Object.keys(allPeriodsData).sort().reverse();
+            
+            let availablePeriods = [];
+            if (reportType === 'weekly') {
+              // Filter to weeks with actual data (revenue > $100)
+              availablePeriods = sortedWeeks.filter(w => (allWeeksData[w]?.total?.revenue || 0) > 100).slice(0, 12);
+            } else if (reportType === 'monthly') {
+              const monthPeriods = sortedPeriods.filter(p => /^\d{4}-\d{2}$/.test(p) || /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}$/i.test(p));
+              const monthsFromWeeks = [...new Set(sortedWeeks.map(w => w.substring(0, 7)))].sort().reverse();
+              availablePeriods = monthPeriods.length > 0 ? monthPeriods.slice(0, 12) : monthsFromWeeks.slice(0, 12);
+            } else if (reportType === 'quarterly') {
+              const quarterPeriods = sortedPeriods.filter(p => /Q[1-4]/i.test(p));
+              if (quarterPeriods.length > 0) {
+                availablePeriods = quarterPeriods.slice(0, 8);
+              } else {
+                const getQuarter = (dateStr) => Math.ceil(parseInt(dateStr.substring(5, 7)) / 3);
+                const getYear = (dateStr) => dateStr.substring(0, 4);
+                availablePeriods = [...new Set(sortedWeeks.map(w => `${getYear(w)}-Q${getQuarter(w)}`))].slice(0, 8);
+              }
+            } else if (reportType === 'annual') {
+              const yearPeriods = sortedPeriods.filter(p => /^\d{4}$/.test(p));
+              const yearsFromWeeks = [...new Set(sortedWeeks.map(w => w.substring(0, 4)))].sort().reverse();
+              availablePeriods = yearPeriods.length > 0 ? yearPeriods.slice(0, 5) : yearsFromWeeks.slice(0, 5);
+            }
+            
+            if (availablePeriods.length === 0) return null;
+            
+            return (
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 text-sm">Period:</span>
+                <select 
+                  value={selectedReportPeriod || ''} 
+                  onChange={(e) => setSelectedReportPeriod(e.target.value || null)}
+                  className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm min-w-[160px]"
+                >
+                  <option value="">Latest Complete</option>
+                  {availablePeriods.map(p => {
+                    let label = p;
+                    if (reportType === 'weekly') {
+                      const rev = allWeeksData[p]?.total?.revenue || 0;
+                      label = `Week ${p} (${formatCurrency(rev)})`;
+                    }
+                    return <option key={p} value={p}>{label}</option>;
+                  })}
+                </select>
+                <button 
+                  onClick={() => generateReport(reportType, true, selectedReportPeriod)}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-1"
+                >
+                  <Zap className="w-3 h-3" />Generate
+                </button>
+              </div>
+            );
+          })()}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {generatingReport ? (
+            <div className="flex flex-col items-center justify-center py-20">
+              <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-6" />
+              <h3 className="text-white text-lg font-semibold mb-2">Generating Report...</h3>
+              <p className="text-slate-400 text-sm">Analyzing your business data...</p>
+            </div>
+          ) : reportError ? (
+            <div className="flex flex-col items-center justify-center py-20">
+              <AlertTriangle className="w-16 h-16 text-rose-400 mb-6" />
+              <h3 className="text-white text-lg font-semibold mb-2">Unable to Generate Report</h3>
+              <p className="text-slate-400 text-sm mb-6">{reportError}</p>
+              <button onClick={() => generateReport(reportType, true, selectedReportPeriod)} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-white">Try Again</button>
+            </div>
+          ) : currentReport ? (
+            <div className="report-content text-slate-200">
+              <style>{`
+                .report-content { color: #e2e8f0; line-height: 1.7; }
+                .report-content h1 { color: #ffffff; font-size: 1.5rem; font-weight: bold; border-bottom: 1px solid #475569; padding-bottom: 0.75rem; margin: 1.5rem 0 1rem 0; }
+                .report-content h2 { color: #34d399; font-size: 1.25rem; font-weight: 600; margin: 2rem 0 1rem 0; }
+                .report-content h3 { color: #22d3ee; font-size: 1.1rem; font-weight: 500; margin: 1.5rem 0 0.75rem 0; }
+                .report-content p { color: #e2e8f0; margin: 0.75rem 0; }
+                .report-content strong, .report-content b { color: #ffffff; font-weight: 600; }
+                .report-content li { color: #e2e8f0; margin: 0.5rem 0 0.5rem 1.5rem; }
+                .report-content ul, .report-content ol { margin: 0.5rem 0; }
+                .report-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; background: rgba(51, 65, 85, 0.3); border-radius: 0.5rem; overflow: hidden; }
+                .report-content th { color: #cbd5e1; font-weight: 600; text-align: left; padding: 0.75rem; border-bottom: 1px solid #475569; background: rgba(51, 65, 85, 0.5); }
+                .report-content td { color: #e2e8f0; padding: 0.75rem; border-bottom: 1px solid rgba(71, 85, 105, 0.5); }
+                .report-content tr:nth-child(even) { background: rgba(51, 65, 85, 0.2); }
+                .report-content tr:hover { background: rgba(51, 65, 85, 0.4); }
+                .report-content a { color: #60a5fa; }
+                .report-content code { background: rgba(51, 65, 85, 0.5); padding: 0.125rem 0.375rem; border-radius: 0.25rem; color: #fbbf24; }
+              `}</style>
+              <div dangerouslySetInnerHTML={{ 
+                __html: (() => {
+                  let html = currentReport.content;
+                  
+                  // Convert markdown tables to HTML tables
+                  const tableRegex = /\|(.+)\|\n\|[-:\s|]+\|\n((?:\|.+\|\n?)+)/g;
+                  html = html.replace(tableRegex, (match, headerRow, bodyRows) => {
+                    const headers = headerRow.split('|').filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join('');
+                    const rows = bodyRows.trim().split('\n').map(row => {
+                      const cells = row.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('');
+                      return `<tr>${cells}</tr>`;
+                    }).join('');
+                    return `<table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
+                  });
+                  
+                  // Headings
+                  html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+                  html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+                  html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+                  
+                  // Bold
+                  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                  
+                  // Lists
+                  html = html.replace(/^- (.*$)/gim, '<li>$1</li>');
+                  html = html.replace(/^\d+\. (.*$)/gim, '<li>$1</li>');
+                  
+                  // Wrap consecutive li elements in ul
+                  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+                  
+                  // Paragraphs - wrap lines that aren't already wrapped
+                  html = html.replace(/^(?!<[hultdp]|<\/)(.*\S.*)$/gim, '<p>$1</p>');
+                  
+                  // Clean up empty paragraphs
+                  html = html.replace(/<p>\s*<\/p>/g, '');
+                  
+                  // Double newlines to breaks
+                  html = html.replace(/\n\n/g, '<br/>');
+                  
+                  return html;
+                })()
+              }} />
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-20">
+              <FileText className="w-16 h-16 text-slate-600 mb-6" />
+              <h3 className="text-white text-lg font-semibold mb-2">No {reportType} Report Yet</h3>
+              <p className="text-slate-400 text-sm mb-6">Generate an AI-powered report for insights.</p>
+              <button onClick={() => generateReport(reportType, false, selectedReportPeriod)} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-white flex items-center gap-2">
+                <Zap className="w-5 h-5" />Generate Report
+              </button>
+            </div>
+          )}
+        </div>
+
+        {weeklyReports[reportType]?.reports?.length > 0 && !generatingReport && (
+          <div className="border-t border-slate-700 p-4 flex-shrink-0">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 text-sm">History:</span>
+                {weeklyReports[reportType].reports.slice(0, 5).map(r => (
+                  <button key={r.id} onClick={() => setCurrentReport(r)} className={`px-3 py-1 rounded-lg text-xs ${currentReport?.id === r.id ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>
+                    {r.periodLabel}
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => generateReport(reportType, true, selectedReportPeriod)} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm text-slate-300 flex items-center gap-2">
+                <RefreshCw className="w-4 h-4" />Regenerate
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
   
-  // AI Chat UI - extracted to AIChatPanel component (combines aiChatUI and aiChatButton)
-  const aiChatUI = (
-    <AIChatPanel
-      showAIChat={showAIChat}
-      setShowAIChat={setShowAIChat}
-      aiMessages={aiMessages}
-      setAiMessages={setAiMessages}
-      aiInput={aiInput}
-      setAiInput={setAiInput}
-      aiLoading={aiLoading}
-      sendAIMessage={sendAIMessage}
-      generateReport={generateReport}
-    />
+  // AI Chat UI - rendered as JSX variable, not a component function
+  const aiChatUI = showAIChat && (
+    <div className="fixed bottom-4 right-4 z-50 w-96 max-w-[calc(100vw-2rem)]">
+      <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden">
+        <div className="bg-gradient-to-r from-violet-600 to-indigo-600 p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+              <MessageSquare className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="text-white font-semibold">AI Assistant</h3>
+              <p className="text-white/70 text-xs">Ask about your business data</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {aiMessages.length > 0 && (
+              <button 
+                onClick={() => { if (confirm('Clear chat history?')) setAiMessages([]); }} 
+                className="p-2 hover:bg-white/20 rounded-lg text-white/70 hover:text-white"
+                title="Clear chat history"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+            <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+        
+        <div className="h-80 overflow-y-auto p-4 space-y-4">
+          {aiMessages.length === 0 && (
+            <div className="text-center text-slate-400 py-8">
+              <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
+              <p className="text-sm">Ask me anything about your business!</p>
+              <div className="mt-4 space-y-2">
+                <button onClick={() => setAiInput("What was my total revenue last month?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "What was my total revenue last month?"</button>
+                <button onClick={() => setAiInput("Which SKU has the best profit per unit?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which SKU has the best profit per unit?"</button>
+                <button onClick={() => setAiInput("Which SKUs are declining in profitability?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which SKUs are declining in profitability?"</button>
+              </div>
+            </div>
+          )}
+          {aiMessages.map((msg, i) => (
+            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[85%] rounded-2xl px-4 py-2 ${msg.role === 'user' ? 'bg-violet-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
+                <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+              </div>
+            </div>
+          ))}
+          {aiLoading && (
+            <div className="flex justify-start">
+              <div className="bg-slate-700 rounded-2xl px-4 py-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        
+        <div className="p-4 border-t border-slate-700">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={aiInput}
+              onChange={(e) => setAiInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendAIMessage(); } }}
+              placeholder="Ask about your data..."
+              className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-500"
+              autoComplete="off"
+            />
+            <button onClick={sendAIMessage} disabled={!aiInput.trim() || aiLoading} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl text-white">
+              <Send className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+  
+  // AI Chat Button - rendered as JSX variable
+  const aiChatButton = !showAIChat && (
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-3">
+      <button onClick={() => generateReport('weekly')} className="w-14 h-14 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group">
+        <FileText className="w-6 h-6 text-white" />
+        <span className="absolute right-full mr-3 px-3 py-1 bg-slate-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">AI Reports</span>
+      </button>
+      <button onClick={() => setShowAIChat(true)} className="w-14 h-14 bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group">
+        <MessageSquare className="w-6 h-6 text-white" />
+        <span className="absolute right-full mr-3 px-3 py-1 bg-slate-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Ask AI Assistant</span>
+      </button>
+    </div>
   );
 
+  
+  // Calculate dashboard metrics based on selected range
   const dashboardMetrics = useMemo(() => {
     // Filter to only include weeks with actual revenue data
     const sortedWeeks = Object.keys(allWeeksData)
@@ -14001,104 +15921,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} />
-          
-          {/* Metrics Export Modal */}
-          {showMetricsExport && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-              <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                    <FileDown className="w-5 h-5 text-emerald-400" />
-                    Export Metrics
-                  </h2>
-                  <button onClick={() => setShowMetricsExport(false)} className="p-1 hover:bg-slate-700 rounded">
-                    <X className="w-5 h-5 text-slate-400" />
-                  </button>
-                </div>
-                
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-300 mb-3">📅 Select Date Range</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {[
-                        { value: 'all', label: 'All Data' },
-                        { value: 'this-week', label: 'This Week (WTD)' },
-                        { value: 'last-week', label: 'Last Week' },
-                        { value: 'last-month', label: 'Last Month' },
-                        { value: 'last-quarter', label: 'Last Quarter' },
-                        { value: 'ytd', label: 'Year to Date' },
-                        { value: 'custom', label: 'Custom Range' },
-                      ].map(opt => (
-                        <button
-                          key={opt.value}
-                          onClick={() => setMetricsExportRange(opt.value)}
-                          className={`p-3 rounded-lg text-sm font-medium transition-all ${
-                            metricsExportRange === opt.value 
-                              ? 'bg-emerald-600 text-white ring-2 ring-emerald-400' 
-                              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  
-                  {metricsExportRange === 'custom' && (
-                    <div className="grid grid-cols-2 gap-3 p-3 bg-slate-900/50 rounded-lg">
-                      <div>
-                        <label className="block text-xs text-slate-400 mb-1">Start Date</label>
-                        <input 
-                          type="date" 
-                          value={metricsExportCustomStart}
-                          onChange={(e) => setMetricsExportCustomStart(e.target.value)}
-                          className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 text-white text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-slate-400 mb-1">End Date</label>
-                        <input 
-                          type="date" 
-                          value={metricsExportCustomEnd}
-                          onChange={(e) => setMetricsExportCustomEnd(e.target.value)}
-                          className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 text-white text-sm"
-                        />
-                      </div>
-                    </div>
-                  )}
-                  
-                  <div className="bg-slate-900/50 rounded-lg p-4 text-sm text-slate-300">
-                    <p className="font-medium text-white mb-2">📊 Export includes:</p>
-                    <ul className="space-y-1 text-slate-400 text-xs">
-                      <li>• Revenue, profit & margins by channel</li>
-                      <li>• Ad spend & ROAS (Amazon, Meta, Google)</li>
-                      <li>• Units sold, returns & AOV</li>
-                      <li>• Top 20 SKUs by revenue</li>
-                      <li>• Daily breakdown (if available)</li>
-                    </ul>
-                  </div>
-                  
-                  <div className="flex gap-3 pt-2">
-                    <button 
-                      onClick={() => exportMetricsForRange('csv')}
-                      className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2"
-                    >
-                      <FileDown className="w-4 h-4" />
-                      Export CSV
-                    </button>
-                    <button 
-                      onClick={() => exportMetricsForRange('json')}
-                      className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2"
-                    >
-                      <FileDown className="w-4 h-4" />
-                      Export JSON
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -14201,7 +16024,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   <button onClick={() => setView('analytics')} className="p-2 hover:bg-slate-700 rounded text-slate-500" title="Need 4+ weeks for forecast"><TrendingUp className="w-4 h-4" /></button>
                 )}
                 <button onClick={() => setShowBreakEven(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Break-even Calculator"><Calculator className="w-4 h-4" /></button>
-                <button onClick={() => setShowMetricsExport(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-xs font-medium flex items-center gap-1" title="Export Metrics Report"><FileDown className="w-3.5 h-3.5" />Export</button>
+                <button onClick={() => setShowExportModal(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Export Data"><FileDown className="w-4 h-4" /></button>
                 <button onClick={() => setShowUploadHelp(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Help"><HelpCircle className="w-4 h-4" /></button>
               </div>
             </div>
@@ -15673,7 +17496,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-4xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -16978,17 +18801,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           file.reportType === 'daily' ? 'bg-cyan-500/20' :
                           file.reportType === 'weekly' ? 'bg-violet-500/20' :
                           file.reportType === 'monthly' ? 'bg-teal-500/20' :
-                          file.reportType === 'quarterly' ? 'bg-amber-500/20' :
-                          file.reportType === 'yearly' ? 'bg-emerald-500/20' :
-                          file.reportType === 'period' ? 'bg-rose-500/20' :
                           'bg-slate-600/50'
                         }`}>
                           {file.reportType === 'daily' ? <Clock className="w-5 h-5 text-cyan-400" /> :
                            file.reportType === 'weekly' ? <Calendar className="w-5 h-5 text-violet-400" /> :
                            file.reportType === 'monthly' ? <CalendarRange className="w-5 h-5 text-teal-400" /> :
-                           file.reportType === 'quarterly' ? <CalendarRange className="w-5 h-5 text-amber-400" /> :
-                           file.reportType === 'yearly' ? <CalendarRange className="w-5 h-5 text-emerald-400" /> :
-                           file.reportType === 'period' ? <CalendarRange className="w-5 h-5 text-rose-400" /> :
                            <FileSpreadsheet className="w-5 h-5 text-slate-400" />}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -16998,14 +18815,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               <span className={`${
                                 file.reportType === 'daily' ? 'text-cyan-400' :
                                 file.reportType === 'weekly' ? 'text-violet-400' :
-                                file.reportType === 'monthly' ? 'text-teal-400' :
-                                file.reportType === 'quarterly' ? 'text-amber-400' :
-                                file.reportType === 'yearly' ? 'text-emerald-400' :
-                                file.reportType === 'period' ? 'text-rose-400' :
-                                'text-slate-400'
+                                'text-teal-400'
                               }`}>
                                 {file.reportType.charAt(0).toUpperCase() + file.reportType.slice(1)}
-                                {file.dateRange?.daysDiff > 1 && ` (${file.dateRange.daysDiff} days)`}
                               </span>
                             ) : 'Parsing...'}{' '}
                             {file.dateRange && `• ${file.dateRange.start} to ${file.dateRange.end}`}
@@ -17027,46 +18839,22 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   {amazonBulkParsed && (
                     <div className="bg-slate-900/50 rounded-xl p-4 space-y-3">
                       <h4 className="text-white font-medium">Import Summary</h4>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-center">
-                        {amazonBulkParsed.dailyCount > 0 && (
-                          <div>
-                            <p className="text-xl font-bold text-cyan-400">{amazonBulkParsed.dailyCount}</p>
-                            <p className="text-xs text-slate-400">Daily</p>
-                          </div>
-                        )}
-                        {amazonBulkParsed.weeklyCount > 0 && (
-                          <div>
-                            <p className="text-xl font-bold text-violet-400">{amazonBulkParsed.weeklyCount}</p>
-                            <p className="text-xs text-slate-400">Weekly</p>
-                          </div>
-                        )}
-                        {amazonBulkParsed.monthlyCount > 0 && (
-                          <div>
-                            <p className="text-xl font-bold text-teal-400">{amazonBulkParsed.monthlyCount}</p>
-                            <p className="text-xs text-slate-400">Monthly</p>
-                          </div>
-                        )}
-                        {amazonBulkParsed.quarterlyCount > 0 && (
-                          <div>
-                            <p className="text-xl font-bold text-amber-400">{amazonBulkParsed.quarterlyCount}</p>
-                            <p className="text-xs text-slate-400">Quarterly</p>
-                          </div>
-                        )}
-                        {amazonBulkParsed.yearlyCount > 0 && (
-                          <div>
-                            <p className="text-xl font-bold text-emerald-400">{amazonBulkParsed.yearlyCount}</p>
-                            <p className="text-xs text-slate-400">Yearly</p>
-                          </div>
-                        )}
-                        {amazonBulkParsed.periodCount > 0 && (
-                          <div>
-                            <p className="text-xl font-bold text-rose-400">{amazonBulkParsed.periodCount}</p>
-                            <p className="text-xs text-slate-400">Custom</p>
-                          </div>
-                        )}
+                      <div className="grid grid-cols-3 gap-4 text-center">
+                        <div>
+                          <p className="text-2xl font-bold text-cyan-400">{amazonBulkParsed.dailyCount || 0}</p>
+                          <p className="text-xs text-slate-400">Daily Reports</p>
+                        </div>
+                        <div>
+                          <p className="text-2xl font-bold text-violet-400">{amazonBulkParsed.weeklyCount || 0}</p>
+                          <p className="text-xs text-slate-400">Weekly Reports</p>
+                        </div>
+                        <div>
+                          <p className="text-2xl font-bold text-teal-400">{amazonBulkParsed.monthlyCount || 0}</p>
+                          <p className="text-xs text-slate-400">Monthly Reports</p>
+                        </div>
                       </div>
                       <div className="pt-3 border-t border-slate-700 text-sm text-slate-300">
-                        <p>Total Files: <span className="text-white font-medium">{amazonBulkParsed.totalFiles}</span> • Revenue: <span className="text-white font-medium">{formatCurrency(amazonBulkParsed.totalRevenue || 0)}</span></p>
+                        <p>Total Revenue: <span className="text-white font-medium">{formatCurrency(amazonBulkParsed.totalRevenue || 0)}</span></p>
                         <p>Date Range: <span className="text-white">{amazonBulkParsed.dateRange?.start} to {amazonBulkParsed.dateRange?.end}</span></p>
                       </div>
                     </div>
@@ -17082,8 +18870,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               >
                 {amazonBulkProcessing ? (
                   <><Loader2 className="w-5 h-5 animate-spin" />Processing...</>
-                ) : amazonBulkFiles.length === 0 ? (
-                  <><Upload className="w-5 h-5" />Select Files to Import</>
                 ) : (
                   <><Upload className="w-5 h-5" />Import {amazonBulkFiles.length} Report{amazonBulkFiles.length !== 1 ? 's' : ''}</>
                 )}
@@ -18352,7 +20138,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   if (view === 'bulk') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-3xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -18370,7 +20156,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   if (view === 'custom-select') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-3xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
@@ -18395,7 +20181,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     const data = customPeriodData;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">Custom Period</h1><p className="text-slate-400">{data.startDate} to {data.endDate} ({data.weeksIncluded} weeks)</p></div>
             <button onClick={() => setView('custom-select')} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm">Change</button>
@@ -18642,7 +20428,7 @@ if (shopifySkuWithShipping.length > 0) {
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div className="flex items-center gap-4">
@@ -18813,7 +20599,7 @@ if (shopifySkuWithShipping.length > 0) {
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -19087,7 +20873,7 @@ if (shopifySkuWithShipping.length > 0) {
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           <div className="flex items-center gap-4 mb-6">
@@ -19113,7 +20899,7 @@ if (shopifySkuWithShipping.length > 0) {
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           <div className="flex items-center gap-4 mb-6">
@@ -19150,7 +20936,7 @@ if (shopifySkuWithShipping.length > 0) {
     const data = allPeriodsData[selectedPeriod], periods = Object.keys(allPeriodsData).sort().reverse(), idx = periods.indexOf(selectedPeriod);
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -19428,19 +21214,17 @@ if (shopifySkuWithShipping.length > 0) {
     const rawItems = data.items || [];
     
     // FILTER AND DEDUPLICATE SKUs
-    // EXCLUDE lowercase ddpe SKUs - these are duplicates
     // Priority: SKUs with inventory > 0, prefer "Shop" suffix variants
     const deduplicatedItems = (() => {
       const skuMap = new Map();
       
       rawItems.forEach(item => {
-        // Skip invalid SKUs (lowercase ddpe or empty)
-        if (!item.sku || !isValidSku(item.sku)) return;
-        const sku = item.sku.trim();
+        // Skip lowercase ddpe SKUs - these are duplicates
+        if (item.sku && item.sku.startsWith('ddpe')) return;
         
-        // Check if this is a "Shop" variant
-        const baseSku = sku.replace(/Shop$/i, '');
-        const isShopVariant = sku.endsWith('Shop');
+        // Normalize SKU - check if this is a "Shop" variant
+        const baseSku = item.sku.replace(/Shop$/i, '');
+        const isShopVariant = item.sku.toLowerCase().endsWith('shop');
         const hasInventory = (item.totalQty || 0) > 0;
         
         // Check if we already have this base SKU
@@ -19448,7 +21232,7 @@ if (shopifySkuWithShipping.length > 0) {
         
         if (!existing) {
           // First time seeing this SKU
-          skuMap.set(baseSku, { ...item, sku, _baseSku: baseSku, _isShopVariant: isShopVariant });
+          skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
         } else {
           // We have a duplicate - decide which to keep
           const existingHasInventory = (existing.totalQty || 0) > 0;
@@ -19459,15 +21243,15 @@ if (shopifySkuWithShipping.length > 0) {
           // 3. Higher inventory wins if tied
           if (hasInventory && !existingHasInventory) {
             // New item has inventory, existing doesn't - replace
-            skuMap.set(baseSku, { ...item, sku, _baseSku: baseSku, _isShopVariant: isShopVariant });
+            skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
           } else if (hasInventory === existingHasInventory) {
             // Both have same inventory status
             if (isShopVariant && !existing._isShopVariant) {
               // Prefer Shop variant
-              skuMap.set(baseSku, { ...item, sku, _baseSku: baseSku, _isShopVariant: isShopVariant });
+              skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
             } else if ((item.totalQty || 0) > (existing.totalQty || 0)) {
               // Higher inventory wins
-              skuMap.set(baseSku, { ...item, sku, _baseSku: baseSku, _isShopVariant: isShopVariant });
+              skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
             }
           }
           // Otherwise keep existing
@@ -19539,128 +21323,249 @@ if (shopifySkuWithShipping.length > 0) {
       setToast({ message: `Settings saved for ${sku}`, type: 'success' });
     };
     
-    // SkuSettingsModal extracted to separate component
-    const SkuSettingsModalJSX = (
-      <SkuSettingsModal
-        showSkuSettings={showSkuSettings}
-        setShowSkuSettings={setShowSkuSettings}
-        skuSettingsEditItem={skuSettingsEditItem}
-        setSkuSettingsEditItem={setSkuSettingsEditItem}
-        skuSettingsEditForm={skuSettingsEditForm}
-        setSkuSettingsEditForm={setSkuSettingsEditForm}
-        skuSettingsSearch={skuSettingsSearch}
-        setSkuSettingsSearch={setSkuSettingsSearch}
-        leadTimeSettings={leadTimeSettings}
-        setLeadTimeSettings={setLeadTimeSettings}
-        invShowZeroStock={invShowZeroStock}
-        setInvShowZeroStock={setInvShowZeroStock}
-        skuSettingsFilteredSkus={skuSettingsFilteredSkus}
-        getSkuSettings={getSkuSettings}
-        saveSkuSettingsHandler={saveSkuSettingsHandler}
-        formatNumber={formatNumber}
-      />
-    );
-    
-    // Metrics Export Modal
-    const MetricsExportModalJSX = showMetricsExport && (
-      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-bold text-white flex items-center gap-2">
-              <FileDown className="w-5 h-5 text-violet-400" />
-              Export Metrics Report
-            </h2>
-            <button onClick={() => setShowMetricsExport(false)} className="p-1 hover:bg-slate-700 rounded">
-              <X className="w-5 h-5 text-slate-400" />
+    const SkuSettingsModalJSX = showSkuSettings ? (
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
+          <div className="bg-gradient-to-r from-emerald-600 to-teal-600 p-6 flex items-center justify-between">
+            <div>
+              <h2 className="text-white text-xl font-bold">⚙️ SKU Inventory Settings</h2>
+              <p className="text-white/70 text-sm">Configure lead times, reorder points, and alerts per SKU</p>
+            </div>
+            <button onClick={() => { setShowSkuSettings(false); setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); setSkuSettingsSearch(''); }} className="p-2 hover:bg-white/20 rounded-lg text-white">
+              <X className="w-6 h-6" />
             </button>
           </div>
           
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-3">📅 Select Date Range</label>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { value: 'all', label: 'All Data' },
-                  { value: 'this-week', label: 'This Week (WTD)' },
-                  { value: 'last-week', label: 'Last Week' },
-                  { value: 'last-month', label: 'Last Month' },
-                  { value: 'last-quarter', label: 'Last Quarter' },
-                  { value: 'ytd', label: 'Year to Date' },
-                  { value: 'custom', label: 'Custom Range' },
-                ].map(opt => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setMetricsExportRange(opt.value)}
-                    className={`p-3 rounded-lg text-sm font-medium transition-all ${
-                      metricsExportRange === opt.value 
-                        ? 'bg-violet-600 text-white ring-2 ring-violet-400' 
-                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+          {/* Global Defaults */}
+          <div className="p-4 bg-slate-800/50 border-b border-slate-700">
+            <h3 className="text-white font-semibold mb-3">🌐 Global Defaults</h3>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              <div>
+                <label className="text-slate-400 text-xs block mb-1">Default Lead Time</label>
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="number" 
+                    value={leadTimeSettings.defaultLeadTimeDays} 
+                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, defaultLeadTimeDays: parseInt(e.target.value) || 14 }))}
+                    className="w-20 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                  />
+                  <span className="text-slate-500 text-xs">days</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-slate-400 text-xs block mb-1">Reorder Trigger</label>
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="number" 
+                    value={leadTimeSettings.reorderTriggerDays} 
+                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, reorderTriggerDays: parseInt(e.target.value) || 60 }))}
+                    className="w-20 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                  />
+                  <span className="text-slate-500 text-xs">days</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-slate-400 text-xs block mb-1">Amazon Min Supply</label>
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="number" 
+                    value={leadTimeSettings.channelRules?.amazon?.minDaysOfSupply || 60} 
+                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, channelRules: { ...prev.channelRules, amazon: { ...prev.channelRules?.amazon, minDaysOfSupply: parseInt(e.target.value) || 60 }}}))}
+                    className="w-20 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                  />
+                  <span className="text-slate-500 text-xs">days</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-slate-400 text-xs block mb-1">3PL Default Alert</label>
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="number" 
+                    value={leadTimeSettings.channelRules?.threepl?.defaultQtyThreshold || 50} 
+                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, channelRules: { ...prev.channelRules, threepl: { ...prev.channelRules?.threepl, defaultQtyThreshold: parseInt(e.target.value) || 50 }}}))}
+                    className="w-20 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                  />
+                  <span className="text-slate-500 text-xs">units</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-slate-400 text-xs block mb-1">Reorder Buffer</label>
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="number" 
+                    value={leadTimeSettings.reorderBuffer || 7} 
+                    onChange={(e) => setLeadTimeSettings(prev => ({ ...prev, reorderBuffer: parseInt(e.target.value) || 7 }))}
+                    className="w-20 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                  />
+                  <span className="text-slate-500 text-xs">days</span>
+                </div>
               </div>
             </div>
-            
-            {metricsExportRange === 'custom' && (
-              <div className="grid grid-cols-2 gap-3 p-3 bg-slate-900/50 rounded-lg">
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Start Date</label>
-                  <input 
-                    type="date" 
-                    value={metricsExportCustomStart}
-                    onChange={(e) => setMetricsExportCustomStart(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 text-white text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">End Date</label>
-                  <input 
-                    type="date" 
-                    value={metricsExportCustomEnd}
-                    onChange={(e) => setMetricsExportCustomEnd(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 text-white text-sm"
-                  />
-                </div>
-              </div>
+          </div>
+          
+          {/* Search and Filter */}
+          <div className="p-4 border-b border-slate-700 flex gap-4 items-center">
+            <input 
+              type="text"
+              placeholder="🔍 Search SKUs..."
+              value={skuSettingsSearch}
+              onChange={(e) => setSkuSettingsSearch(e.target.value)}
+              className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white"
+            />
+            <label className="flex items-center gap-2 text-sm text-slate-400 whitespace-nowrap">
+              <input 
+                type="checkbox" 
+                checked={invShowZeroStock} 
+                onChange={(e) => setInvShowZeroStock(e.target.checked)}
+                className="rounded bg-slate-700 border-slate-600"
+              />
+              Show zero stock
+            </label>
+          </div>
+          
+          {/* SKU List */}
+          <div className="flex-1 overflow-y-auto p-4">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-slate-900 z-10">
+                <tr className="border-b border-slate-700">
+                  <th className="text-left text-slate-400 py-2 px-2" style={{width: '200px'}}>SKU / Product</th>
+                  <th className="text-right text-slate-400 py-2 px-2" style={{width: '80px'}}>Amazon</th>
+                  <th className="text-right text-slate-400 py-2 px-2" style={{width: '80px'}}>3PL</th>
+                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>Lead Time</th>
+                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>Reorder Qty</th>
+                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>3PL Alert Qty</th>
+                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>AMZ Alert Days</th>
+                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>Target Days</th>
+                  <th className="text-center text-slate-400 py-2 px-2" style={{width: '120px'}}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {skuSettingsFilteredSkus.map(item => {
+                  const settings = getSkuSettings(item.sku);
+                  const isEditing = skuSettingsEditItem === item.sku;
+                  
+                  if (isEditing) {
+                    return (
+                      <tr key={item.sku} className="border-b border-slate-700/50 bg-emerald-900/20">
+                        <td className="py-3 px-2">
+                          <p className="text-white font-medium">{item.sku}</p>
+                          <p className="text-slate-500 text-xs truncate max-w-[180px]">{item.name}</p>
+                        </td>
+                        <td className="text-right py-3 px-2 text-orange-400 font-medium">{formatNumber(item.amazonQty || 0)}</td>
+                        <td className="text-right py-3 px-2 text-violet-400 font-medium">{formatNumber(item.threeplQty || 0)}</td>
+                        <td className="py-3 px-2 text-center">
+                          <input 
+                            type="number" 
+                            value={skuSettingsEditForm.leadTime || ''} 
+                            onChange={(e) => setSkuSettingsEditForm(f => ({...f, leadTime: e.target.value}))} 
+                            placeholder={String(leadTimeSettings.defaultLeadTimeDays)} 
+                            className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" 
+                          />
+                        </td>
+                        <td className="py-3 px-2 text-center">
+                          <input 
+                            type="number" 
+                            value={skuSettingsEditForm.reorderPoint || ''} 
+                            onChange={(e) => setSkuSettingsEditForm(f => ({...f, reorderPoint: e.target.value}))} 
+                            placeholder="—" 
+                            className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" 
+                          />
+                        </td>
+                        <td className="py-3 px-2 text-center">
+                          <input 
+                            type="number" 
+                            value={skuSettingsEditForm.threeplAlertQty || ''} 
+                            onChange={(e) => setSkuSettingsEditForm(f => ({...f, threeplAlertQty: e.target.value}))} 
+                            placeholder="50" 
+                            className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" 
+                          />
+                        </td>
+                        <td className="py-3 px-2 text-center">
+                          <input 
+                            type="number" 
+                            value={skuSettingsEditForm.amazonAlertDays || ''} 
+                            onChange={(e) => setSkuSettingsEditForm(f => ({...f, amazonAlertDays: e.target.value}))} 
+                            placeholder="60" 
+                            className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" 
+                          />
+                        </td>
+                        <td className="py-3 px-2 text-center">
+                          <input 
+                            type="number" 
+                            value={skuSettingsEditForm.targetDays || ''} 
+                            onChange={(e) => setSkuSettingsEditForm(f => ({...f, targetDays: e.target.value}))} 
+                            placeholder="90" 
+                            className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" 
+                          />
+                        </td>
+                        <td className="py-3 px-2 text-center whitespace-nowrap">
+                          <button onClick={() => saveSkuSettingsHandler(item.sku, { 
+                            leadTime: skuSettingsEditForm.leadTime ? parseInt(skuSettingsEditForm.leadTime) : undefined,
+                            reorderPoint: skuSettingsEditForm.reorderPoint ? parseInt(skuSettingsEditForm.reorderPoint) : undefined,
+                            threeplAlertQty: skuSettingsEditForm.threeplAlertQty ? parseInt(skuSettingsEditForm.threeplAlertQty) : undefined,
+                            amazonAlertDays: skuSettingsEditForm.amazonAlertDays ? parseInt(skuSettingsEditForm.amazonAlertDays) : undefined,
+                            targetDays: skuSettingsEditForm.targetDays ? parseInt(skuSettingsEditForm.targetDays) : undefined,
+                            alertEnabled: true,
+                          })} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-white text-xs mr-2">Save</button>
+                          <button onClick={() => { setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); }} className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded text-white text-xs">Cancel</button>
+                        </td>
+                      </tr>
+                    );
+                  }
+                  
+                  const hasCustomSettings = settings.leadTime || settings.reorderPoint || settings.threeplAlertQty || settings.amazonAlertDays || settings.targetDays;
+                  
+                  return (
+                    <tr key={item.sku} className={`border-b border-slate-700/50 hover:bg-slate-800/30 ${hasCustomSettings ? 'bg-emerald-900/10' : ''}`}>
+                      <td className="py-2 px-2">
+                        <div className="flex items-center gap-2">
+                          {hasCustomSettings && <span className="w-2 h-2 bg-emerald-500 rounded-full flex-shrink-0" title="Custom settings" />}
+                          <div>
+                            <p className="text-white font-medium">{item.sku}</p>
+                            <p className="text-slate-500 text-xs truncate max-w-[160px]">{item.name}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="text-right py-2 px-2 text-orange-400">{formatNumber(item.amazonQty || 0)}</td>
+                      <td className="text-right py-2 px-2 text-violet-400">{formatNumber(item.threeplQty || 0)}</td>
+                      <td className="text-center py-2 px-2">{settings.leadTime ? <span className="text-emerald-400">{settings.leadTime}d</span> : <span className="text-slate-500">{leadTimeSettings.defaultLeadTimeDays}d</span>}</td>
+                      <td className="text-center py-2 px-2">{settings.reorderPoint ? <span className="text-emerald-400">{formatNumber(settings.reorderPoint)}</span> : <span className="text-slate-500">—</span>}</td>
+                      <td className="text-center py-2 px-2">
+                        {settings.threeplAlertQty ? <span className="text-amber-400">{formatNumber(settings.threeplAlertQty)}</span> : <span className="text-slate-500">—</span>}
+                      </td>
+                      <td className="text-center py-2 px-2">
+                        {settings.amazonAlertDays ? <span className="text-amber-400">{settings.amazonAlertDays}d</span> : <span className="text-slate-500">—</span>}
+                      </td>
+                      <td className="text-center py-2 px-2">
+                        {settings.targetDays ? <span className="text-cyan-400">{settings.targetDays}d</span> : <span className="text-slate-500">90d</span>}
+                      </td>
+                      <td className="py-2 px-2 text-center">
+                        <button onClick={() => { setSkuSettingsEditItem(item.sku); setSkuSettingsEditForm(settings); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs">Edit</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {skuSettingsFilteredSkus.length === 0 && (
+              <div className="text-center py-8 text-slate-400">No SKUs found matching your search</div>
             )}
-            
-            <div className="bg-slate-900/50 rounded-lg p-4 text-sm text-slate-300">
-              <p className="font-medium text-white mb-2">📊 Export includes:</p>
-              <ul className="space-y-1 text-slate-400 text-xs">
-                <li>• Revenue, profit & margins by channel</li>
-                <li>• Ad spend & ROAS (Amazon, Meta, Google)</li>
-                <li>• Units sold, returns & AOV</li>
-                <li>• Top 20 SKUs by revenue</li>
-                <li>• Daily breakdown (if available)</li>
-              </ul>
+          </div>
+          
+          {/* Footer with summary */}
+          <div className="p-4 border-t border-slate-700 bg-slate-800/50 flex items-center justify-between">
+            <div className="text-slate-400 text-sm">
+              <span className="text-white font-medium">{Object.keys(leadTimeSettings.skuSettings || {}).length}</span> SKUs with custom settings
             </div>
-            
-            <div className="flex gap-3 pt-2">
-              <button 
-                onClick={() => exportMetricsForRange('csv')}
-                className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2"
-              >
-                <FileDown className="w-4 h-4" />
-                Export CSV
-              </button>
-              <button 
-                onClick={() => exportMetricsForRange('json')}
-                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2"
-              >
-                <FileDown className="w-4 h-4" />
-                Export JSON
-              </button>
-            </div>
+            <button onClick={() => { setShowSkuSettings(false); setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); setSkuSettingsSearch(''); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white">Close</button>
           </div>
         </div>
       </div>
-    );
+    ) : null;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />{SkuSettingsModalJSX}{MetricsExportModalJSX}
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />{SkuSettingsModalJSX}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div><h1 className="text-2xl lg:text-3xl font-bold text-white">📦 Inventory Management</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} • {items.length} active SKUs</p></div>
             <div className="flex gap-2">
@@ -19931,8 +21836,8 @@ if (shopifySkuWithShipping.length > 0) {
                         <td className="text-right px-2 py-2 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
                         <td className="text-right px-2 py-2 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
                         <td className="text-right px-2 py-2 text-white text-sm">{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</td>
-                        <td className="text-right px-2 py-2 text-slate-400 text-xs">{item.stockoutDate ? (() => { const d = new Date(item.stockoutDate); const thisYear = new Date().getFullYear(); return d.getFullYear() !== thisYear ? `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}` : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); })() : '—'}</td>
-                        <td className={`text-right px-2 py-2 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? (() => { const d = new Date(item.reorderByDate); const thisYear = new Date().getFullYear(); return d.getFullYear() !== thisYear ? `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}` : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); })() : '—'}</td>
+                        <td className="text-right px-2 py-2 text-slate-400 text-xs">{item.stockoutDate ? new Date(item.stockoutDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
+                        <td className={`text-right px-2 py-2 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? new Date(item.reorderByDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
                         <td className="text-center px-2 py-2"><HealthBadge health={item.aiUrgency || item.health} /></td>
                         <td className="text-center px-2 py-2">
                           <button 
@@ -21994,7 +23899,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
 
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dataBar}
           
@@ -23178,7 +25083,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dataBar}
           
@@ -23657,7 +25562,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     if (!hasWeeklyData && !hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+          <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
             <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
             <div className="text-center py-12">
               <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
@@ -23684,7 +25589,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     if (!hasWeeklyData && hasPeriodData && !hasLedgerData) {
       return (
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+          <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
             <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
             
             <div className="mb-6">
@@ -23755,7 +25660,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dataBar}
           
@@ -24373,7 +26278,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dataBar}
           
@@ -24752,7 +26657,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white">Analytics & Forecasting</h1>
@@ -25772,7 +27677,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dataBar}
           
@@ -26265,7 +28170,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dataBar}
           
@@ -27852,7 +29757,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dataBar}
           
@@ -28053,83 +29958,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             </button>
           </div>
           
-          {/* Shared Date Selector for Amazon, Meta/Google, and Trends views */}
-          {(adsViewMode === 'campaigns' || adsViewMode === 'shopify' || adsViewMode === 'trends') && (
-            <div className="flex flex-wrap items-center gap-3 mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700">
-              <div className="flex gap-1">
-                {['daily', 'weekly', 'monthly', 'quarterly', 'yearly'].map(tab => (
-                  <button key={tab} onClick={() => setAdsTimeTab(tab)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all capitalize ${adsTimeTab === tab ? (adsViewMode === 'campaigns' ? 'bg-gradient-to-r from-orange-600 to-amber-600' : adsViewMode === 'shopify' ? 'bg-gradient-to-r from-blue-600 to-red-600' : 'bg-gradient-to-r from-violet-600 to-purple-600') + ' text-white' : 'text-slate-400 hover:bg-slate-700'}`}>
-                    {tab}
-                  </button>
-                ))}
-              </div>
-              <div className="flex items-center gap-2 ml-auto">
-                <select value={adsYear} onChange={(e) => setAdsYear(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                  {[...new Set([...Object.keys(allDaysData), ...Object.keys(amazonCampaigns?.historicalDaily || {})].map(d => parseInt(d.substring(0, 4))))].filter(y => y > 2020).sort((a, b) => b - a).slice(0, 5).map(y => <option key={y} value={y}>{y}</option>)}
-                  {![...new Set([...Object.keys(allDaysData)].map(d => parseInt(d.substring(0, 4))))].includes(adsYear) && <option value={adsYear}>{adsYear}</option>}
-                </select>
-                {adsTimeTab === 'monthly' && (
-                  <select value={adsMonth} onChange={(e) => setAdsMonth(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                    {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, i) => <option key={i} value={i}>{m}</option>)}
-                  </select>
-                )}
-                {adsTimeTab === 'quarterly' && (
-                  <select value={adsQuarter} onChange={(e) => setAdsQuarter(parseInt(e.target.value))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                    {[1, 2, 3, 4].map(q => <option key={q} value={q}>Q{q}</option>)}
-                  </select>
-                )}
-                {adsTimeTab === 'weekly' && (
-                  <select value={adsSelectedWeek || ''} onChange={(e) => setAdsSelectedWeek(e.target.value)} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                    {sortedWeeks.filter(w => w.startsWith(String(adsYear))).slice().reverse().slice(0, 20).map(w => <option key={w} value={w}>{new Date(w + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</option>)}
-                  </select>
-                )}
-                {adsTimeTab === 'daily' && (
-                  <select value={adsSelectedDay || ''} onChange={(e) => setAdsSelectedDay(e.target.value)} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
-                    {sortedDays.filter(d => d.startsWith(String(adsYear))).slice().reverse().slice(0, 60).map(d => <option key={d} value={d}>{new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</option>)}
-                  </select>
-                )}
-              </div>
-              <span className="text-slate-500 text-xs">
-                {adsViewMode === 'campaigns' ? '(Campaign data is a snapshot from last upload)' : ''}
-              </span>
-            </div>
-          )}
-          
           {/* Shopify Ads (Meta/Google) View */}
           {adsViewMode === 'shopify' && (() => {
-            // Get date range based on current selection
-            const getDateRange = () => {
-              const now = new Date();
-              switch (adsTimeTab) {
-                case 'daily':
-                  return adsSelectedDay ? { start: adsSelectedDay, end: adsSelectedDay } : { start: sortedDays[sortedDays.length - 1], end: sortedDays[sortedDays.length - 1] };
-                case 'weekly':
-                  if (!adsSelectedWeek) return null;
-                  const weekEnd = new Date(adsSelectedWeek + 'T12:00:00');
-                  const weekStart = new Date(weekEnd);
-                  weekStart.setDate(weekEnd.getDate() - 6);
-                  return { start: weekStart.toISOString().split('T')[0], end: adsSelectedWeek };
-                case 'monthly':
-                  const monthStart = `${adsYear}-${String(adsMonth + 1).padStart(2, '0')}-01`;
-                  const monthEnd = new Date(adsYear, adsMonth + 1, 0);
-                  return { start: monthStart, end: monthEnd.toISOString().split('T')[0] };
-                case 'quarterly':
-                  const qStart = `${adsYear}-${String((adsQuarter - 1) * 3 + 1).padStart(2, '0')}-01`;
-                  const qEnd = new Date(adsYear, adsQuarter * 3, 0);
-                  return { start: qStart, end: qEnd.toISOString().split('T')[0] };
-                case 'yearly':
-                  return { start: `${adsYear}-01-01`, end: `${adsYear}-12-31` };
-                default:
-                  return null;
-              }
-            };
-            
-            const dateRange = getDateRange();
-            
-            // Aggregate Shopify ads data from daily data - filtered by date range
+            // Aggregate Shopify ads data from daily data
             const daysWithShopifyAds = sortedDays.filter(d => {
-              // Apply date filter
-              if (dateRange && (d < dateRange.start || d > dateRange.end)) return false;
               const day = allDaysData[d];
               const meta = day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
               const google = day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
@@ -28329,36 +30161,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           })()}
           
           {/* Historical Trends View */}
-          {adsViewMode === 'trends' && (() => {
-            // Get date range based on current selection
-            const getDateRange = () => {
-              switch (adsTimeTab) {
-                case 'daily':
-                  return adsSelectedDay ? { start: adsSelectedDay, end: adsSelectedDay } : null;
-                case 'weekly':
-                  if (!adsSelectedWeek) return null;
-                  const weekEnd = new Date(adsSelectedWeek + 'T12:00:00');
-                  const weekStart = new Date(weekEnd);
-                  weekStart.setDate(weekEnd.getDate() - 6);
-                  return { start: weekStart.toISOString().split('T')[0], end: adsSelectedWeek };
-                case 'monthly':
-                  const monthStart = `${adsYear}-${String(adsMonth + 1).padStart(2, '0')}-01`;
-                  const monthEnd = new Date(adsYear, adsMonth + 1, 0);
-                  return { start: monthStart, end: monthEnd.toISOString().split('T')[0] };
-                case 'quarterly':
-                  const qStart = `${adsYear}-${String((adsQuarter - 1) * 3 + 1).padStart(2, '0')}-01`;
-                  const qEnd = new Date(adsYear, adsQuarter * 3, 0);
-                  return { start: qStart, end: qEnd.toISOString().split('T')[0] };
-                case 'yearly':
-                  return { start: `${adsYear}-01-01`, end: `${adsYear}-12-31` };
-                default:
-                  return null;
-              }
-            };
-            
-            const dateRange = getDateRange();
-            
-            return (
+          {adsViewMode === 'trends' && (
             <div>
               {!hasHistoricalData ? (
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-8 text-center">
@@ -28372,12 +30175,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   </button>
                 </div>
               ) : (() => {
-                // Calculate historical metrics - filtered by date range
-                const allDates = Object.keys(historicalDaily).sort();
-                const histDates = dateRange 
-                  ? allDates.filter(d => d >= dateRange.start && d <= dateRange.end)
-                  : allDates;
-                const displayDateRange = { start: histDates[0], end: histDates[histDates.length - 1] };
+                // Calculate historical metrics
+                const histDates = Object.keys(historicalDaily).sort();
+                const dateRange = { start: histDates[0], end: histDates[histDates.length - 1] };
                 
                 // Monthly aggregation
                 const monthly = {};
@@ -28526,8 +30326,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 );
               })()}
             </div>
-          );
-        })()}
+          )}
           
           {/* Amazon Campaigns View */}
           {adsViewMode === 'campaigns' && (
@@ -29824,7 +31623,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><StateConfigModal showTaxStateConfig={showTaxStateConfig} setShowTaxStateConfig={setShowTaxStateConfig} taxConfigState={taxConfigState} setTaxConfigState={setTaxConfigState} US_STATES_TAX_INFO={US_STATES_TAX_INFO} STATE_FILING_FORMATS={STATE_FILING_FORMATS} nexusStates={nexusStates} toggleNexus={toggleNexus} updateStateConfig={updateStateConfig} taxFormRegistrationId={taxFormRegistrationId} setTaxFormRegistrationId={setTaxFormRegistrationId} taxFormNotes={taxFormNotes} setTaxFormNotes={setTaxFormNotes} newCustomFiling={newCustomFiling} setNewCustomFiling={setNewCustomFiling} addCustomFiling={addCustomFiling} removeCustomFiling={removeCustomFiling} toggleHideState={toggleHideState} hiddenStates={hiddenStates} /><FilingDetailModal selectedTaxState={selectedTaxState} setSelectedTaxState={setSelectedTaxState} US_STATES_TAX_INFO={US_STATES_TAX_INFO} nexusStates={nexusStates} getNextDueDate={getNextDueDate} taxReportFileName={taxReportFileName} setTaxReportFileName={setTaxReportFileName} handleTaxReportUpload={handleTaxReportUpload} parsedTaxReport={parsedTaxReport} setParsedTaxReport={setParsedTaxReport} taxFilingConfirmNum={taxFilingConfirmNum} setTaxFilingConfirmNum={setTaxFilingConfirmNum} taxFilingPaidAmount={taxFilingPaidAmount} setTaxFilingPaidAmount={setTaxFilingPaidAmount} taxFilingNotes={taxFilingNotes} setTaxFilingNotes={setTaxFilingNotes} markFilingComplete={markFilingComplete} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><StateConfigModal showTaxStateConfig={showTaxStateConfig} setShowTaxStateConfig={setShowTaxStateConfig} taxConfigState={taxConfigState} setTaxConfigState={setTaxConfigState} US_STATES_TAX_INFO={US_STATES_TAX_INFO} STATE_FILING_FORMATS={STATE_FILING_FORMATS} nexusStates={nexusStates} toggleNexus={toggleNexus} updateStateConfig={updateStateConfig} taxFormRegistrationId={taxFormRegistrationId} setTaxFormRegistrationId={setTaxFormRegistrationId} taxFormNotes={taxFormNotes} setTaxFormNotes={setTaxFormNotes} newCustomFiling={newCustomFiling} setNewCustomFiling={setNewCustomFiling} addCustomFiling={addCustomFiling} removeCustomFiling={removeCustomFiling} toggleHideState={toggleHideState} hiddenStates={hiddenStates} /><FilingDetailModal selectedTaxState={selectedTaxState} setSelectedTaxState={setSelectedTaxState} US_STATES_TAX_INFO={US_STATES_TAX_INFO} nexusStates={nexusStates} getNextDueDate={getNextDueDate} taxReportFileName={taxReportFileName} setTaxReportFileName={setTaxReportFileName} handleTaxReportUpload={handleTaxReportUpload} parsedTaxReport={parsedTaxReport} setParsedTaxReport={setParsedTaxReport} taxFilingConfirmNum={taxFilingConfirmNum} setTaxFilingConfirmNum={setTaxFilingConfirmNum} taxFilingPaidAmount={taxFilingPaidAmount} setTaxFilingPaidAmount={setTaxFilingPaidAmount} taxFilingNotes={taxFilingNotes} setTaxFilingNotes={setTaxFilingNotes} markFilingComplete={markFilingComplete} />
           
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
@@ -31352,14 +33151,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const monthKeys = Object.keys(monthlySnapshots).sort().slice(-12);
     
     // Handle file upload
-    const handleBankingUpload = async (e, replaceAll = true) => {
+    const handleBankingUpload = async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
       
       setBankingProcessing(true);
       try {
         const content = await file.text();
-        // Pass existing category overrides to parser (keep category customizations)
+        // Pass existing category overrides to parser
         const parsed = parseQBOTransactions(content, bankingData.categoryOverrides || {});
         
         if (parsed.transactions.length === 0) {
@@ -31368,33 +33167,46 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           return;
         }
         
-        // REPLACE MODE: Start fresh with parsed data, use balances directly from QBO
-        const transactions = parsed.transactions;
+        // Smart merge: deduplicate transactions based on ID
+        let mergedTransactions = parsed.transactions;
+        let newCount = parsed.transactions.length;
+        let duplicateCount = 0;
+        
+        if (bankingData.transactions?.length > 0) {
+          const existingIds = new Set(bankingData.transactions.map(t => t.id));
+          const newTxns = parsed.transactions.filter(t => !existingIds.has(t.id));
+          duplicateCount = parsed.transactions.length - newTxns.length;
+          
+          // Merge: keep existing transactions, add only new ones
+          // Sort by date to maintain chronological order
+          mergedTransactions = [...bankingData.transactions, ...newTxns]
+            .sort((a, b) => b.date.localeCompare(a.date));
+          newCount = newTxns.length;
+        }
+        
+        // Recalculate all aggregates from merged transactions
         const accounts = {};
         const categories = {};
         const monthlySnapshots = {};
         
-        // Use account balances directly from parsed QBO data
-        Object.entries(parsed.accounts).forEach(([name, acct]) => {
-          accounts[name] = {
-            ...acct,
-            balance: acct.balance || 0,
-            initialBalance: acct.balance || 0,
-          };
-        });
+        // Track net change from new transactions for each account
+        const newTxnNetByAccount = {};
         
-        // Rebuild aggregates from transactions
-        transactions.forEach(txn => {
-          // Ensure account exists
+        mergedTransactions.forEach(txn => {
+          // Account aggregates
           if (!accounts[txn.account]) {
+            // Start with existing balance if we have prior data, otherwise use parsed balance
+            const existingBalance = bankingData.accounts?.[txn.account]?.balance;
+            const existingInitialBalance = bankingData.accounts?.[txn.account]?.initialBalance;
             accounts[txn.account] = { 
               name: txn.account, 
               type: txn.accountType, 
               transactions: 0, 
               totalIn: 0, 
               totalOut: 0,
-              balance: 0,
-              initialBalance: 0,
+              // Preserve initial balance if set, or use existing balance as starting point
+              initialBalance: existingInitialBalance ?? existingBalance ?? 0,
+              balance: existingBalance ?? parsed.accounts[txn.account]?.balance ?? 0,
             };
           }
           accounts[txn.account].transactions++;
@@ -31422,20 +33234,57 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           }
         });
         
+        // Update account balances properly:
+        // - If balance was manually set, preserve it and add net of new transactions
+        // - If we had existing data, add the NET of new transactions to existing balance
+        // - If this is first upload, use parsed balance from QBO
+        if (bankingData.transactions?.length > 0 && newCount > 0) {
+          // Calculate net change from NEW transactions only
+          const newTxns = parsed.transactions.filter(t => !new Set(bankingData.transactions.map(bt => bt.id)).has(t.id));
+          const netByAccount = {};
+          newTxns.forEach(txn => {
+            if (!netByAccount[txn.account]) netByAccount[txn.account] = 0;
+            if (txn.isIncome) netByAccount[txn.account] += txn.amount;
+            if (txn.isExpense) netByAccount[txn.account] -= txn.amount;
+          });
+          
+          // Apply net change to existing balances
+          Object.entries(netByAccount).forEach(([acctName, netChange]) => {
+            if (accounts[acctName]) {
+              const existingBal = bankingData.accounts?.[acctName]?.balance || 0;
+              const wasManuallySet = bankingData.accounts?.[acctName]?.balanceManuallySet;
+              accounts[acctName].balance = existingBal + netChange;
+              // Preserve manual set flag
+              if (wasManuallySet) {
+                accounts[acctName].balanceManuallySet = true;
+                accounts[acctName].balanceSetDate = bankingData.accounts[acctName].balanceSetDate;
+              }
+            }
+          });
+        } else {
+          // First upload - use parsed balances (net of transactions in report)
+          // User may need to set initial balance manually
+          Object.entries(parsed.accounts).forEach(([name, acct]) => {
+            if (accounts[name]) {
+              accounts[name].balance = acct.balance || 0;
+            }
+          });
+        }
+        
         // Calculate date range
-        const dates = transactions.map(t => t.date).sort();
+        const dates = mergedTransactions.map(t => t.date).sort();
         const dateRange = { 
           start: dates[0], 
           end: dates[dates.length - 1] 
         };
         
         const newBankingData = {
-          transactions,
+          transactions: mergedTransactions,
           accounts,
           categories,
           monthlySnapshots,
           dateRange,
-          transactionCount: transactions.length,
+          transactionCount: mergedTransactions.length,
           lastUpload: new Date().toISOString(),
           categoryOverrides: bankingData.categoryOverrides || {},
           settings: bankingData.settings,
@@ -31445,7 +33294,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
         queueCloudSave({ ...combinedData, bankingData: newBankingData });
         
-        const message = `Imported ${transactions.length} transactions from ${dateRange.start} to ${dateRange.end}. Balances reset from QBO.`;
+        const message = duplicateCount > 0 
+          ? `Added ${newCount} new transactions (${duplicateCount} duplicates skipped). Total: ${mergedTransactions.length}`
+          : `Imported ${newCount} transactions from ${dateRange.start} to ${dateRange.end}`;
         setToast({ message, type: 'success' });
       } catch (err) {
         setToast({ message: 'Error parsing file: ' + err.message, type: 'error' });
@@ -31473,7 +33324,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       <div className={`min-h-screen ${theme === 'light' ? 'bg-gray-100' : 'bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900'}`}>
         <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
         <div className="max-w-7xl mx-auto px-4 py-6">
-          <Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} />{aiChatUI}
+          <Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} />{aiChatUI}{aiChatButton}
           {/* Header */}
           <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
             <div>
@@ -31502,24 +33353,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               <label className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-white font-medium cursor-pointer flex items-center gap-2 transition-colors">
                 <Upload className="w-4 h-4" />
                 {bankingProcessing ? 'Processing...' : 'Upload QBO Export'}
-                <input type="file" accept=".csv" onChange={(e) => handleBankingUpload(e, true)} className="hidden" disabled={bankingProcessing} />
+                <input type="file" accept=".csv" onChange={handleBankingUpload} className="hidden" disabled={bankingProcessing} />
               </label>
-              
-              {/* Clear Data Button */}
-              {bankingData.transactions?.length > 0 && (
-                <button
-                  onClick={() => {
-                    if (confirm('Clear all banking data? This will reset account balances and transaction history.')) {
-                      setBankingData({ transactions: [], accounts: {}, categories: {}, monthlySnapshots: {}, categoryOverrides: {} });
-                      setToast({ message: 'Banking data cleared', type: 'success' });
-                    }
-                  }}
-                  className="px-3 py-2 bg-slate-700 hover:bg-rose-600/50 rounded-lg text-slate-300 hover:text-white text-sm flex items-center gap-2 transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Clear Data
-                </button>
-              )}
             </div>
           </div>
           
@@ -31558,7 +33393,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               <label className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-xl text-white font-medium cursor-pointer inline-flex items-center gap-2 transition-colors">
                 <Upload className="w-5 h-5" />
                 Upload QBO Export (.csv)
-                <input type="file" accept=".csv" onChange={(e) => handleBankingUpload(e, true)} className="hidden" />
+                <input type="file" accept=".csv" onChange={handleBankingUpload} className="hidden" />
               </label>
             </div>
           ) : (
@@ -33628,7 +35463,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       alertSalesTaxEnabled: true,
       currencySymbol: '$',
       dateFormat: 'US',
-      timezone: 'America/New_York',
     };
     
     // Merge defaults with saved settings
@@ -33673,7 +35507,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
+        <div className="max-w-4xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           
           <div className="flex items-center justify-between mb-6">
             <div>
@@ -34574,205 +36408,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             saveInv(newHistory);
                             setToast({ message: `Merged ${newTplTotal.toLocaleString()} 3PL units with existing inventory`, type: 'success' });
                           } else {
-                            // No snapshot exists for today - CREATE a new 3PL-only snapshot WITH velocity from sales data
-                            console.log('No snapshot exists - creating new 3PL-only snapshot with velocity calculation');
-                            const todayDate = new Date().toISOString().split('T')[0];
-                            const packiyoData = data.inventoryBySku;
-                            const cogsLookup = getCogsLookup();
-                            
-                            // ===== CALCULATE VELOCITY FROM SALES DATA =====
-                            const amazonSkuVelocity = {};
-                            const shopifySkuVelocity = {};
-                            
-                            // Try localStorage for legacy daily data first
-                            try {
-                              const legacyRaw = localStorage.getItem('ecommerce_daily_data');
-                              if (legacyRaw) {
-                                const legacyDailyData = JSON.parse(legacyRaw);
-                                const legacyDates = Object.keys(legacyDailyData).sort().reverse();
-                                const last28 = legacyDates.slice(0, 28);
-                                const weeksEquiv = last28.length / 7;
-                                
-                                if (weeksEquiv > 0) {
-                                  last28.forEach(d => {
-                                    const dayData = legacyDailyData[d];
-                                    (dayData?.amazon?.skuData || []).forEach(item => {
-                                      if (!item.sku || !isValidSku(item.sku)) return;
-                                      const sku = item.sku.trim();
-                                      if (!amazonSkuVelocity[sku]) amazonSkuVelocity[sku] = 0;
-                                      amazonSkuVelocity[sku] += (item.unitsSold || item.units || 0) / weeksEquiv;
-                                    });
-                                    (dayData?.shopify?.skuData || []).forEach(item => {
-                                      if (!item.sku || !isValidSku(item.sku)) return;
-                                      const sku = item.sku.trim();
-                                      if (!shopifySkuVelocity[sku]) shopifySkuVelocity[sku] = 0;
-                                      shopifySkuVelocity[sku] += (item.unitsSold || item.units || 0) / weeksEquiv;
-                                    });
-                                  });
-                                  console.log('Calculated velocity from', last28.length, 'days of legacy data');
-                                }
-                              }
-                            } catch (e) { console.log('Legacy data not available:', e); }
-                            
-                            // Also try allWeeksData
-                            const sortedWeeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
-                            if (sortedWeeks.length > 0) {
-                              sortedWeeks.forEach(w => {
-                                const weekData = allWeeksData[w];
-                                if (weekData.shopify?.skuData) {
-                                  const skuData = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
-                                  skuData.forEach(item => {
-                                    if (!item.sku || !isValidSku(item.sku)) return;
-                                    const sku = item.sku.trim();
-                                    if (!shopifySkuVelocity[sku]) shopifySkuVelocity[sku] = 0;
-                                    shopifySkuVelocity[sku] += (item.unitsSold || item.units || 0);
-                                  });
-                                }
-                                if (weekData.amazon?.skuData) {
-                                  const skuData = Array.isArray(weekData.amazon.skuData) ? weekData.amazon.skuData : Object.values(weekData.amazon.skuData);
-                                  skuData.forEach(item => {
-                                    if (!item.sku || !isValidSku(item.sku)) return;
-                                    const sku = item.sku.trim();
-                                    if (!amazonSkuVelocity[sku]) amazonSkuVelocity[sku] = 0;
-                                    amazonSkuVelocity[sku] += (item.unitsSold || item.units || 0);
-                                  });
-                                }
-                              });
-                              // Average over weeks
-                              Object.keys(amazonSkuVelocity).forEach(sku => { amazonSkuVelocity[sku] /= sortedWeeks.length; });
-                              Object.keys(shopifySkuVelocity).forEach(sku => { shopifySkuVelocity[sku] /= sortedWeeks.length; });
-                              console.log('Added velocity from', sortedWeeks.length, 'weeks of data');
-                            }
-                            
-                            // Also try allDaysData
-                            const sortedDays = Object.keys(allDaysData).sort().reverse().slice(0, 28);
-                            if (sortedDays.length > 0) {
-                              const weeksEquiv = sortedDays.length / 7;
-                              sortedDays.forEach(d => {
-                                const dayData = allDaysData[d];
-                                if (dayData?.amazon?.skuData) {
-                                  (Array.isArray(dayData.amazon.skuData) ? dayData.amazon.skuData : Object.values(dayData.amazon.skuData)).forEach(item => {
-                                    if (!item.sku || !isValidSku(item.sku)) return;
-                                    const sku = item.sku.trim();
-                                    if (!amazonSkuVelocity[sku] || amazonSkuVelocity[sku] === 0) {
-                                      if (!amazonSkuVelocity[sku]) amazonSkuVelocity[sku] = 0;
-                                      amazonSkuVelocity[sku] += (item.unitsSold || item.units || 0) / weeksEquiv;
-                                    }
-                                  });
-                                }
-                                if (dayData?.shopify?.skuData) {
-                                  (Array.isArray(dayData.shopify.skuData) ? dayData.shopify.skuData : Object.values(dayData.shopify.skuData)).forEach(item => {
-                                    if (!item.sku || !isValidSku(item.sku)) return;
-                                    const sku = item.sku.trim();
-                                    if (!shopifySkuVelocity[sku] || shopifySkuVelocity[sku] === 0) {
-                                      if (!shopifySkuVelocity[sku]) shopifySkuVelocity[sku] = 0;
-                                      shopifySkuVelocity[sku] += (item.unitsSold || item.units || 0) / weeksEquiv;
-                                    }
-                                  });
-                                }
-                              });
-                              console.log('Added velocity from', sortedDays.length, 'days of daily data');
-                            }
-                            
-                            console.log('Velocity calculated for', Object.keys(amazonSkuVelocity).length, 'Amazon SKUs,', Object.keys(shopifySkuVelocity).length, 'Shopify SKUs');
-                            
-                            // ===== BUILD INVENTORY ITEMS =====
-                            let newTplTotal = 0;
-                            let newTplValue = 0;
-                            const newItems = [];
-                            let critical = 0, low = 0, healthy = 0, overstock = 0;
-                            
-                            Object.entries(packiyoData).forEach(([sku, item]) => {
-                              // Skip invalid SKUs (lowercase ddpe)
-                              if (!isValidSku(sku)) return;
-                              
-                              const qty = item.quantityOnHand || item.quantity_on_hand || 0;
-                              const inbound = item.quantityInbound || item.quantity_inbound || 0;
-                              const cost = cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/, '')] || 0;
-                              
-                              if (qty === 0 && inbound === 0) return;
-                              
-                              newTplTotal += qty;
-                              newTplValue += qty * cost;
-                              
-                              // Get velocity - try SKU with and without Shop suffix
-                              const amzVel = amazonSkuVelocity[sku] || amazonSkuVelocity[sku.replace(/Shop$/, '')] || 0;
-                              const shopVel = shopifySkuVelocity[sku] || shopifySkuVelocity[sku.replace(/Shop$/, '')] || 0;
-                              const totalVel = amzVel + shopVel;
-                              
-                              // Calculate days of supply and health
-                              const daysOfSupply = totalVel > 0 ? (qty / totalVel) * 7 : 999;
-                              let health = 'unknown';
-                              if (totalVel > 0) {
-                                if (daysOfSupply < 14) { health = 'critical'; critical++; }
-                                else if (daysOfSupply < 30) { health = 'low'; low++; }
-                                else if (daysOfSupply > 180) { health = 'overstock'; overstock++; }
-                                else { health = 'healthy'; healthy++; }
-                              } else {
-                                overstock++; // No sales = overstock
-                                health = 'overstock';
-                              }
-                              
-                              // Calculate stockout date
-                              const stockoutDate = totalVel > 0 
-                                ? new Date(Date.now() + daysOfSupply * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-                                : null;
-                              
-                              newItems.push({
-                                sku,
-                                name: item.name || sku,
-                                amazonQty: 0,
-                                threeplQty: qty,
-                                threeplInbound: inbound,
-                                homeQty: 0,
-                                totalQty: qty,
-                                cost,
-                                totalValue: qty * cost,
-                                amzWeeklyVel: amzVel,
-                                shopWeeklyVel: shopVel,
-                                weeklyVel: totalVel,
-                                daysOfSupply: Math.round(daysOfSupply),
-                                stockoutDate,
-                                health,
-                              });
+                            // No snapshot exists for today - don't create 3PL-only snapshot that would lose Amazon data
+                            // Instead, tell user to create inventory snapshot first
+                            console.log('No snapshot exists for today - user should create one with Amazon data first');
+                            setToast({ 
+                              message: 'Packiyo synced but no inventory snapshot exists for today. Go to Inventory tab and create a new snapshot to include Amazon + 3PL data.', 
+                              type: 'warning' 
                             });
-                            
-                            newItems.sort((a, b) => b.totalValue - a.totalValue);
-                            
-                            const newSnapshot = {
-                              date: todayDate,
-                              items: newItems,
-                              summary: {
-                                totalUnits: newTplTotal,
-                                totalValue: newTplValue,
-                                amazonUnits: 0,
-                                amazonValue: 0,
-                                amazonInbound: 0,
-                                threeplUnits: newTplTotal,
-                                threeplValue: newTplValue,
-                                threeplInbound: 0,
-                                homeUnits: 0,
-                                homeValue: 0,
-                                skuCount: newItems.length,
-                                critical,
-                                low,
-                                healthy,
-                                overstock,
-                              },
-                              sources: {
-                                amazon: 'none',
-                                threepl: 'packiyo-direct',
-                                home: 'none',
-                                packiyoConnected: true,
-                                lastPackiyoSync: new Date().toISOString(),
-                              },
-                            };
-                            
-                            const newHistory = { ...invHistory, [todayDate]: newSnapshot };
-                            setInvHistory(newHistory);
-                            setSelectedInvDate(todayDate);
-                            saveInv(newHistory);
-                            setToast({ message: `Created inventory with ${newTplTotal.toLocaleString()} units, ${newItems.length} SKUs (velocity from ${Object.keys(shopifySkuVelocity).length} Shopify + ${Object.keys(amazonSkuVelocity).length} Amazon SKUs)`, type: 'success' });
                           }
                         }
                       } catch (err) {
@@ -35220,121 +36862,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               ℹ️ Inventory sources are additive and don't overwrite each other. Amazon FBA/AWD, 3PL (Packiyo), and Wormans Mill (Shopify) inventories are tracked separately.
             </p>
           </SettingSection>
-          
-          {/* QuickBooks Online Connection */}
-          <SettingSection title="📊 QuickBooks Online">
-            <p className="text-slate-400 text-sm mb-4">Connect to QBO for automatic bank balance and expense tracking</p>
-            
-            {qboCredentials.connected ? (
-              <div className="space-y-4">
-                <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-emerald-500/20 rounded-full flex items-center justify-center">
-                        <Check className="w-5 h-5 text-emerald-400" />
-                      </div>
-                      <div>
-                        <p className="text-emerald-400 font-medium">Connected to QuickBooks</p>
-                        <p className="text-slate-400 text-sm">Company ID: {qboCredentials.realmId}</p>
-                        {qboCredentials.lastSync && (
-                          <p className="text-slate-500 text-xs">Last sync: {new Date(qboCredentials.lastSync).toLocaleString()}</p>
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => {
-                        if (confirm('Disconnect from QuickBooks? Your synced data will remain.')) {
-                          setQboCredentials({ clientId: '', clientSecret: '', realmId: '', connected: false, lastSync: null, accessToken: '', refreshToken: '' });
-                          setToast({ message: 'QuickBooks disconnected', type: 'success' });
-                        }
-                      }}
-                      className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300"
-                    >
-                      Disconnect
-                    </button>
-                  </div>
-                </div>
-                <SettingRow label="Sync Banking Data" desc="Pull recent transactions and balances">
-                  <button
-                    onClick={() => setToast({ message: 'QBO sync coming soon! Use CSV upload in Banking tab for now.', type: 'info' })}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text-white flex items-center gap-2"
-                  >
-                    <RefreshCw className="w-4 h-4" />Sync Now
-                  </button>
-                </SettingRow>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4">
-                  <h4 className="text-blue-400 font-medium mb-2">Why Connect QBO?</h4>
-                  <ul className="text-slate-400 text-sm space-y-1">
-                    <li>• Automatic bank balance tracking</li>
-                    <li>• Real-time expense categorization</li>
-                    <li>• Cash flow visibility in Banking tab</li>
-                    <li>• Reconciliation with Amazon/Shopify payouts</li>
-                  </ul>
-                  <p className="text-slate-500 text-xs mt-3">Note: QBO shows bank deposits (after fees), not gross sales. Continue using Amazon/Shopify reports for revenue tracking.</p>
-                </div>
-                
-                <div className="bg-slate-900/50 rounded-xl p-4">
-                  <h4 className="text-white font-medium mb-4">🔧 Setup Instructions</h4>
-                  <ol className="text-slate-400 text-sm space-y-3 list-decimal list-inside">
-                    <li><strong>Create Developer Account:</strong> Go to <a href="https://developer.intuit.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">developer.intuit.com</a> and sign up</li>
-                    <li><strong>Create an App:</strong> Click "Create an app" → Select "QuickBooks Online and Payments" → Name it "Tallowbourn Dashboard"</li>
-                    <li><strong>Get Credentials:</strong> Go to "Keys & credentials" tab → Copy your <strong className="text-white">Client ID</strong> and <strong className="text-white">Client Secret</strong></li>
-                    <li><strong>Set Redirect URI:</strong> Add <code className="text-xs bg-slate-800 px-1.5 py-0.5 rounded">{typeof window !== 'undefined' ? window.location.origin : 'https://yourdomain.com'}/api/qbo/callback</code></li>
-                    <li><strong>App Review:</strong> For Production access, submit for review (takes 1-3 business days)</li>
-                  </ol>
-                </div>
-                
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-slate-300 text-sm font-medium mb-2">Client ID</label>
-                    <input
-                      type="text"
-                      placeholder="ABxxxxxxxxxxxxxxxxxxxxxx"
-                      value={qboCredentials.clientId}
-                      onChange={(e) => setQboCredentials(p => ({ ...p, clientId: e.target.value }))}
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-300 text-sm font-medium mb-2">Client Secret</label>
-                    <input
-                      type="password"
-                      placeholder="Your Client Secret"
-                      value={qboCredentials.clientSecret}
-                      onChange={(e) => setQboCredentials(p => ({ ...p, clientSecret: e.target.value }))}
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <button
-                    onClick={() => {
-                      if (!qboCredentials.clientId || !qboCredentials.clientSecret) {
-                        setToast({ message: 'Please enter Client ID and Client Secret', type: 'error' });
-                        return;
-                      }
-                      // OAuth flow would redirect to Intuit
-                      const redirectUri = encodeURIComponent(window.location.origin + '/api/qbo/callback');
-                      const authUrl = `https://appcenter.intuit.com/connect/oauth2?client_id=${qboCredentials.clientId}&response_type=code&scope=com.intuit.quickbooks.accounting&redirect_uri=${redirectUri}&state=${Date.now()}`;
-                      setToast({ message: 'QBO OAuth requires backend API route. Opening auth URL...', type: 'info' });
-                      window.open(authUrl, '_blank');
-                    }}
-                    className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 rounded-xl text-white font-medium flex items-center justify-center gap-2"
-                  >
-                    <Landmark className="w-5 h-5" />
-                    Connect to QuickBooks
-                  </button>
-                </div>
-                
-                <div className="text-center pt-2">
-                  <p className="text-slate-500 text-xs">
-                    Or <button onClick={() => { setView('banking'); }} className="text-blue-400 hover:underline">upload QBO Transaction Detail CSV</button> manually in the Banking tab
-                  </p>
-                </div>
-              </div>
-            )}
-          </SettingSection>
             </>
           )}
           
@@ -35467,21 +36994,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     className={`w-8 h-8 rounded-full bg-${color}-500 ${theme.accent === color ? 'ring-2 ring-white ring-offset-2 ring-offset-slate-800' : ''}`} />
                 ))}
               </div>
-            </SettingRow>
-            <SettingRow label="Business Timezone" desc="Used for day/week boundary calculations">
-              <select 
-                value={currentLocalSettings.timezone || 'America/New_York'} 
-                onChange={(e) => updateSetting('timezone', e.target.value)} 
-                className="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white"
-              >
-                <option value="America/New_York">Eastern (EST/EDT)</option>
-                <option value="America/Chicago">Central (CST/CDT)</option>
-                <option value="America/Denver">Mountain (MST/MDT)</option>
-                <option value="America/Los_Angeles">Pacific (PST/PDT)</option>
-                <option value="America/Anchorage">Alaska (AKST/AKDT)</option>
-                <option value="Pacific/Honolulu">Hawaii (HST)</option>
-                <option value="UTC">UTC</option>
-              </select>
             </SettingRow>
             <SettingRow label="Mobile-Optimized View" desc="Simplified layout for small screens">
               <div className="flex items-center gap-2">
@@ -35802,21 +37314,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               ) : (
                 <button onClick={() => setShowResetConfirm(true)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">Reset Settings</button>
               )}
-            </SettingRow>
-            
-            {/* Clear Inventory Only */}
-            <SettingRow label="Clear Inventory Data" desc="Reset inventory snapshots to fix duplicate SKU issues">
-              <button 
-                onClick={() => {
-                  if (!confirm('Clear all inventory data? This will remove all inventory snapshots. You can re-sync after to get fresh data.')) return;
-                  setInvHistory({});
-                  try { localStorage.removeItem('ecommerce_inventory_history'); } catch {}
-                  setToast({ message: 'Inventory data cleared. Click Sync Inventory to reload.', type: 'success' });
-                }}
-                className="px-4 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-2"
-              >
-                <Trash2 className="w-4 h-4" />Clear Inventory
-              </button>
             </SettingRow>
           </SettingSection>
             </>
