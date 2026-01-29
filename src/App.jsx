@@ -767,7 +767,7 @@ const handleLogout = async () => {
   // 10. CSV Export modal
   const [showExportModal, setShowExportModal] = useState(false);
   const [showMetricsExport, setShowMetricsExport] = useState(false);
-  const [metricsExportRange, setMetricsExportRange] = useState('last-week'); // 'last-week', 'last-month', 'last-quarter', 'ytd', 'custom'
+  const [metricsExportRange, setMetricsExportRange] = useState('all'); // 'all', 'last-week', 'last-month', 'last-quarter', 'ytd', 'custom'
   const [metricsExportCustomStart, setMetricsExportCustomStart] = useState('');
   const [metricsExportCustomEnd, setMetricsExportCustomEnd] = useState('');
   
@@ -9870,6 +9870,15 @@ Analyze the data and respond with ONLY this JSON:
     let startDate, endDate;
     
     switch (metricsExportRange) {
+      case 'all':
+        // Get earliest and latest dates from all data
+        const allDates = [
+          ...Object.keys(allDaysData),
+          ...Object.keys(allWeeksData),
+        ].filter(d => d && d.match(/^\d{4}-\d{2}-\d{2}$/)).sort();
+        startDate = allDates.length > 0 ? new Date(allDates[0]) : new Date(2024, 0, 1);
+        endDate = allDates.length > 0 ? new Date(allDates[allDates.length - 1]) : today;
+        break;
       case 'last-week':
         endDate = new Date(today);
         endDate.setDate(today.getDate() - today.getDay()); // Last Sunday
@@ -14051,8 +14060,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   <button onClick={() => setView('analytics')} className="p-2 hover:bg-slate-700 rounded text-slate-500" title="Need 4+ weeks for forecast"><TrendingUp className="w-4 h-4" /></button>
                 )}
                 <button onClick={() => setShowBreakEven(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Break-even Calculator"><Calculator className="w-4 h-4" /></button>
-                <button onClick={() => setShowMetricsExport(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Export Metrics (CSV/JSON)"><FileDown className="w-4 h-4" /></button>
-                <button onClick={() => setShowExportModal(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Export All Data"><Download className="w-4 h-4" /></button>
+                <button onClick={() => setShowMetricsExport(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-xs font-medium flex items-center gap-1" title="Export Metrics Report"><FileDown className="w-3.5 h-3.5" />Export</button>
+                <button onClick={() => setShowExportModal(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Export Raw Data"><Download className="w-4 h-4" /></button>
                 <button onClick={() => setShowUploadHelp(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Help"><HelpCircle className="w-4 h-4" /></button>
               </div>
             </div>
@@ -19414,7 +19423,7 @@ if (shopifySkuWithShipping.length > 0) {
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
               <FileDown className="w-5 h-5 text-violet-400" />
-              Export Metrics
+              Export Metrics Report
             </h2>
             <button onClick={() => setShowMetricsExport(false)} className="p-1 hover:bg-slate-700 rounded">
               <X className="w-5 h-5 text-slate-400" />
@@ -19423,29 +19432,40 @@ if (shopifySkuWithShipping.length > 0) {
           
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Date Range</label>
-              <select 
-                value={metricsExportRange} 
-                onChange={(e) => setMetricsExportRange(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white"
-              >
-                <option value="last-week">Last Week</option>
-                <option value="last-month">Last Month</option>
-                <option value="last-quarter">Last Quarter</option>
-                <option value="ytd">Year to Date</option>
-                <option value="custom">Custom Range</option>
-              </select>
+              <label className="block text-sm font-medium text-slate-300 mb-3">📅 Select Date Range</label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { value: 'all', label: 'All Data' },
+                  { value: 'last-week', label: 'Last Week' },
+                  { value: 'last-month', label: 'Last Month' },
+                  { value: 'last-quarter', label: 'Last Quarter' },
+                  { value: 'ytd', label: 'Year to Date' },
+                  { value: 'custom', label: 'Custom Range' },
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setMetricsExportRange(opt.value)}
+                    className={`p-3 rounded-lg text-sm font-medium transition-all ${
+                      metricsExportRange === opt.value 
+                        ? 'bg-violet-600 text-white ring-2 ring-violet-400' 
+                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
             
             {metricsExportRange === 'custom' && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3 p-3 bg-slate-900/50 rounded-lg">
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Start Date</label>
                   <input 
                     type="date" 
                     value={metricsExportCustomStart}
                     onChange={(e) => setMetricsExportCustomStart(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2 text-white text-sm"
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 text-white text-sm"
                   />
                 </div>
                 <div>
@@ -19454,19 +19474,18 @@ if (shopifySkuWithShipping.length > 0) {
                     type="date" 
                     value={metricsExportCustomEnd}
                     onChange={(e) => setMetricsExportCustomEnd(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2 text-white text-sm"
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 text-white text-sm"
                   />
                 </div>
               </div>
             )}
             
             <div className="bg-slate-900/50 rounded-lg p-4 text-sm text-slate-300">
-              <p className="font-medium text-white mb-2">Export includes:</p>
-              <ul className="space-y-1 text-slate-400">
-                <li>• Revenue by channel (Amazon, Shopify)</li>
-                <li>• Profit & margins</li>
-                <li>• Ad spend & ROAS</li>
-                <li>• Units sold & returns</li>
+              <p className="font-medium text-white mb-2">📊 Export includes:</p>
+              <ul className="space-y-1 text-slate-400 text-xs">
+                <li>• Revenue, profit & margins by channel</li>
+                <li>• Ad spend & ROAS (Amazon, Meta, Google)</li>
+                <li>• Units sold, returns & AOV</li>
                 <li>• Top 20 SKUs by revenue</li>
                 <li>• Daily breakdown (if available)</li>
               </ul>
