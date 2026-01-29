@@ -11289,6 +11289,210 @@ Analyze the data and respond with ONLY this JSON:
       const ctx = prepareDataContext();
       const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
       
+      // ========== BUILD VERIFIED FACTS DIRECTLY FROM SOURCE DATA ==========
+      // HYBRID APPROACH: Period data + Weekly data for complete coverage
+      // Period data has historical SKU breakdowns (including Amazon)
+      // Weekly data fills gaps for recent weeks not yet in period aggregates
+      
+      const computedSkuTotals = {};
+      
+      // STEP 1: Get all periods that have SKU data (for tracking what's covered)
+      const periodsWithData = new Set();
+      
+      // Process period data first (2025 + 2026 monthly)
+      Object.entries(allPeriodsData).forEach(([periodKey, periodData]) => {
+        // Only process 2025 and 2026 monthly data
+        if (!periodKey.includes('2025') && !periodKey.includes('2026')) return;
+        if (periodKey === '2025' || periodKey === '2026') return; // Skip consolidated totals
+        
+        periodsWithData.add(periodKey);
+        
+        // Process Amazon SKUs from period
+        (periodData.amazon?.skuData || []).forEach(sku => {
+          const skuId = sku.sku || sku.msku || '';
+          if (!skuId) return;
+          const rev = sku.netSales || sku.revenue || 0;
+          const units = sku.unitsSold || sku.units || 0;
+          if (!computedSkuTotals[skuId]) {
+            computedSkuTotals[skuId] = { 
+              sku: skuId, 
+              name: savedProductNames[skuId] || sku.name || skuId,
+              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
+              periodMonths: new Set()
+            };
+          }
+          computedSkuTotals[skuId].revenue += rev;
+          computedSkuTotals[skuId].units += units;
+          computedSkuTotals[skuId].amazonRev += rev;
+          computedSkuTotals[skuId].periodMonths.add(periodKey);
+        });
+        
+        // Process Shopify SKUs from period
+        (periodData.shopify?.skuData || []).forEach(sku => {
+          const skuId = sku.sku || sku.title || '';
+          if (!skuId) return;
+          const rev = sku.netSales || sku.revenue || 0;
+          const units = sku.unitsSold || sku.units || 0;
+          if (!computedSkuTotals[skuId]) {
+            computedSkuTotals[skuId] = { 
+              sku: skuId, 
+              name: savedProductNames[skuId] || sku.name || skuId,
+              revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
+              periodMonths: new Set()
+            };
+          }
+          computedSkuTotals[skuId].revenue += rev;
+          computedSkuTotals[skuId].units += units;
+          computedSkuTotals[skuId].shopifyRev += rev;
+          computedSkuTotals[skuId].periodMonths.add(periodKey);
+        });
+      });
+      
+      // STEP 2: Add weekly data for weeks NOT covered by period data
+      // This handles cases where period aggregates are missing certain SKUs for certain months
+      const sortedWeeks = Object.keys(allWeeksData).sort();
+      
+      // Helper to get period key from week date (e.g., "2025-11-23" -> "november-2025")
+      const monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+      const weekToPeriod = (weekDate) => {
+        const [year, month] = weekDate.split('-');
+        return `${monthNames[parseInt(month, 10) - 1]}-${year}`;
+      };
+      
+      // Process weekly data for 2025+2026
+      sortedWeeks.forEach(weekKey => {
+        if (!weekKey.startsWith('2025') && !weekKey.startsWith('2026')) return;
+        
+        const weekData = allWeeksData[weekKey];
+        if (!weekData) return;
+        
+        const periodKey = weekToPeriod(weekKey);
+        
+        // Process Shopify SKUs from weekly (always add - weekly has good Shopify coverage)
+        (weekData.shopify?.skuData || []).forEach(sku => {
+          const skuId = sku.sku || sku.title || '';
+          if (!skuId) return;
+          const rev = sku.netSales || sku.revenue || 0;
+          const units = sku.unitsSold || sku.units || 0;
+          
+          // Only add if this SKU doesn't have this month in period data
+          if (!computedSkuTotals[skuId] || !computedSkuTotals[skuId].periodMonths.has(periodKey)) {
+            if (!computedSkuTotals[skuId]) {
+              computedSkuTotals[skuId] = { 
+                sku: skuId, 
+                name: savedProductNames[skuId] || sku.name || skuId,
+                revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
+                periodMonths: new Set()
+              };
+            }
+            computedSkuTotals[skuId].revenue += rev;
+            computedSkuTotals[skuId].units += units;
+            computedSkuTotals[skuId].shopifyRev += rev;
+          }
+        });
+        
+        // Process Amazon SKUs from weekly (only if there's actual Amazon SKU data)
+        (weekData.amazon?.skuData || []).forEach(sku => {
+          const skuId = sku.sku || sku.msku || '';
+          if (!skuId) return;
+          const rev = sku.netSales || sku.revenue || 0;
+          const units = sku.unitsSold || sku.units || 0;
+          
+          // Only add if this SKU doesn't have this month in period data
+          if (!computedSkuTotals[skuId] || !computedSkuTotals[skuId].periodMonths.has(periodKey)) {
+            if (!computedSkuTotals[skuId]) {
+              computedSkuTotals[skuId] = { 
+                sku: skuId, 
+                name: savedProductNames[skuId] || sku.name || skuId,
+                revenue: 0, units: 0, amazonRev: 0, shopifyRev: 0,
+                periodMonths: new Set()
+              };
+            }
+            computedSkuTotals[skuId].revenue += rev;
+            computedSkuTotals[skuId].units += units;
+            computedSkuTotals[skuId].amazonRev += rev;
+          }
+        });
+      });
+      
+      // Sort by revenue and add channel
+      const sortedSkuList = Object.values(computedSkuTotals)
+        .map(s => ({
+          ...s,
+          channel: s.amazonRev > s.shopifyRev ? 'Amazon' : 'Shopify'
+        }))
+        .sort((a, b) => b.revenue - a.revenue);
+      
+      // Compute period totals directly
+      const periodTotals = {};
+      const yearTotals = { '2024': 0, '2025': 0, '2026': 0 };
+      Object.entries(allPeriodsData).forEach(([periodKey, periodData]) => {
+        const rev = periodData.total?.revenue || 0;
+        if (rev > 0) {
+          periodTotals[periodKey] = rev;
+          // Aggregate by year
+          if (periodKey.includes('2024') && !periodKey.match(/^\d{4}$/)) yearTotals['2024'] += rev;
+          else if (periodKey.includes('2025') && periodKey !== '2025') yearTotals['2025'] += rev;
+          else if (periodKey.includes('2026') && periodKey !== '2026') yearTotals['2026'] += rev;
+        }
+      });
+      
+      // Compute weekly totals
+      const weekTotals = {};
+      let totalWeeklyRevenue = 0;
+      Object.entries(allWeeksData).forEach(([weekKey, weekData]) => {
+        const rev = weekData.total?.revenue || 0;
+        if (rev > 0) {
+          weekTotals[weekKey] = rev;
+          totalWeeklyRevenue += rev;
+        }
+      });
+      
+      const verifiedFacts = {
+        // Complete SKU rankings (all 30 products)
+        allSkus: sortedSkuList.map(s => ({
+          sku: s.sku,
+          name: s.name,
+          revenue: Math.round(s.revenue * 100) / 100,
+          units: s.units,
+          channel: s.channel
+        })),
+        
+        // Pre-formatted answers
+        worstSelling5: sortedSkuList.slice(-5).reverse().map((s, i) => ({
+          rank: i + 1,
+          sku: s.sku,
+          name: s.name,
+          revenue: Math.round(s.revenue * 100) / 100,
+          units: s.units,
+          channel: s.channel
+        })),
+        bestSelling5: sortedSkuList.slice(0, 5).map((s, i) => ({
+          rank: i + 1,
+          sku: s.sku,
+          name: s.name,
+          revenue: Math.round(s.revenue * 100) / 100,
+          units: s.units,
+          channel: s.channel
+        })),
+        
+        // Yearly totals
+        yearTotals: yearTotals,
+        
+        // Period totals
+        periodTotals: periodTotals,
+        
+        // Summary stats
+        totalRevenue: Object.values(yearTotals).reduce((a, b) => a + b, 0),
+        totalProducts: sortedSkuList.length,
+        totalPeriods: Object.keys(periodTotals).length,
+        totalWeeks: Object.keys(weekTotals).length,
+        
+        // Last week / month (for quick reference)
+        lastWeek: ctx.lastWeekByCategory || {},
+        currentMonth: ctx.currentMonthByCategory || {},
+      };
+      
       // Build alerts summary for AI
       const alertsSummary = [];
       if (ctx.inventory?.lowStockItems?.length > 0) {
@@ -11383,23 +11587,61 @@ Analyze the data and respond with ONLY this JSON:
       // Include week notes
       const notesData = Object.entries(weekNotes).filter(([k, v]) => v).map(([week, note]) => ({ week, note }));
       
-      const systemPrompt = `You are an expert e-commerce analyst and business advisor for "${ctx.storeName}". You have access to ALL uploaded sales data and can answer questions about any aspect of the business.
+      // Build verified facts as JSON for the prompt
+      const verifiedFactsJSON = JSON.stringify(verifiedFacts, null, 0);
+      
+      const systemPrompt = `You are an expert e-commerce analyst for "${ctx.storeName}".
 
-⚠️⚠️⚠️ VERIFIED DATA - USE THESE EXACT NUMBERS ⚠️⚠️⚠️
+═══════════════════════════════════════════════════════════════════
+█ VERIFIED DATA - THESE ARE THE ONLY CORRECT NUMBERS - USE EXACTLY █
+═══════════════════════════════════════════════════════════════════
+
+${JSON.stringify(verifiedFacts, null, 2)}
+
+═══════════════════════════════════════════════════════════════════
+█ CRITICAL RULES - READ BEFORE RESPONDING █
+═══════════════════════════════════════════════════════════════════
+
+1. WORST SELLING PRODUCTS: Copy EXACTLY from verifiedFacts.worstSelling5
+2. BEST SELLING PRODUCTS: Copy EXACTLY from verifiedFacts.bestSelling5  
+3. ALL REVENUE/UNIT NUMBERS: Must come from verifiedFacts - DO NOT calculate
+4. CHANNELS: Use the "channel" field from verifiedFacts (Amazon or Shopify)
+5. NEVER make up, estimate, or round numbers - use EXACT values from verifiedFacts
+
+EXAMPLE CORRECT RESPONSE for "worst selling products":
+Based on verified sales data:
+1. ${verifiedFacts.worstSelling5[0]?.sku || 'N/A'}: $${(verifiedFacts.worstSelling5[0]?.revenue || 0).toLocaleString('en-US', {minimumFractionDigits: 2})} revenue, ${verifiedFacts.worstSelling5[0]?.units || 0} units (${verifiedFacts.worstSelling5[0]?.channel || 'N/A'})
+...etc
+
+═══════════════════════════════════════════════════════════════════
+
+⚠️⚠️⚠️ VERIFIED DATA (TEXT FORMAT) - USE THESE EXACT NUMBERS ⚠️⚠️⚠️
 
 **5 WORST SELLING PRODUCTS (by revenue) - COPY EXACTLY:**
-${ctx.skuMasterData?.slice().reverse().slice(0, 5).map((s, i) => {
-  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
-  return `${i+1}. ${s.sku}: $${s.totalRevenue.toFixed(2)} revenue, ${s.totalUnits} units (${channel})`;
-}).join('\n')}
+${verifiedFacts.worstSelling5.map((s, i) => 
+  `${i+1}. ${s.sku}: $${s.revenue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} revenue, ${s.units} units (${s.channel})`
+).join('\n')}
 
 **5 BEST SELLING PRODUCTS (by revenue) - COPY EXACTLY:**
-${ctx.skuMasterData?.slice(0, 5).map((s, i) => {
-  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
-  return `${i+1}. ${s.sku}: $${s.totalRevenue.toFixed(2)} revenue, ${s.totalUnits} units (${channel})`;
-}).join('\n')}
+${verifiedFacts.bestSelling5.map((s, i) => 
+  `${i+1}. ${s.sku}: $${s.revenue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} revenue, ${s.units} units (${s.channel})`
+).join('\n')}
 
-🚨 WHEN ASKED ABOUT WORST/BEST SELLING: Copy the EXACT numbers above. DO NOT calculate, estimate, or modify these values.
+**ALL ${verifiedFacts.allSkus.length} PRODUCTS BY REVENUE (complete list):**
+${verifiedFacts.allSkus.map((s, i) => 
+  `${i+1}. ${s.sku}: $${s.revenue.toLocaleString('en-US', {minimumFractionDigits: 0})} (${s.units}u) ${s.channel}`
+).join('\n')}
+
+**YEARLY TOTALS:**
+- 2024: $${verifiedFacts.yearTotals['2024'].toLocaleString('en-US', {minimumFractionDigits: 2})}
+- 2025: $${verifiedFacts.yearTotals['2025'].toLocaleString('en-US', {minimumFractionDigits: 2})}
+- 2026: $${verifiedFacts.yearTotals['2026'].toLocaleString('en-US', {minimumFractionDigits: 2})}
+
+🚨🚨🚨 CRITICAL RULE: ONLY USE NUMBERS FROM THE VERIFIED DATA ABOVE 🚨🚨🚨
+- For ANY question about products, revenue, units, or rankings: Use ONLY the data above
+- NEVER make up numbers, estimate, or calculate - copy EXACTLY from the verified data
+- If data is not in the verified section, say "I don't have that specific data"
+- The "channel" field tells you if it's Amazon or Shopify - USE THIS
 
 🚨🚨🚨 CRITICAL DATA AVAILABILITY RULES - READ FIRST 🚨🚨🚨
 
@@ -11581,67 +11823,28 @@ ${ctx.productCatalog?.slice(0, 15).map(p => `"${p.name.substring(0, 40)}..." →
 === SKUs BY CATEGORY (for category queries) ===
 ${Object.entries(ctx.skusByCategory || {}).map(([cat, skus]) => `${cat}: ${skus.join(', ')}`).join('\n') || 'No categories'}
 
-=== 📦 SKU MASTER DATA (PRIMARY DATA SOURCE - USE THIS) ===
-IMPORTANT: This is the authoritative SKU-level data. Use SKUs as the primary identifier for all analysis.
+=== 📦 SKU MASTER DATA (REFERENCE - verifiedFacts above is authoritative) ===
 
-**COMPLETE ALL SKUs DATA (${ctx.skuMasterData?.length || 0} products - FULL LIST, sorted by revenue high to low):**
-${ctx.skuMasterData?.map(s => {
-  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'AMZ' : 'SHOP';
-  return `${s.sku}:$${s.totalRevenue.toFixed(0)}|${s.totalUnits}u|${channel}`;
-}).join(' ') || 'No SKU data'}
+⚠️ IMPORTANT: For SKU data, ALWAYS use the VERIFIED DATA section above. The verifiedFacts JSON and the "5 WORST/BEST SELLING" text are the ONLY authoritative sources.
 
-**TOP 10 SKUs BY REVENUE (best sellers):**
-${ctx.skuMasterData?.slice(0, 10).map(s => {
-  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
-  return `${s.sku}: "${s.name}" [${s.category}] - $${s.totalRevenue.toFixed(2)} rev, ${s.totalUnits} units - PRIMARY CHANNEL: ${channel} (Amazon: $${(s.amazonRevenue || 0).toFixed(0)}, Shopify: $${(s.shopifyRevenue || 0).toFixed(0)})`;
-}).join('\n') || 'No SKU data'}
+**ALL ${verifiedFacts.allSkus.length} PRODUCTS (for reference):**
+${verifiedFacts.allSkus.map((s, i) => `${i+1}. ${s.sku}: $${s.revenue.toLocaleString('en-US', {minimumFractionDigits: 0})} rev, ${s.units}u (${s.channel})`).join('\n')}
 
-**BOTTOM 15 SKUs BY REVENUE (WORST SELLERS - USE THIS for "worst selling" questions):**
-${ctx.skuMasterData?.slice().reverse().slice(0, 15).map((s, i) => {
-  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
-  return `${i+1}. ${s.sku}: "${s.name}" - $${s.totalRevenue.toFixed(2)} revenue, ${s.totalUnits} units - CHANNEL: ${channel} (AMZ: $${(s.amazonRevenue || 0).toFixed(0)}, SHOP: $${(s.shopifyRevenue || 0).toFixed(0)})`;
-}).join('\n') || 'No SKU data'}
-
-**SKU BREAKDOWN BY 2025 MONTH:**
-${(() => {
-  const byMonth = {};
-  ctx.skuMasterData?.forEach(s => {
-    Object.entries(s.byPeriod || {}).forEach(([period, data]) => {
-      if (!byMonth[period]) byMonth[period] = [];
-      if (data.revenue > 0) byMonth[period].push({ sku: s.sku, name: s.name, category: s.category, revenue: data.revenue, units: data.units });
-    });
-  });
-  return Object.entries(byMonth)
-    .filter(([p]) => p.includes('2025') || p.includes('-2025'))
-    .sort(([a], [b]) => a.localeCompare(b))
-    .slice(0, 6)
-    .map(([period, skus]) => {
-      const top3 = skus.sort((a, b) => b.revenue - a.revenue).slice(0, 3);
-      return `${period}: ${top3.map(s => `${s.sku}=$${s.revenue.toFixed(0)}`).join(', ')}`;
-    }).join('\n') || 'No period data';
-})()}
-
-**CATEGORY TOTALS FROM SKU DATA:**
+**CATEGORY TOTALS:**
 ${(() => {
   const cats = {};
-  ctx.skuMasterData?.forEach(s => {
-    if (!cats[s.category]) cats[s.category] = { revenue: 0, units: 0, skuCount: 0 };
-    cats[s.category].revenue += s.totalRevenue;
-    cats[s.category].units += s.totalUnits;
-    cats[s.category].skuCount++;
+  verifiedFacts.allSkus.forEach(s => {
+    const cat = productCatalog.find(p => p.sku === s.sku)?.category || 'Other';
+    if (!cats[cat]) cats[cat] = { revenue: 0, units: 0, count: 0 };
+    cats[cat].revenue += s.revenue;
+    cats[cat].units += s.units;
+    cats[cat].count++;
   });
   return Object.entries(cats)
     .sort(([,a], [,b]) => b.revenue - a.revenue)
-    .map(([cat, d]) => `${cat}: $${d.revenue.toFixed(0)} revenue, ${d.units} units (${d.skuCount} SKUs)`)
+    .map(([cat, d]) => `${cat}: $${d.revenue.toLocaleString('en-US', {minimumFractionDigits: 0})} (${d.units} units, ${d.count} SKUs)`)
     .join('\n') || 'No category data';
 })()}
-
-🔑 SKU-CENTRIC ANALYSIS RULES:
-- ALWAYS use SKU codes (e.g., DDPE0004Shop) as primary identifiers
-- Look up product names from productCatalog when needed for display
-- For category questions, find SKUs in that category and sum their data
-- For period questions, use skuMasterData[x].byPeriod[period]
-- For week questions, use skuMasterData[x].byWeek[week]
 
 === 🎯🎯🎯 PRE-COMPUTED TIMEFRAME DATA - USE THIS FOR TIMEFRAME QUESTIONS 🎯🎯🎯 ===
 
@@ -12370,77 +12573,58 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
 
 ⚠️ FOR WORST/BEST SELLING QUESTIONS: Use the VERIFIED DATA section at the top of this prompt. Those are the ONLY correct numbers. Do not calculate or modify them.
 
-=== 📋 PRE-COMPUTED ANSWERS (COPY THESE EXACTLY) ===
+=== 📋 PRE-COMPUTED ANSWERS (COPY THESE EXACTLY FROM verifiedFacts) ===
 
 **FOR "WORST SELLING PRODUCTS" QUESTIONS:**
-When user asks about worst selling products, COPY THIS EXACT ANSWER (just update if asking for different count):
+When user asks about worst selling products, COPY THIS EXACT ANSWER:
 
 The 5 worst selling products by revenue are:
-${ctx.skuMasterData?.slice().reverse().slice(0, 5).map((s, i) => {
-  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
-  const name = ctx.productCatalog?.find(p => p.sku === s.sku)?.name || s.name || s.sku;
-  return `${i+1}. **${s.sku}** (${name.substring(0, 50)}...)
-   - Revenue: $${s.totalRevenue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-   - Units: ${s.totalUnits.toLocaleString()}
-   - Channel: ${channel}`;
+${verifiedFacts.worstSelling5.map((s, i) => {
+  return `${i+1}. **${s.sku}** (${s.name.substring(0, 50)})
+   - Revenue: $${s.revenue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+   - Units: ${s.units.toLocaleString()}
+   - Channel: ${s.channel}`;
 }).join('\n\n')}
 
 **FOR "BEST SELLING PRODUCTS" QUESTIONS:**
-${ctx.skuMasterData?.slice(0, 5).map((s, i) => {
-  const channel = (s.amazonRevenue || 0) > (s.shopifyRevenue || 0) ? 'Amazon' : 'Shopify';
-  const name = ctx.productCatalog?.find(p => p.sku === s.sku)?.name || s.name || s.sku;
-  return `${i+1}. ${s.sku} (${name.substring(0, 40)}): $${s.totalRevenue.toLocaleString('en-US', {minimumFractionDigits: 0})} revenue, ${s.totalUnits.toLocaleString()} units - ${channel}`;
+${verifiedFacts.bestSelling5.map((s, i) => {
+  return `${i+1}. ${s.sku} (${s.name.substring(0, 40)}): $${s.revenue.toLocaleString('en-US', {minimumFractionDigits: 0})} revenue, ${s.units.toLocaleString()} units - ${s.channel}`;
 }).join('\n')}
 
 === END PRE-COMPUTED ANSWERS ===
 
 === 🧠 AI LEARNING INSTRUCTIONS ===
-You have access to the MULTI-SIGNAL AI FORECAST which is the most accurate forecast available. Use it as your PRIMARY source for predictions.
 
-**PRODUCT IDENTIFICATION (CRITICAL):**
-- Users may ask using EITHER product name ("lip balm", "assorted 3-pack") OR SKU ("DDPE0004Shop")
-- ALWAYS resolve to SKU internally for data lookup
-- When user says "lip balm" → find SKUs in skusByCategory["Lip Balm"] → aggregate skuMasterData for those SKUs
-- When user says "DDPE0004Shop" → look up directly in skuMasterData
-- When user says "assorted pack" → search productCatalog for matching name → get SKU → look up in skuMasterData
-- In responses, show BOTH: "DDPE0004Shop (Assorted 3-Pack Lip Balm): $X revenue"
+🚨🚨🚨 MOST IMPORTANT RULE 🚨🚨🚨
+For ANY question about SKU data, revenue, units, or rankings:
+1. FIRST look at the verifiedFacts JSON at the TOP of this prompt
+2. COPY the exact numbers from verifiedFacts - DO NOT calculate or estimate
+3. Use the "channel" field to determine Amazon vs Shopify
+4. If you don't see the data in verifiedFacts, say "I don't have that specific data"
 
-**FOR "WORST SELLING" / "BOTTOM PERFORMER" QUESTIONS (CRITICAL):**
-- ALWAYS use the "BOTTOM 15 SKUs BY REVENUE" section in SKU MASTER DATA above
-- The data shows EXACT revenue and units - COPY THESE NUMBERS EXACTLY
-- The channel (Amazon vs Shopify) is shown for each SKU - USE THIS
-- DO NOT round, estimate, or modify the numbers in any way
-- If a SKU shows "SHOP" or "Shopify", it is a SHOPIFY product, NOT Amazon
-- SKUs ending in "Shop" are typically Shopify products
+**PRODUCT IDENTIFICATION:**
+- Users may ask using product name OR SKU
+- Find the SKU in verifiedFacts.allSkus and use that data
+- In responses, show BOTH: "DDPE0004Shop (Product Name): $X revenue"
 
-⚠️ EXAMPLE OF CORRECT RESPONSE FORMAT:
-"The worst selling product since 2025 is DDPE0010Shop with $400.07 revenue and 57 units, sold primarily on Shopify."
+**FOR "WORST SELLING" QUESTIONS - COPY EXACTLY FROM verifiedFacts.worstSelling5:**
+1. ${verifiedFacts.worstSelling5[0]?.sku}: $${verifiedFacts.worstSelling5[0]?.revenue} (${verifiedFacts.worstSelling5[0]?.channel})
+2. ${verifiedFacts.worstSelling5[1]?.sku}: $${verifiedFacts.worstSelling5[1]?.revenue} (${verifiedFacts.worstSelling5[1]?.channel})
+3. ${verifiedFacts.worstSelling5[2]?.sku}: $${verifiedFacts.worstSelling5[2]?.revenue} (${verifiedFacts.worstSelling5[2]?.channel})
+4. ${verifiedFacts.worstSelling5[3]?.sku}: $${verifiedFacts.worstSelling5[3]?.revenue} (${verifiedFacts.worstSelling5[3]?.channel})
+5. ${verifiedFacts.worstSelling5[4]?.sku}: $${verifiedFacts.worstSelling5[4]?.revenue} (${verifiedFacts.worstSelling5[4]?.channel})
 
-❌ WRONG: Making up numbers like $567.75 or claiming Shopify products are Amazon
-✅ RIGHT: Copy the exact numbers from BOTTOM 15 SKUs section above
-
-**FOR SKU-LEVEL ANALYSIS:**
-1. Use skuMasterData as the authoritative source for all SKU data
-2. Each SKU has: totalRevenue, totalUnits, byPeriod (monthly), byWeek (recent weeks)
-3. For category totals, sum data from all SKUs in that category
-4. For period-specific questions, use skuMasterData[sku].byPeriod["january-2025"]
+⚠️ These numbers are PRE-VERIFIED. Copy them EXACTLY. Do not calculate or estimate.
 
 **FOR PREDICTIONS:**
-1. Always use the Multi-Signal AI Forecast data (if available) for weekly predictions
-2. Check the FORECAST ACCURACY LEARNING section to understand how past predictions performed
-3. Apply any correction bias you observe (e.g., if forecasts are consistently 5% low, adjust up 5%)
-4. Consider momentum - if daily trends show acceleration/deceleration, factor this in
-
-**FOR ANALYSIS:**
-1. Cross-reference sales data with banking data when available to validate accuracy
-2. Use seasonal patterns to contextualize current performance
-3. Reference the day-of-week patterns for tactical recommendations
+1. Use the Multi-Signal AI Forecast data for weekly predictions
+2. Check FORECAST ACCURACY LEARNING to understand past performance
+3. Be transparent about confidence levels
 
 **FOR CONSISTENCY:**
-1. Your predictions should align with the Multi-Signal AI Forecast shown on the dashboard
-2. If asked "what will next week's revenue be?", use the Multi-Signal next week prediction
-3. Be transparent about confidence levels and data quality
-4. Always show SKU codes alongside product names in responses for clarity
+1. Your predictions should align with the Multi-Signal AI Forecast
+2. If asked "what will next week's revenue be?", use the Multi-Signal prediction
+3. Always show SKU codes alongside product names
 
 The goal is for you to learn from the forecast vs actual comparisons over time and become increasingly accurate.`;
 
