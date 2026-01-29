@@ -6245,59 +6245,58 @@ const savePeriods = async (d) => {
       }
       
       console.log('All saves complete, clearing upload state...');
+      
+      // Clear upload state first
       setAmazonBulkFiles([]);
       setAmazonBulkParsed(null);
-      setAmazonBulkProcessing(false); // Reset processing state immediately
       
       const messages = [];
       if (dailyImported > 0) messages.push(`${dailyImported} daily`);
       if (weeklyImported > 0) messages.push(`${weeklyImported} weekly`);
       if (monthlyImported > 0) messages.push(`${monthlyImported} monthly/period`);
       
+      // Build success message
+      let toastMsg = '';
+      let toastType = 'success';
+      
       if (messages.length > 0) {
-        let toastMsg = `Imported ${messages.join(', ')} report${dailyImported + weeklyImported + monthlyImported > 1 ? 's' : ''}!`;
+        toastMsg = `✅ Imported ${messages.join(', ')} report${dailyImported + weeklyImported + monthlyImported > 1 ? 's' : ''}!`;
         if (skippedDuplicates > 0) {
           toastMsg += ` (${skippedDuplicates} duplicate${skippedDuplicates > 1 ? 's' : ''} skipped)`;
         }
-        setToast({ 
-          message: toastMsg, 
-          type: 'success' 
-        });
       } else if (skippedDuplicates > 0) {
-        setToast({ 
-          message: `All ${skippedDuplicates} file${skippedDuplicates > 1 ? 's' : ''} skipped - data already exists with equal or higher revenue.`, 
-          type: 'info' 
-        });
+        toastMsg = `All ${skippedDuplicates} file${skippedDuplicates > 1 ? 's' : ''} skipped - data already exists.`;
+        toastType = 'info';
       } else {
-        setToast({ 
-          message: 'No data was imported. Check console for details.', 
-          type: 'warning' 
-        });
+        toastMsg = 'No data was imported. Check console for details.';
+        toastType = 'warning';
       }
       
-      // Navigate to appropriate view after a short delay to let React settle
-      console.log('About to navigate. weeklyImported:', weeklyImported, 'dailyImported:', dailyImported, 'monthlyImported:', monthlyImported);
+      console.log('Import complete:', toastMsg);
+      
+      // Use setTimeout to break out of any React batching issues
       setTimeout(() => {
-        if (weeklyImported > 0) {
-          const latestWeek = Object.keys(updatedWeeklyData).sort().reverse()[0];
-          setSelectedWeek(latestWeek);
-          setView('weekly');
-        } else if (dailyImported > 0) {
-          const latestDay = Object.keys(updatedDailyData).filter(k => hasDailySalesData(updatedDailyData[k])).sort().reverse()[0];
-          if (latestDay) setSelectedDay(latestDay);
-          setView('daily');
-        } else if (monthlyImported > 0) {
-          setView('periods');
-        }
-        console.log('Navigation complete');
-      }, 100);
+        setToast({ message: toastMsg, type: toastType });
+        // Use functional update to ensure React detects the change
+        setAmazonBulkProcessing(prev => {
+          console.log('Setting amazonBulkProcessing from', prev, 'to false');
+          return false;
+        });
+        console.log('Import finished successfully - processing state cleared');
+      }, 0);
     } catch (err) {
       console.error('Bulk upload error:', err);
       console.error('Error stack:', err.stack);
       setToast({ message: 'Error processing files: ' + err.message, type: 'error' });
-    } finally {
-      console.log('Finally block executing - setting processing to false');
       setAmazonBulkProcessing(false);
+    } finally {
+      // Ensure processing is stopped no matter what
+      setTimeout(() => {
+        setAmazonBulkProcessing(prev => {
+          console.log('Finally: Setting amazonBulkProcessing from', prev, 'to false');
+          return false;
+        });
+      }, 100);
     }
   }, [amazonBulkFiles, getCogsLookup, allDaysData, allWeeksData, allPeriodsData, save]);
   
@@ -16626,6 +16625,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               >
                 {amazonBulkProcessing ? (
                   <><Loader2 className="w-5 h-5 animate-spin" />Processing...</>
+                ) : amazonBulkFiles.length === 0 ? (
+                  <><Upload className="w-5 h-5" />Select Files to Import</>
                 ) : (
                   <><Upload className="w-5 h-5" />Import {amazonBulkFiles.length} Report{amazonBulkFiles.length !== 1 ? 's' : ''}</>
                 )}
