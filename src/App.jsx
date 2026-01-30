@@ -3021,8 +3021,14 @@ const loadFromLocal = useCallback(() => {
     if (r) {
       const d = JSON.parse(r);
       setAllWeeksData(d);
-      const today = new Date().toISOString().split('T')[0];
-      const w = Object.keys(d).filter(wk => wk <= today).sort().reverse();
+      const today = new Date();
+      // Allow current week: week is visible if it has started
+      const w = Object.keys(d).filter(wk => {
+        const weekEnd = new Date(wk + 'T12:00:00');
+        const weekStart = new Date(weekEnd);
+        weekStart.setDate(weekStart.getDate() - 6);
+        return weekStart <= today;
+      }).sort().reverse();
       if (w.length) { setSelectedWeek(w[0]); }
     }
   } catch {}
@@ -3418,8 +3424,14 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     
     setAllWeeksData(cloud.sales || {});
     setAllDaysData(cloud.dailySales || {}); // Load daily data
-    const today = new Date().toISOString().split('T')[0];
-    const w = Object.keys(cloud.sales || {}).filter(wk => wk <= today).sort().reverse();
+    const today = new Date();
+    // Allow current week: week is visible if it has started
+    const w = Object.keys(cloud.sales || {}).filter(wk => {
+      const weekEnd = new Date(wk + 'T12:00:00');
+      const weekStart = new Date(weekEnd);
+      weekStart.setDate(weekStart.getDate() - 6);
+      return weekStart <= today;
+    }).sort().reverse();
     if (w.length) { setSelectedWeek(w[0]); }
     setInvHistory(cloud.inventory || {});
     setSavedCogs(cloud.cogs?.lookup || {});
@@ -6503,8 +6515,13 @@ const savePeriods = async (d) => {
       }
     });
     
-    const today = new Date().toISOString().split('T')[0];
-    const r = Object.keys(u).filter(wk => wk <= today).sort().reverse(); 
+    const today = new Date();
+    const r = Object.keys(u).filter(wk => {
+      const weekEnd = new Date(wk + 'T12:00:00');
+      const weekStart = new Date(weekEnd);
+      weekStart.setDate(weekStart.getDate() - 6);
+      return weekStart <= today;
+    }).sort().reverse(); 
     if (r.length) setSelectedWeek(r[0]); 
     else { setView('upload'); setSelectedWeek(null); }
   };
@@ -7635,8 +7652,13 @@ const savePeriods = async (d) => {
       // Navigate to appropriate view
       console.log('About to navigate. weeklyImported:', weeklyImported, 'dailyImported:', dailyImported);
       if (weeklyImported > 0) {
-        const todayStr = new Date().toISOString().split('T')[0];
-        const latestWeek = Object.keys(updatedWeeklyData).filter(w => w <= todayStr).sort().reverse()[0];
+        const todayDate = new Date();
+        const latestWeek = Object.keys(updatedWeeklyData).filter(wk => {
+          const weekEnd = new Date(wk + 'T12:00:00');
+          const weekStart = new Date(weekEnd);
+          weekStart.setDate(weekStart.getDate() - 6);
+          return weekStart <= todayDate;
+        }).sort().reverse()[0];
         if (latestWeek) setSelectedWeek(latestWeek);
         setView('weekly');
       } else if (dailyImported > 0) {
@@ -20541,13 +20563,23 @@ if (shopifySkuWithShipping.length > 0) {
 
   if (view === 'weekly' && selectedWeek) {
     const derivedWeeks = deriveWeeksFromDays(allDaysData);
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+    // Allow current week: week is visible if it has started (weekEnding - 6 days <= today)
     const weeks = Array.from(new Set([...(Object.keys(allWeeksData || {})), ...(Object.keys(derivedWeeks || {}))]))
-      .filter(w => w <= today) // Only include weeks that have ended (not future)
+      .filter(w => {
+        const weekEnd = new Date(w + 'T12:00:00');
+        const weekStart = new Date(weekEnd);
+        weekStart.setDate(weekStart.getDate() - 6); // Week starts 6 days before ending
+        return weekStart <= today; // Show if week has started
+      })
       .sort().reverse();
     
-    // If current selectedWeek is in the future, switch to most recent valid week
-    if (selectedWeek > today && weeks.length > 0) {
+    // If current selectedWeek hasn't started yet, switch to most recent valid week
+    const selectedWeekEnd = new Date(selectedWeek + 'T12:00:00');
+    const selectedWeekStart = new Date(selectedWeekEnd);
+    selectedWeekStart.setDate(selectedWeekStart.getDate() - 6);
+    if (selectedWeekStart > today && weeks.length > 0) {
       setSelectedWeek(weeks[0]);
       return null; // Re-render with valid week
     }
