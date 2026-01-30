@@ -1681,6 +1681,8 @@ const handleLogout = async () => {
   const [showSkuSettings, setShowSkuSettings] = useState(false);
   const [editingSku, setEditingSku] = useState(null);
   const [invShowZeroStock, setInvShowZeroStock] = useState(false);
+  const [invSortColumn, setInvSortColumn] = useState('totalValue'); // Default sort by value
+  const [invSortDirection, setInvSortDirection] = useState('desc'); // desc = highest first
   const [skuSettingsSearch, setSkuSettingsSearch] = useState('');
   const [skuSettingsEditItem, setSkuSettingsEditItem] = useState(null);
   const [skuSettingsEditForm, setSkuSettingsEditForm] = useState({});
@@ -3019,7 +3021,8 @@ const loadFromLocal = useCallback(() => {
     if (r) {
       const d = JSON.parse(r);
       setAllWeeksData(d);
-      const w = Object.keys(d).sort().reverse();
+      const today = new Date().toISOString().split('T')[0];
+      const w = Object.keys(d).filter(wk => wk <= today).sort().reverse();
       if (w.length) { setSelectedWeek(w[0]); }
     }
   } catch {}
@@ -3415,7 +3418,8 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     
     setAllWeeksData(cloud.sales || {});
     setAllDaysData(cloud.dailySales || {}); // Load daily data
-    const w = Object.keys(cloud.sales || {}).sort().reverse();
+    const today = new Date().toISOString().split('T')[0];
+    const w = Object.keys(cloud.sales || {}).filter(wk => wk <= today).sort().reverse();
     if (w.length) { setSelectedWeek(w[0]); }
     setInvHistory(cloud.inventory || {});
     setSavedCogs(cloud.cogs?.lookup || {});
@@ -6499,7 +6503,8 @@ const savePeriods = async (d) => {
       }
     });
     
-    const r = Object.keys(u).sort().reverse(); 
+    const today = new Date().toISOString().split('T')[0];
+    const r = Object.keys(u).filter(wk => wk <= today).sort().reverse(); 
     if (r.length) setSelectedWeek(r[0]); 
     else { setView('upload'); setSelectedWeek(null); }
   };
@@ -7630,11 +7635,13 @@ const savePeriods = async (d) => {
       // Navigate to appropriate view
       console.log('About to navigate. weeklyImported:', weeklyImported, 'dailyImported:', dailyImported);
       if (weeklyImported > 0) {
-        const latestWeek = Object.keys(updatedWeeklyData).sort().reverse()[0];
-        setSelectedWeek(latestWeek);
+        const todayStr = new Date().toISOString().split('T')[0];
+        const latestWeek = Object.keys(updatedWeeklyData).filter(w => w <= todayStr).sort().reverse()[0];
+        if (latestWeek) setSelectedWeek(latestWeek);
         setView('weekly');
       } else if (dailyImported > 0) {
-        const latestDay = Object.keys(updatedDailyData).filter(k => hasDailySalesData(updatedDailyData[k])).sort().reverse()[0];
+        const todayStr = new Date().toISOString().split('T')[0];
+        const latestDay = Object.keys(updatedDailyData).filter(k => hasDailySalesData(updatedDailyData[k]) && k <= todayStr).sort().reverse()[0];
         if (latestDay) setSelectedDay(latestDay);
         setView('daily');
       } else if (monthlyImported > 0) {
@@ -20215,7 +20222,15 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   // ==================== DAILY VIEW ====================
   if (view === 'daily' && selectedDay && allDaysData[selectedDay]) {
     const dayData = allDaysData[selectedDay];
-    const daysWithSales = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse();
+    const today = new Date().toISOString().split('T')[0];
+    const daysWithSales = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k]) && k <= today).sort().reverse();
+    
+    // If current selectedDay is in the future, switch to most recent valid day
+    if (selectedDay > today && daysWithSales.length > 0) {
+      setSelectedDay(daysWithSales[0]);
+      return null; // Re-render with valid day
+    }
+    
     const idx = daysWithSales.indexOf(selectedDay);
     
     let amazon = dayData.amazon || {};
@@ -20421,7 +20436,8 @@ if (shopifySkuWithShipping.length > 0) {
         }
       });
       
-      const remaining = Object.keys(updated).filter(k => hasDailySalesData(updated[k])).sort().reverse();
+      const today = new Date().toISOString().split('T')[0];
+      const remaining = Object.keys(updated).filter(k => hasDailySalesData(updated[k]) && k <= today).sort().reverse();
       if (remaining.length) setSelectedDay(remaining[0]);
       else { setView('dashboard'); setSelectedDay(null); }
     };
@@ -20525,7 +20541,17 @@ if (shopifySkuWithShipping.length > 0) {
 
   if (view === 'weekly' && selectedWeek) {
     const derivedWeeks = deriveWeeksFromDays(allDaysData);
-    const weeks = Array.from(new Set([...(Object.keys(allWeeksData || {})), ...(Object.keys(derivedWeeks || {}))])).sort().reverse();
+    const today = new Date().toISOString().split('T')[0];
+    const weeks = Array.from(new Set([...(Object.keys(allWeeksData || {})), ...(Object.keys(derivedWeeks || {}))]))
+      .filter(w => w <= today) // Only include weeks that have ended (not future)
+      .sort().reverse();
+    
+    // If current selectedWeek is in the future, switch to most recent valid week
+    if (selectedWeek > today && weeks.length > 0) {
+      setSelectedWeek(weeks[0]);
+      return null; // Re-render with valid week
+    }
+    
     const idx = weeks.indexOf(selectedWeek);
     const rawData = mergeWeekData(allWeeksData[selectedWeek], derivedWeeks[selectedWeek]);
     if (!rawData) {
@@ -21262,7 +21288,33 @@ if (shopifySkuWithShipping.length > 0) {
     })();
     
     // Filter items based on user preference (show only with inventory by default)
-    const items = invShowZeroStock ? deduplicatedItems : deduplicatedItems.filter(item => (item.totalQty || 0) > 0);
+    const filteredItems = invShowZeroStock ? deduplicatedItems : deduplicatedItems.filter(item => (item.totalQty || 0) > 0);
+    
+    // Sort items based on selected column
+    const items = [...filteredItems].sort((a, b) => {
+      let aVal, bVal;
+      switch (invSortColumn) {
+        case 'name': aVal = a.name || a.sku; bVal = b.name || b.sku; break;
+        case 'amazonQty': aVal = a.amazonQty || 0; bVal = b.amazonQty || 0; break;
+        case 'threeplQty': aVal = a.threeplQty || 0; bVal = b.threeplQty || 0; break;
+        case 'totalQty': aVal = a.totalQty || 0; bVal = b.totalQty || 0; break;
+        case 'totalValue': aVal = a.totalValue || 0; bVal = b.totalValue || 0; break;
+        case 'amzWeeklyVel': aVal = a.amzWeeklyVel || 0; bVal = b.amzWeeklyVel || 0; break;
+        case 'shopWeeklyVel': aVal = a.shopWeeklyVel || 0; bVal = b.shopWeeklyVel || 0; break;
+        case 'weeklyVel': aVal = a.weeklyVel || 0; bVal = b.weeklyVel || 0; break;
+        case 'daysOfSupply': aVal = a.daysOfSupply || 999; bVal = b.daysOfSupply || 999; break;
+        case 'stockoutDate': aVal = a.stockoutDate || '9999'; bVal = b.stockoutDate || '9999'; break;
+        case 'reorderByDate': aVal = a.reorderByDate || '9999'; bVal = b.reorderByDate || '9999'; break;
+        case 'health': 
+          const healthOrder = { critical: 0, low: 1, healthy: 2, overstock: 3, unknown: 4 };
+          aVal = healthOrder[a.health] ?? 4; bVal = healthOrder[b.health] ?? 4; break;
+        default: aVal = a.totalValue || 0; bVal = b.totalValue || 0;
+      }
+      if (typeof aVal === 'string') {
+        return invSortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+      }
+      return invSortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+    });
     
     // Recalculate summary based on filtered items
     const filteredSummary = {
@@ -21797,18 +21849,40 @@ if (shopifySkuWithShipping.length > 0) {
                   <col style={{width: '40px'}} />
                 </colgroup>
                 <thead className="bg-slate-900/50"><tr>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase px-3 py-3">Product</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Amazon</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">3PL</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Total</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Value</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">AMZ Vel</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Shop Vel</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Tot Vel</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Days</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Stockout</th>
-                  <th className="text-right text-xs font-medium text-slate-400 uppercase px-2 py-3">Order By</th>
-                  <th className="text-center text-xs font-medium text-slate-400 uppercase px-2 py-3">Status</th>
+                  {[
+                    { key: 'name', label: 'Product', align: 'left' },
+                    { key: 'amazonQty', label: 'Amazon', align: 'right' },
+                    { key: 'threeplQty', label: '3PL', align: 'right' },
+                    { key: 'totalQty', label: 'Total', align: 'right' },
+                    { key: 'totalValue', label: 'Value', align: 'right' },
+                    { key: 'amzWeeklyVel', label: 'AMZ Vel', align: 'right' },
+                    { key: 'shopWeeklyVel', label: 'Shop Vel', align: 'right' },
+                    { key: 'weeklyVel', label: 'Tot Vel', align: 'right' },
+                    { key: 'daysOfSupply', label: 'Days', align: 'right' },
+                    { key: 'stockoutDate', label: 'Stockout', align: 'right' },
+                    { key: 'reorderByDate', label: 'Order By', align: 'right' },
+                    { key: 'health', label: 'Status', align: 'center' },
+                  ].map(col => (
+                    <th 
+                      key={col.key}
+                      onClick={() => {
+                        if (invSortColumn === col.key) {
+                          setInvSortDirection(invSortDirection === 'asc' ? 'desc' : 'asc');
+                        } else {
+                          setInvSortColumn(col.key);
+                          setInvSortDirection('desc');
+                        }
+                      }}
+                      className={`text-${col.align} text-xs font-medium text-slate-400 uppercase px-2 py-3 cursor-pointer hover:text-white hover:bg-slate-800/50 select-none transition-colors ${col.align === 'left' ? 'px-3' : ''}`}
+                    >
+                      <span className="flex items-center gap-1" style={{ justifyContent: col.align === 'left' ? 'flex-start' : col.align === 'right' ? 'flex-end' : 'center' }}>
+                        {col.label}
+                        {invSortColumn === col.key && (
+                          <span className="text-emerald-400">{invSortDirection === 'asc' ? '↑' : '↓'}</span>
+                        )}
+                      </span>
+                    </th>
+                  ))}
                   <th className="text-center text-xs font-medium text-slate-400 uppercase px-2 py-3">⚙️</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-700/50">
