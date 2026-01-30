@@ -21349,14 +21349,26 @@ if (shopifySkuWithShipping.length > 0) {
     });
     
     // Recalculate summary based on filtered items
+    // Use item-level calculations, but fall back to snapshot summary for 3PL if items don't have data
+    const itemThreeplUnits = items.reduce((s, i) => s + (i.threeplQty || 0), 0);
+    const itemThreeplValue = items.reduce((s, i) => s + ((i.threeplValue ?? ((i.threeplQty || 0) * (i.cost || 0))) || 0), 0);
+    const itemAmazonUnits = items.reduce((s, i) => s + (i.amazonQty || 0), 0);
+    const itemAmazonValue = items.reduce((s, i) => s + ((i.amazonValue ?? ((i.amazonQty || 0) * (i.cost || 0))) || 0), 0);
+    
+    // Use item totals if available, otherwise fall back to snapshot summary
+    const finalThreeplUnits = itemThreeplUnits > 0 ? itemThreeplUnits : (summary.threeplUnits || 0);
+    const finalThreeplValue = itemThreeplValue > 0 ? itemThreeplValue : (summary.threeplValue || 0);
+    const finalAmazonUnits = itemAmazonUnits > 0 ? itemAmazonUnits : (summary.amazonUnits || 0);
+    const finalAmazonValue = itemAmazonValue > 0 ? itemAmazonValue : (summary.amazonValue || 0);
+    
     const filteredSummary = {
       ...summary,
-      totalUnits: items.reduce((s, i) => s + (i.totalQty || 0), 0),
-      totalValue: items.reduce((s, i) => s + (i.totalValue || 0), 0),
-      amazonUnits: items.reduce((s, i) => s + (i.amazonQty || 0), 0),
-      amazonValue: items.reduce((s, i) => s + ((i.amazonValue ?? ((i.amazonQty || 0) * (i.cost || 0))) || 0), 0),
-      threeplUnits: items.reduce((s, i) => s + (i.threeplQty || 0), 0),
-      threeplValue: items.reduce((s, i) => s + ((i.threeplValue ?? ((i.threeplQty || 0) * (i.cost || 0))) || 0), 0),
+      totalUnits: finalAmazonUnits + finalThreeplUnits + (summary.homeUnits || 0),
+      totalValue: finalAmazonValue + finalThreeplValue + (summary.homeValue || 0),
+      amazonUnits: finalAmazonUnits,
+      amazonValue: finalAmazonValue,
+      threeplUnits: finalThreeplUnits,
+      threeplValue: finalThreeplValue,
       skuCount: items.length,
       critical: items.filter(i => i.health === 'critical').length,
       low: items.filter(i => i.health === 'low').length,
