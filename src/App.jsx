@@ -4259,15 +4259,22 @@ const savePeriods = async (d) => {
     let shopRev = 0, shopUnits = 0, shopCogs = 0, shopDisc = 0;
     const shopifySkuData = {};
     reprocessFiles.shopify.forEach(r => {
-      const units = parseInt(r['Net items sold'] || 0), sales = parseFloat(r['Net sales'] || 0), sku = r['Product variant SKU'] || '';
+      const units = parseInt(r['Net items sold'] || r['Net quantity'] || 0);
+      const grossSales = parseFloat(r['Gross sales'] || 0);
+      const netSales = parseFloat(r['Net sales'] || 0);
+      const sales = grossSales > 0 ? grossSales : netSales;
+      const sku = r['Product variant SKU'] || '';
       const name = r['Product title'] || r['Product'] || sku;
       const disc = Math.abs(parseFloat(r['Discounts'] || 0));
+      const returns = Math.abs(parseFloat(r['Returns'] || 0));
       shopRev += sales; shopUnits += units; shopCogs += (cogsLookup[sku] || 0) * units; shopDisc += disc;
-      if (sku && units > 0) {
-        if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+      if (sku && (units > 0 || sales !== 0)) {
+        if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, grossSales: 0, discounts: 0, returns: 0, cogs: 0 };
         shopifySkuData[sku].unitsSold += units;
-        shopifySkuData[sku].netSales += sales;
+        shopifySkuData[sku].netSales += netSales;
+        shopifySkuData[sku].grossSales += sales;
         shopifySkuData[sku].discounts += disc;
+        shopifySkuData[sku].returns += returns;
         shopifySkuData[sku].cogs += (cogsLookup[sku] || 0) * units;
       }
     });
@@ -4305,7 +4312,8 @@ const savePeriods = async (d) => {
     
     // Shopify profit: fulfillment cost + proportional storage (if not 'total' mode)
     const shopThreeplCost = fulfillmentCost + (storageAlloc !== 'total' ? shopStorageCost : 0);
-    const shopProfit = shopRev - shopCogs - shopThreeplCost - shopAds;
+    // shopRev is Gross sales, so subtract discounts to get net profit
+    const shopProfit = shopRev - shopDisc - shopCogs - shopThreeplCost - shopAds;
     
     // Adjust Amazon profit for storage share (if proportional)
     const adjustedAmzProfit = storageAlloc === 'proportional' ? amzProfit - amzStorageCost : amzProfit;
@@ -4653,15 +4661,22 @@ const savePeriods = async (d) => {
     let shopRev = 0, shopUnits = 0, shopCogs = 0, shopDisc = 0;
     const shopifySkuData = {};
     (files.shopify || []).forEach(r => {
-      const units = parseInt(r['Net items sold'] || 0), sales = parseFloat(r['Net sales'] || 0), sku = r['Product variant SKU'] || '';
+      const units = parseInt(r['Net items sold'] || r['Net quantity'] || 0);
+      const grossSales = parseFloat(r['Gross sales'] || 0);
+      const netSales = parseFloat(r['Net sales'] || 0);
+      const sales = grossSales > 0 ? grossSales : netSales;
+      const sku = r['Product variant SKU'] || '';
       const name = r['Product title'] || r['Product'] || sku;
       const disc = Math.abs(parseFloat(r['Discounts'] || 0));
+      const returns = Math.abs(parseFloat(r['Returns'] || 0));
       shopRev += sales; shopUnits += units; shopCogs += (cogsLookup[sku] || 0) * units; shopDisc += disc;
-      if (sku && units > 0) {
-        if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+      if (sku && (units > 0 || sales !== 0)) {
+        if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, grossSales: 0, discounts: 0, returns: 0, cogs: 0 };
         shopifySkuData[sku].unitsSold += units;
-        shopifySkuData[sku].netSales += sales;
+        shopifySkuData[sku].netSales += netSales;
+        shopifySkuData[sku].grossSales += sales;
         shopifySkuData[sku].discounts += disc;
+        shopifySkuData[sku].returns += returns;
         shopifySkuData[sku].cogs += (cogsLookup[sku] || 0) * units;
       }
     });
@@ -4692,7 +4707,8 @@ const savePeriods = async (d) => {
 
     const metaS = parseFloat(adSpend.meta) || 0, googleS = parseFloat(adSpend.google) || 0, shopAds = metaS + googleS;
     const shopThreeplCost = fulfillmentCost + (storageAlloc !== 'total' ? shopStorageCost : 0);
-    const shopProfit = shopRev - shopCogs - shopThreeplCost - shopAds;
+    // shopRev is Gross sales, so subtract discounts to get net profit
+    const shopProfit = shopRev - shopDisc - shopCogs - shopThreeplCost - shopAds;
     const adjustedAmzProfit = storageAlloc === 'proportional' ? amzProfit - amzStorageCost : amzProfit;
     const totalProfit = adjustedAmzProfit + shopProfit - (storageAlloc === 'total' ? storageCost : 0);
     const totalCogs = amzCogs + shopCogs;
@@ -4772,15 +4788,24 @@ const savePeriods = async (d) => {
         });
         
         shopData.forEach(r => {
-          const units = parseInt(r['Net items sold'] || 0), sales = parseFloat(r['Net sales'] || 0), sku = r['Product variant SKU'] || '';
+          const units = parseInt(r['Net items sold'] || r['Net quantity'] || 0);
+          // Use Gross sales for revenue (before discounts), fallback to Net sales if Gross not available
+          const grossSales = parseFloat(r['Gross sales'] || 0);
+          const netSales = parseFloat(r['Net sales'] || 0);
+          const sales = grossSales > 0 ? grossSales : netSales;
+          const sku = r['Product variant SKU'] || '';
           const name = r['Product title'] || r['Product'] || sku;
           const disc = Math.abs(parseFloat(r['Discounts'] || 0));
+          const returns = Math.abs(parseFloat(r['Returns'] || 0));
           shopRev += sales; shopUnits += units; shopCogs += (cogsLookup[sku] || 0) * units; shopDisc += disc;
-          if (sku && units > 0) {
-            if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+          // Include SKUs if they have units OR sales (to capture shipping, etc.)
+          if (sku && (units > 0 || sales !== 0)) {
+            if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, grossSales: 0, discounts: 0, returns: 0, cogs: 0 };
             shopifySkuData[sku].unitsSold += units;
-            shopifySkuData[sku].netSales += sales;
+            shopifySkuData[sku].netSales += netSales;
+            shopifySkuData[sku].grossSales += sales;
             shopifySkuData[sku].discounts += disc;
+            shopifySkuData[sku].returns += returns;
             shopifySkuData[sku].cogs += (cogsLookup[sku] || 0) * units;
           }
         });
@@ -4789,7 +4814,8 @@ const savePeriods = async (d) => {
       const metaS = parseFloat(dailyAdSpend.meta) || 0;
       const googleS = parseFloat(dailyAdSpend.google) || 0;
       const shopAds = metaS + googleS;
-      const shopProfit = shopRev - shopCogs - shopAds;
+      // shopRev is now Gross sales, so subtract discounts to get net profit
+      const shopProfit = shopRev - shopDisc - shopCogs - shopAds;
       const totalRev = amzRev + shopRev;
       const totalProfit = amzProfit + shopProfit;
       const totalCogs = amzCogs + shopCogs;
@@ -5472,15 +5498,22 @@ const savePeriods = async (d) => {
     let shopRev = 0, shopUnits = 0, shopCogs = 0, shopDisc = 0;
     const shopifySkuData = {};
     files.shopify.forEach(r => { 
-      const u = parseInt(r['Net items sold'] || 0), s = parseFloat(r['Net sales'] || 0), sku = r['Product variant SKU'] || ''; 
+      const u = parseInt(r['Net items sold'] || r['Net quantity'] || 0);
+      const grossSales = parseFloat(r['Gross sales'] || 0);
+      const netSales = parseFloat(r['Net sales'] || 0);
+      const s = grossSales > 0 ? grossSales : netSales;
+      const sku = r['Product variant SKU'] || ''; 
       const name = r['Product title'] || r['Product'] || sku;
       const disc = Math.abs(parseFloat(r['Discounts'] || 0));
+      const returns = Math.abs(parseFloat(r['Returns'] || 0));
       shopRev += s; shopUnits += u; shopCogs += (cogsLookup[sku] || 0) * u; shopDisc += disc;
-      if (sku && u > 0) {
-        if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+      if (sku && (u > 0 || s !== 0)) {
+        if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, grossSales: 0, discounts: 0, returns: 0, cogs: 0 };
         shopifySkuData[sku].unitsSold += u;
-        shopifySkuData[sku].netSales += s;
+        shopifySkuData[sku].netSales += netSales;
+        shopifySkuData[sku].grossSales += s;
         shopifySkuData[sku].discounts += disc;
+        shopifySkuData[sku].returns += returns;
         shopifySkuData[sku].cogs += (cogsLookup[sku] || 0) * u;
       }
     });
@@ -5490,9 +5523,11 @@ const savePeriods = async (d) => {
       Object.keys(newWeeksData).forEach(weekEnd => {
         const week = newWeeksData[weekEnd];
         const prop = week.amazon.revenue / totalAmzRev;
-        const wRev = shopRev * prop, wUnits = Math.round(shopUnits * prop), wCogs = shopCogs * prop, wDisc = shopDisc * prop, wProfit = wRev - wCogs;
+        const wRev = shopRev * prop, wUnits = Math.round(shopUnits * prop), wCogs = shopCogs * prop, wDisc = shopDisc * prop;
+        // shopRev is Gross sales, so subtract discounts for profit
+        const wProfit = wRev - wDisc - wCogs;
         // Proportionally distribute SKU data
-        const wShopifySkus = shopifySkus.map(s => ({ ...s, unitsSold: Math.round(s.unitsSold * prop), netSales: s.netSales * prop, discounts: s.discounts * prop, cogs: s.cogs * prop }));
+        const wShopifySkus = shopifySkus.map(s => ({ ...s, unitsSold: Math.round(s.unitsSold * prop), netSales: s.netSales * prop, grossSales: s.grossSales * prop, discounts: s.discounts * prop, cogs: s.cogs * prop }));
         week.shopify = { revenue: wRev, units: wUnits, cogs: wCogs, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: wDisc, netProfit: wProfit, netMargin: wRev > 0 ? (wProfit/wRev)*100 : 0, aov: wUnits > 0 ? wRev/wUnits : 0, roas: 0, skuData: wShopifySkus };
         const tRev = week.amazon.revenue + wRev, tProfit = week.amazon.netProfit + wProfit;
         week.total = { revenue: tRev, units: week.amazon.units + wUnits, cogs: week.amazon.cogs + wCogs, adSpend: week.amazon.adSpend, netProfit: tProfit, netMargin: tRev > 0 ? (tProfit/tRev)*100 : 0, roas: week.amazon.adSpend > 0 ? tRev/week.amazon.adSpend : 0, amazonShare: tRev > 0 ? (week.amazon.revenue/tRev)*100 : 0, shopifyShare: tRev > 0 ? (wRev/tRev)*100 : 0 };
@@ -5582,15 +5617,22 @@ const savePeriods = async (d) => {
     let shopRev = 0, shopUnits = 0, shopCogs = 0, shopDisc = 0;
     const shopifySkuData = {};
     periodFiles.shopify.forEach(r => {
-      const units = parseInt(r['Net items sold'] || 0), sales = parseFloat(r['Net sales'] || 0), sku = r['Product variant SKU'] || '';
+      const units = parseInt(r['Net items sold'] || r['Net quantity'] || 0);
+      const grossSales = parseFloat(r['Gross sales'] || 0);
+      const netSales = parseFloat(r['Net sales'] || 0);
+      const sales = grossSales > 0 ? grossSales : netSales;
+      const sku = r['Product variant SKU'] || '';
       const name = r['Product title'] || r['Product'] || sku;
       const disc = Math.abs(parseFloat(r['Discounts'] || 0));
+      const returns = Math.abs(parseFloat(r['Returns'] || 0));
       shopRev += sales; shopUnits += units; shopCogs += (cogsLookup[sku] || 0) * units; shopDisc += disc;
-      if (sku && units > 0) {
-        if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+      if (sku && (units > 0 || sales !== 0)) {
+        if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, grossSales: 0, discounts: 0, returns: 0, cogs: 0 };
         shopifySkuData[sku].unitsSold += units;
-        shopifySkuData[sku].netSales += sales;
+        shopifySkuData[sku].netSales += netSales;
+        shopifySkuData[sku].grossSales += sales;
         shopifySkuData[sku].discounts += disc;
+        shopifySkuData[sku].returns += returns;
         shopifySkuData[sku].cogs += (cogsLookup[sku] || 0) * units;
       }
     });
@@ -5620,7 +5662,8 @@ const savePeriods = async (d) => {
 
     const metaS = parseFloat(periodAdSpend.meta) || 0, googleS = parseFloat(periodAdSpend.google) || 0, shopAds = metaS + googleS;
     const shopThreeplCost = fulfillmentCost + (storageAlloc !== 'total' ? shopStorageCost : 0);
-    const shopProfit = shopRev - shopCogs - shopThreeplCost - shopAds;
+    // shopRev is Gross sales, so subtract discounts to get net profit
+    const shopProfit = shopRev - shopDisc - shopCogs - shopThreeplCost - shopAds;
     const adjustedAmzProfit = storageAlloc === 'proportional' ? amzProfit - amzStorageCost : amzProfit;
     const totalProfit = adjustedAmzProfit + shopProfit - (storageAlloc === 'total' ? storageCost : 0);
     const totalCogs = amzCogs + shopCogs;
