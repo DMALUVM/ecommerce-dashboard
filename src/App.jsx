@@ -21354,12 +21354,21 @@ if (shopifySkuWithShipping.length > 0) {
         newReorderByDate = reorderBy.toISOString().split('T')[0];
       }
       
-      // Recalculate health based on CURRENT days of supply
+      // Recalculate health based on WHEN you need to order, not just days of supply
+      // If order by date is in the past, you're late! That's critical.
       let newHealth = 'unknown';
-      if (newDaysOfSupply < 14) newHealth = 'critical';
-      else if (newDaysOfSupply < 30) newHealth = 'low';
-      else if (newDaysOfSupply <= 90) newHealth = 'healthy';
-      else newHealth = 'overstock';
+      if (newDaysUntilMustOrder !== null) {
+        if (newDaysUntilMustOrder < 0) newHealth = 'critical'; // Order date passed!
+        else if (newDaysUntilMustOrder < 14) newHealth = 'low'; // Need to order within 2 weeks
+        else if (newDaysUntilMustOrder < 30) newHealth = 'healthy'; // Order within a month
+        else newHealth = 'overstock'; // More than 30 days until you need to order
+      } else if (newDaysOfSupply < 999) {
+        // Fallback if no velocity data
+        if (newDaysOfSupply < 14) newHealth = 'critical';
+        else if (newDaysOfSupply < 30) newHealth = 'low';
+        else if (newDaysOfSupply <= 90) newHealth = 'healthy';
+        else newHealth = 'overstock';
+      }
       
       return {
         ...item,
