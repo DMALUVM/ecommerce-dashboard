@@ -21319,8 +21319,63 @@ if (shopifySkuWithShipping.length > 0) {
       return Array.from(skuMap.values());
     })();
     
+    // RECALCULATE health, daysOfSupply, and dates dynamically based on current date
+    // The snapshot was taken on selectedInvDate, so we need to adjust for days elapsed
+    const snapshotDate = new Date(selectedInvDate + 'T12:00:00');
+    const today = new Date();
+    const daysElapsed = Math.floor((today - snapshotDate) / (1000 * 60 * 60 * 24));
+    
+    const recalculatedItems = deduplicatedItems.map(item => {
+      const weeklyVel = item.weeklyVel || 0;
+      const dailyVel = weeklyVel / 7;
+      
+      // Adjust quantities for days elapsed (inventory decreases over time)
+      const adjustedTotalQty = Math.max(0, (item.totalQty || 0) - Math.round(dailyVel * daysElapsed));
+      
+      // Recalculate days of supply from TODAY
+      const newDaysOfSupply = weeklyVel > 0 ? Math.round((adjustedTotalQty / weeklyVel) * 7) : 999;
+      
+      // Recalculate stockout and reorder dates from TODAY
+      const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
+      const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
+      
+      let newStockoutDate = null;
+      let newReorderByDate = null;
+      let newDaysUntilMustOrder = null;
+      
+      if (weeklyVel > 0 && newDaysOfSupply < 999) {
+        const stockout = new Date(today);
+        stockout.setDate(stockout.getDate() + newDaysOfSupply);
+        newStockoutDate = stockout.toISOString().split('T')[0];
+        
+        newDaysUntilMustOrder = newDaysOfSupply - reorderTriggerDays - leadTimeDays;
+        const reorderBy = new Date(today);
+        reorderBy.setDate(reorderBy.getDate() + newDaysUntilMustOrder);
+        newReorderByDate = reorderBy.toISOString().split('T')[0];
+      }
+      
+      // Recalculate health based on CURRENT days of supply
+      let newHealth = 'unknown';
+      if (newDaysOfSupply < 14) newHealth = 'critical';
+      else if (newDaysOfSupply < 30) newHealth = 'low';
+      else if (newDaysOfSupply <= 90) newHealth = 'healthy';
+      else newHealth = 'overstock';
+      
+      return {
+        ...item,
+        daysOfSupply: newDaysOfSupply,
+        stockoutDate: newStockoutDate,
+        reorderByDate: newReorderByDate,
+        daysUntilMustOrder: newDaysUntilMustOrder,
+        health: newHealth,
+        // Keep original values for reference
+        _originalDaysOfSupply: item.daysOfSupply,
+        _adjustedTotalQty: adjustedTotalQty,
+      };
+    });
+    
     // Filter items based on user preference (show only with inventory by default)
-    const filteredItems = invShowZeroStock ? deduplicatedItems : deduplicatedItems.filter(item => (item.totalQty || 0) > 0);
+    const filteredItems = invShowZeroStock ? recalculatedItems : recalculatedItems.filter(item => (item.totalQty || 0) > 0);
     
     // Sort items based on selected column
     const items = [...filteredItems].sort((a, b) => {
