@@ -13,6 +13,8 @@ const AdsBulkUploadModal = ({
   setAdsResults,
   allDaysData,
   setAllDaysData,
+  allWeeksData,
+  setAllWeeksData,
   combinedData,
   session,
   supabase,
@@ -352,9 +354,79 @@ const AdsBulkUploadModal = ({
       setAllDaysData(updatedDays);
       lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays));
       
+      // Also update weekly data with ads spend from daily data
+      if (allWeeksData && setAllWeeksData) {
+        const updatedWeeks = { ...allWeeksData };
+        const weeksToUpdate = new Set();
+        
+        // Figure out which weeks need updating
+        allDatesAffected.forEach(dateStr => {
+          const d = new Date(dateStr + 'T12:00:00');
+          const dayOfWeek = d.getDay();
+          const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+          const weekEnd = new Date(d);
+          weekEnd.setDate(weekEnd.getDate() + daysUntilSunday);
+          const weekKey = weekEnd.toISOString().split('T')[0];
+          weeksToUpdate.add(weekKey);
+        });
+        
+        // For each affected week, aggregate ads from daily data
+        weeksToUpdate.forEach(weekKey => {
+          if (!updatedWeeks[weekKey]) return;
+          
+          // Calculate all 7 days of this week
+          const weekEnd = new Date(weekKey + 'T12:00:00');
+          let weekMetaSpend = 0;
+          let weekGoogleSpend = 0;
+          
+          for (let i = 6; i >= 0; i--) {
+            const dayDate = new Date(weekEnd);
+            dayDate.setDate(weekEnd.getDate() - i);
+            const dayKey = dayDate.toISOString().split('T')[0];
+            const dayData = updatedDays[dayKey];
+            
+            if (dayData?.shopify) {
+              weekMetaSpend += dayData.shopify.metaSpend || 0;
+              weekGoogleSpend += dayData.shopify.googleSpend || 0;
+            }
+          }
+          
+          // Update week's Shopify data
+          const existingShopify = updatedWeeks[weekKey].shopify || {};
+          const totalShopifyAds = weekMetaSpend + weekGoogleSpend;
+          const shopifyRevenue = existingShopify.revenue || 0;
+          const shopifyCogs = existingShopify.cogs || 0;
+          const shopifyThreeplCosts = existingShopify.threeplCosts || 0;
+          const shopifyDiscounts = existingShopify.discounts || 0;
+          const shopifyProfit = shopifyRevenue - shopifyCogs - totalShopifyAds - shopifyThreeplCosts - shopifyDiscounts;
+          
+          updatedWeeks[weekKey] = {
+            ...updatedWeeks[weekKey],
+            shopify: {
+              ...existingShopify,
+              metaSpend: weekMetaSpend,
+              metaAds: weekMetaSpend,
+              googleSpend: weekGoogleSpend,
+              googleAds: weekGoogleSpend,
+              adSpend: totalShopifyAds,
+              netProfit: shopifyProfit,
+            },
+            total: {
+              ...updatedWeeks[weekKey].total,
+              adSpend: (updatedWeeks[weekKey].amazon?.adSpend || 0) + totalShopifyAds,
+              netProfit: (updatedWeeks[weekKey].amazon?.netProfit || 0) + shopifyProfit,
+            },
+          };
+        });
+        
+        setAllWeeksData(updatedWeeks);
+        lsSet('ecommerce_weekly_sales_v1', JSON.stringify(updatedWeeks));
+      }
+      
       const freshCombinedData = {
         ...combinedData,
         dailySales: updatedDays,
+        weeklySales: allWeeksData ? { ...allWeeksData } : combinedData.weeklySales,
       };
       if (session?.user?.id && supabase) {
         pushToCloudNow(freshCombinedData);
