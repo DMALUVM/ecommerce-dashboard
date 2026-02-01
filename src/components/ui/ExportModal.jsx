@@ -35,7 +35,16 @@ const ExportModal = ({
   // Calculate date range based on selection
   const getDateRange = () => {
     const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
+    
+    // Helper to format date as YYYY-MM-DD in local timezone (not UTC)
+    const formatLocalDate = (d) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    const todayStr = formatLocalDate(today);
     
     if (dateRangeType === 'all') {
       return { start: dataDateRange.earliest, end: dataDateRange.latest };
@@ -45,57 +54,68 @@ const ExportModal = ({
       return { start: startDate || dataDateRange.earliest, end: endDate || todayStr };
     }
     
-    // Presets
-    const getWeekStart = (d) => {
+    // Presets - get Monday of a given week (without mutating input)
+    const getWeekStart = (date) => {
+      const d = new Date(date);
       const day = d.getDay();
       const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday
-      return new Date(d.setDate(diff));
+      d.setDate(diff);
+      return d;
+    };
+    
+    // Get Sunday of a given week
+    const getWeekEnd = (date) => {
+      const monday = getWeekStart(date);
+      monday.setDate(monday.getDate() + 6); // Sunday
+      return monday;
     };
     
     switch (preset) {
       case 'thisWeek': {
         const weekStart = getWeekStart(new Date());
-        return { start: weekStart.toISOString().split('T')[0], end: todayStr };
+        return { start: formatLocalDate(weekStart), end: todayStr };
       }
       case 'lastWeek': {
-        const lastWeekEnd = getWeekStart(new Date());
-        lastWeekEnd.setDate(lastWeekEnd.getDate() - 1);
+        // Last week = the full Mon-Sun week before the current week
+        const thisWeekStart = getWeekStart(new Date());
+        const lastWeekEnd = new Date(thisWeekStart);
+        lastWeekEnd.setDate(lastWeekEnd.getDate() - 1); // Sunday of last week
         const lastWeekStart = new Date(lastWeekEnd);
-        lastWeekStart.setDate(lastWeekStart.getDate() - 6);
-        return { start: lastWeekStart.toISOString().split('T')[0], end: lastWeekEnd.toISOString().split('T')[0] };
+        lastWeekStart.setDate(lastWeekStart.getDate() - 6); // Monday of last week
+        return { start: formatLocalDate(lastWeekStart), end: formatLocalDate(lastWeekEnd) };
       }
       case 'thisMonth': {
         const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-        return { start: monthStart.toISOString().split('T')[0], end: todayStr };
+        return { start: formatLocalDate(monthStart), end: todayStr };
       }
       case 'lastMonth': {
         const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
         const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        return { start: lastMonthStart.toISOString().split('T')[0], end: lastMonthEnd.toISOString().split('T')[0] };
+        return { start: formatLocalDate(lastMonthStart), end: formatLocalDate(lastMonthEnd) };
       }
       case 'last30': {
         const thirtyAgo = new Date(today);
         thirtyAgo.setDate(thirtyAgo.getDate() - 30);
-        return { start: thirtyAgo.toISOString().split('T')[0], end: todayStr };
+        return { start: formatLocalDate(thirtyAgo), end: todayStr };
       }
       case 'last90': {
         const ninetyAgo = new Date(today);
         ninetyAgo.setDate(ninetyAgo.getDate() - 90);
-        return { start: ninetyAgo.toISOString().split('T')[0], end: todayStr };
+        return { start: formatLocalDate(ninetyAgo), end: todayStr };
       }
       case 'thisQuarter': {
         const quarter = Math.floor(today.getMonth() / 3);
         const quarterStart = new Date(today.getFullYear(), quarter * 3, 1);
-        return { start: quarterStart.toISOString().split('T')[0], end: todayStr };
+        return { start: formatLocalDate(quarterStart), end: todayStr };
       }
       case 'thisYear': {
         const yearStart = new Date(today.getFullYear(), 0, 1);
-        return { start: yearStart.toISOString().split('T')[0], end: todayStr };
+        return { start: formatLocalDate(yearStart), end: todayStr };
       }
       case 'lastYear': {
         const lastYearStart = new Date(today.getFullYear() - 1, 0, 1);
         const lastYearEnd = new Date(today.getFullYear() - 1, 11, 31);
-        return { start: lastYearStart.toISOString().split('T')[0], end: lastYearEnd.toISOString().split('T')[0] };
+        return { start: formatLocalDate(lastYearStart), end: formatLocalDate(lastYearEnd) };
       }
       default:
         return { start: dataDateRange.earliest, end: dataDateRange.latest };
