@@ -42,6 +42,7 @@ import DayDetailsModal from './components/ui/DayDetailsModal';
 import ThreePLBulkUploadModal from './components/ui/ThreePLBulkUploadModal';
 import AdsBulkUploadModal from './components/ui/AdsBulkUploadModal';
 import AmazonAdsBulkUploadModal from './components/ui/AmazonAdsBulkUploadModal';
+import AmazonAdsIntelModal, { buildAdsIntelContext } from './components/ui/AmazonAdsIntelModal';
 import ChannelCard from './components/ui/ChannelCard';
 import GoalsCard from './components/ui/GoalsCard';
 import StateConfigModal from './components/ui/StateConfigModal';
@@ -107,36 +108,62 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
     }
   }
   
-  // Bank account patterns - must have account number pattern like (5983), (1003), (1009)
+  // Bank account patterns - detect checking, savings, and credit card accounts
   const isBankAccount = (name) => {
-    // Must have account number in parentheses pattern at end
-    const hasAccountNumber = /\(\d{4}\)\s*-\s*\d+$/.test(name);
-    if (!hasAccountNumber) return false;
-    
     // Must NOT contain quotes (sign of corrupted multi-line CSV parsing)
     if (name.includes('"')) return false;
     
-    // Must be reasonably short (account names are typically < 50 chars)
-    if (name.length > 60) return false;
+    // Must be reasonably short (account names are typically < 80 chars)
+    if (name.length > 80) return false;
     
     // Must start with a letter (not a continuation of a memo)
     if (!/^[A-Za-z]/.test(name.trim())) return false;
     
     const lower = name.toLowerCase();
-    return (
+    
+    // Skip things that are clearly NOT bank accounts
+    if (lower.includes('depreciation') || lower.includes('accumulated') || 
+        lower.includes('inventory asset') || lower.includes('accounts receivable') ||
+        lower.includes('accounts payable') || lower.includes('retained earnings') ||
+        lower.includes('equity') || lower.includes('total for')) return false;
+    
+    // Check for account number pattern like (5983) - 1234 or similar
+    const hasAccountNumber = /\(\d{3,4}\)/.test(name);
+    
+    // Strong signals: explicit bank/card keywords
+    const hasBankKeyword = (
       lower.includes('checking') ||
       lower.includes('savings') ||
       lower.includes('operations') ||
+      lower.includes('money market') ||
+      lower.includes('bank')
+    );
+    
+    const hasCreditKeyword = (
       lower.includes('card') ||
       lower.includes('credit') ||
       lower.includes('amex') ||
       lower.includes('visa') ||
       lower.includes('mastercard') ||
+      lower.includes('discover') ||
       lower.includes('platinum') ||
-      lower.includes('(5983)') ||
-      lower.includes('(1003)') ||
-      lower.includes('(1009)')
+      lower.includes('chase') ||
+      lower.includes('capital one') ||
+      lower.includes('citi')
     );
+    
+    // Accept if has account number + keyword, or just strong keyword
+    if (hasAccountNumber && (hasBankKeyword || hasCreditKeyword)) return true;
+    if (hasBankKeyword || hasCreditKeyword) return true;
+    
+    // Also accept if it has an account number pattern and looks like a financial account
+    if (hasAccountNumber && !lower.includes('asset') && !lower.includes('liability') && 
+        !lower.includes('expense') && !lower.includes('income') && !lower.includes('cost of')) {
+      // Could be a bank account with a non-standard name - accept it
+      return true;
+    }
+    
+    return false;
   };
   
   // Non-cash/asset patterns to skip
@@ -178,8 +205,12 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
                              lowerName.includes('credit') ||
                              lowerName.includes('amex') ||
                              lowerName.includes('platinum') ||
-                             lowerName.includes('1003') ||
-                             lowerName.includes('1009')) ? 'credit_card' : 'checking';
+                             lowerName.includes('visa') ||
+                             lowerName.includes('mastercard') ||
+                             lowerName.includes('discover') ||
+                             lowerName.includes('chase') ||
+                             lowerName.includes('capital one') ||
+                             lowerName.includes('citi')) ? 'credit_card' : 'checking';
         
         if (!accounts[currentAccount]) {
           // Get balance from totals we found earlier
@@ -257,14 +288,37 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
     let isExpense = false;
     
     if (currentAccountType === 'credit_card') {
-      if (txnType === 'Expense' && amount > 0) isExpense = true;
+      // Credit card transactions: charges are expenses, credits/refunds are income
+      // QBO can export credit card charges as:
+      //   - Expense (positive amount) - most common
+      //   - Bill / Bill Payment - for some card types
+      //   - Check - sometimes used for card charges  
+      //   - Credit Card Credit / Credit Card Refund (negative or positive) - refunds
+      //   - Charge - some exports use this
+      const txnLower = txnType.toLowerCase();
+      
+      if (txnLower.includes('credit') || txnLower.includes('refund') || txnLower.includes('return')) {
+        // Refund/credit back to card
+        isIncome = true;
+      } else if (amount > 0) {
+        // Positive amount on credit card = charge/expense
+        isExpense = true;
+      } else if (amount < 0 && !txnLower.includes('payment')) {
+        // Negative amount that's not a payment = refund/credit
+        isIncome = true;
+      }
+      // Note: Credit Card Payments are already skipped above
     } else {
       // Checking/savings accounts
       if (txnType === 'Deposit' && amount > 0) isIncome = true;
       else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) isExpense = true;
       else if (txnType === 'Credit Card Payment' && amount < 0) isExpense = true; // Cash leaving to pay card
       else if (txnType === 'Transfer' && amount > 0) isIncome = true;
+      else if (txnType === 'Transfer' && amount < 0) isExpense = true;
       else if (txnType === 'Payroll Check') isExpense = true;
+      else if (txnType === 'Bill Payment' && amount < 0) isExpense = true;
+      else if (amount > 0 && !isIncome) isIncome = true; // Catch-all: positive = income
+      else if (amount < 0 && !isExpense) isExpense = true; // Catch-all: negative = expense
     }
     
     if (!isIncome && !isExpense) continue;
@@ -1156,6 +1210,20 @@ export default function Dashboard() {
   });
   const [amazonCampaignSort, setAmazonCampaignSort] = useState({ field: 'spend', dir: 'desc' });
   const [amazonCampaignFilter, setAmazonCampaignFilter] = useState({ status: 'all', type: 'all', search: '' });
+  
+  // Amazon Ads Intelligence Data (search terms, placements, targeting, etc.)
+  const [adsIntelData, setAdsIntelData] = useState(() => {
+    try { return safeLocalStorageGet('ecommerce_ads_intel_v1', {}); }
+    catch { return {}; }
+  });
+  const [showAdsIntelUpload, setShowAdsIntelUpload] = useState(false);
+  
+  // Persist adsIntelData
+  useEffect(() => {
+    if (adsIntelData?.lastUpdated) {
+      try { lsSet('ecommerce_ads_intel_v1', JSON.stringify(adsIntelData)); } catch(e) {}
+    }
+  }, [adsIntelData]);
 
   // Weekly Intelligence Reports
   const [weeklyReports, setWeeklyReports] = useState(() => {
@@ -2987,6 +3055,8 @@ const combinedData = useMemo(() => ({
   productionPipeline,
   threeplLedger,
   amazonCampaigns,
+  // Amazon Ads Intelligence (search terms, placements, targeting, etc.)
+  adsIntelData,
   // Self-learning forecast data
   forecastAccuracyHistory,
   forecastCorrections,
@@ -3013,7 +3083,7 @@ const combinedData = useMemo(() => ({
   packiyoCredentials,
   // Amazon SP-API Integration credentials
   amazonCredentials,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials]);
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, adsIntelData, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -3468,6 +3538,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.productionPipeline) setProductionPipeline(cloud.productionPipeline);
     if (cloud.threeplLedger) setThreeplLedger(cloud.threeplLedger);
     if (cloud.amazonCampaigns) setAmazonCampaigns(cloud.amazonCampaigns);
+    if (cloud.adsIntelData) setAdsIntelData(cloud.adsIntelData);
     
     // Load self-learning forecast data
     if (cloud.forecastAccuracyHistory) setForecastAccuracyHistory(cloud.forecastAccuracyHistory);
@@ -14359,14 +14430,20 @@ ${campaignContext}
 
 ${historicalContext}
 
+${buildAdsIntelContext(adsIntelData)}
+
 ANALYSIS GUIDELINES:
 1. Identify specific campaigns that need action (pause, reduce budget, increase budget, optimize)
 2. Calculate potential savings from pausing underperformers
 3. Identify scaling opportunities with estimated impact
 4. Compare current metrics to industry benchmarks (good ACOS: <25%, great ROAS: >4x)
 5. Flag any concerning trends
-6. Suggest keyword or targeting optimizations based on campaign names
-7. Always provide specific numbers and campaign names
+6. Suggest keyword or targeting optimizations based on search term data
+7. Analyze placement performance and recommend bid adjustments
+8. Identify wasted spend on search terms and negative keyword opportunities
+9. Cross-reference organic search query performance with paid campaigns for efficiency
+10. Always provide specific numbers, campaign names, and search terms
+11. When intel data is available, prioritize search term and targeting recommendations as they have the most actionable detail
 
 Be direct and actionable. Start with the most impactful recommendations.`;
 
@@ -16021,7 +16098,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><AmazonAdsBulkUploadModal showAmazonAdsBulkUpload={showAmazonAdsBulkUpload} setShowAmazonAdsBulkUpload={setShowAmazonAdsBulkUpload} amazonAdsFile={amazonAdsFile} setAmazonAdsFile={setAmazonAdsFile} amazonAdsProcessing={amazonAdsProcessing} setAmazonAdsProcessing={setAmazonAdsProcessing} amazonAdsResults={amazonAdsResults} setAmazonAdsResults={setAmazonAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} combinedData={combinedData} queueCloudSave={queueCloudSave} setToast={setToast} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -30109,10 +30186,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       <p className="text-white/70 text-xs">
                         {hasCampaignData ? `${campaigns.length} campaigns` : 'No campaigns'} 
                         {hasHistoricalData ? ` • ${Object.keys(historicalDaily).length}d history` : ''}
+                        {adsIntelData?.lastUpdated ? ` • Intel ✓` : ''}
                       </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    <button onClick={() => setShowAdsIntelUpload(true)} className={`p-2 rounded-lg text-white/70 hover:text-white ${adsIntelData?.lastUpdated ? 'hover:bg-white/20' : 'bg-white/20 animate-pulse'}`} title="Upload Ads Intelligence Reports">
+                      <Brain className="w-4 h-4" />
+                    </button>
                     <button onClick={() => setAdsAiMessages([])} className="p-2 hover:bg-white/20 rounded-lg text-white/70 hover:text-white" title="Clear chat">
                       <RefreshCw className="w-4 h-4" />
                     </button>
@@ -30126,20 +30207,48 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   {adsAiMessages.length === 0 && (
                     <div className="text-center text-slate-400 py-2">
                       <Zap className="w-10 h-10 mx-auto mb-3 opacity-50" />
-                      <p className="text-sm mb-4">I can analyze your campaigns and trends. Try asking:</p>
+                      {!adsIntelData?.lastUpdated && (
+                        <button onClick={() => setShowAdsIntelUpload(true)} className="block w-full mb-3 px-3 py-2.5 bg-gradient-to-r from-violet-900/40 to-indigo-900/40 hover:from-violet-900/60 rounded-lg text-sm text-violet-300 border border-violet-500/30">
+                          🧠 Upload Intel Reports for deeper analysis (search terms, placements, targeting)
+                        </button>
+                      )}
+                      {adsIntelData?.lastUpdated && (
+                        <div className="mb-3 px-3 py-2 bg-emerald-900/20 rounded-lg text-xs text-emerald-400 border border-emerald-500/20">
+                          ✓ Intel loaded: {[adsIntelData.spSearchTerms && 'Search Terms', adsIntelData.spPlacement && 'Placements', adsIntelData.spTargeting?.length && 'Targeting', adsIntelData.businessReport?.length && 'Business Report', adsIntelData.searchQueryPerf?.length && 'Organic Queries'].filter(Boolean).join(' • ')}
+                        </div>
+                      )}
+                      <p className="text-sm mb-4">{adsIntelData?.lastUpdated ? 'Deep intel loaded! Try asking:' : 'I can analyze your campaigns and trends. Try asking:'}</p>
                       <div className="space-y-2 text-left">
                         <button onClick={() => { setAdsAiInput("Give me your top 5 recommendations to improve my ads"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-gradient-to-r from-orange-900/30 to-slate-800 hover:from-orange-900/50 rounded-lg text-sm text-white border border-orange-500/30">
                           🎯 Top 5 recommendations to improve my ads
                         </button>
-                        <button onClick={() => { setAdsAiInput("Which campaigns should I pause to save money?"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
-                          ⚠️ Which campaigns should I pause?
-                        </button>
-                        <button onClick={() => { setAdsAiInput("What are my best scaling opportunities?"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
-                          🚀 What are my best scaling opportunities?
-                        </button>
-                        <button onClick={() => { setAdsAiInput("How has my ROAS trended over the last 6 months?"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
-                          📈 How has my ROAS trended over time?
-                        </button>
+                        {adsIntelData?.spSearchTerms ? (
+                          <button onClick={() => { setAdsAiInput("Analyze my search terms - which are wasting money and which should I scale? Give me negative keyword suggestions."); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                            🔍 Search term analysis + negative keywords
+                          </button>
+                        ) : (
+                          <button onClick={() => { setAdsAiInput("Which campaigns should I pause to save money?"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                            ⚠️ Which campaigns should I pause?
+                          </button>
+                        )}
+                        {adsIntelData?.spPlacement ? (
+                          <button onClick={() => { setAdsAiInput("Analyze my placement performance - where should I increase/decrease bids for Top of Search vs Product Pages vs Rest of Search?"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                            📍 Placement bid optimization
+                          </button>
+                        ) : (
+                          <button onClick={() => { setAdsAiInput("What are my best scaling opportunities?"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                            🚀 What are my best scaling opportunities?
+                          </button>
+                        )}
+                        {adsIntelData?.searchQueryPerf?.length > 0 ? (
+                          <button onClick={() => { setAdsAiInput("Compare my organic search query performance with my paid campaigns. Where am I paying for clicks I could get organically? Where should I increase paid because organic share is low?"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                            🔄 Organic vs Paid gap analysis
+                          </button>
+                        ) : (
+                          <button onClick={() => { setAdsAiInput("How has my ROAS trended over the last 6 months?"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                            📈 How has my ROAS trended over time?
+                          </button>
+                        )}
                         <button onClick={() => { setAdsAiInput("Compare my SP vs SB vs SD campaign performance"); sendAdsAIMessage(); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
                           📊 Compare SP vs SB vs SD performance
                         </button>
