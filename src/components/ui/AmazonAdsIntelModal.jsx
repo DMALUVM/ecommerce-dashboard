@@ -616,6 +616,49 @@ ${sq.filter(q => q.brandPurchaseShare > 30).sort((a, b) => b.brandPurchaseShare 
   return context;
 };
 
+// ============ AUTO-DETECT REPORT TYPE ============
+
+const detectReportType = (headers, rows, fileName) => {
+  const hSet = new Set(headers.map(h => h.toLowerCase().trim()));
+  const fLower = fileName.toLowerCase();
+
+  // Search Query Performance (Brand Analytics)
+  if (hSet.has('search query') || hSet.has('"search query"') || hSet.has('search query volume') || hSet.has('search query score')) return 'searchQueryPerf';
+
+  // Business Report (by ASIN)
+  if (hSet.has('sessions - total') || hSet.has('(parent) asin') || hSet.has('unit session percentage') || hSet.has('featured offer (buy box) percentage')) return 'businessReport';
+
+  // SD Campaign (14 Day + DPV / New-to-brand)
+  if (hSet.has('14 day detail page views (dpv)') || hSet.has('14 day new-to-brand orders (#)')) return 'sdCampaign';
+
+  // SB Search Terms (14 Day attribution)
+  if ((hSet.has('customer search term') || hSet.has('search term')) && (hSet.has('14 day total sales') || hSet.has('14 day total sales ') || hSet.has('14 day total orders (#)'))) return 'sbSearchTerms';
+
+  // SP Placement
+  if (hSet.has('placement')) return 'spPlacement';
+
+  // SP Targeting
+  if (hSet.has('targeting') && (hSet.has('top-of-search impression share') || hSet.has('top-of-search is') || hSet.has('match type'))) return 'spTargeting';
+
+  // SP Advertised Products
+  if (hSet.has('advertised asin') || hSet.has('advertised sku')) return 'spAdvertised';
+
+  // SP Search Terms (7 Day attribution)
+  if (hSet.has('customer search term') && (hSet.has('7 day total sales') || hSet.has('7 day total sales ') || hSet.has('7 day total orders (#)'))) return 'spSearchTerms';
+
+  // Daily Overview / Historical (has Date + Spend + ROAS columns)
+  if ((hSet.has('date') || hSet.has('Date')) && (hSet.has('spend') || hSet.has('Spend')) && (hSet.has('roas') || hSet.has('ROAS') || hSet.has('acos') || hSet.has('ACOS'))) {
+    // Distinguish by row count: >60 days = historical, else recent overview
+    if (rows.length > 60 || fLower.includes('histor') || fLower.includes('year') || fLower.includes('552')) return 'historicalDaily';
+    return 'dailyOverview';
+  }
+
+  // Fallback: search term report without clear attribution window
+  if (hSet.has('customer search term') || hSet.has('search term')) return 'spSearchTerms';
+
+  return null;
+};
+
 // ============ COMPONENT ============
 
 const AmazonAdsIntelModal = ({
@@ -631,75 +674,65 @@ const AmazonAdsIntelModal = ({
   setAmazonCampaigns,
   setToast,
 }) => {
-  const [files, setFiles] = useState({});
+  const [detectedFiles, setDetectedFiles] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
 
   if (!show) return null;
 
-  const handleFileSelect = (key, file) => {
-    setFiles(prev => ({ ...prev, [key]: file }));
+  const readAndDetect = async (fileList) => {
+    const newDetected = [];
+    for (const file of fileList) {
+      try {
+        let rows, headers;
+        if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+          rows = await parseXlsx(file);
+          headers = rows.length > 0 ? Object.keys(rows[0]) : [];
+        } else {
+          const text = await file.text();
+          rows = parseCSV(text);
+          headers = rows.length > 0 ? Object.keys(rows[0]) : [];
+        }
+        const type = detectReportType(headers, rows, file.name);
+        newDetected.push({ file, type, rows: rows.length, headers: headers.slice(0, 6) });
+      } catch (err) {
+        newDetected.push({ file, type: null, rows: 0, error: err.message });
+      }
+    }
+    setDetectedFiles(prev => {
+      // Replace files of same detected type, keep others
+      const existing = [...prev];
+      newDetected.forEach(nd => {
+        if (nd.type) {
+          const idx = existing.findIndex(e => e.type === nd.type);
+          if (idx >= 0) existing[idx] = nd;
+          else existing.push(nd);
+        } else {
+          existing.push(nd);
+        }
+      });
+      return existing;
+    });
     setResults(null);
   };
 
-  // Write daily overview data to allDaysData (replaces AmazonAdsBulkUploadModal functionality)
-  const writeDailyToTracking = (rows, existingDays, existingCampaigns) => {
-    const updatedDays = { ...existingDays };
-    let daysUpdated = 0;
-    const dailyData = {};
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const fileList = [...e.dataTransfer.files].filter(f => f.name.endsWith('.csv') || f.name.endsWith('.xlsx') || f.name.endsWith('.xls'));
+    if (fileList.length > 0) readAndDetect(fileList);
+  };
 
-    rows.forEach(r => {
-      const rawDate = r['date'] || r['Date'] || '';
-      const date = normalizeDate(rawDate);
-      if (!date) return;
-      const spend = num(r['Spend']);
-      if (spend <= 0) return;
+  const handleFileInput = (e) => {
+    const fileList = [...e.target.files];
+    if (fileList.length > 0) readAndDetect(fileList);
+    e.target.value = '';
+  };
 
-      const adsData = {
-        spend,
-        adRevenue: num(r['Revenue']),
-        orders: num(r['Orders']),
-        conversions: num(r['Conversions']),
-        roas: num(r['ROAS']),
-        acos: num(r['ACOS']),
-        impressions: num(r['Impressions']),
-        clicks: num(r['Clicks']),
-        ctr: num(r['CTR']),
-        cpc: num(r['Avg CPC']),
-        convRate: num(r['Conv Rate']),
-        tacos: num(r['Total ACOS (TACOS)']),
-        totalUnits: num(r['Total Units Ordered']),
-        totalRevenue: num(r['Total Revenue']),
-      };
-
-      dailyData[date] = adsData;
-
-      const existingDay = updatedDays[date] || {
-        total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
-        amazon: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
-        shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, netProfit: 0 },
-      };
-
-      updatedDays[date] = {
-        ...existingDay,
-        amazonAdsMetrics: adsData,
-      };
-      daysUpdated++;
-    });
-
-    // Update amazonCampaigns with analytics
-    const dates = Object.keys(dailyData).sort();
-    const updatedCampaigns = {
-      ...existingCampaigns,
-      historicalDaily: {
-        ...(existingCampaigns?.historicalDaily || {}),
-        ...dailyData,
-      },
-      historicalLastUpdated: new Date().toISOString(),
-      historicalDateRange: dates.length ? { from: dates[0], to: dates[dates.length - 1] } : null,
-    };
-
-    return { updatedDays, updatedCampaigns, daysUpdated };
+  const removeFile = (idx) => {
+    setDetectedFiles(prev => prev.filter((_, i) => i !== idx));
+    setResults(null);
   };
 
   const processAll = async () => {
@@ -709,19 +742,22 @@ const AmazonAdsIntelModal = ({
     const processResults = [];
 
     try {
-      for (const [key, file] of Object.entries(files)) {
-        if (!file) continue;
+      for (const det of detectedFiles) {
+        if (!det.type || det.error) {
+          processResults.push({ key: det.type || 'unknown', fileName: det.file.name, status: 'skipped', error: det.error || 'Unrecognized format' });
+          continue;
+        }
         try {
           let rows;
-          if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
-            rows = await parseXlsx(file);
+          if (det.file.name.endsWith('.xlsx') || det.file.name.endsWith('.xls')) {
+            rows = await parseXlsx(det.file);
           } else {
-            const text = await file.text();
+            const text = await det.file.text();
             rows = parseCSV(text);
           }
 
           let summary;
-          switch (key) {
+          switch (det.type) {
             case 'dailyOverview': summary = aggregateDailyOverview(rows); break;
             case 'historicalDaily': summary = aggregateDailyOverview(rows); break;
             case 'spSearchTerms': summary = aggregateSPSearchTerms(rows); break;
@@ -734,11 +770,11 @@ const AmazonAdsIntelModal = ({
             case 'searchQueryPerf': summary = aggregateSearchQueryPerf(rows); break;
           }
 
-          newIntel[key] = summary;
-          processResults.push({ key, status: 'success', rows: rows.length });
+          newIntel[det.type] = summary;
+          processResults.push({ key: det.type, fileName: det.file.name, status: 'success', rows: rows.length });
         } catch (err) {
-          console.error(`Error processing ${key}:`, err);
-          processResults.push({ key, status: 'error', error: err.message });
+          console.error(`Error processing ${det.file.name}:`, err);
+          processResults.push({ key: det.type, fileName: det.file.name, status: 'error', error: err.message });
         }
       }
 
@@ -749,13 +785,18 @@ const AmazonAdsIntelModal = ({
       let currentDays = allDaysData || {};
       let currentCampaigns = amazonCampaigns || {};
       
-      for (const [key, file] of Object.entries(files)) {
-        if (!file || (key !== 'dailyOverview' && key !== 'historicalDaily')) continue;
+      for (const det of detectedFiles) {
+        if (!det.type || (det.type !== 'dailyOverview' && det.type !== 'historicalDaily')) continue;
         try {
-          const text = await file.text();
-          const rows = parseCSV(text);
+          let rows;
+          if (det.file.name.endsWith('.xlsx') || det.file.name.endsWith('.xls')) {
+            rows = await parseXlsx(det.file);
+          } else {
+            const text = await det.file.text();
+            rows = parseCSV(text);
+          }
           if (rows.length > 0 && setAllDaysData) {
-            const { updatedDays, updatedCampaigns, daysUpdated } = writeDailyToTracking(rows, currentDays, currentCampaigns);
+            const { updatedDays, updatedCampaigns } = writeDailyToTracking(rows, currentDays, currentCampaigns);
             currentDays = updatedDays;
             currentCampaigns = updatedCampaigns;
             trackingUpdated = true;
@@ -774,7 +815,7 @@ const AmazonAdsIntelModal = ({
       setResults(processResults);
       if (setToast && processResults.length > 0) {
         const successCount = processResults.filter(r => r.status === 'success').length;
-        setToast({ message: `Processed ${successCount} report${successCount !== 1 ? 's' : ''} successfully${trackingUpdated ? ' • Daily tracking data updated' : ''}`, type: 'success' });
+        setToast({ message: `Processed ${successCount} report${successCount !== 1 ? 's' : ''} successfully${trackingUpdated ? ' • Daily tracking updated' : ''}`, type: 'success' });
       }
     } catch (err) {
       console.error('Processing error:', err);
@@ -783,77 +824,119 @@ const AmazonAdsIntelModal = ({
     }
   };
 
-  const fileCount = Object.values(files).filter(Boolean).length;
+  const validFiles = detectedFiles.filter(d => d.type && !d.error);
+  const unknownFiles = detectedFiles.filter(d => !d.type || d.error);
   const hasExistingData = adsIntelData?.lastUpdated;
+  const typeLabels = Object.fromEntries(REPORT_TYPES.map(r => [r.key, r.label]));
+  const typeColors = Object.fromEntries(REPORT_TYPES.map(r => [r.key, r.color]));
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+      <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="bg-gradient-to-r from-violet-600 to-indigo-600 p-4 flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
-              <Brain className="w-6 h-6" />Amazon Ads Intelligence Upload
+              <Brain className="w-6 h-6" />Amazon Ads Intelligence
             </h2>
-            <p className="text-white/70 text-sm">Upload reports for deep AI optimization analysis</p>
+            <p className="text-white/70 text-sm">Drop all your reports — we'll figure out the rest</p>
           </div>
-          <button onClick={() => { setShow(false); setFiles({}); setResults(null); }} className="p-2 hover:bg-white/20 rounded-lg text-white">
+          <button onClick={() => { setShow(false); setDetectedFiles([]); setResults(null); }} className="p-2 hover:bg-white/20 rounded-lg text-white">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content */}
         <div className="p-4 overflow-y-auto flex-1 space-y-3">
+          {/* Existing data status */}
           {hasExistingData && (
             <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-lg p-3 text-sm">
-              <p className="text-emerald-400 font-medium">✓ Intel data loaded from {new Date(adsIntelData.lastUpdated).toLocaleDateString()}</p>
+              <p className="text-emerald-400 font-medium">✓ Intel loaded · {new Date(adsIntelData.lastUpdated).toLocaleDateString()}</p>
               <p className="text-slate-400 text-xs mt-1">
                 {[
-                  adsIntelData.dailyOverview && `${adsIntelData.dailyOverview.totalDays}d recent overview`,
+                  adsIntelData.dailyOverview && `${adsIntelData.dailyOverview.totalDays}d overview`,
                   adsIntelData.historicalDaily && `${adsIntelData.historicalDaily.totalDays}d historical`,
-                  adsIntelData.spSearchTerms && `${adsIntelData.spSearchTerms.totalTerms} SP search terms`,
-                  adsIntelData.spAdvertised?.length && `${adsIntelData.spAdvertised.length} advertised ASINs`,
-                  adsIntelData.spPlacement && `${adsIntelData.spPlacement.byPlacement.length} placements`,
+                  adsIntelData.spSearchTerms && `${adsIntelData.spSearchTerms.totalTerms} SP terms`,
+                  adsIntelData.spAdvertised?.length && `${adsIntelData.spAdvertised.length} ASINs`,
+                  adsIntelData.spPlacement && `placements`,
                   adsIntelData.spTargeting?.length && `${adsIntelData.spTargeting.length} targets`,
                   adsIntelData.sbSearchTerms?.length && `${adsIntelData.sbSearchTerms.length} SB terms`,
                   adsIntelData.sdCampaign?.length && `${adsIntelData.sdCampaign.length} SD campaigns`,
-                  adsIntelData.businessReport?.length && `${adsIntelData.businessReport.length} ASINs in biz report`,
-                  adsIntelData.searchQueryPerf?.length && `${adsIntelData.searchQueryPerf.length} organic queries`,
-                ].filter(Boolean).join(' • ')}
+                  adsIntelData.businessReport?.length && `${adsIntelData.businessReport.length} biz report ASINs`,
+                  adsIntelData.searchQueryPerf?.length && `${adsIntelData.searchQueryPerf.length} queries`,
+                ].filter(Boolean).join(' · ')}
               </p>
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {REPORT_TYPES.map(rt => {
-              const Icon = rt.icon;
-              const file = files[rt.key];
-              const hasExisting = !!adsIntelData?.[rt.key];
-              return (
-                <label key={rt.key} className={`relative flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${file ? 'border-emerald-500/50 bg-emerald-900/20' : hasExisting ? 'border-slate-600 bg-slate-800/30' : 'border-slate-700 bg-slate-800/50 hover:border-slate-500'}`}>
-                  <Icon className={`w-5 h-5 flex-shrink-0 text-${rt.color}-400`} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-white text-sm font-medium">{rt.label}</p>
-                    {file ? (
-                      <p className="text-emerald-400 text-xs truncate">✓ {file.name}</p>
-                    ) : (
-                      <p className="text-slate-500 text-xs">{rt.desc}</p>
-                    )}
-                  </div>
-                  {hasExisting && !file && <span className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded">cached</span>}
-                  <input type="file" accept={rt.accept || '.xlsx,.csv'} className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => { if (e.target.files[0]) handleFileSelect(rt.key, e.target.files[0]); }} />
-                </label>
-              );
-            })}
+          {/* DROP ZONE */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-all cursor-pointer ${dragOver ? 'border-violet-400 bg-violet-500/10' : 'border-slate-600 hover:border-slate-500 bg-slate-800/30'}`}
+          >
+            <input
+              type="file"
+              multiple
+              accept=".csv,.xlsx,.xls"
+              onChange={handleFileInput}
+              className="absolute inset-0 opacity-0 cursor-pointer"
+            />
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${dragOver ? 'text-violet-400' : 'text-slate-500'}`} />
+            <p className="text-white font-medium mb-1">
+              {detectedFiles.length > 0 ? 'Drop more files or click to add' : 'Drop files here or click to browse'}
+            </p>
+            <p className="text-slate-500 text-xs">
+              CSV & XLSX — search terms, placements, targeting, business reports, daily overviews, and more
+            </p>
           </div>
+
+          {/* Detected files list */}
+          {detectedFiles.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-slate-400 text-xs font-medium uppercase tracking-wide">{detectedFiles.length} file{detectedFiles.length !== 1 ? 's' : ''} detected</p>
+              {validFiles.map((det, i) => {
+                const origIdx = detectedFiles.indexOf(det);
+                return (
+                  <div key={origIdx} className="flex items-center gap-3 bg-emerald-900/20 border border-emerald-500/30 rounded-lg p-2.5">
+                    <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white text-sm truncate">{det.file.name}</p>
+                      <p className="text-emerald-400 text-xs">{typeLabels[det.type] || det.type} · {det.rows.toLocaleString()} rows</p>
+                    </div>
+                    <button onClick={() => removeFile(origIdx)} className="p-1 hover:bg-slate-700 rounded text-slate-500 hover:text-white">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+              {unknownFiles.map((det, i) => {
+                const origIdx = detectedFiles.indexOf(det);
+                return (
+                  <div key={origIdx} className="flex items-center gap-3 bg-amber-900/20 border border-amber-500/30 rounded-lg p-2.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white text-sm truncate">{det.file.name}</p>
+                      <p className="text-amber-400 text-xs">{det.error || 'Could not identify report type'} — will be skipped</p>
+                    </div>
+                    <button onClick={() => removeFile(origIdx)} className="p-1 hover:bg-slate-700 rounded text-slate-500 hover:text-white">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Results */}
           {results && (
             <div className="bg-slate-800/50 rounded-lg p-3 space-y-1">
-              {results.map(r => (
-                <div key={r.key} className={`flex items-center gap-2 text-sm ${r.status === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
+              <p className="text-slate-300 text-xs font-medium mb-2">Processing Results</p>
+              {results.map((r, i) => (
+                <div key={i} className={`flex items-center gap-2 text-sm ${r.status === 'success' ? 'text-emerald-400' : r.status === 'skipped' ? 'text-amber-400' : 'text-red-400'}`}>
                   {r.status === 'success' ? <CheckCircle className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
-                  <span>{REPORT_TYPES.find(rt => rt.key === r.key)?.label}: {r.status === 'success' ? `${r.rows} rows processed` : r.error}</span>
+                  <span className="truncate">{r.fileName || typeLabels[r.key] || r.key}: {r.status === 'success' ? `${r.rows} rows → ${typeLabels[r.key]}` : r.error}</span>
                 </div>
               ))}
             </div>
@@ -862,16 +945,23 @@ const AmazonAdsIntelModal = ({
 
         {/* Footer */}
         <div className="p-4 border-t border-slate-700 flex justify-between items-center">
-          <p className="text-slate-400 text-sm">{fileCount} file{fileCount !== 1 ? 's' : ''} selected</p>
+          <div>
+            {validFiles.length > 0 && (
+              <p className="text-slate-400 text-sm">{validFiles.length} report{validFiles.length !== 1 ? 's' : ''} ready</p>
+            )}
+            {detectedFiles.length > 0 && (
+              <button onClick={() => { setDetectedFiles([]); setResults(null); }} className="text-slate-500 text-xs hover:text-slate-300">Clear all</button>
+            )}
+          </div>
           <button
             onClick={processAll}
-            disabled={fileCount === 0 || processing}
-            className="px-6 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-lg font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2"
+            disabled={validFiles.length === 0 || processing}
+            className="px-6 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-lg font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2"
           >
             {processing ? (
               <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Processing...</>
             ) : (
-              <><Brain className="w-4 h-4" /> Process & Save Intel</>
+              <><Brain className="w-4 h-4" /> Process {validFiles.length} Report{validFiles.length !== 1 ? 's' : ''}</>
             )}
           </button>
         </div>
