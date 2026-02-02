@@ -116,7 +116,6 @@ const NavTabs = ({
     }] : []),
     ...(appSettings.modulesEnabled?.ads !== false ? [{
       view: 'ads', label: 'Ads & Marketing', icon: Zap,
-      disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
       onClick: () => setView('ads'),
     }] : []),
   ];
