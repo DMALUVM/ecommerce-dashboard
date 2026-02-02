@@ -3,6 +3,8 @@ import { Brain, X, Upload, FileSpreadsheet, CheckCircle, AlertTriangle, Trending
 import { loadXLSX } from '../../utils/xlsx';
 
 const REPORT_TYPES = [
+  { key: 'dailyOverview', label: 'Daily Ads Overview', icon: TrendingUp, color: 'yellow', accept: '.csv', desc: 'Seller Central daily ads overview (recent 30d)' },
+  { key: 'historicalDaily', label: 'Historical Daily Data', icon: BarChart3, color: 'indigo', accept: '.csv', desc: 'Historical daily ads data (months/years)' },
   { key: 'spSearchTerms', label: 'SP Search Terms', icon: Search, color: 'blue', accept: '.xlsx,.csv', desc: 'Sponsored Products Search Term Report' },
   { key: 'spAdvertised', label: 'SP Advertised Products', icon: ShoppingCart, color: 'green', desc: 'Sponsored Products Advertised Product Report' },
   { key: 'spPlacement', label: 'SP Placements', icon: BarChart3, color: 'purple', desc: 'Sponsored Products Placement Report' },
@@ -41,7 +43,8 @@ const parseCSV = (text) => {
   // Skip metadata lines (like Search Query Performance header)
   let headerIdx = 0;
   for (let i = 0; i < Math.min(5, lines.length); i++) {
-    if (lines[i].includes('ASIN') || lines[i].includes('Date') || lines[i].includes('Search Query')) {
+    const lower = lines[i].toLowerCase();
+    if (lower.includes('asin') || lower.includes('date') || lower.includes('search query')) {
       headerIdx = i;
       break;
     }
@@ -56,6 +59,132 @@ const parseCSV = (text) => {
     rows.push(row);
   }
   return rows;
+};
+
+// Normalize date formats: "2026-01-01", "01/01/2024" (DD/MM/YYYY), etc
+const normalizeDate = (d) => {
+  if (!d) return null;
+  const s = String(d).replace(/"/g, '').trim();
+  // YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
+  // DD/MM/YYYY
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
+    const [dd, mm, yyyy] = s.split('/');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  // MM/DD/YYYY
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) {
+    const parts = s.split('/');
+    return `${parts[2]}-${parts[0].padStart(2,'0')}-${parts[1].padStart(2,'0')}`;
+  }
+  return s;
+};
+
+// ============ DAILY OVERVIEW / HISTORICAL AGGREGATION ============
+
+const aggregateDailyOverview = (rows) => {
+  // Parse each day
+  const days = rows.map(r => ({
+    date: normalizeDate(r['date'] || r['Date']),
+    spend: num(r['Spend']),
+    revenue: num(r['Revenue']),
+    orders: num(r['Orders']),
+    conversions: num(r['Conversions']),
+    roas: num(r['ROAS']),
+    acos: num(r['ACOS']),
+    impressions: num(r['Impressions']),
+    clicks: num(r['Clicks']),
+    ctr: num(r['CTR']),
+    cpc: num(r['Avg CPC']),
+    convRate: num(r['Conv Rate']),
+    tacos: num(r['Total ACOS (TACOS)']),
+    totalUnits: num(r['Total Units Ordered']),
+    totalRevenue: num(r['Total Revenue']),
+  })).filter(d => d.date && d.spend > 0).sort((a, b) => a.date.localeCompare(b.date));
+
+  if (days.length === 0) return null;
+
+  // Monthly summaries
+  const monthly = {};
+  days.forEach(d => {
+    const m = d.date.substring(0, 7);
+    if (!monthly[m]) monthly[m] = { month: m, spend: 0, revenue: 0, totalRevenue: 0, orders: 0, clicks: 0, impressions: 0, days: 0 };
+    monthly[m].spend += d.spend;
+    monthly[m].revenue += d.revenue;
+    monthly[m].totalRevenue += d.totalRevenue;
+    monthly[m].orders += d.orders;
+    monthly[m].clicks += d.clicks;
+    monthly[m].impressions += d.impressions;
+    monthly[m].days++;
+  });
+  const monthlyArr = Object.values(monthly).map(m => ({
+    ...m,
+    roas: m.spend > 0 ? m.revenue / m.spend : 0,
+    acos: m.revenue > 0 ? (m.spend / m.revenue) * 100 : 0,
+    tacos: m.totalRevenue > 0 ? (m.spend / m.totalRevenue) * 100 : 0,
+    avgDailySpend: m.days > 0 ? m.spend / m.days : 0,
+    avgDailyRevenue: m.days > 0 ? m.totalRevenue / m.days : 0,
+    cpc: m.clicks > 0 ? m.spend / m.clicks : 0,
+    ctr: m.impressions > 0 ? (m.clicks / m.impressions) * 100 : 0,
+    convRate: m.clicks > 0 ? (m.orders / m.clicks) * 100 : 0,
+  })).sort((a, b) => a.month.localeCompare(b.month));
+
+  // Day-of-week patterns
+  const dow = { 0: 'Sun', 1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat' };
+  const dowBuckets = {};
+  days.forEach(d => {
+    const dayIdx = new Date(d.date + 'T12:00:00').getDay();
+    const dayName = dow[dayIdx];
+    if (!dowBuckets[dayName]) dowBuckets[dayName] = { day: dayName, spend: 0, revenue: 0, totalRevenue: 0, orders: 0, count: 0 };
+    dowBuckets[dayName].spend += d.spend;
+    dowBuckets[dayName].revenue += d.revenue;
+    dowBuckets[dayName].totalRevenue += d.totalRevenue;
+    dowBuckets[dayName].orders += d.orders;
+    dowBuckets[dayName].count++;
+  });
+  const dowArr = Object.values(dowBuckets).map(b => ({
+    ...b,
+    avgSpend: b.count > 0 ? b.spend / b.count : 0,
+    avgRevenue: b.count > 0 ? b.revenue / b.count : 0,
+    avgTotalRevenue: b.count > 0 ? b.totalRevenue / b.count : 0,
+    avgOrders: b.count > 0 ? b.orders / b.count : 0,
+    roas: b.spend > 0 ? b.revenue / b.spend : 0,
+    tacos: b.totalRevenue > 0 ? (b.spend / b.totalRevenue) * 100 : 0,
+  })).sort((a, b) => b.roas - a.roas);
+
+  // Last 7 vs prior 7 momentum
+  const recent7 = days.slice(-7);
+  const prior7 = days.slice(-14, -7);
+  const r7 = recent7.reduce((a, d) => ({ spend: a.spend + d.spend, revenue: a.revenue + d.revenue, orders: a.orders + d.orders, totalRevenue: a.totalRevenue + d.totalRevenue }), { spend: 0, revenue: 0, orders: 0, totalRevenue: 0 });
+  const p7 = prior7.length >= 5 ? prior7.reduce((a, d) => ({ spend: a.spend + d.spend, revenue: a.revenue + d.revenue, orders: a.orders + d.orders, totalRevenue: a.totalRevenue + d.totalRevenue }), { spend: 0, revenue: 0, orders: 0, totalRevenue: 0 }) : null;
+
+  // Best / worst days
+  const bestROAS = [...days].sort((a, b) => b.roas - a.roas).slice(0, 5);
+  const worstROAS = [...days].filter(d => d.spend > 100).sort((a, b) => a.roas - b.roas).slice(0, 5);
+  const highestSpend = [...days].sort((a, b) => b.spend - a.spend).slice(0, 5);
+  const highestRevenue = [...days].sort((a, b) => b.totalRevenue - a.totalRevenue).slice(0, 5);
+
+  // Totals
+  const totalSpend = days.reduce((s, d) => s + d.spend, 0);
+  const totalAdRevenue = days.reduce((s, d) => s + d.revenue, 0);
+  const totalRevenue = days.reduce((s, d) => s + d.totalRevenue, 0);
+  const totalOrders = days.reduce((s, d) => s + d.orders, 0);
+
+  return {
+    dateRange: { from: days[0].date, to: days[days.length - 1].date },
+    totalDays: days.length,
+    totalSpend, totalAdRevenue, totalRevenue, totalOrders,
+    overallROAS: totalSpend > 0 ? totalAdRevenue / totalSpend : 0,
+    overallACOS: totalAdRevenue > 0 ? (totalSpend / totalAdRevenue) * 100 : 0,
+    overallTACOS: totalRevenue > 0 ? (totalSpend / totalRevenue) * 100 : 0,
+    monthly: monthlyArr,
+    dayOfWeek: dowArr,
+    momentum: {
+      recent7: { ...r7, roas: r7.spend > 0 ? r7.revenue / r7.spend : 0, tacos: r7.totalRevenue > 0 ? (r7.spend / r7.totalRevenue) * 100 : 0 },
+      prior7: p7 ? { ...p7, roas: p7.spend > 0 ? p7.revenue / p7.spend : 0, tacos: p7.totalRevenue > 0 ? (p7.spend / p7.totalRevenue) * 100 : 0 } : null,
+    },
+    bestROAS, worstROAS, highestSpend, highestRevenue,
+  };
 };
 
 const num = (v) => {
@@ -314,10 +443,74 @@ const aggregateSearchQueryPerf = (rows) => {
 
 // ============ BUILD AI CONTEXT ============
 
+const buildDailyContext = (data, label) => {
+  if (!data) return '';
+  let ctx = `\n--- ${label} (${data.dateRange.from} to ${data.dateRange.to}, ${data.totalDays} days) ---
+TOTALS: Ad Spend $${Math.round(data.totalSpend).toLocaleString()} | Ad Revenue $${Math.round(data.totalAdRevenue).toLocaleString()} | Total Revenue $${Math.round(data.totalRevenue).toLocaleString()} | Orders ${data.totalOrders.toLocaleString()}
+ROAS: ${data.overallROAS.toFixed(2)} | ACOS: ${data.overallACOS.toFixed(1)}% | TACOS: ${data.overallTACOS.toFixed(1)}%
+`;
+
+  // Monthly trend
+  if (data.monthly.length > 1) {
+    ctx += `\nMONTHLY TREND:\n`;
+    data.monthly.slice(-12).forEach(m => {
+      ctx += `  ${m.month}: Spend $${Math.round(m.spend).toLocaleString()} | Ad Rev $${Math.round(m.revenue).toLocaleString()} | Total Rev $${Math.round(m.totalRevenue).toLocaleString()} | ROAS ${m.roas.toFixed(2)} | ACOS ${m.acos.toFixed(1)}% | TACOS ${m.tacos.toFixed(1)}% | CPC $${m.cpc.toFixed(2)} | Conv ${m.convRate.toFixed(1)}%\n`;
+    });
+    // Month-over-month changes
+    if (data.monthly.length >= 2) {
+      const last = data.monthly[data.monthly.length - 1];
+      const prev = data.monthly[data.monthly.length - 2];
+      const spendChg = prev.spend > 0 ? ((last.spend - prev.spend) / prev.spend * 100) : 0;
+      const roasChg = prev.roas > 0 ? ((last.roas - prev.roas) / prev.roas * 100) : 0;
+      const revChg = prev.totalRevenue > 0 ? ((last.totalRevenue - prev.totalRevenue) / prev.totalRevenue * 100) : 0;
+      ctx += `  MoM CHANGES (${prev.month} → ${last.month}): Spend ${spendChg >= 0 ? '+' : ''}${spendChg.toFixed(1)}% | ROAS ${roasChg >= 0 ? '+' : ''}${roasChg.toFixed(1)}% | Total Rev ${revChg >= 0 ? '+' : ''}${revChg.toFixed(1)}%\n`;
+    }
+  }
+
+  // Day-of-week
+  if (data.dayOfWeek.length > 0) {
+    ctx += `\nDAY-OF-WEEK PERFORMANCE (sorted by ROAS):\n`;
+    data.dayOfWeek.forEach(d => {
+      ctx += `  ${d.day}: Avg Spend $${d.avgSpend.toFixed(0)} | Avg Ad Rev $${d.avgRevenue.toFixed(0)} | Avg Total Rev $${d.avgTotalRevenue.toFixed(0)} | ROAS ${d.roas.toFixed(2)} | TACOS ${d.tacos.toFixed(1)}% | Avg Orders ${d.avgOrders.toFixed(1)}\n`;
+    });
+  }
+
+  // Momentum
+  if (data.momentum.prior7) {
+    const r = data.momentum.recent7;
+    const p = data.momentum.prior7;
+    const spendChg = p.spend > 0 ? ((r.spend - p.spend) / p.spend * 100) : 0;
+    const roasChg = p.roas > 0 ? ((r.roas - p.roas) / p.roas * 100) : 0;
+    ctx += `\nWEEK-OVER-WEEK MOMENTUM (last 7d vs prior 7d):
+  Recent 7d: Spend $${Math.round(r.spend)} | ROAS ${r.roas.toFixed(2)} | TACOS ${r.tacos.toFixed(1)}%
+  Prior 7d:  Spend $${Math.round(p.spend)} | ROAS ${p.roas.toFixed(2)} | TACOS ${p.tacos.toFixed(1)}%
+  Change: Spend ${spendChg >= 0 ? '+' : ''}${spendChg.toFixed(1)}% | ROAS ${roasChg >= 0 ? '+' : ''}${roasChg.toFixed(1)}%
+`;
+  }
+
+  // Outliers
+  ctx += `\nBEST ROAS DAYS: ${data.bestROAS.slice(0, 3).map(d => `${d.date} ROAS ${d.roas.toFixed(2)} ($${Math.round(d.spend)} spend)`).join(' | ')}`;
+  ctx += `\nWORST ROAS DAYS: ${data.worstROAS.slice(0, 3).map(d => `${d.date} ROAS ${d.roas.toFixed(2)} ($${Math.round(d.spend)} spend)`).join(' | ')}`;
+  ctx += `\nHIGHEST REVENUE DAYS: ${data.highestRevenue.slice(0, 3).map(d => `${d.date} $${Math.round(d.totalRevenue)} total rev`).join(' | ')}`;
+  ctx += '\n';
+
+  return ctx;
+};
+
 export const buildAdsIntelContext = (intelData) => {
   if (!intelData || !intelData.lastUpdated) return '';
   
   let context = `\n=== DETAILED AMAZON ADS INTELLIGENCE (Updated: ${new Date(intelData.lastUpdated).toLocaleDateString()}) ===\n`;
+
+  // Daily Overview (recent)
+  if (intelData.dailyOverview) {
+    context += buildDailyContext(intelData.dailyOverview, 'RECENT DAILY PERFORMANCE');
+  }
+
+  // Historical Daily
+  if (intelData.historicalDaily) {
+    context += buildDailyContext(intelData.historicalDaily, 'HISTORICAL DAILY PERFORMANCE');
+  }
   
   // SP Search Terms
   if (intelData.spSearchTerms) {
@@ -432,6 +625,11 @@ const AmazonAdsIntelModal = ({
   setAdsIntelData,
   combinedData,
   queueCloudSave,
+  allDaysData,
+  setAllDaysData,
+  amazonCampaigns,
+  setAmazonCampaigns,
+  setToast,
 }) => {
   const [files, setFiles] = useState({});
   const [processing, setProcessing] = useState(false);
@@ -442,6 +640,66 @@ const AmazonAdsIntelModal = ({
   const handleFileSelect = (key, file) => {
     setFiles(prev => ({ ...prev, [key]: file }));
     setResults(null);
+  };
+
+  // Write daily overview data to allDaysData (replaces AmazonAdsBulkUploadModal functionality)
+  const writeDailyToTracking = (rows, existingDays, existingCampaigns) => {
+    const updatedDays = { ...existingDays };
+    let daysUpdated = 0;
+    const dailyData = {};
+
+    rows.forEach(r => {
+      const rawDate = r['date'] || r['Date'] || '';
+      const date = normalizeDate(rawDate);
+      if (!date) return;
+      const spend = num(r['Spend']);
+      if (spend <= 0) return;
+
+      const adsData = {
+        spend,
+        adRevenue: num(r['Revenue']),
+        orders: num(r['Orders']),
+        conversions: num(r['Conversions']),
+        roas: num(r['ROAS']),
+        acos: num(r['ACOS']),
+        impressions: num(r['Impressions']),
+        clicks: num(r['Clicks']),
+        ctr: num(r['CTR']),
+        cpc: num(r['Avg CPC']),
+        convRate: num(r['Conv Rate']),
+        tacos: num(r['Total ACOS (TACOS)']),
+        totalUnits: num(r['Total Units Ordered']),
+        totalRevenue: num(r['Total Revenue']),
+      };
+
+      dailyData[date] = adsData;
+
+      const existingDay = updatedDays[date] || {
+        total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
+        amazon: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
+        shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, netProfit: 0 },
+      };
+
+      updatedDays[date] = {
+        ...existingDay,
+        amazonAdsMetrics: adsData,
+      };
+      daysUpdated++;
+    });
+
+    // Update amazonCampaigns with analytics
+    const dates = Object.keys(dailyData).sort();
+    const updatedCampaigns = {
+      ...existingCampaigns,
+      historicalDaily: {
+        ...(existingCampaigns?.historicalDaily || {}),
+        ...dailyData,
+      },
+      historicalLastUpdated: new Date().toISOString(),
+      historicalDateRange: dates.length ? { from: dates[0], to: dates[dates.length - 1] } : null,
+    };
+
+    return { updatedDays, updatedCampaigns, daysUpdated };
   };
 
   const processAll = async () => {
@@ -464,6 +722,8 @@ const AmazonAdsIntelModal = ({
 
           let summary;
           switch (key) {
+            case 'dailyOverview': summary = aggregateDailyOverview(rows); break;
+            case 'historicalDaily': summary = aggregateDailyOverview(rows); break;
             case 'spSearchTerms': summary = aggregateSPSearchTerms(rows); break;
             case 'spAdvertised': summary = aggregateSPAdvertised(rows); break;
             case 'spPlacement': summary = aggregateSPPlacement(rows); break;
@@ -483,8 +743,39 @@ const AmazonAdsIntelModal = ({
       }
 
       setAdsIntelData(newIntel);
+      
+      // If daily overview or historical files were processed, also write to allDaysData
+      let trackingUpdated = false;
+      let currentDays = allDaysData || {};
+      let currentCampaigns = amazonCampaigns || {};
+      
+      for (const [key, file] of Object.entries(files)) {
+        if (!file || (key !== 'dailyOverview' && key !== 'historicalDaily')) continue;
+        try {
+          const text = await file.text();
+          const rows = parseCSV(text);
+          if (rows.length > 0 && setAllDaysData) {
+            const { updatedDays, updatedCampaigns, daysUpdated } = writeDailyToTracking(rows, currentDays, currentCampaigns);
+            currentDays = updatedDays;
+            currentCampaigns = updatedCampaigns;
+            trackingUpdated = true;
+          }
+        } catch (e) { console.error('Error writing daily tracking:', e); }
+      }
+      
+      if (trackingUpdated && setAllDaysData) {
+        setAllDaysData(currentDays);
+        if (setAmazonCampaigns) setAmazonCampaigns(currentCampaigns);
+        try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(currentDays)); } catch(e) {}
+        try { localStorage.setItem('ecommerce_amazon_campaigns_v1', JSON.stringify(currentCampaigns)); } catch(e) {}
+      }
+      
       if (queueCloudSave) queueCloudSave();
       setResults(processResults);
+      if (setToast && processResults.length > 0) {
+        const successCount = processResults.filter(r => r.status === 'success').length;
+        setToast({ message: `Processed ${successCount} report${successCount !== 1 ? 's' : ''} successfully${trackingUpdated ? ' • Daily tracking data updated' : ''}`, type: 'success' });
+      }
     } catch (err) {
       console.error('Processing error:', err);
     } finally {
@@ -518,6 +809,8 @@ const AmazonAdsIntelModal = ({
               <p className="text-emerald-400 font-medium">✓ Intel data loaded from {new Date(adsIntelData.lastUpdated).toLocaleDateString()}</p>
               <p className="text-slate-400 text-xs mt-1">
                 {[
+                  adsIntelData.dailyOverview && `${adsIntelData.dailyOverview.totalDays}d recent overview`,
+                  adsIntelData.historicalDaily && `${adsIntelData.historicalDaily.totalDays}d historical`,
                   adsIntelData.spSearchTerms && `${adsIntelData.spSearchTerms.totalTerms} SP search terms`,
                   adsIntelData.spAdvertised?.length && `${adsIntelData.spAdvertised.length} advertised ASINs`,
                   adsIntelData.spPlacement && `${adsIntelData.spPlacement.byPlacement.length} placements`,
