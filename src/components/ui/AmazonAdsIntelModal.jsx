@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { Brain, X, Upload, FileSpreadsheet, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, Eye, ShoppingCart } from 'lucide-react';
+import { Brain, X, Upload, FileSpreadsheet, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, Eye, ShoppingCart, Zap } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
 
 const REPORT_TYPES = [
@@ -673,6 +673,7 @@ const AmazonAdsIntelModal = ({
   amazonCampaigns,
   setAmazonCampaigns,
   setToast,
+  onGoToAnalyst,
 }) => {
   const [detectedFiles, setDetectedFiles] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -931,14 +932,31 @@ const AmazonAdsIntelModal = ({
 
           {/* Results */}
           {results && (
-            <div className="bg-slate-800/50 rounded-lg p-3 space-y-1">
-              <p className="text-slate-300 text-xs font-medium mb-2">Processing Results</p>
-              {results.map((r, i) => (
-                <div key={i} className={`flex items-center gap-2 text-sm ${r.status === 'success' ? 'text-emerald-400' : r.status === 'skipped' ? 'text-amber-400' : 'text-red-400'}`}>
-                  {r.status === 'success' ? <CheckCircle className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
-                  <span className="truncate">{r.fileName || typeLabels[r.key] || r.key}: {r.status === 'success' ? `${r.rows} rows → ${typeLabels[r.key]}` : r.error}</span>
-                </div>
-              ))}
+            <div className="space-y-3">
+              <div className="bg-slate-800/50 rounded-lg p-3 space-y-1">
+                <p className="text-slate-300 text-xs font-medium mb-2">Processing Results</p>
+                {results.map((r, i) => (
+                  <div key={i} className={`flex items-center gap-2 text-sm ${r.status === 'success' ? 'text-emerald-400' : r.status === 'skipped' ? 'text-amber-400' : 'text-red-400'}`}>
+                    {r.status === 'success' ? <CheckCircle className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                    <span className="truncate">{r.fileName || typeLabels[r.key] || r.key}: {r.status === 'success' ? `${r.rows} rows → ${typeLabels[r.key]}` : r.error}</span>
+                  </div>
+                ))}
+              </div>
+              
+              {/* Generate Action Plan CTA */}
+              {results.some(r => r.status === 'success') && onGoToAnalyst && (
+                <button
+                  onClick={() => {
+                    setShow(false);
+                    setDetectedFiles([]);
+                    setResults(null);
+                    onGoToAnalyst();
+                  }}
+                  className="w-full px-4 py-3.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-semibold flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20 text-base"
+                >
+                  <Zap className="w-5 h-5" />Generate My Action Plan
+                </button>
+              )}
             </div>
           )}
         </div>
