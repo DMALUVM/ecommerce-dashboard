@@ -6361,10 +6361,11 @@ const savePeriods = async (d) => {
             tplValue += qty * cost;
             tplInbound += inb;
             
-            const itemData = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
+            const skuUpper = sku.toUpperCase();
+            const itemData = { sku: skuUpper, name: item.name || sku, total: qty, inbound: inb, cost };
             
             // Store under UPPERCASE version for consistency
-            tplInv[sku.toUpperCase()] = itemData;
+            tplInv[skuUpper] = itemData;
           });
           console.log('Packiyo unique SKUs added to tplInv:', Object.keys(tplInv).length);
           
