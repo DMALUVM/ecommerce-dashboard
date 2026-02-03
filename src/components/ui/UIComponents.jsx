@@ -897,6 +897,222 @@ export const FreshnessIndicator = ({ lastUpdated, warningDays = 1, criticalDays 
   );
 };
 
+// ============ CONFIRM DIALOG ============
+
+export const ConfirmDialog = ({ 
+  show, 
+  onConfirm, 
+  onCancel, 
+  title = 'Confirm Action',
+  message = 'Are you sure you want to proceed?',
+  confirmText = 'Confirm',
+  cancelText = 'Cancel',
+  variant = 'danger', // 'danger' | 'warning' | 'info'
+  icon: CustomIcon,
+}) => {
+  if (!show) return null;
+  
+  const variants = {
+    danger: {
+      iconBg: 'bg-rose-500/20',
+      iconColor: 'text-rose-400',
+      buttonBg: 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500',
+      buttonShadow: 'shadow-rose-500/20',
+    },
+    warning: {
+      iconBg: 'bg-amber-500/20',
+      iconColor: 'text-amber-400',
+      buttonBg: 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500',
+      buttonShadow: 'shadow-amber-500/20',
+    },
+    info: {
+      iconBg: 'bg-blue-500/20',
+      iconColor: 'text-blue-400',
+      buttonBg: 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500',
+      buttonShadow: 'shadow-blue-500/20',
+    },
+  };
+  
+  const v = variants[variant] || variants.danger;
+  const Icon = CustomIcon || AlertCircle;
+  
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onCancel}>
+      <div 
+        className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-4 mb-6">
+          <div className={`w-12 h-12 ${v.iconBg} rounded-xl flex items-center justify-center flex-shrink-0`}>
+            <Icon className={`w-6 h-6 ${v.iconColor}`} />
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-white mb-1">{title}</h3>
+            <p className="text-slate-400 text-sm">{message}</p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <button 
+            onClick={onCancel}
+            className="flex-1 px-4 py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-medium transition-all"
+          >
+            {cancelText}
+          </button>
+          <button 
+            onClick={onConfirm}
+            className={`flex-1 px-4 py-2.5 ${v.buttonBg} text-white rounded-xl font-medium shadow-lg ${v.buttonShadow} transition-all`}
+          >
+            {confirmText}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ FILE DROPZONE ============
+
+export const FileDropzone = ({
+  onFilesSelected,
+  accept = '.csv',
+  multiple = false,
+  label = 'Drop files here or click to upload',
+  sublabel,
+  hasFiles = false,
+  fileNames = '',
+  icon: CustomIcon,
+  color = 'emerald',
+}) => {
+  const [isDragging, setIsDragging] = useState(false);
+  
+  const colors = {
+    emerald: {
+      active: 'border-emerald-500/50 bg-emerald-950/20',
+      icon: 'text-emerald-400',
+    },
+    violet: {
+      active: 'border-violet-500/50 bg-violet-950/20',
+      icon: 'text-violet-400',
+    },
+    blue: {
+      active: 'border-blue-500/50 bg-blue-950/20',
+      icon: 'text-blue-400',
+    },
+    orange: {
+      active: 'border-orange-500/50 bg-orange-950/20',
+      icon: 'text-orange-400',
+    },
+  };
+  
+  const c = colors[color] || colors.emerald;
+  const Icon = CustomIcon || Upload;
+  
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+  
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+  
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length) onFilesSelected(multiple ? files : [files[0]]);
+  };
+  
+  const handleClick = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.multiple = multiple;
+    input.onchange = (e) => {
+      const files = Array.from(e.target.files || []);
+      if (files.length) onFilesSelected(files);
+    };
+    input.click();
+  };
+  
+  return (
+    <div
+      onClick={handleClick}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${
+        hasFiles ? c.active : 
+        isDragging ? 'border-slate-400 bg-slate-800/50' : 
+        'border-slate-600 hover:border-slate-500 bg-slate-800/30'
+      }`}
+    >
+      <div className={`w-14 h-14 mx-auto mb-4 rounded-2xl flex items-center justify-center ${hasFiles ? c.active : 'bg-slate-700/50'}`}>
+        {hasFiles ? (
+          <CheckCircle className={`w-7 h-7 ${c.icon}`} />
+        ) : (
+          <Icon className="w-7 h-7 text-slate-400" />
+        )}
+      </div>
+      <p className={`font-medium mb-1 ${hasFiles ? c.icon : 'text-white'}`}>
+        {hasFiles ? fileNames : label}
+      </p>
+      {sublabel && !hasFiles && (
+        <p className="text-slate-500 text-sm">{sublabel}</p>
+      )}
+      {hasFiles && (
+        <p className="text-slate-500 text-sm mt-1">Click to change</p>
+      )}
+    </div>
+  );
+};
+
+// ============ INPUT FIELD ============
+
+export const InputField = ({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = 'text',
+  prefix,
+  suffix,
+  error,
+  helpText,
+  disabled = false,
+  className = '',
+}) => {
+  return (
+    <div className={className}>
+      {label && (
+        <label className="block text-sm font-medium text-slate-300 mb-2">
+          {label}
+        </label>
+      )}
+      <div className="relative">
+        {prefix && (
+          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">{prefix}</span>
+        )}
+        <input
+          type={type}
+          value={value}
+          onChange={onChange}
+          placeholder={placeholder}
+          disabled={disabled}
+          className={`w-full bg-slate-900 border rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 transition-all ${
+            error ? 'border-rose-500 focus:ring-rose-500/50' : 'border-slate-600 focus:ring-violet-500/50 focus:border-violet-500'
+          } ${prefix ? 'pl-8' : ''} ${suffix ? 'pr-8' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+        />
+        {suffix && (
+          <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500">{suffix}</span>
+        )}
+      </div>
+      {error && <p className="text-rose-400 text-sm mt-1">{error}</p>}
+      {helpText && !error && <p className="text-slate-500 text-sm mt-1">{helpText}</p>}
+    </div>
+  );
+};
+
 export default {
   Card,
   CardHeader,
@@ -925,4 +1141,8 @@ export default {
   KeyboardShortcutsModal,
   RelativeTime,
   FreshnessIndicator,
+  // Batch 4: Smart Inputs
+  ConfirmDialog,
+  FileDropzone,
+  InputField,
 };

@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart, Activity } from 'lucide-react';
 
 // UI Components Library
-import { Card, CardHeader, Button as UIButton, EmptyState, Skeleton, SkeletonCard, SkeletonMetrics, SkeletonTable, PageHeader, StatCard, Badge, Divider, Tooltip, AnimatedNumber, LoadingDots, PulseDot, SuccessCheck, ProgressBar, FadeIn, StaggerChildren, Breadcrumbs, KeyboardShortcutsModal, RelativeTime, FreshnessIndicator } from './components/ui/UIComponents';
+import { Card, CardHeader, Button as UIButton, EmptyState, Skeleton, SkeletonCard, SkeletonMetrics, SkeletonTable, PageHeader, StatCard, Badge, Divider, Tooltip, AnimatedNumber, LoadingDots, PulseDot, SuccessCheck, ProgressBar, FadeIn, StaggerChildren, Breadcrumbs, KeyboardShortcutsModal, RelativeTime, FreshnessIndicator, ConfirmDialog, FileDropzone, InputField } from './components/ui/UIComponents';
 
 // ============ KEYBOARD SHORTCUTS HOOK ============
 const useKeyboardShortcuts = (shortcuts, dependencies = []) => {
@@ -16390,9 +16390,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   )}
                 </div>
               )}
-              <button onClick={() => setShowGoalsModal(true)} className="px-3 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-lg text-sm text-amber-300 flex items-center gap-1"><Target className="w-4 h-4" />Goals</button>
-              <button onClick={() => setShowCogsManager(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"><Settings className="w-4 h-4" />COGS</button>
-              <button onClick={() => setShowProductCatalog(true)} className="px-3 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-1"><Package className="w-4 h-4" />Catalog{Object.keys(savedProductNames).length > 0 && <span className="ml-1">✓</span>}</button>
+              <button onClick={() => setShowGoalsModal(true)} className="px-3 py-2 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded-xl text-sm text-amber-300 flex items-center gap-1.5 transition-all"><Target className="w-4 h-4" />Goals</button>
+              <button onClick={() => setShowCogsManager(true)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm text-white flex items-center gap-1.5 transition-all"><Settings className="w-4 h-4" />COGS</button>
+              <button onClick={() => setShowProductCatalog(true)} className="px-3 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-xl text-sm text-violet-300 flex items-center gap-1.5 transition-all"><Package className="w-4 h-4" />Catalog{Object.keys(savedProductNames).length > 0 && <span className="ml-1">✓</span>}</button>
               <button onClick={() => setShowInvoiceModal(true)} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-1 ${upcomingBills.length > 0 ? 'bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 text-amber-300' : 'bg-slate-700 hover:bg-slate-600 text-white'}`}>
                 <FileText className="w-4 h-4" />Bills{upcomingBills.length > 0 && <span className="ml-1 px-1.5 py-0.5 bg-amber-500/30 rounded text-xs">{upcomingBills.length}</span>}
               </button>
@@ -18115,7 +18115,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             </div>
             <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">Upload Data</h1>
             <p className="text-slate-400 mb-3">Import your sales reports and track performance</p>
-            <button onClick={() => setShowUploadHelp(true)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300 flex items-center gap-2 mx-auto">
+            <button onClick={() => setShowUploadHelp(true)} className="px-4 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm text-slate-300 flex items-center gap-2 mx-auto transition-all">
               <FileText className="w-4 h-4" />How to Get These Files
             </button>
           </div>
@@ -18123,31 +18123,31 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           
           {/* Upload Type Tabs - Streamlined */}
-          <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
-            <button onClick={() => setUploadTab('amazon-bulk')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'amazon-bulk' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+          <div className="flex gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl overflow-x-auto">
+            <button onClick={() => setUploadTab('amazon-bulk')} className={`flex-1 min-w-fit px-4 py-3 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${uploadTab === 'amazon-bulk' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-lg shadow-orange-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
               <Package className="w-5 h-5" />Sales Data
             </button>
-            <button onClick={() => setUploadTab('bulk-ads')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'bulk-ads' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setUploadTab('bulk-ads')} className={`flex-1 min-w-fit px-4 py-3 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${uploadTab === 'bulk-ads' ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
               <TrendingUp className="w-5 h-5" />Ads & Intel
             </button>
-            <button onClick={() => setUploadTab('inventory')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setUploadTab('inventory')} className={`flex-1 min-w-fit px-4 py-3 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${uploadTab === 'inventory' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
               <Boxes className="w-5 h-5" />Inventory
             </button>
-            <button onClick={() => setUploadTab('cogs')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'cogs' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setUploadTab('cogs')} className={`flex-1 min-w-fit px-4 py-3 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${uploadTab === 'cogs' ? 'bg-gradient-to-r from-pink-600 to-rose-600 text-white shadow-lg shadow-pink-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
               <DollarSign className="w-5 h-5" />COGS
             </button>
-            <button onClick={() => setUploadTab('forecast')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${['forecast', 'period'].includes(uploadTab) ? 'bg-slate-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setUploadTab('forecast')} className={`flex-1 min-w-fit px-4 py-3 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${['forecast', 'period'].includes(uploadTab) ? 'bg-gradient-to-r from-slate-600 to-slate-500 text-white shadow-lg shadow-slate-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
               <MoreHorizontal className="w-5 h-5" />Advanced
             </button>
           </div>
           
           {/* Advanced sub-tabs */}
           {['forecast', 'period'].includes(uploadTab) && (
-            <div className="flex gap-2 mb-4 p-1 bg-slate-700/30 rounded-lg">
-              <button onClick={() => setUploadTab('forecast')} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${uploadTab === 'forecast' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+            <div className="flex gap-2 mb-4 p-1 bg-slate-700/30 rounded-xl">
+              <button onClick={() => setUploadTab('forecast')} className={`px-4 py-2.5 rounded-xl text-sm flex items-center gap-2 transition-all ${uploadTab === 'forecast' ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg shadow-amber-500/20' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}>
                 <LineChart className="w-4 h-4" />Amazon Forecast
               </button>
-              <button onClick={() => setUploadTab('period')} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${uploadTab === 'period' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+              <button onClick={() => setUploadTab('period')} className={`px-4 py-2.5 rounded-xl text-sm flex items-center gap-2 transition-all ${uploadTab === 'period' ? 'bg-gradient-to-r from-teal-600 to-cyan-600 text-white shadow-lg shadow-teal-500/20' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}>
                 <CalendarRange className="w-4 h-4" />Annual/Period
               </button>
             </div>
@@ -18190,16 +18190,16 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       'text-slate-400'
                     }`}>{action.message}</span>
                     {action.action === 'upload-forecast' && (
-                      <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="text-xs px-2 py-1 bg-amber-600 hover:bg-amber-500 rounded text-white">Upload</button>
+                      <button onClick={() => { setUploadTab('forecast'); setView('upload'); }} className="text-xs px-3 py-1.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg text-white font-medium transition-all">Upload</button>
                     )}
                     {action.action === 'upload-daily' && (
-                      <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="text-xs px-2 py-1 bg-cyan-600 hover:bg-cyan-500 rounded text-white">Upload</button>
+                      <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="text-xs px-3 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-lg text-white font-medium transition-all">Upload</button>
                     )}
                     {action.action === 'upload-weekly' && (
-                      <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="text-xs px-2 py-1 bg-violet-600 hover:bg-violet-500 rounded text-white">Upload</button>
+                      <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="text-xs px-3 py-1.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 rounded-lg text-white font-medium transition-all">Upload</button>
                     )}
                     {action.action === 'aggregate-daily' && (
-                      <button onClick={aggregateDailyToWeekly} className="text-xs px-2 py-1 bg-teal-600 hover:bg-teal-500 rounded text-white">Aggregate</button>
+                      <button onClick={aggregateDailyToWeekly} className="text-xs px-3 py-1.5 bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 rounded-lg text-white font-medium transition-all">Aggregate</button>
                     )}
                   </div>
                 ))}
@@ -38148,8 +38148,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             <SettingRow label="Reset Settings Only" desc="Restore settings to defaults (keeps all data)">
               {showResetConfirm ? (
                 <div className="flex gap-2">
-                  <button onClick={resetToDefaults} className="px-3 py-2 bg-rose-600 hover:bg-rose-500 rounded-lg text-sm text-white">Confirm Reset</button>
-                  <button onClick={() => setShowResetConfirm(false)} className="px-3 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm text-white">Cancel</button>
+                  <button onClick={resetToDefaults} className="px-4 py-2.5 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 rounded-xl text-sm text-white font-medium shadow-lg shadow-rose-500/20 transition-all">Confirm Reset</button>
+                  <button onClick={() => setShowResetConfirm(false)} className="px-4 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm text-white font-medium transition-all">Cancel</button>
                 </div>
               ) : (
                 <button onClick={() => setShowResetConfirm(true)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">Reset Settings</button>

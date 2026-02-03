@@ -39,25 +39,25 @@ const NavTabs = ({
       <div className="relative">
         <button 
           onClick={() => setNavDropdown(isOpen ? null : dropdownKey)}
-          className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1 ${isActive ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}
+          className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${isActive ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}
         >
           <Icon className="w-4 h-4" />
           {label}
           <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
         </button>
         {isOpen && (
-          <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl py-1 z-50 min-w-[180px]">
+          <div className="absolute top-full left-0 mt-2 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl py-1.5 z-50 min-w-[200px]">
             {items.map((item, index) => (
               <React.Fragment key={item.view}>
-                {item.divider && index > 0 && <div className="border-t border-slate-600 my-1" />}
+                {item.divider && index > 0 && <div className="border-t border-slate-700 my-1.5" />}
                 <button
                   onClick={() => { item.onClick(); setNavDropdown(null); }}
                   disabled={item.disabled}
-                  className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 disabled:opacity-40 ${view === item.view ? 'bg-violet-600/30 text-violet-300' : 'text-slate-300 hover:bg-slate-700'}`}
+                  className={`w-full px-4 py-2.5 text-left text-sm flex items-center gap-2.5 disabled:opacity-40 transition-all ${view === item.view ? 'bg-violet-600/20 text-violet-300' : 'text-slate-300 hover:bg-slate-700/70'}`}
                 >
                   <item.icon className="w-4 h-4" />
                   {item.label}
-                  {item.badge && <span className="ml-auto text-xs bg-amber-500/30 text-amber-300 px-1.5 rounded">{item.badge}</span>}
+                  {item.badge && <span className="ml-auto text-xs bg-violet-500/30 text-violet-300 px-2 py-0.5 rounded-full">{item.badge}</span>}
                 </button>
               </React.Fragment>
             ))}
@@ -160,8 +160,8 @@ const NavTabs = ({
   return (
     <div className="flex flex-wrap gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl relative" onClick={(e) => { if (e.target === e.currentTarget) setNavDropdown(null); }}>
       {/* Core Navigation - Always visible */}
-      <button onClick={() => setView('dashboard')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'dashboard' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />Dashboard</button>
-      <button onClick={() => setView('upload')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Upload className="w-4 h-4 inline mr-1" />Upload</button>
+      <button onClick={() => setView('dashboard')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${view === 'dashboard' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><BarChart3 className="w-4 h-4" />Dashboard</button>
+      <button onClick={() => setView('upload')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Upload className="w-4 h-4" />Upload</button>
       
       <div className="w-px bg-slate-600 mx-1" />
       
@@ -201,7 +201,7 @@ const NavTabs = ({
       <div className="w-px bg-slate-600 mx-1" />
       
       {/* Settings - Always visible */}
-      <button onClick={() => setView('settings')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'settings' ? 'bg-slate-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Settings className="w-4 h-4 inline mr-1" />Settings</button>
+      <button onClick={() => setView('settings')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${view === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-500 text-white shadow-lg shadow-slate-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Settings className="w-4 h-4" />Settings</button>
     </div>
   );
 };
