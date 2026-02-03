@@ -1,6 +1,9 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart, Activity } from 'lucide-react';
+
+// UI Components Library
+import { Card, CardHeader, Button as UIButton, EmptyState, Skeleton, SkeletonCard, SkeletonMetrics, SkeletonTable, PageHeader, StatCard, Badge, Divider, Tooltip } from './components/ui/UIComponents';
 // Extracted utilities (keep App.jsx lean)
 import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
@@ -24625,42 +24628,45 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dataBar}
           
-          <div className="mb-6">
-            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">📈 Trends Dashboard</h1>
-            <p className="text-slate-400">Performance trends across different time periods</p>
-          </div>
+          <PageHeader
+            icon={TrendingUp}
+            iconColor="blue"
+            title="Trends & Charts"
+            subtitle="Performance trends across different time periods"
+            badge={currentData.length > 0 ? { label: `${currentData.length} ${periodLabelShort}s`, variant: 'info' } : null}
+          />
           
           {/* Time Period Tabs */}
           <div className="flex flex-wrap gap-2 mb-4">
             <button 
               onClick={() => setTrendsTab('daily')}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'daily' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-xl font-medium transition-all ${trendsTab === 'daily' ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
             >
-              🕐 Daily ({sortedDays.length})
+              Daily ({sortedDays.length})
             </button>
             <button 
               onClick={() => setTrendsTab('weekly')}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'weekly' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-xl font-medium transition-all ${trendsTab === 'weekly' ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
             >
-              📅 Weekly ({sortedWeeks.length})
+              Weekly ({sortedWeeks.length})
             </button>
             <button 
               onClick={() => setTrendsTab('monthly')}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'monthly' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-xl font-medium transition-all ${trendsTab === 'monthly' ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
             >
-              📊 Monthly ({monthlyTrends.length})
+              Monthly ({monthlyTrends.length})
             </button>
             <button 
               onClick={() => setTrendsTab('yearly')}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'yearly' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-xl font-medium transition-all ${trendsTab === 'yearly' ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
             >
-              📆 Yearly ({yearlyTrends.length})
+              Yearly ({yearlyTrends.length})
             </button>
             <button 
               onClick={() => setTrendsTab('returns')}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'returns' ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-xl font-medium transition-all ${trendsTab === 'returns' ? 'bg-gradient-to-r from-rose-600 to-red-600 text-white shadow-lg shadow-rose-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
             >
-              🔄 Returns ({Object.keys(returnRates.bySku || {}).length} SKUs)
+              Returns ({Object.keys(returnRates.bySku || {}).length} SKUs)
             </button>
           </div>
           
@@ -24669,21 +24675,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             <span className="text-slate-400 text-sm mr-2">Channel:</span>
             <button 
               onClick={() => setTrendsChannel('combined')}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsChannel === 'combined' ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${trendsChannel === 'combined' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
             >
               All Channels
             </button>
             <button 
               onClick={() => setTrendsChannel('amazon')}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsChannel === 'amazon' ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${trendsChannel === 'amazon' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-lg shadow-orange-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
             >
-              🛒 Amazon
+              Amazon
             </button>
             <button 
               onClick={() => setTrendsChannel('shopify')}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsChannel === 'shopify' ? 'bg-green-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${trendsChannel === 'shopify' ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white shadow-lg shadow-green-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
             >
-              🛍️ Shopify
+              Shopify
             </button>
           </div>
           
@@ -26386,19 +26392,22 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dataBar}
           
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-2">
-              <h1 className="text-2xl lg:text-3xl font-bold text-white">🚚 3PL Fulfillment Analytics</h1>
+          <PageHeader
+            icon={Truck}
+            iconColor="blue"
+            title="3PL Costs"
+            subtitle="Track shipping costs, order metrics, and fulfillment efficiency over time"
+            badge={weeklyData.length > 0 ? { label: `${weeklyData.length} weeks`, variant: 'info' } : null}
+            actions={
               <button 
                 onClick={() => setShow3PLBulkUpload(true)}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white font-medium flex items-center gap-2"
+                className="px-4 py-2.5 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 rounded-xl text-white font-medium flex items-center gap-2 shadow-lg shadow-blue-500/20"
               >
                 <Upload className="w-4 h-4" />
-                Bulk Upload
+                Upload Data
               </button>
-            </div>
-            <p className="text-slate-400">Track shipping costs, order metrics, and fulfillment efficiency over time</p>
-          </div>
+            }
+          />
           
           {/* Date Range Selector */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 mb-6">
@@ -26409,10 +26418,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   <button
                     key={range}
                     onClick={() => setThreeplDateRange(range)}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${
                       threeplDateRange === range 
-                        ? 'bg-blue-600 text-white' 
-                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                        ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg shadow-blue-500/20' 
+                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600 border border-slate-600'
                     }`}
                   >
                     {rangeLabels[range]}
@@ -26420,10 +26429,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 ))}
                 <button
                   onClick={() => setThreeplDateRange('custom')}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${
                     threeplDateRange === 'custom' 
-                      ? 'bg-blue-600 text-white' 
-                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                      ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg shadow-blue-500/20' 
+                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600 border border-slate-600'
                   }`}
                 >
                   Custom
@@ -26435,20 +26444,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     type="date"
                     value={threeplCustomStart}
                     onChange={(e) => setThreeplCustomStart(e.target.value)}
-                    className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm"
+                    className="bg-slate-900 border border-slate-600 rounded-xl px-3 py-1.5 text-white text-sm"
                   />
                   <span className="text-slate-500">to</span>
                   <input
                     type="date"
                     value={threeplCustomEnd}
                     onChange={(e) => setThreeplCustomEnd(e.target.value)}
-                    className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm"
+                    className="bg-slate-900 border border-slate-600 rounded-xl px-3 py-1.5 text-white text-sm"
                   />
                 </div>
               )}
             </div>
             {weeklyData.length === 0 && allWeeklyData.length > 0 && (
-              <div className="mt-3 p-3 bg-amber-900/20 border border-amber-500/30 rounded-lg">
+              <div className="mt-3 p-3 bg-amber-900/20 border border-amber-500/30 rounded-xl">
                 <p className="text-amber-400 text-sm">⚠️ No 3PL data found for {rangeLabels[threeplDateRange]}. Try selecting a different date range.</p>
               </div>
             )}
@@ -27005,10 +27014,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           {dataBar}
           
           <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div>
-              <h1 className="text-2xl lg:text-3xl font-bold text-white mb-1">🏆 SKU Performance Rankings</h1>
-              <p className="text-slate-400 text-sm">Identify your best sellers, most profitable products, and trends — <span className="text-white font-medium">{getPeriodLabel()}</span></p>
-            </div>
+            <PageHeader
+              icon={Trophy}
+              iconColor="amber"
+              title="SKU Performance"
+              subtitle={`Identify your best sellers, most profitable products, and trends — ${getPeriodLabel()}`}
+              badge={allSkus.length > 0 ? { label: `${allSkus.length} SKUs`, variant: 'info' } : null}
+            />
             <div className="flex flex-wrap gap-2">
               {[
                 { key: '4weeks', label: '4 Weeks' },
@@ -27020,10 +27032,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 <button
                   key={r.key}
                   onClick={() => setSkuDateRange(r.key)}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${
                     skuDateRange === r.key 
-                      ? 'bg-amber-600 text-white' 
-                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                      ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg shadow-amber-500/20' 
+                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600 border border-slate-600'
                   }`}
                 >
                   {r.label}
@@ -27381,29 +27393,32 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           
-          <div className="mb-6">
-            <h1 className="text-2xl lg:text-3xl font-bold text-white">Analytics & Forecasting</h1>
-            <p className="text-slate-400">Predict future performance and compare metrics</p>
-          </div>
+          <PageHeader
+            icon={BarChart3}
+            iconColor="violet"
+            title="Revenue Analytics"
+            subtitle="Predict future performance and compare metrics"
+            badge={sortedWeeks.length > 0 ? { label: `${sortedWeeks.length} weeks analyzed`, variant: 'info' } : null}
+          />
           
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           
           {/* Analytics Sub-tabs */}
-          <div className="flex flex-wrap gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl w-fit">
-            <button onClick={() => setAnalyticsTab('forecast')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'forecast' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <TrendingUp className="w-4 h-4 inline mr-1" />Total Forecast
+          <div className="flex flex-wrap gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl border border-slate-700 w-fit">
+            <button onClick={() => setAnalyticsTab('forecast')} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${analyticsTab === 'forecast' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <TrendingUp className="w-4 h-4 inline mr-1.5" />Total Forecast
             </button>
-            <button onClick={() => setAnalyticsTab('amazon-accuracy')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'amazon-accuracy' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <Brain className="w-4 h-4 inline mr-1" />AI Learning
+            <button onClick={() => setAnalyticsTab('amazon-accuracy')} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${analyticsTab === 'amazon-accuracy' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-lg shadow-orange-500/20' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Brain className="w-4 h-4 inline mr-1.5" />AI Learning
             </button>
-            <button onClick={() => setAnalyticsTab('sku-forecast')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'sku-forecast' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <Package className="w-4 h-4 inline mr-1" />SKU Forecast
+            <button onClick={() => setAnalyticsTab('sku-forecast')} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${analyticsTab === 'sku-forecast' ? 'bg-gradient-to-r from-pink-600 to-rose-600 text-white shadow-lg shadow-pink-500/20' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Package className="w-4 h-4 inline mr-1.5" />SKU Forecast
             </button>
-            <button onClick={() => setAnalyticsTab('compare-weeks')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'compare-weeks' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <GitCompare className="w-4 h-4 inline mr-1" />Compare Weeks
+            <button onClick={() => setAnalyticsTab('compare-weeks')} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${analyticsTab === 'compare-weeks' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <GitCompare className="w-4 h-4 inline mr-1.5" />Compare Weeks
             </button>
-            <button onClick={() => setAnalyticsTab('compare-skus')} className={`px-4 py-2 rounded-lg text-sm font-medium ${analyticsTab === 'compare-skus' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <Trophy className="w-4 h-4 inline mr-1" />Compare SKUs
+            <button onClick={() => setAnalyticsTab('compare-skus')} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${analyticsTab === 'compare-skus' ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg shadow-amber-500/20' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Trophy className="w-4 h-4 inline mr-1.5" />Compare SKUs
             </button>
           </div>
           
@@ -28403,42 +28418,42 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dataBar}
           
-          <div className="mb-6">
-            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">💰 Profitability Deep Dive</h1>
-            <p className="text-slate-400">
-              {profitPeriod === 'yearly' 
-                ? currentPeriodLabel 
-                : `${currentPeriodLabel}${priorPeriodLabel ? ` vs ${priorPeriodLabel}` : ''}`}
-            </p>
-          </div>
+          <PageHeader
+            icon={DollarSign}
+            iconColor="emerald"
+            title="Profitability"
+            subtitle={profitPeriod === 'yearly' 
+              ? currentPeriodLabel 
+              : `${currentPeriodLabel}${priorPeriodLabel ? ` vs ${priorPeriodLabel}` : ''}`}
+          />
           
           {/* Time Period Tabs */}
           <div className="flex flex-wrap gap-2 mb-4">
             <button 
               onClick={() => { setTrendsTab('weekly'); setProfitPeriodIndex(-1); }}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'weekly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-xl font-medium transition-all ${profitPeriod === 'weekly' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
             >
-              📅 Weekly
+              Weekly
             </button>
             <button 
               onClick={() => { setTrendsTab('monthly'); setProfitPeriodIndex(-1); }}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'monthly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-xl font-medium transition-all ${profitPeriod === 'monthly' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
               disabled={monthlyPeriods.length === 0}
             >
-              📊 Monthly {monthlyPeriods.length === 0 && '(No data)'}
+              Monthly {monthlyPeriods.length === 0 && '(No data)'}
             </button>
             <button 
               onClick={() => { setTrendsTab('quarterly'); setProfitPeriodIndex(-1); }}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'quarterly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-xl font-medium transition-all ${profitPeriod === 'quarterly' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
               disabled={quarterlyPeriods.length === 0}
             >
-              📈 Quarterly {quarterlyPeriods.length === 0 && '(No data)'}
+              Quarterly {quarterlyPeriods.length === 0 && '(No data)'}
             </button>
             <button 
               onClick={() => { setTrendsTab('yearly'); setProfitPeriodIndex(-1); }}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'yearly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-xl font-medium transition-all ${profitPeriod === 'yearly' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'}`}
             >
-              📆 YTD
+              YTD
             </button>
           </div>
           
@@ -30483,29 +30498,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dataBar}
           
-          <div className="mb-6">
-            <div className="flex items-center justify-between flex-wrap gap-4">
-              <div>
-                <h1 className="text-2xl lg:text-3xl font-bold text-white mb-1">📊 Advertising Command Center</h1>
-                <p className="text-slate-400">
-                  {hasCampaignData ? `${campaigns.length} campaigns` : 'No campaigns'} 
-                  {hasHistoricalData ? ` • ${Object.keys(historicalDaily).length} days history` : ''} 
-                  {sortedWeeks.length > 0 ? ` • ${sortedWeeks.length} weeks data` : ''}
-                </p>
-              </div>
+          <PageHeader
+            icon={Zap}
+            iconColor="amber"
+            title="Ads & Marketing"
+            subtitle={`${hasCampaignData ? `${campaigns.length} campaigns` : 'No campaigns'}${hasHistoricalData ? ` • ${Object.keys(historicalDaily).length} days history` : ''}${sortedWeeks.length > 0 ? ` • ${sortedWeeks.length} weeks data` : ''}`}
+            badge={campaignSummary.roas > 3 ? { label: `${campaignSummary.roas?.toFixed(1)}x ROAS`, variant: 'success' } : campaignSummary.roas > 0 ? { label: `${campaignSummary.roas?.toFixed(1)}x ROAS`, variant: 'warning' } : null}
+            actions={
               <div className="flex items-center gap-2">
                 <button onClick={() => setShowAdsAIChat(true)} className="px-4 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white flex items-center gap-2 font-medium shadow-lg shadow-orange-500/20">
-                  <Zap className="w-4 h-4" />Ask AI
+                  <Brain className="w-4 h-4" />AI Analyst
                 </button>
-                <button onClick={() => setShowAdsIntelUpload(true)} className="px-3 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-white flex items-center gap-2 text-sm">
-                  <Upload className="w-4 h-4" />History
+                <button onClick={() => setShowAdsIntelUpload(true)} className="px-3 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-white flex items-center gap-2 text-sm border border-slate-600">
+                  <Upload className="w-4 h-4" />Intel
                 </button>
-                <button onClick={() => setShowAdsBulkUpload(true)} className="px-3 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-white flex items-center gap-2 text-sm">
+                <button onClick={() => setShowAdsBulkUpload(true)} className="px-3 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-white flex items-center gap-2 text-sm border border-slate-600">
                   <Upload className="w-4 h-4" />Meta/Google
                 </button>
               </div>
-            </div>
-          </div>
+            }
+          />
           
           {/* Executive Summary - Quick Insights */}
           {quickInsights.length > 0 && (
@@ -34080,37 +34092,22 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         <div className="max-w-7xl mx-auto px-4 py-6">
           <Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} />{aiChatUI}{aiChatButton}
           {/* Header */}
-          <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-            <div>
-              <h1 className="text-2xl lg:text-3xl font-bold text-white flex items-center gap-3">
-                <Landmark className="w-8 h-8 text-green-400" />
-                Banking & Cash Flow
-              </h1>
-              <p className="text-slate-400 mt-1">
-                {bankingData.lastUpload 
-                  ? `Last updated: ${new Date(bankingData.lastUpload).toLocaleString()}`
-                  : 'Upload your QBO transaction export to get started'}
-                {bankingData.transactions?.length > 0 && ` • ${bankingData.transactions.length} transactions`}
-              </p>
-            </div>
-            
-            <div className="flex items-center gap-3">
-              {/* Stale Data Alert */}
-              {isDataStale && bankingData.transactions?.length > 0 && (
-                <div className="px-3 py-2 bg-amber-500/20 border border-amber-500/50 rounded-lg text-amber-300 text-sm flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4" />
-                  Banking data not uploaded today
-                </div>
-              )}
-              
-              {/* Upload Button */}
-              <label className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-white font-medium cursor-pointer flex items-center gap-2 transition-colors">
+          <PageHeader
+            icon={Landmark}
+            iconColor="emerald"
+            title="Banking & Cash Flow"
+            subtitle={bankingData.lastUpload 
+              ? `Last updated: ${new Date(bankingData.lastUpload).toLocaleString()}${bankingData.transactions?.length > 0 ? ` • ${bankingData.transactions.length} transactions` : ''}`
+              : 'Upload your QBO transaction export to get started'}
+            badge={isDataStale && bankingData.transactions?.length > 0 ? { label: 'Needs Update', variant: 'warning' } : null}
+            actions={
+              <label className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 rounded-xl text-white font-medium cursor-pointer flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20">
                 <Upload className="w-4 h-4" />
                 {bankingProcessing ? 'Processing...' : 'Upload QBO Export'}
                 <input type="file" accept=".csv" onChange={handleBankingUpload} className="hidden" disabled={bankingProcessing} />
               </label>
-            </div>
-          </div>
+            }
+          />
           
           {/* Date Range Selector */}
           <div className="flex flex-wrap items-center gap-2 mb-6">
@@ -34125,10 +34122,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               <button
                 key={r.key}
                 onClick={() => setBankingDateRange(r.key)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${
                   bankingDateRange === r.key 
-                    ? 'bg-green-600 text-white' 
-                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                    ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' 
+                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
                 }`}
               >
                 {r.label}
@@ -34138,18 +34135,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           
           {bankingData.transactions?.length === 0 ? (
             /* Empty State */
-            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-12 text-center">
-              <Landmark className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-              <h2 className="text-xl font-semibold text-white mb-2">No Banking Data Yet</h2>
-              <p className="text-slate-400 mb-6 max-w-md mx-auto">
-                Upload your QuickBooks Online Transaction Detail by Account report to analyze your cash flow, expenses, and profitability.
-              </p>
-              <label className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-xl text-white font-medium cursor-pointer inline-flex items-center gap-2 transition-colors">
-                <Upload className="w-5 h-5" />
-                Upload QBO Export (.csv)
-                <input type="file" accept=".csv" onChange={handleBankingUpload} className="hidden" />
-              </label>
-            </div>
+            <Card variant="outlined" padding="none">
+              <EmptyState
+                preset="banking"
+                onPrimaryClick={() => document.getElementById('banking-upload-input')?.click()}
+              />
+              <input id="banking-upload-input" type="file" accept=".csv" onChange={handleBankingUpload} className="hidden" />
+            </Card>
           ) : (
             <>
               {/* Key Metrics */}
