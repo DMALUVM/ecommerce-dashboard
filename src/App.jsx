@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart, Activity } from 'lucide-react';
 
 // UI Components Library
-import { Card, CardHeader, Button as UIButton, EmptyState, Skeleton, SkeletonCard, SkeletonMetrics, SkeletonTable, PageHeader, StatCard, Badge, Divider, Tooltip } from './components/ui/UIComponents';
+import { Card, CardHeader, Button as UIButton, EmptyState, Skeleton, SkeletonCard, SkeletonMetrics, SkeletonTable, PageHeader, StatCard, Badge, Divider, Tooltip, AnimatedNumber, LoadingDots, PulseDot, SuccessCheck, ProgressBar, FadeIn, StaggerChildren } from './components/ui/UIComponents';
 // Extracted utilities (keep App.jsx lean)
 import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
@@ -26292,22 +26292,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
           <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
             <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
-            <div className="text-center py-12">
-              <Truck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-              <h2 className="text-xl font-bold text-white mb-2">No 3PL Data Yet</h2>
-              <p className="text-slate-400 mb-4">Upload data with 3PL files to see fulfillment analytics</p>
-              <button 
-                onClick={() => setShow3PLBulkUpload(true)}
-                className="px-6 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl text-white font-semibold flex items-center gap-2 mx-auto mb-4"
-              >
-                <Upload className="w-5 h-5" />
-                Bulk Upload 3PL Files
-              </button>
-              <div className="text-slate-500 text-sm">
-                <p>Upload multiple 3PL Excel files at once</p>
-                <p>Supports .xlsx format from Packiyo • Auto-deduplication</p>
-              </div>
-            </div>
+            <Card variant="outlined" padding="none">
+              <EmptyState
+                preset="3pl"
+                description="Upload your Packiyo billing reports to track fulfillment costs, per-order metrics, and identify savings opportunities."
+                onPrimaryClick={() => setShow3PLBulkUpload(true)}
+                onSecondaryClick={packiyoCredentials?.connected ? null : () => { setSettingsTab('integrations'); setView('settings'); }}
+              />
+            </Card>
           </div>
         </div>
       );
@@ -30549,29 +30541,33 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           {(!hasCampaignData || !hasHistoricalData) && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
               {!hasCampaignData && (
-                <div className="bg-slate-800/50 rounded-xl border border-dashed border-orange-500/50 p-6 text-center">
-                  <div className="w-12 h-12 bg-orange-500/20 rounded-xl flex items-center justify-center mx-auto mb-3">
-                    <Target className="w-6 h-6 text-orange-400" />
+                <Card variant="outlined" padding="normal" className="border-dashed border-orange-500/50 hover:border-orange-400/70 transition-all">
+                  <div className="text-center">
+                    <div className="w-14 h-14 bg-gradient-to-br from-orange-500/20 to-amber-500/20 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                      <Target className="w-7 h-7 text-orange-400" />
+                    </div>
+                    <h4 className="text-white font-semibold mb-1">Campaign Performance</h4>
+                    <p className="text-slate-400 text-sm mb-4">Upload Amazon Ads campaign report for detailed analysis</p>
+                    <label className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white text-sm cursor-pointer shadow-lg shadow-orange-500/20 transition-all">
+                      <Upload className="w-4 h-4" />Upload Campaigns
+                      <input type="file" accept=".csv" className="hidden" onChange={(e) => handleAmazonCampaignUpload(e.target.files[0])} />
+                    </label>
                   </div>
-                  <h4 className="text-white font-medium mb-1">Campaign Performance</h4>
-                  <p className="text-slate-400 text-sm mb-3">Upload Amazon Ads campaign report for detailed analysis</p>
-                  <label className="inline-flex items-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-white text-sm cursor-pointer">
-                    <Upload className="w-4 h-4" />Upload Campaigns
-                    <input type="file" accept=".csv" className="hidden" onChange={(e) => handleAmazonCampaignUpload(e.target.files[0])} />
-                  </label>
-                </div>
+                </Card>
               )}
               {!hasHistoricalData && (
-                <div className="bg-slate-800/50 rounded-xl border border-dashed border-violet-500/50 p-6 text-center">
-                  <div className="w-12 h-12 bg-violet-500/20 rounded-xl flex items-center justify-center mx-auto mb-3">
-                    <TrendingUp className="w-6 h-6 text-violet-400" />
+                <Card variant="outlined" padding="normal" className="border-dashed border-violet-500/50 hover:border-violet-400/70 transition-all">
+                  <div className="text-center">
+                    <div className="w-14 h-14 bg-gradient-to-br from-violet-500/20 to-indigo-500/20 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                      <TrendingUp className="w-7 h-7 text-violet-400" />
+                    </div>
+                    <h4 className="text-white font-semibold mb-1">Historical Trends</h4>
+                    <p className="text-slate-400 text-sm mb-4">Upload daily performance data for trend analysis</p>
+                    <button onClick={() => setShowAdsIntelUpload(true)} className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 rounded-xl text-white text-sm shadow-lg shadow-violet-500/20 transition-all">
+                      <Upload className="w-4 h-4" />Import History
+                    </button>
                   </div>
-                  <h4 className="text-white font-medium mb-1">Historical Trends</h4>
-                  <p className="text-slate-400 text-sm mb-3">Upload daily performance data for trend analysis</p>
-                  <button onClick={() => setShowAdsIntelUpload(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white text-sm">
-                    <Upload className="w-4 h-4" />Import History
-                  </button>
-                </div>
+                </Card>
               )}
             </div>
           )}

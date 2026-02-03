@@ -1,5 +1,204 @@
-import React from 'react';
-import { Upload, AlertCircle, FileText, Database, Boxes, Landmark, BarChart3, Zap, TrendingUp, Settings, ChevronRight, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Upload, AlertCircle, FileText, Database, Boxes, Landmark, BarChart3, Zap, TrendingUp, Settings, ChevronRight, Loader2, CheckCircle, Sparkles } from 'lucide-react';
+
+// ============ ANIMATED NUMBER COMPONENT ============
+// Smooth counting animation for metrics
+
+export const AnimatedNumber = ({ 
+  value, 
+  duration = 800, 
+  prefix = '', 
+  suffix = '',
+  decimals = 0,
+  className = '',
+}) => {
+  const [displayValue, setDisplayValue] = useState(0);
+  const previousValue = useRef(0);
+  const animationRef = useRef(null);
+
+  useEffect(() => {
+    const startValue = previousValue.current;
+    const endValue = typeof value === 'number' ? value : parseFloat(value) || 0;
+    const startTime = performance.now();
+    
+    const animate = (currentTime) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Easing function (ease-out cubic)
+      const easeOut = 1 - Math.pow(1 - progress, 3);
+      
+      const current = startValue + (endValue - startValue) * easeOut;
+      setDisplayValue(current);
+      
+      if (progress < 1) {
+        animationRef.current = requestAnimationFrame(animate);
+      } else {
+        previousValue.current = endValue;
+      }
+    };
+    
+    animationRef.current = requestAnimationFrame(animate);
+    
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [value, duration]);
+
+  const formattedValue = displayValue.toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+
+  return (
+    <span className={className}>
+      {prefix}{formattedValue}{suffix}
+    </span>
+  );
+};
+
+// ============ LOADING DOTS COMPONENT ============
+
+export const LoadingDots = ({ className = '' }) => (
+  <span className={`inline-flex gap-1 ${className}`}>
+    <span className="w-1.5 h-1.5 bg-current rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+    <span className="w-1.5 h-1.5 bg-current rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+    <span className="w-1.5 h-1.5 bg-current rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+  </span>
+);
+
+// ============ PULSE DOT (Live indicator) ============
+
+export const PulseDot = ({ color = 'emerald', size = 'md' }) => {
+  const colors = {
+    emerald: 'bg-emerald-500',
+    amber: 'bg-amber-500',
+    rose: 'bg-rose-500',
+    blue: 'bg-blue-500',
+    violet: 'bg-violet-500',
+  };
+  const sizes = {
+    sm: 'w-2 h-2',
+    md: 'w-2.5 h-2.5',
+    lg: 'w-3 h-3',
+  };
+  return (
+    <span className="relative flex">
+      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${colors[color]} opacity-75`} />
+      <span className={`relative inline-flex rounded-full ${sizes[size]} ${colors[color]}`} />
+    </span>
+  );
+};
+
+// ============ SUCCESS CHECKMARK ANIMATION ============
+
+export const SuccessCheck = ({ show, size = 'md' }) => {
+  const sizes = {
+    sm: 'w-8 h-8',
+    md: 'w-12 h-12',
+    lg: 'w-16 h-16',
+  };
+  
+  if (!show) return null;
+  
+  return (
+    <div className={`${sizes[size]} rounded-full bg-emerald-500 flex items-center justify-center animate-scale-in`}>
+      <CheckCircle className="w-2/3 h-2/3 text-white animate-draw-check" />
+    </div>
+  );
+};
+
+// ============ SHIMMER EFFECT ============
+
+export const Shimmer = ({ className = '' }) => (
+  <div className={`relative overflow-hidden ${className}`}>
+    <div className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+  </div>
+);
+
+// ============ PROGRESS BAR ============
+
+export const ProgressBar = ({ 
+  value, 
+  max = 100, 
+  color = 'violet',
+  size = 'md',
+  showLabel = false,
+  animated = true,
+}) => {
+  const percentage = Math.min(Math.max((value / max) * 100, 0), 100);
+  
+  const colors = {
+    violet: 'from-violet-600 to-indigo-600',
+    emerald: 'from-emerald-600 to-green-600',
+    amber: 'from-amber-600 to-orange-600',
+    rose: 'from-rose-600 to-red-600',
+    blue: 'from-blue-600 to-cyan-600',
+  };
+  
+  const sizes = {
+    sm: 'h-1',
+    md: 'h-2',
+    lg: 'h-3',
+  };
+
+  return (
+    <div className="w-full">
+      <div className={`w-full bg-slate-700 rounded-full overflow-hidden ${sizes[size]}`}>
+        <div 
+          className={`h-full bg-gradient-to-r ${colors[color]} rounded-full transition-all duration-500 ease-out ${animated ? 'animate-pulse-subtle' : ''}`}
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
+      {showLabel && (
+        <div className="flex justify-between mt-1 text-xs text-slate-400">
+          <span>{value.toLocaleString()}</span>
+          <span>{percentage.toFixed(0)}%</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============ FADE IN COMPONENT ============
+
+export const FadeIn = ({ children, delay = 0, duration = 300, className = '' }) => {
+  const [isVisible, setIsVisible] = useState(false);
+  
+  useEffect(() => {
+    const timer = setTimeout(() => setIsVisible(true), delay);
+    return () => clearTimeout(timer);
+  }, [delay]);
+
+  return (
+    <div 
+      className={`transition-all ${className}`}
+      style={{
+        opacity: isVisible ? 1 : 0,
+        transform: isVisible ? 'translateY(0)' : 'translateY(10px)',
+        transitionDuration: `${duration}ms`,
+      }}
+    >
+      {children}
+    </div>
+  );
+};
+
+// ============ STAGGER CHILDREN ============
+
+export const StaggerChildren = ({ children, staggerDelay = 50, className = '' }) => {
+  return (
+    <div className={className}>
+      {React.Children.map(children, (child, index) => (
+        <FadeIn delay={index * staggerDelay} key={index}>
+          {child}
+        </FadeIn>
+      ))}
+    </div>
+  );
+};
 
 // ============ CARD COMPONENT ============
 // Unified card styling for all containers
@@ -518,4 +717,13 @@ export default {
   Badge,
   Divider,
   Tooltip,
+  // Batch 2: Micro-interactions
+  AnimatedNumber,
+  LoadingDots,
+  PulseDot,
+  SuccessCheck,
+  Shimmer,
+  ProgressBar,
+  FadeIn,
+  StaggerChildren,
 };
