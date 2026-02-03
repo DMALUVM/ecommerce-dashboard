@@ -6029,6 +6029,7 @@ const savePeriods = async (d) => {
       const dayData = allDaysData[d];
       return dayData && (dayData.amazon?.units > 0 || dayData.shopify?.units > 0);
     }).sort().reverse();
+    let dailyDaysCount = dailyDates.length; // Track at function level for later use
     
     if (dailyDates.length > 0) {
       if (velocityDataSource === 'none') velocityDataSource = 'daily';
@@ -6037,6 +6038,7 @@ const savePeriods = async (d) => {
       // Group last 28 days of daily data
       const recentDays = dailyDates.slice(0, 28);
       const daysCount = recentDays.length;
+      dailyDaysCount = daysCount; // Update with actual used count
       const weeksEquivalent = daysCount / 7;
       
       // DEBUG: Log daily data structure
@@ -6219,9 +6221,17 @@ const savePeriods = async (d) => {
         
         if (data.success && data.items) {
           amzSource = data.source || 'amazon-sp-api';
+          const seenAmzSkus = new Set(); // Track duplicates
           data.items.forEach(item => {
             const sku = item.sku;
             if (!sku) return;
+            
+            // Skip duplicates (case-insensitive)
+            const skuLower = sku.toLowerCase();
+            if (seenAmzSkus.has(skuLower)) return;
+            seenAmzSkus.add(skuLower);
+            
+            const skuUpper = sku.toUpperCase();
             
             // Use FBA quantities (AWD is separate distribution inventory)
             const avail = item.fbaFulfillable || item.available || 0;
@@ -6229,18 +6239,17 @@ const savePeriods = async (d) => {
             const inb = item.fbaInbound || item.amazonInbound || 0;
             const total = avail + reserved;
             
-            const cost = cogsLookup[sku] || cogsLookup[sku.toLowerCase()] || cogsLookup[sku.toUpperCase()] || 0;
+            const cost = cogsLookup[sku] || cogsLookup[skuLower] || cogsLookup[skuUpper] || 0;
             amzTotal += total;
             amzValue += total * cost;
             amzInbound += inb;
             
             // Get velocity - try multiple case variants
-            const skuLower = sku.toLowerCase();
-            const amzVelFromWeekly = amazonSkuVelocity[sku] || amazonSkuVelocity[skuLower] || amazonSkuVelocity[sku.toUpperCase()] || 0;
+            const amzVelFromWeekly = amazonSkuVelocity[sku] || amazonSkuVelocity[skuLower] || amazonSkuVelocity[skuUpper] || 0;
             const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : 0;
             
             const itemData = { 
-              sku, 
+              sku: skuUpper, // Normalize to uppercase 
               asin: item.asin || '', 
               name: item.name || sku, 
               total, 
@@ -6249,14 +6258,13 @@ const savePeriods = async (d) => {
               amzWeeklyVel 
             };
             
-            // Store only under original SKU (not multiple case variants)
-            // We'll build case-insensitive lookup later
-            amzInv[sku] = itemData;
+            // Store under UPPERCASE for consistency
+            amzInv[skuUpper] = itemData;
             
             // Track AWD separately
             if (item.awdQuantity > 0) {
-              awdData[sku] = {
-                sku,
+              awdData[skuUpper] = {
+                sku: skuUpper,
                 awdQuantity: item.awdQuantity,
                 awdInbound: item.awdInbound || 0,
               };
@@ -6276,22 +6284,29 @@ const savePeriods = async (d) => {
     // Fall back to uploaded Amazon file if SP-API not connected or failed
     if (Object.keys(amzInv).length === 0 && invFiles.amazon) {
       amzSource = 'file-upload';
+      const seenAmzSkus = new Set(); // Track duplicates
       invFiles.amazon.forEach(r => {
         const sku = r['sku'] || '', avail = parseInt(r['available'] || 0), inb = parseInt(r['inbound-quantity'] || 0);
         const res = parseInt(r['Total Reserved Quantity'] || 0), t30 = parseInt(r['units-shipped-t30'] || 0);
         const name = r['product-name'] || '', asin = r['asin'] || '';
         const skuLower = sku.toLowerCase();
-        const cost = cogsLookup[sku] || cogsLookup[skuLower] || 0, total = avail + res;
+        const skuUpper = sku.toUpperCase();
+        
+        // Skip duplicates (case-insensitive)
+        if (seenAmzSkus.has(skuLower)) return;
+        seenAmzSkus.add(skuLower);
+        
+        const cost = cogsLookup[sku] || cogsLookup[skuLower] || cogsLookup[skuUpper] || 0, total = avail + res;
         amzTotal += total; amzValue += total * cost; amzInbound += inb;
         
         // Use weekly data velocity if available, otherwise fall back to t30 from file
-        const amzVelFromWeekly = amazonSkuVelocity[sku] || amazonSkuVelocity[skuLower] || 0;
+        const amzVelFromWeekly = amazonSkuVelocity[sku] || amazonSkuVelocity[skuLower] || amazonSkuVelocity[skuUpper] || 0;
         const amzVelFromFile = t30 / 4.3;
         const amzWeeklyVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : amzVelFromFile;
         
-        const itemData = { sku, asin, name, total, inbound: inb, cost, amzWeeklyVel };
+        const itemData = { sku: skuUpper, asin, name, total, inbound: inb, cost, amzWeeklyVel };
         if (sku) {
-          amzInv[sku] = itemData;
+          amzInv[skuUpper] = itemData; // Store under UPPERCASE
         }
       });
     }
@@ -6319,9 +6334,21 @@ const savePeriods = async (d) => {
         if (data.success && data.items) {
           tplSource = 'packiyo-direct';
           console.log('Packiyo returned', data.items.length, 'items');
+          
+          // Track SKUs we've already added (case-insensitive)
+          const seenSkusLower = new Set();
+          
           data.items.forEach(item => {
             const sku = item.sku;
             if (!sku || sku.includes('Bundle') || item.name?.includes('Gift Card') || item.name?.includes('FREE')) return;
+            
+            // Case-insensitive duplicate check within Packiyo data
+            const skuLower = sku.toLowerCase();
+            if (seenSkusLower.has(skuLower)) {
+              console.log('Packiyo duplicate SKU skipped:', sku);
+              return;
+            }
+            seenSkusLower.add(skuLower);
             
             const qty = item.quantity_on_hand || 0;
             const inb = item.quantity_inbound || 0;
@@ -6336,10 +6363,10 @@ const savePeriods = async (d) => {
             
             const itemData = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
             
-            // Store only under original SKU
-            tplInv[sku] = itemData;
+            // Store under UPPERCASE version for consistency
+            tplInv[sku.toUpperCase()] = itemData;
           });
-          console.log('Packiyo SKUs added to tplInv:', Object.keys(tplInv).length);
+          console.log('Packiyo unique SKUs added to tplInv:', Object.keys(tplInv).length);
           
           // Update Packiyo last sync time
           setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
@@ -6353,15 +6380,24 @@ const savePeriods = async (d) => {
     // Fall back to uploaded 3PL file if Packiyo not connected or failed
     if (Object.keys(tplInv).length === 0 && invFiles.threepl) {
       tplSource = 'file-upload';
+      const seenTplSkus = new Set();
       invFiles.threepl.forEach(r => {
         const sku = r['sku'] || '', name = r['name'] || '', qty = parseInt(r['quantity_on_hand'] || 0);
-        const inb = parseInt(r['quantity_inbound'] || 0), cost = parseFloat(r['cost'] || 0) || cogsLookup[sku] || 0;
+        const inb = parseInt(r['quantity_inbound'] || 0);
+        const skuLower = sku.toLowerCase();
+        const skuUpper = sku.toUpperCase();
+        
+        // Skip duplicates
+        if (seenTplSkus.has(skuLower)) return;
+        seenTplSkus.add(skuLower);
+        
+        const cost = parseFloat(r['cost'] || 0) || cogsLookup[sku] || cogsLookup[skuLower] || cogsLookup[skuUpper] || 0;
         if (sku.includes('Bundle') || name.includes('Gift Card') || name.includes('FREE') || qty === 0) return;
         tplTotal += qty; tplValue += qty * cost; tplInbound += inb;
         
-        const itemData = { sku, name, total: qty, inbound: inb, cost };
+        const itemData = { sku: skuUpper, name, total: qty, inbound: inb, cost };
         if (sku) {
-          tplInv[sku] = itemData;
+          tplInv[skuUpper] = itemData; // Store under UPPERCASE
         }
       });
     }
@@ -6388,18 +6424,26 @@ const savePeriods = async (d) => {
         
         if (data.success && data.items) {
           homeSource = 'shopify-sync';
+          const seenHomeSkus = new Set();
           data.items.forEach(item => {
             const sku = item.sku;
             if (!sku) return;
+            
+            // Skip duplicates
+            const skuLower = sku.toLowerCase();
+            if (seenHomeSkus.has(skuLower)) return;
+            seenHomeSkus.add(skuLower);
+            
+            const skuUpper = sku.toUpperCase();
             
             // Only get home/office location inventory (not 3PL locations)
             const homeQty = item.homeQty || 0;
             if (homeQty === 0) return;
             
-            const cost = item.cost || cogsLookup[sku] || 0;
+            const cost = item.cost || cogsLookup[sku] || cogsLookup[skuLower] || cogsLookup[skuUpper] || 0;
             homeTotal += homeQty;
             homeValue += homeQty * cost;
-            homeInv[sku] = { sku, name: item.name || sku, total: homeQty, cost };
+            homeInv[skuUpper] = { sku: skuUpper, name: item.name || sku, total: homeQty, cost };
           });
         }
       } catch (err) {
@@ -6576,7 +6620,7 @@ const savePeriods = async (d) => {
     } else {
       const sources = [];
       if (velocityDataSource.includes('weekly')) sources.push(`${weeksCount} weeks`);
-      if (velocityDataSource.includes('daily')) sources.push(`${dailyDates.length} days`);
+      if (velocityDataSource.includes('daily')) sources.push(`${dailyDaysCount} days`);
       if (velocityDataSource.includes('monthly')) sources.push(`${periodsCount} months`);
       velNote = `Velocity from: ${sources.join(' + ')} (${Object.keys(amazonSkuVelocity).length} Amazon SKUs, ${Object.keys(shopifySkuVelocity).length} Shopify SKUs)`;
     }
@@ -21548,24 +21592,25 @@ if (shopifySkuWithShipping.length > 0) {
     
     // FILTER AND DEDUPLICATE SKUs
     // Priority: SKUs with inventory > 0, prefer "Shop" suffix variants
+    // Use case-insensitive deduplication based on base SKU
     const deduplicatedItems = (() => {
       const skuMap = new Map();
       
       rawItems.forEach(item => {
-        // Skip lowercase ddpe SKUs - these are duplicates
-        if (item.sku && item.sku.startsWith('ddpe')) return;
+        if (!item.sku) return;
         
-        // Normalize SKU - check if this is a "Shop" variant
+        // Normalize SKU - remove "Shop" suffix and lowercase for dedup key
         const baseSku = item.sku.replace(/Shop$/i, '');
+        const dedupKey = baseSku.toLowerCase(); // Case-insensitive dedup
         const isShopVariant = item.sku.toLowerCase().endsWith('shop');
         const hasInventory = (item.totalQty || 0) > 0;
         
         // Check if we already have this base SKU
-        const existing = skuMap.get(baseSku);
+        const existing = skuMap.get(dedupKey);
         
         if (!existing) {
           // First time seeing this SKU
-          skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+          skuMap.set(dedupKey, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
         } else {
           // We have a duplicate - decide which to keep
           const existingHasInventory = (existing.totalQty || 0) > 0;
@@ -21576,15 +21621,15 @@ if (shopifySkuWithShipping.length > 0) {
           // 3. Higher inventory wins if tied
           if (hasInventory && !existingHasInventory) {
             // New item has inventory, existing doesn't - replace
-            skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+            skuMap.set(dedupKey, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
           } else if (hasInventory === existingHasInventory) {
             // Both have same inventory status
             if (isShopVariant && !existing._isShopVariant) {
               // Prefer Shop variant
-              skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+              skuMap.set(dedupKey, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
             } else if ((item.totalQty || 0) > (existing.totalQty || 0)) {
               // Higher inventory wins
-              skuMap.set(baseSku, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+              skuMap.set(dedupKey, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
             }
           }
           // Otherwise keep existing
