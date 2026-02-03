@@ -703,6 +703,200 @@ export const Tooltip = ({ children, content, position = 'top' }) => {
   );
 };
 
+// ============ BREADCRUMBS COMPONENT ============
+
+export const Breadcrumbs = ({ items, className = '' }) => {
+  return (
+    <nav className={`flex items-center gap-2 text-sm mb-4 ${className}`}>
+      {items.map((item, index) => (
+        <React.Fragment key={index}>
+          {index > 0 && <ChevronRight className="w-4 h-4 text-slate-600" />}
+          {item.onClick ? (
+            <button 
+              onClick={item.onClick}
+              className="text-slate-400 hover:text-white transition-colors flex items-center gap-1.5"
+            >
+              {item.icon && <item.icon className="w-4 h-4" />}
+              {item.label}
+            </button>
+          ) : (
+            <span className="text-white font-medium flex items-center gap-1.5">
+              {item.icon && <item.icon className="w-4 h-4" />}
+              {item.label}
+            </span>
+          )}
+        </React.Fragment>
+      ))}
+    </nav>
+  );
+};
+
+// ============ KEYBOARD SHORTCUTS MODAL ============
+
+export const KeyboardShortcutsModal = ({ show, onClose }) => {
+  if (!show) return null;
+  
+  const shortcuts = [
+    { category: 'Navigation', items: [
+      { keys: ['D'], description: 'Go to Dashboard' },
+      { keys: ['U'], description: 'Go to Upload' },
+      { keys: ['T'], description: 'Go to Trends' },
+      { keys: ['I'], description: 'Go to Inventory' },
+      { keys: ['A'], description: 'Go to Ads' },
+      { keys: ['B'], description: 'Go to Banking' },
+      { keys: ['S'], description: 'Go to Settings' },
+    ]},
+    { category: 'General', items: [
+      { keys: ['Shift', '?'], description: 'Show keyboard shortcuts' },
+      { keys: ['Esc'], description: 'Close modals' },
+    ]},
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div 
+        className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-lg w-full shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-violet-400" />
+            Keyboard Shortcuts
+          </h2>
+          <button 
+            onClick={onClose}
+            className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white"
+          >
+            <span className="sr-only">Close</span>
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        
+        <div className="space-y-6">
+          {shortcuts.map((group, groupIndex) => (
+            <div key={groupIndex}>
+              <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
+                {group.category}
+              </h3>
+              <div className="space-y-2">
+                {group.items.map((shortcut, index) => (
+                  <div key={index} className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-slate-700/50 transition-colors">
+                    <span className="text-slate-300">{shortcut.description}</span>
+                    <div className="flex items-center gap-1">
+                      {shortcut.keys.map((key, keyIndex) => (
+                        <React.Fragment key={keyIndex}>
+                          {keyIndex > 0 && <span className="text-slate-600 mx-0.5">+</span>}
+                          <kbd className="px-2.5 py-1 bg-slate-900 border border-slate-600 rounded-lg text-sm font-mono text-white shadow-sm">
+                            {key}
+                          </kbd>
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        
+        <div className="mt-6 pt-4 border-t border-slate-700">
+          <p className="text-xs text-slate-500 text-center">
+            Press <kbd className="px-1.5 py-0.5 bg-slate-700 rounded text-slate-300">Shift</kbd> + <kbd className="px-1.5 py-0.5 bg-slate-700 rounded text-slate-300">?</kbd> anytime to show this help
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ RELATIVE TIME COMPONENT ============
+
+export const RelativeTime = ({ date, className = '' }) => {
+  if (!date) return <span className={`text-slate-500 ${className}`}>Never</span>;
+  
+  const now = new Date();
+  const then = new Date(date);
+  const diffMs = now - then;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+  
+  let text;
+  let color = 'text-slate-400';
+  
+  if (diffMins < 1) {
+    text = 'Just now';
+    color = 'text-emerald-400';
+  } else if (diffMins < 60) {
+    text = `${diffMins}m ago`;
+    color = 'text-emerald-400';
+  } else if (diffHours < 24) {
+    text = `${diffHours}h ago`;
+    color = diffHours < 12 ? 'text-emerald-400' : 'text-slate-400';
+  } else if (diffDays === 1) {
+    text = 'Yesterday';
+    color = 'text-amber-400';
+  } else if (diffDays < 7) {
+    text = `${diffDays}d ago`;
+    color = 'text-amber-400';
+  } else {
+    text = then.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    color = 'text-slate-500';
+  }
+  
+  return (
+    <span className={`${color} ${className}`} title={then.toLocaleString()}>
+      {text}
+    </span>
+  );
+};
+
+// ============ DATA FRESHNESS INDICATOR ============
+
+export const FreshnessIndicator = ({ lastUpdated, warningDays = 1, criticalDays = 7, label }) => {
+  if (!lastUpdated) {
+    return (
+      <div className="flex items-center gap-2 text-slate-500 text-sm">
+        <div className="w-2 h-2 rounded-full bg-slate-600" />
+        <span>{label || 'No data'}</span>
+      </div>
+    );
+  }
+  
+  const now = new Date();
+  const then = new Date(lastUpdated);
+  const diffDays = Math.floor((now - then) / (1000 * 60 * 60 * 24));
+  
+  let color, bgColor, text;
+  
+  if (diffDays === 0) {
+    color = 'text-emerald-400';
+    bgColor = 'bg-emerald-500';
+    text = 'Updated today';
+  } else if (diffDays <= warningDays) {
+    color = 'text-emerald-400';
+    bgColor = 'bg-emerald-500';
+    text = `${diffDays}d ago`;
+  } else if (diffDays <= criticalDays) {
+    color = 'text-amber-400';
+    bgColor = 'bg-amber-500';
+    text = `${diffDays}d ago`;
+  } else {
+    color = 'text-rose-400';
+    bgColor = 'bg-rose-500';
+    text = `${diffDays}d ago`;
+  }
+  
+  return (
+    <div className={`flex items-center gap-2 text-sm ${color}`}>
+      <div className={`w-2 h-2 rounded-full ${bgColor} ${diffDays === 0 ? 'animate-pulse' : ''}`} />
+      <span>{label ? `${label}: ${text}` : text}</span>
+    </div>
+  );
+};
+
 export default {
   Card,
   CardHeader,
@@ -726,4 +920,9 @@ export default {
   ProgressBar,
   FadeIn,
   StaggerChildren,
+  // Batch 3: Navigation & Context
+  Breadcrumbs,
+  KeyboardShortcutsModal,
+  RelativeTime,
+  FreshnessIndicator,
 };
