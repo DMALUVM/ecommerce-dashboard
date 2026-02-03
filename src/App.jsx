@@ -11854,7 +11854,6 @@ Analyze the data and respond with ONLY this JSON:
         <button onClick={() => setShowCogsManager(true)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white flex items-center gap-1"><Settings className="w-3 h-3" />COGS</button>
         <button onClick={() => setShowProductCatalog(true)} className="px-2 py-1 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded text-xs text-violet-300 flex items-center gap-1"><Package className="w-3 h-3" />Catalog{Object.keys(savedProductNames).length > 0 && <span className="text-violet-400">✓</span>}</button>
       </div>
-      <button onClick={() => setShowGoalsModal(true)} className="px-2 py-1 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded text-xs text-amber-300 flex items-center gap-1"><Target className="w-3 h-3" />Goals</button>
       <div className="flex items-center gap-2">
         <span className="text-slate-400 text-sm">Store:</span>
         <input 
@@ -16343,8 +16342,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   <button onClick={() => setView('analytics')} className="p-2 hover:bg-slate-700 rounded text-slate-500" title="Need 4+ weeks for forecast"><TrendingUp className="w-4 h-4" /></button>
                 )}
                 <button onClick={() => setShowBreakEven(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Break-even Calculator"><Calculator className="w-4 h-4" /></button>
-                <button onClick={() => setShowExportModal(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Export Data"><FileDown className="w-4 h-4" /></button>
-                <button onClick={() => setShowUploadHelp(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Help"><HelpCircle className="w-4 h-4" /></button>
               </div>
             </div>
           </div>
@@ -18600,28 +18597,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     <p className="text-slate-400 text-xs">Pull latest data from all connected sources + calculate velocity</p>
                   </div>
                   <div className="flex gap-2">
-                    <button 
-                      onClick={() => {
-                        console.log('=== DEBUG v3.0: CHECKING LOCALSTORAGE ===');
-                        // Direct localStorage check
-                        const legacyRaw = localStorage.getItem('dailySales');
-                        if (legacyRaw) {
-                          const legacy = JSON.parse(legacyRaw);
-                          const dates = Object.keys(legacy).sort().reverse();
-                          const withAmazonSku = dates.filter(d => legacy[d]?.amazon?.skuData?.length > 0);
-                          console.log('dailySales:', dates.length, 'days,', withAmazonSku.length, 'with Amazon skuData');
-                          if (withAmazonSku.length > 0) {
-                            console.log('Sample:', withAmazonSku[0], legacy[withAmazonSku[0]]?.amazon?.skuData?.[0]);
-                          }
-                        } else {
-                          console.log('dailySales: NOT FOUND');
-                        }
-                        alert('Check console (F12) for localStorage data');
-                      }}
-                      className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-white text-sm flex items-center gap-2"
-                    >
-                      <Database className="w-4 h-4" />Debug Data
-                    </button>
                     <button 
                       onClick={async () => {
                         setToast({ message: 'Syncing inventory from all sources...', type: 'success' });
@@ -36238,6 +36213,32 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             </SettingRow>
             <p className="text-slate-500 text-xs mt-3">Your logo will appear in the dashboard header next to your store name.</p>
           </SettingSection>
+          
+          {/* Help & Resources */}
+          <SettingSection title="❓ Help & Resources">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <button 
+                onClick={() => setShowUploadHelp(true)}
+                className="p-4 bg-blue-900/20 hover:bg-blue-900/30 border border-blue-500/30 rounded-xl text-left flex items-center gap-3"
+              >
+                <HelpCircle className="w-8 h-8 text-blue-400" />
+                <div>
+                  <p className="text-white font-medium">Upload Guide</p>
+                  <p className="text-slate-400 text-xs">Learn how to upload Amazon & Shopify reports</p>
+                </div>
+              </button>
+              <button 
+                onClick={() => setShowExportModal(true)}
+                className="p-4 bg-emerald-900/20 hover:bg-emerald-900/30 border border-emerald-500/30 rounded-xl text-left flex items-center gap-3"
+              >
+                <FileDown className="w-8 h-8 text-emerald-400" />
+                <div>
+                  <p className="text-white font-medium">Export Data</p>
+                  <p className="text-slate-400 text-xs">Download your data as CSV or JSON backup</p>
+                </div>
+              </button>
+            </div>
+          </SettingSection>
             </>
           )}
           
@@ -37626,6 +37627,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             </div>
             <SettingRow label="Full Backup" desc="Downloads ALL data: weeks, periods, inventory, forecasts, invoices, settings">
               <button onClick={exportAll} className="px-4 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-sm text-emerald-300 flex items-center gap-2"><Download className="w-4 h-4" />Export Full Backup</button>
+            </SettingRow>
+            <SettingRow label="Export to CSV" desc="Download specific data as CSV files">
+              <div className="flex flex-wrap gap-2">
+                <button onClick={exportWeeklyDataCSV} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white">Weekly CSV</button>
+                <button onClick={exportSKUDataCSV} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white">SKU CSV</button>
+                <button onClick={exportInventoryCSV} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white">Inventory CSV</button>
+              </div>
             </SettingRow>
             <SettingRow label="Restore from Backup" desc="Import a previously exported JSON file">
               <label className="px-4 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Import Backup<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
