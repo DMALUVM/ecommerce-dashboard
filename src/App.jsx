@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart, Activity } from 'lucide-react';
 // Extracted utilities (keep App.jsx lean)
 import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
@@ -53,20 +53,22 @@ import NavTabs from './components/ui/NavTabs';
 const DEFAULT_DASHBOARD_WIDGETS = {
   widgets: [
     { id: 'alerts', name: 'Alerts & Notifications', enabled: true, order: 0 },
-    { id: 'todayPerformance', name: 'Last Week & MTD Performance', enabled: true, order: 1 },
-    { id: 'weekProgress', name: 'This Week\'s Goal', enabled: true, order: 2 },
-    { id: 'topSellers14d', name: 'Top Sellers (14 Days)', enabled: true, order: 3 },
-    { id: 'worstSellers14d', name: 'Needs Attention (14 Days)', enabled: true, order: 4 },
-    { id: 'topSellersYTD', name: 'Top Sellers (YTD)', enabled: false, order: 5 },
-    { id: 'worstSellersYTD', name: 'Needs Attention (YTD)', enabled: false, order: 6 },
-    { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 7 },
-    { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 8 },
-    { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 9 },
-    { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 10 },
-    { id: 'summaryMetrics', name: 'Summary Metrics (Time Range)', enabled: false, order: 11 },
-    { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 12 },
-    { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 13 },
-    { id: 'dataHub', name: 'Data Hub', enabled: false, order: 14 },
+    { id: 'dataHealth', name: 'Data Health Status', enabled: true, order: 1 },
+    { id: 'quickActions', name: 'Quick Actions', enabled: true, order: 2 },
+    { id: 'todayPerformance', name: 'Last Week & MTD Performance', enabled: true, order: 3 },
+    { id: 'weekProgress', name: 'This Week\'s Goal', enabled: true, order: 4 },
+    { id: 'topSellers14d', name: 'Top Sellers (14 Days)', enabled: true, order: 5 },
+    { id: 'worstSellers14d', name: 'Needs Attention (14 Days)', enabled: true, order: 6 },
+    { id: 'topSellersYTD', name: 'Top Sellers (YTD)', enabled: false, order: 7 },
+    { id: 'worstSellersYTD', name: 'Needs Attention (YTD)', enabled: false, order: 8 },
+    { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 9 },
+    { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 10 },
+    { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 11 },
+    { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 12 },
+    { id: 'summaryMetrics', name: 'Summary Metrics (Time Range)', enabled: false, order: 13 },
+    { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 14 },
+    { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 15 },
+    { id: 'dataHub', name: 'Data Hub', enabled: false, order: 16 },
   ],
   stacks: {}, // { 'salesTax': ['salesTax', 'billsDue'] } - widget stacks
   layout: 'auto',
@@ -16515,6 +16517,234 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     ))}
                   </div>
                 </DashboardWidget>
+              )}
+              
+              {/* Data Health Status Bar - Quick glance at data freshness */}
+              {isWidgetEnabled('dataHealth') && (
+                <div className="mb-6 bg-gradient-to-r from-slate-800/60 to-slate-900/60 rounded-xl border border-slate-700/50 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-cyan-400" />
+                      Data Health
+                    </h4>
+                    <button 
+                      onClick={() => setView('upload')}
+                      className="text-xs text-slate-400 hover:text-white"
+                    >
+                      Update Data →
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    {/* Sales Data Status */}
+                    {(() => {
+                      const latestDay = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse()[0];
+                      const daysSince = latestDay ? Math.floor((new Date() - new Date(latestDay + 'T12:00:00')) / (1000 * 60 * 60 * 24)) : null;
+                      const status = daysSince === null ? 'none' : daysSince <= 2 ? 'fresh' : daysSince <= 7 ? 'stale' : 'old';
+                      return (
+                        <div 
+                          onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all ${
+                            status === 'fresh' ? 'bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20' :
+                            status === 'stale' ? 'bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20' :
+                            status === 'old' ? 'bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20' :
+                            'bg-slate-700/30 border border-slate-600/50 hover:bg-slate-700/50'
+                          }`}
+                        >
+                          <Package className={`w-4 h-4 ${
+                            status === 'fresh' ? 'text-emerald-400' :
+                            status === 'stale' ? 'text-amber-400' :
+                            status === 'old' ? 'text-rose-400' : 'text-slate-500'
+                          }`} />
+                          <span className="text-xs text-slate-300">Sales</span>
+                          <span className={`text-xs font-medium ${
+                            status === 'fresh' ? 'text-emerald-400' :
+                            status === 'stale' ? 'text-amber-400' :
+                            status === 'old' ? 'text-rose-400' : 'text-slate-500'
+                          }`}>
+                            {status === 'none' ? 'No data' : status === 'fresh' ? '✓' : `${daysSince}d`}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                    
+                    {/* Ads Data Status */}
+                    {(() => {
+                      const lastAds = amazonCampaigns.lastUpdated ? new Date(amazonCampaigns.lastUpdated) : null;
+                      const daysSince = lastAds ? Math.floor((new Date() - lastAds) / (1000 * 60 * 60 * 24)) : null;
+                      const status = daysSince === null ? 'none' : daysSince <= 3 ? 'fresh' : daysSince <= 7 ? 'stale' : 'old';
+                      return (
+                        <div 
+                          onClick={() => setShowAdsIntelUpload(true)}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all ${
+                            status === 'fresh' ? 'bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20' :
+                            status === 'stale' ? 'bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20' :
+                            status === 'old' ? 'bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20' :
+                            'bg-slate-700/30 border border-slate-600/50 hover:bg-slate-700/50'
+                          }`}
+                        >
+                          <Zap className={`w-4 h-4 ${
+                            status === 'fresh' ? 'text-emerald-400' :
+                            status === 'stale' ? 'text-amber-400' :
+                            status === 'old' ? 'text-rose-400' : 'text-slate-500'
+                          }`} />
+                          <span className="text-xs text-slate-300">Ads</span>
+                          <span className={`text-xs font-medium ${
+                            status === 'fresh' ? 'text-emerald-400' :
+                            status === 'stale' ? 'text-amber-400' :
+                            status === 'old' ? 'text-rose-400' : 'text-slate-500'
+                          }`}>
+                            {status === 'none' ? 'No data' : status === 'fresh' ? '✓' : `${daysSince}d`}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                    
+                    {/* Inventory Status */}
+                    {(() => {
+                      const latestInv = Object.keys(invHistory).sort().reverse()[0];
+                      const daysSince = latestInv ? Math.floor((new Date() - new Date(latestInv + 'T12:00:00')) / (1000 * 60 * 60 * 24)) : null;
+                      const status = daysSince === null ? 'none' : daysSince <= 1 ? 'fresh' : daysSince <= 3 ? 'stale' : 'old';
+                      return (
+                        <div 
+                          onClick={() => { setUploadTab('inventory'); setView('upload'); }}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all ${
+                            status === 'fresh' ? 'bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20' :
+                            status === 'stale' ? 'bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20' :
+                            status === 'old' ? 'bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20' :
+                            'bg-slate-700/30 border border-slate-600/50 hover:bg-slate-700/50'
+                          }`}
+                        >
+                          <Boxes className={`w-4 h-4 ${
+                            status === 'fresh' ? 'text-emerald-400' :
+                            status === 'stale' ? 'text-amber-400' :
+                            status === 'old' ? 'text-rose-400' : 'text-slate-500'
+                          }`} />
+                          <span className="text-xs text-slate-300">Inventory</span>
+                          <span className={`text-xs font-medium ${
+                            status === 'fresh' ? 'text-emerald-400' :
+                            status === 'stale' ? 'text-amber-400' :
+                            status === 'old' ? 'text-rose-400' : 'text-slate-500'
+                          }`}>
+                            {status === 'none' ? 'No data' : status === 'fresh' ? '✓' : `${daysSince}d`}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                    
+                    {/* Banking Status */}
+                    {bankingData.transactions?.length > 0 && (() => {
+                      const lastUpload = bankingData.lastUpload ? new Date(bankingData.lastUpload) : null;
+                      const daysSince = lastUpload ? Math.floor((new Date() - lastUpload) / (1000 * 60 * 60 * 24)) : null;
+                      const status = daysSince === null ? 'none' : daysSince <= 1 ? 'fresh' : daysSince <= 3 ? 'stale' : 'old';
+                      return (
+                        <div 
+                          onClick={() => setView('banking')}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all ${
+                            status === 'fresh' ? 'bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20' :
+                            status === 'stale' ? 'bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20' :
+                            status === 'old' ? 'bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20' :
+                            'bg-slate-700/30 border border-slate-600/50 hover:bg-slate-700/50'
+                          }`}
+                        >
+                          <Landmark className={`w-4 h-4 ${
+                            status === 'fresh' ? 'text-emerald-400' :
+                            status === 'stale' ? 'text-amber-400' :
+                            status === 'old' ? 'text-rose-400' : 'text-slate-500'
+                          }`} />
+                          <span className="text-xs text-slate-300">Banking</span>
+                          <span className={`text-xs font-medium ${
+                            status === 'fresh' ? 'text-emerald-400' :
+                            status === 'stale' ? 'text-amber-400' :
+                            status === 'old' ? 'text-rose-400' : 'text-slate-500'
+                          }`}>
+                            {status === 'none' ? 'No data' : status === 'fresh' ? '✓' : `${daysSince}d`}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                    
+                    {/* COGS Status */}
+                    {(() => {
+                      const hasCogs = Object.keys(savedCogs).length > 0;
+                      return (
+                        <div 
+                          onClick={() => setShowCogsManager(true)}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all ${
+                            hasCogs ? 'bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20' :
+                            'bg-slate-700/30 border border-slate-600/50 hover:bg-slate-700/50'
+                          }`}
+                        >
+                          <DollarSign className={`w-4 h-4 ${hasCogs ? 'text-emerald-400' : 'text-slate-500'}`} />
+                          <span className="text-xs text-slate-300">COGS</span>
+                          <span className={`text-xs font-medium ${hasCogs ? 'text-emerald-400' : 'text-slate-500'}`}>
+                            {hasCogs ? `${Object.keys(savedCogs).length}` : 'Setup'}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                    
+                    {/* Goals Status */}
+                    {(() => {
+                      const hasGoals = goals.weeklyRevenue > 0 || goals.monthlyRevenue > 0;
+                      return (
+                        <div 
+                          onClick={() => setShowGoalsModal(true)}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all ${
+                            hasGoals ? 'bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20' :
+                            'bg-slate-700/30 border border-slate-600/50 hover:bg-slate-700/50'
+                          }`}
+                        >
+                          <Target className={`w-4 h-4 ${hasGoals ? 'text-emerald-400' : 'text-slate-500'}`} />
+                          <span className="text-xs text-slate-300">Goals</span>
+                          <span className={`text-xs font-medium ${hasGoals ? 'text-emerald-400' : 'text-slate-500'}`}>
+                            {hasGoals ? '✓' : 'Setup'}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+              
+              {/* Quick Actions Row - Most common tasks */}
+              {isWidgetEnabled('quickActions') && (
+                <div className="mb-6 flex flex-wrap gap-2">
+                  <button 
+                    onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-orange-600/20 to-orange-500/10 border border-orange-500/30 rounded-xl text-orange-300 hover:from-orange-600/30 hover:to-orange-500/20 transition-all text-sm font-medium"
+                  >
+                    <Upload className="w-4 h-4" />
+                    Upload Sales
+                  </button>
+                  <button 
+                    onClick={() => setShowAdsIntelUpload(true)}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-600/20 to-blue-500/10 border border-blue-500/30 rounded-xl text-blue-300 hover:from-blue-600/30 hover:to-blue-500/20 transition-all text-sm font-medium"
+                  >
+                    <Zap className="w-4 h-4" />
+                    Upload Ads
+                  </button>
+                  <button 
+                    onClick={() => { setUploadTab('inventory'); setView('upload'); }}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-600/20 to-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 hover:from-emerald-600/30 hover:to-emerald-500/20 transition-all text-sm font-medium"
+                  >
+                    <Boxes className="w-4 h-4" />
+                    Sync Inventory
+                  </button>
+                  <button 
+                    onClick={() => setView('analytics')}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-violet-600/20 to-violet-500/10 border border-violet-500/30 rounded-xl text-violet-300 hover:from-violet-600/30 hover:to-violet-500/20 transition-all text-sm font-medium"
+                  >
+                    <BarChart3 className="w-4 h-4" />
+                    View Analytics
+                  </button>
+                  <button 
+                    onClick={() => setView('ads')}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-pink-600/20 to-pink-500/10 border border-pink-500/30 rounded-xl text-pink-300 hover:from-pink-600/30 hover:to-pink-500/20 transition-all text-sm font-medium"
+                  >
+                    <Brain className="w-4 h-4" />
+                    AI Ads Analyst
+                  </button>
+                </div>
               )}
               
               {/* Week-to-Date & Month-to-Date Performance */}
