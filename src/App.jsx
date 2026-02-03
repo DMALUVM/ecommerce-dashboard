@@ -3302,6 +3302,42 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   if (!supabase || !session?.user?.id) return;
   setCloudStatus('Saving…');
   
+  // CRITICAL SAFETY CHECK: Never overwrite populated data with empty data
+  // This prevents accidental data loss from race conditions
+  const localSalesCount = Object.keys(dataObj.sales || {}).length;
+  const localDailyCount = Object.keys(dataObj.dailySales || {}).length;
+  const localPeriodsCount = Object.keys(dataObj.periods || {}).length;
+  const localDataSize = localSalesCount + localDailyCount + localPeriodsCount;
+  
+  // Check existing cloud data
+  const { data: existingCheck } = await supabase
+    .from('app_data')
+    .select('data')
+    .eq('user_id', session.user.id)
+    .maybeSingle();
+  
+  if (existingCheck?.data?.storeData) {
+    const targetStoreId = activeStoreId || 'default';
+    const cloudStore = existingCheck.data.storeData[targetStoreId] || {};
+    const cloudSalesCount = Object.keys(cloudStore.sales || {}).length;
+    const cloudDailyCount = Object.keys(cloudStore.dailySales || {}).length;
+    const cloudPeriodsCount = Object.keys(cloudStore.periods || {}).length;
+    const cloudDataSize = cloudSalesCount + cloudDailyCount + cloudPeriodsCount;
+    
+    // If cloud has significant data but local is empty/minimal, BLOCK the save
+    if (cloudDataSize > 5 && localDataSize === 0 && !forceOverwrite) {
+      console.error('BLOCKED: Attempted to overwrite', cloudDataSize, 'records with empty data. Use forceOverwrite=true to override.');
+      setCloudStatus('Save blocked - would delete data');
+      setTimeout(() => setCloudStatus(''), 3000);
+      return;
+    }
+    
+    // Warn if losing significant data (but still allow if not empty)
+    if (cloudDataSize > localDataSize + 10 && !forceOverwrite) {
+      console.warn('WARNING: Saving will reduce data count from', cloudDataSize, 'to', localDataSize);
+    }
+  }
+  
   // First, check if cloud data has been modified since we last loaded (conflict detection)
   if (!forceOverwrite && loadedCloudVersion && !conflictCheckRef.current) {
     const { data: currentCloud } = await supabase
@@ -3439,7 +3475,7 @@ useEffect(() => {
 }, [amazonCredentials]);
 
 const loadFromCloud = useCallback(async (storeId = null) => {
-  if (!supabase || !session?.user?.id) return { ok: false, stores: [] };
+  if (!supabase || !session?.user?.id) return { ok: false, reason: 'no_session', stores: [] };
   setCloudStatus('Loading…');
   
   try {
@@ -3452,11 +3488,11 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (error) {
       console.error('Cloud load error:', error);
       setCloudStatus('');
-      return { ok: false, stores: [] };
+      return { ok: false, reason: 'error', stores: [] }; // Error - do NOT overwrite
     }
     if (!data?.data) {
       setCloudStatus('');
-      return { ok: false, stores: [] };
+      return { ok: false, reason: 'no_data', stores: [] }; // Truly new user - safe to initialize
     }
 
     // Store the cloud version timestamp for conflict detection
@@ -3594,11 +3630,11 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.amazonCredentials) writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify(cloud.amazonCredentials));
 
     setCloudStatus('');
-    return { ok: true, stores: loadedStores };
+    return { ok: true, reason: 'success', stores: loadedStores };
   } catch (err) {
     console.error('Cloud load unexpected error:', err);
     setCloudStatus('');
-    return { ok: false, stores: [] };
+    return { ok: false, reason: 'error', stores: [] };
   } finally {
     isLoadingDataRef.current = false;
   }
@@ -3992,78 +4028,86 @@ useEffect(() => {
       if (session?.user?.id && supabase) {
         const result = await loadFromCloud();
         if (!result.ok) {
-          // NEW USER: No cloud data yet - start with clean slate
-          // DO NOT load from localStorage - that belongs to whoever used this browser before!
-          console.log('New user detected - starting with fresh data');
-          
-          // Clear any existing state to ensure clean start
-          setAllWeeksData({});
-          setAllDaysData({});
-          setInvHistory({});
-          setSavedCogs({});
-          setCogsLastUpdated(null);
-          setAllPeriodsData({});
-          setStoreName('');
-          setStoreLogo('');
-          setSalesTaxConfig({ nexusStates: {}, filingHistory: {}, hiddenStates: [] });
-          setInvoices([]);
-          setAmazonForecasts({});
-          setForecastMeta({ lastUploads: { '7day': null, '30day': null, '60day': null }, history: [] });
-          setWeekNotes({});
-          setGoals({ weeklyRevenue: 0, monthlyRevenue: 0, weeklyProfit: 0, monthlyProfit: 0 });
-          setSavedProductNames({});
-          setProductionPipeline([]);
-          setThreeplLedger({ orders: {}, weeklyTotals: {} });
-          setAmazonCampaigns({ campaigns: [], lastUpdated: null, history: [] });
-          setReturnRates({ overall: {}, bySku: {}, byMonth: {}, byWeek: {} });
-          setLeadTimeSettings({ defaultLeadTimeDays: 14, skuLeadTimes: {}, reorderBuffer: 7 });
-          setBankingData({ transactions: [], accounts: {}, categories: {}, monthlySnapshots: {} });
-          setConfirmedRecurring([]);
-          // Also reset AI forecast states
-          setAiForecasts(null);
-          setAiForecastModule({ salesForecast: null, inventoryPlan: null, lastUpdated: null, loading: null, error: null });
-          setAiLearningHistory({ predictions: [], outcomes: [], modelUpdates: [] });
-          setUnifiedAIModel(null);
-          setForecastAccuracyHistory({ records: [], lastUpdated: null, modelVersion: 1 });
-          setForecastCorrections({ overall: { revenue: 1.0, units: 1.0, profit: 1.0 }, bySku: {}, byMonth: {}, byQuarter: {}, confidence: 0, samplesUsed: 0, lastUpdated: null });
-          setWidgetConfig({});
-          setWeeklyReports({});
-          setAiMessages([]);
-          setAdsAiMessages([]);
-          setShopifyCredentials({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
-          setPackiyoCredentials({ apiKey: '', customerId: '134', baseUrl: 'https://excel3pl.packiyo.com/api/v1', connected: false, lastSync: null, customerName: '' });
-          setAppSettings({
-            inventoryDaysOptimal: 60, inventoryDaysLow: 30, inventoryDaysCritical: 14,
-            tacosOptimal: 15, tacosWarning: 25, tacosMax: 35, roasTarget: 3.0,
-            marginTarget: 25, marginWarning: 15,
-            modulesEnabled: { weeklyTracking: true, periodTracking: true, inventory: true, trends: true, yoy: true, skus: true, profitability: true, ads: true, threepl: true, salesTax: true },
-            dashboardDefaultRange: 'month', showWeeklyGoals: true, showMonthlyGoals: true,
-            alertSalesTaxDays: 7, alertInventoryEnabled: true,
-          });
-          setLastBackupDate(null);
-          setLastSyncDate(null);
-          setLoadedCloudVersion(null);
-          setShowConflictModal(false);
-          setConflictData(null);
-          
-          // Create default store for new user
-          const defaultStore = {
-            id: `store_${Date.now()}`,
-            name: 'My Store',
-            createdAt: new Date().toISOString(),
-          };
-          setStores([defaultStore]);
-          setActiveStoreId(defaultStore.id);
-          
-          // Push empty state to cloud so they have a record
-          await pushToCloudNow({
-            sales: {},
-            dailySales: {},
-            inventory: {},
-            cogs: { lookup: {}, updatedAt: null },
-            periods: {},
-            storeName: '',
-          });
+          // Check the reason - only initialize empty state for truly new users
+          if (result.reason === 'no_data') {
+            // NEW USER: No cloud data yet - start with clean slate
+            console.log('New user detected - starting with fresh data');
+            
+            // Clear any existing state to ensure clean start
+            setAllWeeksData({});
+            setAllDaysData({});
+            setInvHistory({});
+            setSavedCogs({});
+            setCogsLastUpdated(null);
+            setAllPeriodsData({});
+            setStoreName('');
+            setStoreLogo('');
+            setSalesTaxConfig({ nexusStates: {}, filingHistory: {}, hiddenStates: [] });
+            setInvoices([]);
+            setAmazonForecasts({});
+            setForecastMeta({ lastUploads: { '7day': null, '30day': null, '60day': null }, history: [] });
+            setWeekNotes({});
+            setGoals({ weeklyRevenue: 0, monthlyRevenue: 0, weeklyProfit: 0, monthlyProfit: 0 });
+            setSavedProductNames({});
+            setProductionPipeline([]);
+            setThreeplLedger({ orders: {}, weeklyTotals: {} });
+            setAmazonCampaigns({ campaigns: [], lastUpdated: null, history: [] });
+            setReturnRates({ overall: {}, bySku: {}, byMonth: {}, byWeek: {} });
+            setLeadTimeSettings({ defaultLeadTimeDays: 14, skuLeadTimes: {}, reorderBuffer: 7 });
+            setBankingData({ transactions: [], accounts: {}, categories: {}, monthlySnapshots: {} });
+            setConfirmedRecurring([]);
+            // Also reset AI forecast states
+            setAiForecasts(null);
+            setAiForecastModule({ salesForecast: null, inventoryPlan: null, lastUpdated: null, loading: null, error: null });
+            setAiLearningHistory({ predictions: [], outcomes: [], modelUpdates: [] });
+            setUnifiedAIModel(null);
+            setForecastAccuracyHistory({ records: [], lastUpdated: null, modelVersion: 1 });
+            setForecastCorrections({ overall: { revenue: 1.0, units: 1.0, profit: 1.0 }, bySku: {}, byMonth: {}, byQuarter: {}, confidence: 0, samplesUsed: 0, lastUpdated: null });
+            setWidgetConfig({});
+            setWeeklyReports({});
+            setAiMessages([]);
+            setAdsAiMessages([]);
+            setShopifyCredentials({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
+            setPackiyoCredentials({ apiKey: '', customerId: '134', baseUrl: 'https://excel3pl.packiyo.com/api/v1', connected: false, lastSync: null, customerName: '' });
+            setAppSettings({
+              inventoryDaysOptimal: 60, inventoryDaysLow: 30, inventoryDaysCritical: 14,
+              tacosOptimal: 15, tacosWarning: 25, tacosMax: 35, roasTarget: 3.0,
+              marginTarget: 25, marginWarning: 15,
+              modulesEnabled: { weeklyTracking: true, periodTracking: true, inventory: true, trends: true, yoy: true, skus: true, profitability: true, ads: true, threepl: true, salesTax: true },
+              dashboardDefaultRange: 'month', showWeeklyGoals: true, showMonthlyGoals: true,
+              alertSalesTaxDays: 7, alertInventoryEnabled: true,
+            });
+            setLastBackupDate(null);
+            setLastSyncDate(null);
+            setLoadedCloudVersion(null);
+            setShowConflictModal(false);
+            setConflictData(null);
+            
+            // Create default store for new user
+            const defaultStore = {
+              id: `store_${Date.now()}`,
+              name: 'My Store',
+              createdAt: new Date().toISOString(),
+            };
+            setStores([defaultStore]);
+            setActiveStoreId(defaultStore.id);
+            
+            // Push empty state to cloud so they have a record
+            await pushToCloudNow({
+              sales: {},
+              dailySales: {},
+              inventory: {},
+              cogs: { lookup: {}, updatedAt: null },
+              periods: {},
+              storeName: '',
+            });
+          } else {
+            // ERROR loading data - do NOT overwrite cloud! Just show error and retry
+            console.error('Error loading cloud data - NOT overwriting. Reason:', result.reason);
+            setCloudStatus('Load failed - please refresh');
+            // Try loading from localStorage as fallback for display only
+            loadFromLocal();
+          }
         } else {
           // Existing user with cloud data - loaded successfully
           // Create default store if loaded data has no stores
@@ -6274,6 +6318,7 @@ const savePeriods = async (d) => {
         
         if (data.success && data.items) {
           tplSource = 'packiyo-direct';
+          console.log('Packiyo returned', data.items.length, 'items');
           data.items.forEach(item => {
             const sku = item.sku;
             if (!sku || sku.includes('Bundle') || item.name?.includes('Gift Card') || item.name?.includes('FREE')) return;
@@ -6283,8 +6328,8 @@ const savePeriods = async (d) => {
             // Try COGS with and without "Shop" suffix
             const cost = item.cost || cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/i, '')] || 0;
             
-            if (qty === 0 && inb === 0) return;
-            
+            // ALWAYS include Packiyo SKUs - they're valid products even if temporarily out of stock
+            // This ensures all 3PL products appear in inventory management
             tplTotal += qty;
             tplValue += qty * cost;
             tplInbound += inb;
@@ -6294,6 +6339,7 @@ const savePeriods = async (d) => {
             // Store only under original SKU
             tplInv[sku] = itemData;
           });
+          console.log('Packiyo SKUs added to tplInv:', Object.keys(tplInv).length);
           
           // Update Packiyo last sync time
           setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
@@ -6385,6 +6431,14 @@ const savePeriods = async (d) => {
     });
     
     const allSkus = new Set([...Object.keys(amzInv), ...Object.keys(tplInv), ...Object.keys(homeInv)]);
+    
+    // Log SKU sources for debugging
+    console.log('Inventory SKU sources:', {
+      amazon: Object.keys(amzInv).length,
+      threepl: Object.keys(tplInv).length,
+      home: Object.keys(homeInv).length,
+      totalUnique: allSkus.size
+    });
     
     // Deduplicate SKUs - keep only one version of each SKU (prefer original case)
     const seenSkusLower = new Set();
@@ -21488,6 +21542,9 @@ if (shopifySkuWithShipping.length > 0) {
       critical: 0, low: 0, healthy: 0, overstock: 0, skuCount: 0
     };
     const rawItems = data.items || [];
+    
+    // Log raw data for debugging
+    console.log('Inventory display - raw items:', rawItems.length, 'source:', data.inventorySources);
     
     // FILTER AND DEDUPLICATE SKUs
     // Priority: SKUs with inventory > 0, prefer "Shop" suffix variants
