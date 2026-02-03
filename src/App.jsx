@@ -5902,6 +5902,7 @@ const savePeriods = async (d) => {
     const amazonSkuVelocity = {};
     let velocityDataSource = 'none';
     let dailyDaysCount = 0; // Initialize at function level to ensure it's always defined
+    let periodsCount = 0; // Initialize at function level
     
     // FIRST: Calculate velocity from DIRECT localStorage read (most reliable)
     const legacyDates = Object.keys(legacyDailyData).sort().reverse();
@@ -6131,7 +6132,7 @@ const savePeriods = async (d) => {
     // SOURCE 3: Monthly/Period data - use for SKUs not covered by weekly or daily
     const WEEKS_PER_MONTH = 4.33;
     const sortedPeriods = Object.keys(allPeriodsData).sort().reverse().slice(0, 3);
-    const periodsCount = sortedPeriods.length;
+    periodsCount = sortedPeriods.length;
     
     if (periodsCount > 0) {
       if (velocityDataSource === 'none') velocityDataSource = 'monthly';
