@@ -46,18 +46,20 @@ const NavTabs = ({
           <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
         </button>
         {isOpen && (
-          <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl py-1 z-50 min-w-[160px]">
-            {items.map(item => (
-              <button
-                key={item.view}
-                onClick={() => { item.onClick(); setNavDropdown(null); }}
-                disabled={item.disabled}
-                className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 disabled:opacity-40 ${view === item.view ? 'bg-violet-600/30 text-violet-300' : 'text-slate-300 hover:bg-slate-700'}`}
-              >
-                <item.icon className="w-4 h-4" />
-                {item.label}
-                {item.badge && <span className="ml-auto text-xs bg-amber-500/30 text-amber-300 px-1.5 rounded">{item.badge}</span>}
-              </button>
+          <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl py-1 z-50 min-w-[180px]">
+            {items.map((item, index) => (
+              <React.Fragment key={item.view}>
+                {item.divider && index > 0 && <div className="border-t border-slate-600 my-1" />}
+                <button
+                  onClick={() => { item.onClick(); setNavDropdown(null); }}
+                  disabled={item.disabled}
+                  className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 disabled:opacity-40 ${view === item.view ? 'bg-violet-600/30 text-violet-300' : 'text-slate-300 hover:bg-slate-700'}`}
+                >
+                  <item.icon className="w-4 h-4" />
+                  {item.label}
+                  {item.badge && <span className="ml-auto text-xs bg-amber-500/30 text-amber-300 px-1.5 rounded">{item.badge}</span>}
+                </button>
+              </React.Fragment>
             ))}
           </div>
         )}
@@ -68,34 +70,35 @@ const NavTabs = ({
   // Data dropdown items
   const dataItems = [
     ...(appSettings.modulesEnabled?.dailyTracking !== false ? [{
-      view: 'daily', label: 'Days', icon: Sun,
+      view: 'daily', label: 'Daily View', icon: Sun,
       disabled: !Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).length,
       onClick: () => { const d = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse(); if (d.length) { setSelectedDay(d[0]); setView('daily'); }},
       badge: Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).length || null
     }] : []),
     ...(appSettings.modulesEnabled?.weeklyTracking !== false ? [{
-      view: 'weekly', label: 'Weeks', icon: Calendar,
+      view: 'weekly', label: 'Weekly View', icon: Calendar,
       disabled: !Object.keys(allWeeksData).length,
       onClick: () => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }},
       badge: Object.keys(allWeeksData).length || null
     }] : []),
     ...(appSettings.modulesEnabled?.periodTracking !== false ? [{
-      view: 'period-view', label: 'Periods', icon: CalendarRange,
+      view: 'period-view', label: 'Period View', icon: CalendarRange,
       disabled: !Object.keys(allPeriodsData).length,
       onClick: () => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }},
       badge: Object.keys(allPeriodsData).length || null
     }] : []),
   ];
   
-  // Analytics dropdown items
+  // Analytics dropdown items - reorganized and cleaner
   const analyticsItems = [
+    // Time-based analysis
     ...(appSettings.modulesEnabled?.trends !== false ? [{
-      view: 'trends', label: 'Trends', icon: TrendingUp,
+      view: 'trends', label: 'Trends & Charts', icon: TrendingUp,
       disabled: Object.keys(allWeeksData).length < 2,
       onClick: () => setView('trends'),
     }] : []),
     {
-      view: 'analytics', label: 'Analytics', icon: BarChart3,
+      view: 'analytics', label: 'Revenue Analytics', icon: BarChart3,
       disabled: Object.keys(allWeeksData).length < 1,
       onClick: () => setView('analytics'),
     },
@@ -104,19 +107,23 @@ const NavTabs = ({
       disabled: Object.keys(allWeeksData).length < 2 && Object.keys(allPeriodsData).length < 2,
       onClick: () => setView('yoy'),
     }] : []),
+    // Product & profit analysis (with divider)
     ...(appSettings.modulesEnabled?.skus !== false ? [{
-      view: 'skus', label: 'SKU Analysis', icon: Trophy,
+      view: 'skus', label: 'SKU Performance', icon: Trophy,
       disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
       onClick: () => setView('skus'),
+      divider: true,
     }] : []),
     ...(appSettings.modulesEnabled?.profitability !== false ? [{
       view: 'profitability', label: 'Profitability', icon: PieChart,
       disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
       onClick: () => setView('profitability'),
     }] : []),
+    // Marketing (with divider)
     ...(appSettings.modulesEnabled?.ads !== false ? [{
       view: 'ads', label: 'Ads & Marketing', icon: Zap,
       onClick: () => setView('ads'),
+      divider: true,
     }] : []),
   ];
   
@@ -128,12 +135,12 @@ const NavTabs = ({
       onClick: () => { if (Object.keys(invHistory).length) { const d = Object.keys(invHistory).sort().reverse()[0]; setSelectedInvDate(d); setView('inventory'); } else { setUploadTab('inventory'); setView('upload'); }},
     }] : []),
     {
-      view: 'forecast', label: 'Forecast', icon: Brain,
+      view: 'forecast', label: 'Forecasting', icon: Brain,
       disabled: false,
       onClick: () => setView('forecast'),
     },
     ...(appSettings.modulesEnabled?.threepl !== false ? [{
-      view: '3pl', label: '3PL / Fulfillment', icon: Truck,
+      view: '3pl', label: '3PL Costs', icon: Truck,
       disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
       onClick: () => setView('3pl'),
     }] : []),
@@ -141,7 +148,7 @@ const NavTabs = ({
       view: 'banking', label: 'Banking', icon: Landmark,
       disabled: false,
       onClick: () => setView('banking'),
-      badge: bankingData.lastUpload && new Date().toDateString() !== new Date(bankingData.lastUpload).toDateString() ? '!' : null
+      divider: true,
     },
     ...(appSettings.modulesEnabled?.salesTax !== false ? [{
       view: 'sales-tax', label: 'Sales Tax', icon: DollarSign,

@@ -1966,12 +1966,12 @@ const handleLogout = async () => {
       const lastUpdate = new Date(amazonCampaigns.lastUpdated);
       const daysSince = Math.floor((now - lastUpdate) / (1000 * 60 * 60 * 24));
       if (daysSince >= 7) {
-        alerts.push({ type: 'amazonCampaigns', severity: 'warning', message: `Amazon Campaign data is ${daysSince} days old (upload weekly)`, action: 'refresh' });
+        alerts.push({ type: 'amazonCampaigns', severity: 'warning', message: `Amazon Ads data is ${daysSince} days old`, actionText: 'Upload Sponsored Products Report', action: 'refresh' });
       } else if (daysSince >= 5) {
-        alerts.push({ type: 'amazonCampaigns', severity: 'info', message: `Amazon Campaign refresh due in ${7 - daysSince} day(s)`, action: 'upcoming' });
+        alerts.push({ type: 'amazonCampaigns', severity: 'info', message: `Amazon Ads refresh due in ${7 - daysSince} day(s)`, actionText: 'Upload early', action: 'upcoming' });
       }
     } else {
-      alerts.push({ type: 'amazonCampaigns', severity: 'info', message: 'Upload Amazon Campaign data for PPC analysis', action: 'upload' });
+      alerts.push({ type: 'amazonCampaigns', severity: 'info', message: 'No Amazon Ads data uploaded', actionText: 'Upload Sponsored Products Report', action: 'upload' });
     }
     
     return alerts;
@@ -15523,14 +15523,14 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     
     // Get alerts
     const alerts = [];
-    if (!hasCogs) alerts.push({ type: 'warning', text: 'Set up COGS to track profitability accurately' });
+    if (!hasCogs) alerts.push({ type: 'warning', text: 'Set up COGS for profit tracking → Upload COGS file', action: () => { setUploadTab('cogs'); setView('upload'); } });
     // Weekly goal tracking is now handled by the progress bar widget instead of alerts
     
     // Check inventory alerts
     const latestInv = Object.keys(invHistory).sort().reverse()[0];
     const invAlerts = latestInv ? (invHistory[latestInv]?.items || []).filter(i => i.health === 'critical' || i.health === 'low') : [];
     if (invAlerts.length > 0 && appSettings.alertInventoryEnabled) {
-      alerts.push({ type: 'critical', text: `${invAlerts.length} products need reorder attention` });
+      alerts.push({ type: 'critical', text: `${invAlerts.length} products need reorder → View Inventory`, link: 'inventory' });
     }
     
     // Check upcoming invoices/bills
@@ -15542,10 +15542,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     });
     if (overdueBills.length > 0) {
       const total = overdueBills.reduce((s, i) => s + i.amount, 0);
-      alerts.push({ type: 'critical', text: `${overdueBills.length} overdue bills totaling ${formatCurrency(total)}`, link: 'invoices' });
+      alerts.push({ type: 'critical', text: `${overdueBills.length} overdue bill${overdueBills.length > 1 ? 's' : ''} (${formatCurrency(total)}) → Pay Now`, link: 'invoices' });
     } else if (dueSoonBills.length > 0) {
       const total = dueSoonBills.reduce((s, i) => s + i.amount, 0);
-      alerts.push({ type: 'warning', text: `${dueSoonBills.length} bills due within 7 days (${formatCurrency(total)})`, link: 'invoices' });
+      alerts.push({ type: 'warning', text: `${dueSoonBills.length} bill${dueSoonBills.length > 1 ? 's' : ''} due soon (${formatCurrency(total)}) → Review`, link: 'invoices' });
     }
     
     // Check sales tax deadlines
@@ -15584,7 +15584,18 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     
     // Forecast alerts
     forecastAlerts.filter(a => a.severity === 'warning').forEach(a => {
-      alerts.push({ type: 'warning', text: a.message, link: 'forecast' });
+      // Amazon Campaign alerts should link to Ads & Intel upload
+      if (a.type === 'amazonCampaigns') {
+        alerts.push({ 
+          type: 'warning', 
+          text: a.actionText ? `${a.message} → ${a.actionText}` : a.message, 
+          link: 'ads-intel',
+          action: () => { setShowAdsIntelUpload(true); }
+        });
+      } else {
+        // Forecast alerts link to forecast upload
+        alerts.push({ type: 'warning', text: a.message, link: 'forecast' });
+      }
     });
     
     // QBO/Banking data stale alert
@@ -15601,8 +15612,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         alerts.push({ 
           type: 'warning', 
           text: daysSince 
-            ? `QBO data is ${daysSince} day${daysSince !== 1 ? 's' : ''} old - upload latest transactions`
-            : 'QBO data needs to be uploaded',
+            ? `Banking data is ${daysSince} day${daysSince !== 1 ? 's' : ''} old → Upload QBO/Bank CSV`
+            : 'Banking data needs to be uploaded → Upload QBO/Bank CSV',
           link: 'banking' 
         });
       }
@@ -15663,7 +15674,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       const weekDates = formatWeekDates(weeksMissing3PL);
       alerts.push({ 
         type: 'warning', 
-        text: `Missing 3PL data: ${weekDates}`,
+        text: `Missing 3PL costs: ${weekDates} → Upload Packiyo data`,
         link: '3pl',
         action: () => setView('3pl')
       });
@@ -15673,7 +15684,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       const weekDates = formatWeekDates(weeksMissingAds);
       alerts.push({ 
         type: 'warning', 
-        text: `Missing Ads data: ${weekDates}`,
+        text: `Missing DTC ads: ${weekDates} → Upload Meta/Google CSV`,
         link: 'ads-upload',
         action: () => { setUploadTab('bulk-ads'); setView('upload'); }
       });
@@ -16482,9 +16493,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           } else if (alert.link === 'sales-tax') {
                             setView('sales-tax');
                           } else if (alert.link === 'ads-upload') {
-                            setUploadTab('ads'); setView('upload');
+                            setUploadTab('bulk-ads'); setView('upload');
+                          } else if (alert.link === 'ads-intel') {
+                            setShowAdsIntelUpload(true);
                           } else if (alert.link === '3pl') {
                             setView('3pl');
+                          } else if (alert.link === 'inventory') {
+                            setView('inventory');
                           } else if (alert.link) {
                             setView(alert.link);
                           }
@@ -17841,22 +17856,19 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             <button onClick={() => setUploadTab('cogs')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'cogs' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
               <DollarSign className="w-5 h-5" />COGS
             </button>
-            <button onClick={() => setUploadTab('more')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${['forecast', 'period', 'shopify-sync'].includes(uploadTab) || uploadTab === 'more' ? 'bg-slate-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <MoreHorizontal className="w-5 h-5" />More
+            <button onClick={() => setUploadTab('forecast')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${['forecast', 'period'].includes(uploadTab) ? 'bg-slate-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <MoreHorizontal className="w-5 h-5" />Advanced
             </button>
           </div>
           
-          {/* More options sub-tabs */}
-          {['forecast', 'period', 'shopify-sync', 'more'].includes(uploadTab) && (
+          {/* Advanced sub-tabs */}
+          {['forecast', 'period'].includes(uploadTab) && (
             <div className="flex gap-2 mb-4 p-1 bg-slate-700/30 rounded-lg">
               <button onClick={() => setUploadTab('forecast')} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${uploadTab === 'forecast' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}>
                 <LineChart className="w-4 h-4" />Amazon Forecast
               </button>
               <button onClick={() => setUploadTab('period')} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${uploadTab === 'period' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'}`}>
                 <CalendarRange className="w-4 h-4" />Annual/Period
-              </button>
-              <button onClick={() => setUploadTab('shopify-sync')} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${uploadTab === 'shopify-sync' ? 'bg-green-600 text-white' : 'text-slate-400 hover:text-white'}`}>
-                <ShoppingBag className="w-4 h-4" />Shopify Sync
               </button>
             </div>
           )}
@@ -18582,7 +18594,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       {shopifyCredentials.lastInventorySync ? `Last sync: ${new Date(shopifyCredentials.lastInventorySync).toLocaleString()}` : 'Not synced yet'}
                     </div>
                   ) : (
-                    <button onClick={() => setUploadTab('shopify-sync')} className="text-xs text-green-400 hover:text-green-300 flex items-center gap-1">
+                    <button onClick={() => { setSettingsTab('integrations'); setView('settings'); }} className="text-xs text-green-400 hover:text-green-300 flex items-center gap-1">
                       <ShoppingBag className="w-3 h-3" />Connect Shopify
                     </button>
                   )}
@@ -33167,10 +33179,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     <p className="text-slate-400">No Shopify tax data for this period</p>
                     <p className="text-slate-500 text-sm mb-4">Sync Shopify orders to see tax breakdown by state</p>
                     <button
-                      onClick={() => { setUploadTab('shopify-sync'); setView('upload'); }}
+                      onClick={() => { setSettingsTab('integrations'); setView('settings'); }}
                       className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm text-white"
                     >
-                      Sync Shopify
+                      Connect Shopify
                     </button>
                   </div>
                 )}
