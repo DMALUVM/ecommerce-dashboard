@@ -5901,6 +5901,7 @@ const savePeriods = async (d) => {
     const shopifySkuVelocity = {};
     const amazonSkuVelocity = {};
     let velocityDataSource = 'none';
+    let dailyDaysCount = 0; // Initialize at function level to ensure it's always defined
     
     // FIRST: Calculate velocity from DIRECT localStorage read (most reliable)
     const legacyDates = Object.keys(legacyDailyData).sort().reverse();
@@ -6029,7 +6030,7 @@ const savePeriods = async (d) => {
       const dayData = allDaysData[d];
       return dayData && (dayData.amazon?.units > 0 || dayData.shopify?.units > 0);
     }).sort().reverse();
-    let dailyDaysCount = dailyDates.length; // Track at function level for later use
+    dailyDaysCount = dailyDates.length; // Update with actual count
     
     if (dailyDates.length > 0) {
       if (velocityDataSource === 'none') velocityDataSource = 'daily';
