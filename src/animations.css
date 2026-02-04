@@ -255,3 +255,123 @@
   background-size: 200px 100%;
   animation: skeleton-loading 1.5s ease-in-out infinite;
 }
+
+/* ============ FOCUS STATES ============ */
+/* Consistent focus ring for all interactive elements */
+.focus-ring {
+  outline: none;
+}
+.focus-ring:focus-visible {
+  outline: 2px solid rgb(139 92 246); /* violet-500 */
+  outline-offset: 2px;
+}
+
+/* Button focus animation */
+.btn-focus:focus-visible {
+  outline: 2px solid rgb(139 92 246);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgb(139 92 246 / 0.2);
+}
+
+/* ============ ACCESSIBILITY ============ */
+/* Screen reader only content */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Skip link for keyboard navigation */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  padding: 8px 16px;
+  background: rgb(139 92 246);
+  color: white;
+  z-index: 100;
+  transition: top 0.2s;
+}
+.skip-link:focus {
+  top: 0;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ============ CARD HOVER EFFECTS ============ */
+.card-hover {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 40px -10px rgb(0 0 0 / 0.3);
+}
+
+/* Interactive row hover */
+.row-hover {
+  transition: background-color 0.15s ease;
+}
+.row-hover:hover {
+  background-color: rgb(51 65 85 / 0.3);
+}
+
+/* ============ INPUT ENHANCEMENTS ============ */
+/* Input with icon prefix */
+.input-with-icon {
+  padding-left: 2.5rem;
+}
+
+/* Number input spin button removal */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* ============ BUTTON ACTIVE STATES ============ */
+.btn-active:active {
+  transform: scale(0.98);
+}
+
+/* ============ LOADING STATES ============ */
+.loading-shimmer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.1) 50%,
+    transparent 100%
+  );
+  animation: shimmer 1.5s infinite;
+}
+
+/* ============ SCROLL SHADOWS ============ */
+.scroll-shadow-top {
+  box-shadow: inset 0 10px 10px -10px rgba(0, 0, 0, 0.3);
+}
+.scroll-shadow-bottom {
+  box-shadow: inset 0 -10px 10px -10px rgba(0, 0, 0, 0.3);
+}

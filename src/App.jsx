@@ -1663,6 +1663,7 @@ const handleLogout = async () => {
   // Settings view state
   const [localSettings, setLocalSettings] = useState(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { type: 'day'|'week'|'period'|'inv', key: string, label: string }
   
   // Sales tax modal state
   const [newCustomFiling, setNewCustomFiling] = useState({ name: '', frequency: 'annual', dueMonth: 1, dueDay: 15, amount: '' });
@@ -11925,8 +11926,8 @@ Analyze the data and respond with ONLY this JSON:
           className="bg-slate-900 border border-slate-600 rounded-lg px-2 py-1 text-sm text-white w-44" />
       </div>
       <div className="flex-1" />
-      <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" />Export</button>
-      <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" />Import<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
+      <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-white"><Download className="w-4 h-4" />Export</button>
+      <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-white cursor-pointer"><Upload className="w-4 h-4" />Import<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
     </div>
   ), [allWeeksData, allDaysData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session, stores, activeStoreId, dataStatus]);
 
@@ -15083,7 +15084,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 </select>
                 <button 
                   onClick={() => generateReport(reportType, true, selectedReportPeriod)}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-1"
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-all text-white text-sm flex items-center gap-1"
                 >
                   <Zap className="w-3 h-3" />Generate
                 </button>
@@ -15191,7 +15192,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   </button>
                 ))}
               </div>
-              <button onClick={() => generateReport(reportType, true, selectedReportPeriod)} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm text-slate-300 flex items-center gap-2">
+              <button onClick={() => generateReport(reportType, true, selectedReportPeriod)} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl transition-all text-sm text-slate-300 flex items-center gap-2">
                 <RefreshCw className="w-4 h-4" />Regenerate
               </button>
             </div>
@@ -15237,9 +15238,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
               <p className="text-sm">Ask me anything about your business!</p>
               <div className="mt-4 space-y-2">
-                <button onClick={() => setAiInput("What was my total revenue last month?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "What was my total revenue last month?"</button>
-                <button onClick={() => setAiInput("Which SKU has the best profit per unit?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which SKU has the best profit per unit?"</button>
-                <button onClick={() => setAiInput("Which SKUs are declining in profitability?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which SKUs are declining in profitability?"</button>
+                <button onClick={() => setAiInput("What was my total revenue last month?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-xl transition-all text-xs text-slate-300">💡 "What was my total revenue last month?"</button>
+                <button onClick={() => setAiInput("Which SKU has the best profit per unit?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-xl transition-all text-xs text-slate-300">💡 "Which SKU has the best profit per unit?"</button>
+                <button onClick={() => setAiInput("Which SKUs are declining in profitability?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-xl transition-all text-xs text-slate-300">💡 "Which SKUs are declining in profitability?"</button>
               </div>
             </div>
           )}
@@ -16303,6 +16304,22 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><KeyboardShortcutsModal show={showKeyboardHelp} onClose={() => setShowKeyboardHelp(false)} />
+          <ConfirmDialog 
+            show={!!deleteConfirm} 
+            title={`Delete ${deleteConfirm?.label || 'Data'}?`}
+            message="This action cannot be undone. All data for this period will be permanently removed."
+            confirmText="Delete"
+            cancelText="Cancel"
+            variant="danger"
+            onCancel={() => setDeleteConfirm(null)}
+            onConfirm={() => {
+              if (deleteConfirm?.type === 'day') deleteDay(deleteConfirm.key);
+              else if (deleteConfirm?.type === 'week') deleteWeek(deleteConfirm.key);
+              else if (deleteConfirm?.type === 'period') deletePeriod(deleteConfirm.key);
+              else if (deleteConfirm?.type === 'inv') deleteInv(deleteConfirm.key);
+              setDeleteConfirm(null);
+            }}
+          />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -16429,7 +16446,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   </h3>
                   <button 
                     onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }}
-                    className="text-xs text-slate-400 hover:text-white px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg"
+                    className="text-xs text-slate-400 hover:text-white px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all"
                   >
                     Skip for now →
                   </button>
@@ -17282,7 +17299,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             <span className="text-slate-500 text-xs">Never</span>
                           )}
                         </div>
-                        <button onClick={exportAll} className="w-full mt-1 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white flex items-center justify-center gap-1">
+                        <button onClick={exportAll} className="w-full mt-1 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-xs text-white flex items-center justify-center gap-1">
                           <Download className="w-3 h-3" />Backup Now
                         </button>
                       </div>
@@ -17428,7 +17445,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           <p className="text-slate-400 text-sm">Week ending {new Date(expectedWeekEnd + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} (last data: {daysSinceLast} days ago)</p>
                         </div>
                       </div>
-                      <button onClick={() => { setWeekEnding(expectedWeekEnd); setUploadTab('amazon-bulk'); setView('upload'); }} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white flex items-center gap-2">
+                      <button onClick={() => { setWeekEnding(expectedWeekEnd); setUploadTab('amazon-bulk'); setView('upload'); }} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-xl transition-all text-sm text-white flex items-center gap-2">
                         <Upload className="w-4 h-4" />Upload This Week
                       </button>
                     </div>
@@ -17991,17 +18008,17 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               
               {/* No Daily Data Message */}
               {dashboardRange === 'yesterday' && !usingDailyData && (
-                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-8 mb-6 text-center">
-                  <Clock className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                  <h3 className="text-lg font-semibold text-white mb-2">No Daily Data Available</h3>
-                  <p className="text-slate-400 mb-4">Upload yesterday's sales data to see daily metrics</p>
-                  <button 
-                    onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }}
-                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-medium"
-                  >
-                    Upload Daily Data
-                  </button>
-                </div>
+                <Card variant="outlined" padding="none" className="mb-6">
+                  <EmptyState
+                    preset="sales"
+                    title="No Daily Data Available"
+                    description="Upload yesterday's Amazon and Shopify sales reports to see daily metrics, hourly trends, and same-day comparisons."
+                    primaryAction={{ 
+                      label: 'Upload Daily Data', 
+                      onClick: () => { setUploadTab('amazon-bulk'); setView('upload'); }
+                    }}
+                  />
+                </Card>
               )}
               
               {/* Daily Channel Breakdown (only for yesterday view) */}
@@ -18895,7 +18912,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                         if (!invSnapshotDate) setInvSnapshotDate(new Date().toISOString().split('T')[0]);
                         processInventory();
                       }}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-2"
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-all text-white text-sm flex items-center gap-2"
                     >
                       <RefreshCw className="w-4 h-4" />Sync Now
                     </button>
@@ -19804,7 +19821,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             setToast({ message: `Found ${missing.length} days missing Shopify data`, type: 'info' });
                           }
                         }}
-                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300 flex items-center gap-2"
+                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-slate-300 flex items-center gap-2"
                       >
                         <RefreshCw className="w-4 h-4" />
                         Scan Full History
@@ -20742,8 +20759,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           
           {/* Import/Export */}
           <div className="mt-6 flex gap-3 justify-center">
-            <button onClick={exportAll} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-2"><Download className="w-4 h-4" />Export All Data</button>
-            <label className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Import Data<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
+            <button onClick={exportAll} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-white flex items-center gap-2"><Download className="w-4 h-4" />Export All Data</button>
+            <label className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-white flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Import Data<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
           </div>
         </div>
       </div>
@@ -20781,10 +20798,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             </div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-            <button onClick={() => { const n = new Date(), s = new Date(n.getFullYear(), n.getMonth() - 1, 1), e = new Date(n.getFullYear(), n.getMonth(), 0); setCustomStartDate(s.toISOString().split('T')[0]); setCustomEndDate(e.toISOString().split('T')[0]); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">Last Month</button>
-            <button onClick={() => { const n = new Date(), s = new Date(n.getFullYear(), n.getMonth() - 3, 1), e = new Date(n.getFullYear(), n.getMonth(), 0); setCustomStartDate(s.toISOString().split('T')[0]); setCustomEndDate(e.toISOString().split('T')[0]); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">Last Quarter</button>
-            <button onClick={() => { const n = new Date(); setCustomStartDate(`${n.getFullYear()}-01-01`); setCustomEndDate(n.toISOString().split('T')[0]); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">YTD</button>
-            <button onClick={() => { const y = new Date().getFullYear() - 1; setCustomStartDate(`${y}-01-01`); setCustomEndDate(`${y}-12-31`); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">Last Year</button>
+            <button onClick={() => { const n = new Date(), s = new Date(n.getFullYear(), n.getMonth() - 1, 1), e = new Date(n.getFullYear(), n.getMonth(), 0); setCustomStartDate(s.toISOString().split('T')[0]); setCustomEndDate(e.toISOString().split('T')[0]); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-white">Last Month</button>
+            <button onClick={() => { const n = new Date(), s = new Date(n.getFullYear(), n.getMonth() - 3, 1), e = new Date(n.getFullYear(), n.getMonth(), 0); setCustomStartDate(s.toISOString().split('T')[0]); setCustomEndDate(e.toISOString().split('T')[0]); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-white">Last Quarter</button>
+            <button onClick={() => { const n = new Date(); setCustomStartDate(`${n.getFullYear()}-01-01`); setCustomEndDate(n.toISOString().split('T')[0]); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-white">YTD</button>
+            <button onClick={() => { const y = new Date().getFullYear() - 1; setCustomStartDate(`${y}-01-01`); setCustomEndDate(`${y}-12-31`); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-white">Last Year</button>
           </div>
           <button onClick={processCustomPeriod} disabled={!customStartDate || !customEndDate} className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">Analyze</button>
         </div>
@@ -21071,7 +21088,7 @@ if (shopifySkuWithShipping.length > 0) {
               </div>
             </div>
             <div className="flex gap-2">
-              <button onClick={() => deleteDay(selectedDay)} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-xl text-sm transition-all"><Trash2 className="w-4 h-4" /></button>
+              <button onClick={() => setDeleteConfirm({ type: 'day', key: selectedDay, label: new Date(selectedDay + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) })} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-xl text-sm transition-all" title="Delete this day's data"><Trash2 className="w-4 h-4" /></button>
             </div>
           </div>
           
@@ -21079,11 +21096,11 @@ if (shopifySkuWithShipping.length > 0) {
           
           {/* Day Selector */}
           <div className="flex items-center gap-4 mb-6">
-            <button onClick={() => idx < daysWithSales.length - 1 && setSelectedDay(daysWithSales[idx + 1])} disabled={idx >= daysWithSales.length - 1} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
-            <select value={selectedDay} onChange={(e) => setSelectedDay(e.target.value)} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">
+            <button onClick={() => idx < daysWithSales.length - 1 && setSelectedDay(daysWithSales[idx + 1])} disabled={idx >= daysWithSales.length - 1} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronLeft className="w-5 h-5" /></button>
+            <select value={ px-4 py-2 text-white">
               {daysWithSales.map(d => <option key={d} value={d}>{new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</option>)}
             </select>
-            <button onClick={() => idx > 0 && setSelectedDay(daysWithSales[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
+            <button onClick={() => idx > 0 && setSelectedDay(daysWithSales[idx - 1])} disabled={idx <= 0} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronRight className="w-5 h-5" /></button>
           </div>
           
           {/* Top Metrics */}
@@ -21184,10 +21201,14 @@ if (shopifySkuWithShipping.length > 0) {
           <div className="max-w-7xl mx-auto">
             <Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} />
             <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
-            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mt-6">
-              <h2 className="text-xl font-bold mb-2">Weekly View</h2>
-              <p className="text-slate-400">No data found for this week yet. Upload daily Amazon/Shopify files or run a sync, and this week will populate automatically.</p>
-            </div>
+            <Card variant="outlined" className="mt-6">
+              <EmptyState
+                preset="sales"
+                title="No Weekly Data Yet"
+                description="Upload daily Amazon or Shopify sales files, and this week will populate automatically from the aggregated data."
+                primaryAction={{ label: 'Upload Sales Data', onClick: () => { setUploadTab('amazon-bulk'); setView('upload'); } }}
+              />
+            </Card>
           </div>
         </div>
       );
@@ -21252,7 +21273,7 @@ if (shopifySkuWithShipping.length > 0) {
         <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           {/* Edit Ad Spend Modal */}
           {showEditAdSpend && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
               <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
                 <h2 className="text-xl font-bold text-white mb-2">Edit Ad Spend</h2>
                 <p className="text-slate-400 text-sm mb-4">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString()}</p>
@@ -21301,7 +21322,7 @@ if (shopifySkuWithShipping.length > 0) {
           )}
           {/* Edit 3PL Costs Modal */}
           {showEdit3PL && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
               <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
                 <h2 className="text-xl font-bold text-white mb-4">Edit 3PL / Fulfillment Costs</h2>
                 <p className="text-slate-400 text-sm mb-4">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString()}</p>
@@ -21365,7 +21386,7 @@ if (shopifySkuWithShipping.length > 0) {
           )}
           {/* Reprocess Modal */}
           {showReprocess && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
               <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
                 <h2 className="text-xl font-bold text-white mb-2">Re-process Week</h2>
                 <p className="text-slate-400 text-sm mb-4">Week ending {new Date(selectedWeek+'T00:00:00').toLocaleDateString()} - Upload files to add SKU detail</p>
@@ -21434,14 +21455,14 @@ if (shopifySkuWithShipping.length > 0) {
               <button onClick={() => { setReprocessAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowReprocess(true); }} className="bg-violet-900/50 hover:bg-violet-800/50 border border-violet-600/50 text-violet-300 px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 transition-all"><RefreshCw className="w-4 h-4" />Re-process</button>
               <button onClick={() => { setEditAdSpend({ meta: data.shopify.metaSpend || '', google: data.shopify.googleSpend || '' }); setShowEditAdSpend(true); }} className="bg-blue-900/50 hover:bg-blue-800/50 border border-blue-600/50 text-blue-300 px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 transition-all"><DollarSign className="w-4 h-4" />Edit Ads</button>
               <button onClick={() => { setEdit3PLCost(data.shopify?.threeplCosts?.toString() || ''); setShowEdit3PL(true); }} className="bg-teal-900/50 hover:bg-teal-800/50 border border-teal-600/50 text-teal-300 px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 transition-all"><Truck className="w-4 h-4" />Edit 3PL</button>
-              <button onClick={() => deleteWeek(selectedWeek)} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-xl text-sm transition-all"><Trash2 className="w-4 h-4" /></button>
+              <button onClick={() => setDeleteConfirm({ type: 'week', key: selectedWeek, label: 'Week of ' + new Date(selectedWeek+'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) })} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-xl text-sm transition-all" title="Delete this week's data"><Trash2 className="w-4 h-4" /></button>
             </div>
           </div>
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           <div className="flex items-center gap-4 mb-6">
-            <button onClick={() => idx < weeks.length - 1 && setSelectedWeek(weeks[idx + 1])} disabled={idx >= weeks.length - 1} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
-            <select value={selectedWeek} onChange={(e) => setSelectedWeek(e.target.value)} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">{weeks.map(w => <option key={w} value={w}>{new Date(w+'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</option>)}</select>
-            <button onClick={() => idx > 0 && setSelectedWeek(weeks[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
+            <button onClick={() => idx < weeks.length - 1 && setSelectedWeek(weeks[idx + 1])} disabled={idx >= weeks.length - 1} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronLeft className="w-5 h-5" /></button>
+            <select value={ px-4 py-2 text-white">{weeks.map(w => <option key={w} value={w}>{new Date(w+'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</option>)}</select>
+            <button onClick={() => idx > 0 && setSelectedWeek(weeks[idx - 1])} disabled={idx <= 0} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronRight className="w-5 h-5" /></button>
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
             <MetricCard label="Total Revenue" value={formatCurrency(data.total.revenue)} icon={DollarSign} color="emerald" />
@@ -21526,16 +21547,25 @@ if (shopifySkuWithShipping.length > 0) {
 
   if (view === 'monthly') {
     const months = getMonths(), data = selectedMonth ? getMonthlyData(selectedMonth) : null, idx = months.indexOf(selectedMonth);
-    if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
+    if (!data) return (
+      <div className="min-h-screen bg-slate-950 text-white p-6">
+        <div className="max-w-7xl mx-auto">
+          <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
+          <Card variant="outlined" className="mt-6">
+            <EmptyState preset="analytics" title="No Monthly Data" description="Upload weekly sales data to view monthly aggregates and analytics." primaryAction={{ label: 'Upload Data', onClick: () => { setUploadTab('amazon-bulk'); setView('upload'); } }} />
+          </Card>
+        </div>
+      </div>
+    );
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           <div className="flex items-center gap-4 mb-6">
-            <button onClick={() => idx < months.length - 1 && setSelectedMonth(months[idx + 1])} disabled={idx >= months.length - 1} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
-            <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">{months.map(m => <option key={m} value={m}>{new Date(m+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</option>)}</select>
-            <button onClick={() => idx > 0 && setSelectedMonth(months[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
+            <button onClick={() => idx < months.length - 1 && setSelectedMonth(months[idx + 1])} disabled={idx >= months.length - 1} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronLeft className="w-5 h-5" /></button>
+            <select value={ px-4 py-2 text-white">{months.map(m => <option key={m} value={m}>{new Date(m+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</option>)}</select>
+            <button onClick={() => idx > 0 && setSelectedMonth(months[idx - 1])} disabled={idx <= 0} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronRight className="w-5 h-5" /></button>
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
             <MetricCard label="Total Revenue" value={formatCurrency(data.total.revenue)} icon={DollarSign} color="emerald" />
@@ -21552,16 +21582,25 @@ if (shopifySkuWithShipping.length > 0) {
 
   if (view === 'yearly') {
     const years = getYears(), data = selectedYear ? getYearlyData(selectedYear) : null, idx = years.indexOf(selectedYear);
-    if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
+    if (!data) return (
+      <div className="min-h-screen bg-slate-950 text-white p-6">
+        <div className="max-w-7xl mx-auto">
+          <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
+          <Card variant="outlined" className="mt-6">
+            <EmptyState preset="analytics" title="No Yearly Data" description="Upload multiple weeks of sales data to view yearly performance." primaryAction={{ label: 'Upload Data', onClick: () => { setUploadTab('amazon-bulk'); setView('upload'); } }} />
+          </Card>
+        </div>
+      </div>
+    );
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
         <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           <div className="flex items-center gap-4 mb-6">
-            <button onClick={() => idx < years.length - 1 && setSelectedYear(years[idx + 1])} disabled={idx >= years.length - 1} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
-            <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">{years.map(y => <option key={y} value={y}>{y}</option>)}</select>
-            <button onClick={() => idx > 0 && setSelectedYear(years[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
+            <button onClick={() => idx < years.length - 1 && setSelectedYear(years[idx + 1])} disabled={idx >= years.length - 1} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronLeft className="w-5 h-5" /></button>
+            <select value={ px-4 py-2 text-white">{years.map(y => <option key={y} value={y}>{y}</option>)}</select>
+            <button onClick={() => idx > 0 && setSelectedYear(years[idx - 1])} disabled={idx <= 0} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronRight className="w-5 h-5" /></button>
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
             <MetricCard label="Total Revenue" value={formatCurrency(data.total.revenue)} icon={DollarSign} color="emerald" />
@@ -21595,7 +21634,7 @@ if (shopifySkuWithShipping.length > 0) {
         <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} />
           {/* Period Reprocess Modal */}
           {reprocessPeriod && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
               <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
                 <h2 className="text-xl font-bold text-white mb-2">Update Period: {allPeriodsData[reprocessPeriod]?.label}</h2>
                 <p className="text-slate-400 text-sm mb-4">Add or update 3PL costs and ad spend for this period</p>
@@ -21698,15 +21737,15 @@ if (shopifySkuWithShipping.length > 0) {
             <div className="flex gap-2">
               <button onClick={() => setReprocessPeriod(selectedPeriod)} className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-1"><RefreshCw className="w-4 h-4" />Update 3PL/Ads</button>
               <button onClick={() => { setUploadTab('period'); setView('upload'); }} className="bg-teal-700 hover:bg-teal-600 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-1"><Upload className="w-4 h-4" />New</button>
-              <button onClick={() => deletePeriod(selectedPeriod)} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-lg text-sm"><Trash2 className="w-4 h-4" /></button>
+              <button onClick={() => setDeleteConfirm({ type: 'period', key: selectedPeriod, label: selectedPeriod })} className="bg-rose-900/50 hover:bg-rose-800/50 border border-rose-600/50 text-rose-300 px-3 py-2 rounded-xl text-sm transition-all" title="Delete this period's data"><Trash2 className="w-4 h-4" /></button>
             </div>
           </div>
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {periods.length > 1 && (
             <div className="flex items-center gap-4 mb-6">
-              <button onClick={() => idx < periods.length - 1 && setSelectedPeriod(periods[idx + 1])} disabled={idx >= periods.length - 1} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
-              <select value={selectedPeriod} onChange={(e) => setSelectedPeriod(e.target.value)} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">{periods.map(p => <option key={p} value={p}>{allPeriodsData[p]?.label || p}</option>)}</select>
-              <button onClick={() => idx > 0 && setSelectedPeriod(periods[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
+              <button onClick={() => idx < periods.length - 1 && setSelectedPeriod(periods[idx + 1])} disabled={idx >= periods.length - 1} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronLeft className="w-5 h-5" /></button>
+              <select value={ px-4 py-2 text-white">{periods.map(p => <option key={p} value={p}>{allPeriodsData[p]?.label || p}</option>)}</select>
+              <button onClick={() => idx > 0 && setSelectedPeriod(periods[idx - 1])} disabled={idx <= 0} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronRight className="w-5 h-5" /></button>
             </div>
           )}
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
@@ -22172,7 +22211,7 @@ if (shopifySkuWithShipping.length > 0) {
               placeholder="🔍 Search SKUs..."
               value={skuSettingsSearch}
               onChange={(e) => setSkuSettingsSearch(e.target.value)}
-              className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white"
+              className="flex-1 bg-slate-800 border border-slate-600 rounded-xl px-4 py-2.5 text-white focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500 transition-all"
             />
             <label className="flex items-center gap-2 text-sm text-slate-400 whitespace-nowrap">
               <input 
@@ -22319,7 +22358,7 @@ if (shopifySkuWithShipping.length > 0) {
             <div className="text-slate-400 text-sm">
               <span className="text-white font-medium">{Object.keys(leadTimeSettings.skuSettings || {}).length}</span> SKUs with custom settings
             </div>
-            <button onClick={() => { setShowSkuSettings(false); setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); setSkuSettingsSearch(''); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white">Close</button>
+            <button onClick={() => { setShowSkuSettings(false); setSkuSettingsEditItem(null); setSkuSettingsEditForm({}); setSkuSettingsSearch(''); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-white">Close</button>
           </div>
         </div>
       </div>
@@ -22339,15 +22378,15 @@ if (shopifySkuWithShipping.length > 0) {
             <div className="flex gap-2">
               <button onClick={() => setShowSkuSettings(true)} className="bg-violet-700 hover:bg-violet-600 text-white px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 transition-all"><Settings className="w-4 h-4" />SKU Settings</button>
               <button onClick={() => { setUploadTab('inventory'); setView('upload'); }} className="bg-emerald-700 hover:bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm transition-all"><RefreshCw className="w-4 h-4 inline mr-1" />New</button>
-              <button onClick={() => deleteInv(selectedInvDate)} className="bg-rose-900/50 hover:bg-rose-800/50 text-rose-300 px-3 py-2 rounded-xl text-sm transition-all"><Trash2 className="w-4 h-4" /></button>
+              <button onClick={() => setDeleteConfirm({ type: 'inv', key: selectedInvDate, label: new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' inventory' })} className="bg-rose-900/50 hover:bg-rose-800/50 text-rose-300 px-3 py-2 rounded-xl text-sm transition-all" title="Delete this inventory snapshot"><Trash2 className="w-4 h-4" /></button>
             </div>
           </div>
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           {dates.length > 1 && (
             <div className="flex items-center gap-4 mb-6">
-              <button onClick={() => idx < dates.length - 1 && setSelectedInvDate(dates[idx + 1])} disabled={idx >= dates.length - 1} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
-              <select value={selectedInvDate} onChange={(e) => setSelectedInvDate(e.target.value)} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">{dates.map(d => <option key={d} value={d}>{new Date(d+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</option>)}</select>
-              <button onClick={() => idx > 0 && setSelectedInvDate(dates[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
+              <button onClick={() => idx < dates.length - 1 && setSelectedInvDate(dates[idx + 1])} disabled={idx >= dates.length - 1} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronLeft className="w-5 h-5" /></button>
+              <select value={ px-4 py-2 text-white">{dates.map(d => <option key={d} value={d}>{new Date(d+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</option>)}</select>
+              <button onClick={() => idx > 0 && setSelectedInvDate(dates[idx - 1])} disabled={idx <= 0} className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all"><ChevronRight className="w-5 h-5" /></button>
             </div>
           )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -22542,7 +22581,7 @@ if (shopifySkuWithShipping.length > 0) {
                   />
                   Show zero stock
                 </label>
-                <button onClick={() => setShowSkuSettings(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-1">
+                <button onClick={() => setShowSkuSettings(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-all text-white text-sm flex items-center gap-1">
                   <Settings className="w-4 h-4" />Settings
                 </button>
               </div>
@@ -23008,7 +23047,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             
             {/* Add/Edit Production Modal */}
             {showAddProduction && (
-              <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 overflow-y-auto">
+              <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
                 <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-2xl w-full my-8">
                   <h3 className="text-lg font-semibold text-white mb-4">{editingProduction ? 'Edit Purchase Order' : 'Add Purchase Order'}</h3>
                   
@@ -23741,7 +23780,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               const balancePercent = (100 - (po.depositPercent || 30)) / 100;
               
               return (
-                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
                   <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
                     <h3 className="text-lg font-semibold text-white mb-2">Log Shipment</h3>
                     <p className="text-slate-400 text-sm mb-4">{po.productName || po.sku} — {formatNumber(remaining)} units remaining</p>
@@ -24759,11 +24798,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           </div>
           
           {/* Date Range Filter */}
-          <div className="flex flex-wrap gap-2 mb-6 items-center bg-slate-800/50 rounded-lg p-3 border border-slate-700">
+          <div className="flex flex-wrap gap-2 mb-6 items-center bg-slate-800/50 rounded-xl p-3 border border-slate-700">
             <span className="text-slate-400 text-sm mr-2">📅 Date Range:</span>
             <button 
               onClick={() => setTrendsDateRange({ start: null, end: null, preset: 'all' })}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsDateRange.preset === 'all' ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+              className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${trendsDateRange.preset === 'all' ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}
             >
               All Time
             </button>
@@ -24774,7 +24813,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 const end = `${now.getFullYear()}-12-31`;
                 setTrendsDateRange({ start, end, preset: 'ytd' });
               }}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsDateRange.preset === 'ytd' ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+              className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${trendsDateRange.preset === 'ytd' ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}
             >
               {new Date().getFullYear()}
             </button>
@@ -24783,7 +24822,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 const lastYear = new Date().getFullYear() - 1;
                 setTrendsDateRange({ start: `${lastYear}-01-01`, end: `${lastYear}-12-31`, preset: 'lastyear' });
               }}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsDateRange.preset === 'lastyear' ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+              className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${trendsDateRange.preset === 'lastyear' ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}
             >
               {new Date().getFullYear() - 1}
             </button>
@@ -24794,7 +24833,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 const start = new Date(now.setDate(now.getDate() - 30)).toISOString().split('T')[0];
                 setTrendsDateRange({ start, end, preset: 'last30' });
               }}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsDateRange.preset === 'last30' ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+              className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${trendsDateRange.preset === 'last30' ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}
             >
               Last 30 Days
             </button>
@@ -24805,7 +24844,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 const start = new Date(now.setDate(now.getDate() - 90)).toISOString().split('T')[0];
                 setTrendsDateRange({ start, end, preset: 'last90' });
               }}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${trendsDateRange.preset === 'last90' ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+              className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${trendsDateRange.preset === 'last90' ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}
             >
               Last 90 Days
             </button>
@@ -24829,16 +24868,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           </div>
           
           {!dataAvailable ? (
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-12 text-center">
-              <Database className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-              <h3 className="text-xl font-semibold text-white mb-2">No {periodLabel} Data Available</h3>
-              <p className="text-slate-400 mb-4">Upload {trendsTab} data to see trends</p>
-              {trendsTab === 'daily' && (
-                <button onClick={() => { setUploadTab('amazon-bulk'); setView('upload'); }} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white">
-                  Upload Daily Data
-                </button>
-              )}
-            </div>
+            <Card variant="outlined" padding="none">
+              <EmptyState
+                preset="analytics"
+                title={`No ${periodLabel} Data Available`}
+                description={`Upload ${trendsTab === 'daily' ? 'daily sales' : trendsTab === 'weekly' ? 'weekly' : trendsTab} data to see trends and charts. Your analytics will update automatically.`}
+                primaryAction={trendsTab === 'daily' || trendsTab === 'weekly' ? { 
+                  label: `Upload ${trendsTab === 'daily' ? 'Daily' : 'Weekly'} Data`, 
+                  onClick: () => { setUploadTab('amazon-bulk'); setView('upload'); } 
+                } : undefined}
+              />
+            </Card>
           ) : (
             <>
               {/* RETURNS TAB CONTENT */}
@@ -26550,9 +26590,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           </div>
           
           {/* Time View Toggle */}
-          <div className="flex gap-2 mb-4">
-            <button onClick={() => setTimeView('weekly')} className={`px-4 py-2 rounded-lg text-sm font-medium ${timeView === 'weekly' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>Weekly</button>
-            <button onClick={() => setTimeView('monthly')} className={`px-4 py-2 rounded-lg text-sm font-medium ${timeView === 'monthly' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>Monthly</button>
+          <div className="flex gap-2 mb-4 p-1 bg-slate-800/50 rounded-xl">
+            <button onClick={() => setTimeView('weekly')} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${timeView === 'weekly' ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>Weekly</button>
+            <button onClick={() => setTimeView('monthly')} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${timeView === 'monthly' ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>Monthly</button>
           </div>
           
           {/* Cost Trend Chart */}
@@ -29000,23 +29040,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           </div>
           
           {/* Forecast Type Tabs */}
-          <div className="flex flex-wrap gap-2 mb-6">
-            <button onClick={() => setForecastTab('sales')} className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${forecastTab === 'sales' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+          <div className="flex flex-wrap gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl">
+            <button onClick={() => setForecastTab('sales')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 transition-all ${forecastTab === 'sales' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
               <TrendingUp className="w-4 h-4" />Sales Forecast
             </button>
-            <button onClick={() => setForecastTab('amazon')} className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${forecastTab === 'amazon' ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setForecastTab('amazon')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 transition-all ${forecastTab === 'amazon' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-lg shadow-orange-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
               <Store className="w-4 h-4" />Amazon
             </button>
-            <button onClick={() => setForecastTab('shopify')} className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${forecastTab === 'shopify' ? 'bg-green-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setForecastTab('shopify')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 transition-all ${forecastTab === 'shopify' ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white shadow-lg shadow-green-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
               <ShoppingBag className="w-4 h-4" />Shopify
             </button>
-            <button onClick={() => setForecastTab('inventory')} className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${forecastTab === 'inventory' ? 'bg-amber-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setForecastTab('inventory')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 transition-all ${forecastTab === 'inventory' ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg shadow-amber-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
               <Boxes className="w-4 h-4" />Inventory
             </button>
-            <button onClick={() => setForecastTab('comparison')} className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${forecastTab === 'comparison' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setForecastTab('comparison')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 transition-all ${forecastTab === 'comparison' ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
               <BarChart3 className="w-4 h-4" />AI vs Amazon
             </button>
-            <button onClick={() => setForecastTab('settings')} className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${forecastTab === 'settings' ? 'bg-slate-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setForecastTab('settings')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 transition-all ${forecastTab === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-500 text-white shadow-lg shadow-slate-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
               <Settings className="w-4 h-4" />Settings
             </button>
           </div>
@@ -29950,7 +29990,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             daysInput.value = '';
                           }
                         }}
-                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white"
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-all text-white"
                       >
                         Add
                       </button>
@@ -30688,33 +30728,33 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           ⚡ Generate Full Action Plan
                         </button>
                         {adsIntelData?.spSearchTerms ? (
-                          <button onClick={() => { sendAdsAIMessage("Analyze my search terms - which are wasting money and which should I scale? Give me negative keyword suggestions."); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                          <button onClick={() => { sendAdsAIMessage("Analyze my search terms - which are wasting money and which should I scale? Give me negative keyword suggestions."); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-xl transition-all text-sm text-slate-300">
                             🔍 Search term analysis + negative keywords
                           </button>
                         ) : (
-                          <button onClick={() => { sendAdsAIMessage("Which campaigns should I pause to save money?"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                          <button onClick={() => { sendAdsAIMessage("Which campaigns should I pause to save money?"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-xl transition-all text-sm text-slate-300">
                             ⚠️ Which campaigns should I pause?
                           </button>
                         )}
                         {adsIntelData?.spPlacement ? (
-                          <button onClick={() => { sendAdsAIMessage("Analyze my placement performance - where should I increase/decrease bids for Top of Search vs Product Pages vs Rest of Search?"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                          <button onClick={() => { sendAdsAIMessage("Analyze my placement performance - where should I increase/decrease bids for Top of Search vs Product Pages vs Rest of Search?"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-xl transition-all text-sm text-slate-300">
                             📍 Placement bid optimization
                           </button>
                         ) : (
-                          <button onClick={() => { sendAdsAIMessage("What are my best scaling opportunities?"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                          <button onClick={() => { sendAdsAIMessage("What are my best scaling opportunities?"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-xl transition-all text-sm text-slate-300">
                             🚀 What are my best scaling opportunities?
                           </button>
                         )}
                         {adsIntelData?.searchQueryPerf?.length > 0 ? (
-                          <button onClick={() => { sendAdsAIMessage("Compare my organic search query performance with my paid campaigns. Where am I paying for clicks I could get organically? Where should I increase paid because organic share is low?"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                          <button onClick={() => { sendAdsAIMessage("Compare my organic search query performance with my paid campaigns. Where am I paying for clicks I could get organically? Where should I increase paid because organic share is low?"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-xl transition-all text-sm text-slate-300">
                             🔄 Organic vs Paid gap analysis
                           </button>
                         ) : (
-                          <button onClick={() => { sendAdsAIMessage("How has my ROAS trended over the last 6 months?"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                          <button onClick={() => { sendAdsAIMessage("How has my ROAS trended over the last 6 months?"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-xl transition-all text-sm text-slate-300">
                             📈 How has my ROAS trended over time?
                           </button>
                         )}
-                        <button onClick={() => { sendAdsAIMessage("Compare my SP vs SB vs SD campaign performance"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">
+                        <button onClick={() => { sendAdsAIMessage("Compare my SP vs SB vs SD campaign performance"); }} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-xl transition-all text-sm text-slate-300">
                           📊 Compare SP vs SB vs SD performance
                         </button>
                       </div>
@@ -30938,7 +30978,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
                         <div className="flex items-center justify-between mb-4">
                           <h3 className="text-lg font-semibold text-white">Monthly Performance</h3>
-                          <button onClick={() => setShowAdsBulkUpload(true)} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white flex items-center gap-1">
+                          <button onClick={() => setShowAdsBulkUpload(true)} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-xl transition-all text-sm text-white flex items-center gap-1">
                             <Upload className="w-4 h-4" />Import More
                           </button>
                         </div>
@@ -31185,7 +31225,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         return null;
                       })()}
                     </div>
-                    <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm cursor-pointer">
+                    <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-white text-sm cursor-pointer">
                       <RefreshCw className="w-4 h-4" />
                       Refresh Data
                       <input type="file" accept=".csv" className="hidden" onChange={(e) => handleAmazonCampaignUpload(e.target.files[0])} />
@@ -31343,12 +31383,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                       <h3 className="text-lg font-semibold text-white">All Campaigns ({filteredCampaigns.length})</h3>
                       <div className="flex flex-wrap items-center gap-2">
-                        <select value={amazonCampaignFilter.status} onChange={(e) => setAmazonCampaignFilter(f => ({...f, status: e.target.value}))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                        <select value={ px-2 py-1 text-white text-sm">
                           <option value="all">All Status</option>
                           <option value="ENABLED">Enabled</option>
                           <option value="PAUSED">Paused</option>
                         </select>
-                        <select value={amazonCampaignFilter.type} onChange={(e) => setAmazonCampaignFilter(f => ({...f, type: e.target.value}))} className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-white text-sm">
+                        <select value={ px-2 py-1 text-white text-sm">
                           <option value="all">All Types</option>
                           <option value="SP">SP</option>
                           <option value="SB">SB</option>
@@ -31419,7 +31459,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           <div className="flex flex-wrap items-center gap-3 mb-6">
             <div className="flex items-center gap-2">
               <span className="text-slate-400 text-sm">Year:</span>
-              <select value={adsYear} onChange={(e) => setAdsYear(parseInt(e.target.value))} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
+              <select value={ px-3 py-1.5 text-white text-sm">
                 {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
             </div>
@@ -31428,7 +31468,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             {adsTimeTab === 'monthly' && (
               <div className="flex items-center gap-2">
                 <span className="text-slate-400 text-sm">Month:</span>
-                <select value={adsMonth} onChange={(e) => setAdsMonth(parseInt(e.target.value))} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
+                <select value={ px-3 py-1.5 text-white text-sm">
                   {monthNames.map((m, i) => <option key={i} value={i} disabled={!monthsWithData.includes(i)}>{m}</option>)}
                 </select>
               </div>
@@ -31438,7 +31478,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             {adsTimeTab === 'daily' && sortedDays.length > 0 && (
               <div className="flex items-center gap-2">
                 <span className="text-slate-400 text-sm">Day:</span>
-                <select value={adsSelectedDay || ''} onChange={(e) => setAdsSelectedDay(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
+                <select value={ px-3 py-1.5 text-white text-sm">
                   {sortedDays.slice().reverse().slice(0, 90).map(d => (
                     <option key={d} value={d}>
                       {new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
@@ -31452,7 +31492,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             {adsTimeTab === 'weekly' && weeksInYear.length > 0 && (
               <div className="flex items-center gap-2">
                 <span className="text-slate-400 text-sm">Week Ending:</span>
-                <select value={adsSelectedWeek || ''} onChange={(e) => setAdsSelectedWeek(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
+                <select value={ px-3 py-1.5 text-white text-sm">
                   {weeksInYear.slice().reverse().map(w => (
                     <option key={w} value={w}>
                       {new Date(w + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
@@ -31465,15 +31505,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             {adsTimeTab === 'quarterly' && (
               <div className="flex items-center gap-2">
                 <span className="text-slate-400 text-sm">Quarter:</span>
-                <select value={adsQuarter} onChange={(e) => setAdsQuarter(parseInt(e.target.value))} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">
+                <select value={ px-3 py-1.5 text-white text-sm">
                   {[1, 2, 3, 4].map(q => <option key={q} value={q}>Q{q}</option>)}
                 </select>
               </div>
             )}
             
             <div className="flex items-center gap-1 ml-auto">
-              <button onClick={goToPrev} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"><ChevronLeft className="w-4 h-4" /></button>
-              <button onClick={goToNext} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"><ChevronRight className="w-4 h-4" /></button>
+              <button onClick={goToPrev} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-white"><ChevronLeft className="w-4 h-4" /></button>
+              <button onClick={goToNext} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-white"><ChevronRight className="w-4 h-4" /></button>
             </div>
           </div>
           
@@ -32245,7 +32285,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-white">{adsTimeTab === 'daily' ? 'Daily Details' : 'Last 7 Days Breakdown'}</h3>
-                <button onClick={() => setShowAdsBulkUpload(true)} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white flex items-center gap-1">
+                <button onClick={() => setShowAdsBulkUpload(true)} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-xl transition-all text-sm text-white flex items-center gap-1">
                   <Upload className="w-4 h-4" />Import Ads
                 </button>
               </div>
@@ -32329,7 +32369,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             <div className="text-center py-12 bg-slate-800/30 rounded-2xl border border-slate-700">
               <DollarSign className="w-12 h-12 text-slate-600 mx-auto mb-4" />
               <p className="text-slate-400 mb-4">No ad data for {getPeriodLabel()}</p>
-              <button onClick={() => setShowAdsBulkUpload(true)} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white flex items-center gap-2 mx-auto">
+              <button onClick={() => setShowAdsBulkUpload(true)} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-xl transition-all text-white flex items-center gap-2 mx-auto">
                 <Upload className="w-4 h-4" />Upload Ad Spend Data
               </button>
             </div>
@@ -33160,14 +33200,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           const alreadyFiled = salesTaxConfig.filingHistory?.[stateCode]?.[periodKey]?.filed;
                           
                           return (
-                            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
                               <div className="bg-slate-800 rounded-xl border border-slate-600 p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
                                 <div className="flex items-center justify-between mb-4">
                                   <div>
                                     <h3 className="text-xl font-bold text-white">{stateInfo?.name || stateCode} Sales Tax Filing</h3>
                                     <p className="text-sm text-slate-400">{filingFormat.formName}</p>
                                   </div>
-                                  <button onClick={() => setFilingDetailState(null)} className="p-2 hover:bg-slate-700 rounded-lg">
+                                  <button onClick={() => setFilingDetailState(null)} className="p-2 hover:bg-slate-700 rounded-xl transition-all">
                                     <X className="w-5 h-5 text-slate-400" />
                                   </button>
                                 </div>
@@ -33426,7 +33466,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                           setToast({ message: `${stateInfo?.name} tax marked as filed for ${taxPeriodValue}`, type: 'success' });
                                           setFilingDetailState(null);
                                         }}
-                                        className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white font-medium"
+                                        className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-all text-white font-medium"
                                       >
                                         ✓ Mark as Filed & Paid
                                       </button>
@@ -33457,14 +33497,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                       a.click();
                                       URL.revokeObjectURL(url);
                                     }}
-                                    className="flex-1 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium flex items-center justify-center gap-2"
+                                    className="flex-1 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-xl transition-all text-white font-medium flex items-center justify-center gap-2"
                                   >
                                     <Download className="w-4 h-4" />
                                     Export {stateCode} Data
                                   </button>
                                   <button
                                     onClick={() => setFilingDetailState(null)}
-                                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300"
+                                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-slate-300"
                                   >
                                     Close
                                   </button>
@@ -33499,7 +33539,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             <div className="lg:col-span-2 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-white">Your Nexus States</h3>
-                <select value={taxFilterStatus} onChange={(e) => setTaxFilterStatus(e.target.value)} className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white">
+                <select value={ px-3 py-1.5 text-sm text-white">
                   <option value="all">All States</option>
                   <option value="due">Overdue</option>
                   <option value="upcoming">Due Soon</option>
@@ -33535,9 +33575,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               </p>
                               <p className="text-slate-500 text-xs">{Math.ceil((state.nextDue - now) / (1000 * 60 * 60 * 24))} days</p>
                             </div>
-                            <button onClick={() => setSelectedTaxState(state.code)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg" title="File/Upload Report"><Upload className="w-4 h-4" /></button>
-                            <button onClick={() => setViewingStateHistory(state.code)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg" title="View History"><FileText className="w-4 h-4" /></button>
-                            <button onClick={() => { setTaxConfigState(state.code); setShowTaxStateConfig(true); }} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg" title="Settings"><Settings className="w-4 h-4" /></button>
+                            <button onClick={() => setSelectedTaxState(state.code)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all" title="File/Upload Report"><Upload className="w-4 h-4" /></button>
+                            <button onClick={() => setViewingStateHistory(state.code)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all" title="View History"><FileText className="w-4 h-4" /></button>
+                            <button onClick={() => { setTaxConfigState(state.code); setShowTaxStateConfig(true); }} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all" title="Settings"><Settings className="w-4 h-4" /></button>
                           </div>
                         </div>
                       );
@@ -34326,7 +34366,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               })()}
               
               {/* Tabs */}
-              <div className="flex gap-2 mb-6 border-b border-slate-700 pb-2 overflow-x-auto">
+              <div className="flex gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl overflow-x-auto">
                 {[
                   { key: 'overview', label: 'Overview', icon: BarChart3 },
                   { key: 'cfo', label: 'CFO Dashboard', icon: Target },
@@ -34340,9 +34380,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   <button
                     key={tab.key}
                     onClick={() => { setBankingTab(tab.key); setBankingDrilldown(null); }}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors whitespace-nowrap ${
+                    className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 transition-all whitespace-nowrap ${
                       bankingTab === tab.key 
-                        ? 'bg-green-600 text-white' 
+                        ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' 
                         : 'text-slate-400 hover:text-white hover:bg-slate-700'
                     }`}
                   >
@@ -34645,7 +34685,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   
                   {/* Manual Add Recurring Modal */}
                   {showAddRecurring && (
-                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
                       <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
                         <h3 className="text-lg font-semibold text-white mb-4">Add Recurring Expense</h3>
                         <p className="text-slate-400 text-sm mb-4">Manually add a recurring expense that wasn't auto-detected (e.g., agency retainers, subscriptions).</p>
@@ -34787,7 +34827,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             <div className="flex gap-2">
                               <button
                                 onClick={() => setConfirmedRecurring(prev => ({ ...prev, [item.key]: { confirmed: true, amount: item.monthlyAmount } }))}
-                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm"
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-all text-white text-sm"
                               >
                                 Confirm
                               </button>
@@ -35431,7 +35471,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     <div className="p-6 border-t border-slate-700 flex gap-3">
                       <button
                         onClick={() => setEditingTransaction(null)}
-                        className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"
+                        className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-white"
                       >
                         Cancel
                       </button>
@@ -35443,7 +35483,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           }
                           setEditingTransaction(null);
                         }}
-                        className="flex-1 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium"
+                        className="flex-1 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-xl transition-all text-white font-medium"
                       >
                         Save Category
                       </button>
@@ -35454,7 +35494,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               
               {/* Account Balance Edit Modal */}
               {editingAccountBalance && (
-                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
                   <div className="bg-slate-800 rounded-xl border border-slate-600 p-6 max-w-md w-full">
                     <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
                       {editingAccountBalance.isCard ? <CreditCard className="w-5 h-5 text-rose-400" /> : <Wallet className="w-5 h-5 text-emerald-400" />}
@@ -35485,7 +35525,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     <div className="flex gap-3">
                       <button
                         onClick={() => setEditingAccountBalance(null)}
-                        className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300"
+                        className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-slate-300"
                       >
                         Cancel
                       </button>
@@ -35518,7 +35558,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           setToast({ message: `Balance updated for ${editingAccountBalance.name.split('(')[0].trim()}`, type: 'success' });
                           setEditingAccountBalance(null);
                         }}
-                        className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white font-medium"
+                        className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-all text-white font-medium"
                       >
                         Save Balance
                       </button>
@@ -36408,7 +36448,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         {store.id !== activeStoreId && (
                           <button 
                             onClick={() => switchStore(store.id)}
-                            className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"
+                            className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-white"
                           >
                             Switch
                           </button>
@@ -36434,7 +36474,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               <div className="flex gap-2">
                 <input 
                   placeholder="New store name..."
-                  className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
                   id="new-store-name"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && e.target.value.trim()) {
@@ -36451,7 +36491,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       input.value = '';
                     }
                   }}
-                  className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white flex items-center gap-2"
+                  className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-xl transition-all text-white flex items-center gap-2"
                 >
                   <Plus className="w-4 h-4" />Add Store
                 </button>
@@ -36500,7 +36540,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   />
                 </label>
                 {storeLogo && (
-                  <button onClick={() => { setStoreLogo(null); setToast({ message: 'Logo removed', type: 'success' }); }} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300">
+                  <button onClick={() => { setStoreLogo(null); setToast({ message: 'Logo removed', type: 'success' }); }} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-slate-300">
                     Remove
                   </button>
                 )}
@@ -37803,7 +37843,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           {/* Dashboard Preferences */}
           <SettingSection title="🏠 Dashboard Preferences">
             <SettingRow label="Default Time Range" desc="Initial view when loading dashboard">
-              <select value={currentLocalSettings.dashboardDefaultRange || 'month'} onChange={(e) => updateSetting('dashboardDefaultRange', e.target.value)} className="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white">
+              <select value={ px-4 py-2 text-white">
                 <option value="week">Week</option>
                 <option value="month">Month</option>
                 <option value="quarter">Quarter</option>
@@ -37925,9 +37965,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             </SettingRow>
             <SettingRow label="Export to CSV" desc="Download specific data as CSV files">
               <div className="flex flex-wrap gap-2">
-                <button onClick={exportWeeklyDataCSV} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white">Weekly CSV</button>
-                <button onClick={exportSKUDataCSV} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white">SKU CSV</button>
-                <button onClick={exportInventoryCSV} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white">Inventory CSV</button>
+                <button onClick={exportWeeklyDataCSV} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-xs text-white">Weekly CSV</button>
+                <button onClick={exportSKUDataCSV} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-xs text-white">SKU CSV</button>
+                <button onClick={exportInventoryCSV} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-xs text-white">Inventory CSV</button>
               </div>
             </SettingRow>
             <SettingRow label="Restore from Backup" desc="Import a previously exported JSON file">
@@ -38152,7 +38192,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   <button onClick={() => setShowResetConfirm(false)} className="px-4 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm text-white font-medium transition-all">Cancel</button>
                 </div>
               ) : (
-                <button onClick={() => setShowResetConfirm(true)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white">Reset Settings</button>
+                <button onClick={() => setShowResetConfirm(true)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all text-sm text-white">Reset Settings</button>
               )}
             </SettingRow>
           </SettingSection>
