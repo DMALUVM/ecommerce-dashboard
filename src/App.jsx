@@ -7690,8 +7690,8 @@ const savePeriods = async (d) => {
         reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
         reorderByDate = reorderBy.toISOString().split('T')[0];
         
-        // Suggested order = minOrderWeeks of supply
-        suggestedOrderQty = Math.ceil(totalVel * minOrderWeeks);
+        // Suggested order = minOrderWeeks of supply (use corrected velocity)
+        suggestedOrderQty = Math.ceil(correctedVel * minOrderWeeks);
       }
       
       items.push({ 
@@ -39759,24 +39759,29 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             const rawWeeklyVel = amzWeeklyVel + shopWeeklyVel;
                             
                             // Use CORRECTED velocity for DOS calculation (includes learning adjustments)
-                            const weeklyVel = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
+                            // But display RAW velocity in the UI for clarity (Tot Vel = AMZ + Shop)
+                            const correctedVelForDOS = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
                             const correctionApplied = velocityData.correctionApplied;
                             const velocityTrend = velocityData.trend;
                             
+                            // Display RAW total velocity (AMZ + Shop), but use corrected for DOS
+                            const weeklyVel = rawWeeklyVel; // Show raw in UI
+                            
                             // Debug: Log velocity lookup for first few items
                             if (matchedCount <= 5) {
-                              console.log(`Velocity for "${item.sku}": Raw=${rawWeeklyVel.toFixed(2)}, Corrected=${weeklyVel.toFixed(2)}, Trend=${velocityTrend}% ${correctionApplied ? '(correction applied)' : ''}`);
+                              console.log(`Velocity for "${item.sku}": AMZ=${amzWeeklyVel.toFixed(2)}, Shop=${shopWeeklyVel.toFixed(2)}, Raw Total=${rawWeeklyVel.toFixed(2)}, Corrected=${correctedVelForDOS.toFixed(2)} ${correctionApplied ? '(correction applied)' : ''}`);
                             }
                             
-                            const dos = weeklyVel > 0 ? Math.round((newTotalQty / weeklyVel) * 7) : 999;
+                            // Use CORRECTED velocity for Days of Supply calculation
+                            const dos = correctedVelForDOS > 0 ? Math.round((newTotalQty / correctedVelForDOS) * 7) : 999;
                             const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
                             
-                            // Recalculate stockout and reorder dates
+                            // Recalculate stockout and reorder dates using CORRECTED velocity
                             let stockoutDate = null;
                             let reorderByDate = null;
                             let daysUntilMustOrder = null;
                             
-                            if (weeklyVel > 0 && dos < 999) {
+                            if (correctedVelForDOS > 0 && dos < 999) {
                               const stockout = new Date(today);
                               stockout.setDate(stockout.getDate() + dos);
                               stockoutDate = stockout.toISOString().split('T')[0];
@@ -39793,8 +39798,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               threeplInbound: newTplInbound,
                               totalQty: newTotalQty,
                               totalValue: newTotalQty * (item.cost || 0),
-                              weeklyVel, // Corrected total velocity (used for DOS)
-                              rawWeeklyVel, // Uncorrected velocity
+                              weeklyVel, // RAW total velocity (AMZ + Shop) - displayed in UI
+                              rawWeeklyVel, // Same as weeklyVel for clarity
+                              correctedVel: correctedVelForDOS, // Corrected velocity - used for DOS
                               amzWeeklyVel, // Amazon-only velocity
                               shopWeeklyVel, // Shopify-only velocity
                               correctionApplied, // Whether forecast correction was applied
@@ -39803,7 +39809,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               stockoutDate,
                               reorderByDate,
                               daysUntilMustOrder,
-                              suggestedOrderQty: weeklyVel > 0 ? Math.ceil(weeklyVel * minOrderWeeks) : 0,
+                              suggestedOrderQty: correctedVelForDOS > 0 ? Math.ceil(correctedVelForDOS * minOrderWeeks) : 0,
                             };
                           });
                           
