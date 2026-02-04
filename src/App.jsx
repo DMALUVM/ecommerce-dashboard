@@ -4001,7 +4001,9 @@ const combinedData = useMemo(() => ({
   packiyoCredentials,
   // Amazon SP-API Integration credentials
   amazonCredentials,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, adsIntelData, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials]);
+  // QuickBooks Online Integration credentials
+  qboCredentials,
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, adsIntelData, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials, qboCredentials]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -4143,6 +4145,12 @@ const loadFromLocal = useCallback(() => {
   try {
     const r = lsGet('ecommerce_amazon_creds_v1');
     if (r) setAmazonCredentials(JSON.parse(r));
+  } catch {}
+  
+  // Load QBO credentials from localStorage
+  try {
+    const r = lsGet('ecommerce_qbo_creds_v1');
+    if (r) setQboCredentials(JSON.parse(r));
   } catch {}
 }, []);
 
@@ -4365,7 +4373,7 @@ useEffect(() => {
   if (!session?.user?.id || !supabase) return;
   if (isLoadingDataRef.current) return; // Don't sync during initial load
   queueCloudSave(combinedData);
-}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials]);
+}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials, qboCredentials]);
 
 // Persist Shopify credentials to localStorage for offline backup
 useEffect(() => {
@@ -4393,6 +4401,15 @@ useEffect(() => {
     } catch {}
   }
 }, [amazonCredentials]);
+
+// Persist QBO credentials to localStorage for offline backup
+useEffect(() => {
+  if (qboCredentials.accessToken || qboCredentials.connected || qboCredentials.clientId) {
+    try {
+      lsSet('ecommerce_qbo_creds_v1', JSON.stringify(qboCredentials));
+    } catch {}
+  }
+}, [qboCredentials]);
 
 const loadFromCloud = useCallback(async (storeId = null) => {
   if (!supabase || !session?.user?.id) return { ok: false, reason: 'no_session', stores: [] };
@@ -4510,6 +4527,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.shopifyCredentials) setShopifyCredentials(cloud.shopifyCredentials);
     if (cloud.packiyoCredentials) setPackiyoCredentials(cloud.packiyoCredentials);
     if (cloud.amazonCredentials) setAmazonCredentials(cloud.amazonCredentials);
+    if (cloud.qboCredentials) setQboCredentials(cloud.qboCredentials);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -4548,6 +4566,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.shopifyCredentials) writeToLocal('ecommerce_shopify_creds_v1', JSON.stringify(cloud.shopifyCredentials));
     if (cloud.packiyoCredentials) writeToLocal('ecommerce_packiyo_creds_v1', JSON.stringify(cloud.packiyoCredentials));
     if (cloud.amazonCredentials) writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify(cloud.amazonCredentials));
+    if (cloud.qboCredentials) writeToLocal('ecommerce_qbo_creds_v1', JSON.stringify(cloud.qboCredentials));
 
     setCloudStatus('');
     return { ok: true, reason: 'success', stores: loadedStores };
