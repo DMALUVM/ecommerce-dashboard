@@ -15650,6 +15650,20 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               {authMode === 'sign_up' ? 'Have an account? Sign in' : 'New here? Create an account'}
             </button>
           </form>
+          
+          {/* Legal Links */}
+          <div className="mt-6 pt-4 border-t border-slate-800 text-center">
+            <p className="text-xs text-slate-500">
+              By signing in, you agree to our{' '}
+              <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-violet-400 hover:text-violet-300">
+                Terms of Service
+              </a>
+              {' '}and{' '}
+              <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-violet-400 hover:text-violet-300">
+                Privacy Policy
+              </a>
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -38739,6 +38753,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               <span>{Object.keys(allPeriodsData).length} periods saved</span>
               <span>•</span>
               <span>{Object.keys(savedCogs).length} SKUs configured</span>
+            </div>
+            {/* Legal Links */}
+            <div className="flex justify-center gap-4 mt-4 pt-4 border-t border-slate-700/50">
+              <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-xs text-slate-500 hover:text-violet-400 transition-colors">
+                Terms of Service
+              </a>
+              <span className="text-slate-600">•</span>
+              <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-xs text-slate-500 hover:text-violet-400 transition-colors">
+                Privacy Policy
+              </a>
             </div>
           </div>
           
