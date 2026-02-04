@@ -1753,6 +1753,15 @@ const handleLogout = async () => {
   const [skuSettingsEditItem, setSkuSettingsEditItem] = useState(null);
   const [skuSettingsEditForm, setSkuSettingsEditForm] = useState({});
   
+  // SKU Performance table sorting
+  const [skuSortColumn, setSkuSortColumn] = useState('revenue'); // revenue, profit, units, margin
+  const [skuSortDirection, setSkuSortDirection] = useState('desc');
+  const [skuSearchQuery, setSkuSearchQuery] = useState('');
+  
+  // Profitability table sorting
+  const [profitSortColumn, setProfitSortColumn] = useState('profit');
+  const [profitSortDirection, setProfitSortDirection] = useState('desc');
+  
   // Save lead time settings
   useEffect(() => {
     localStorage.setItem('ecommerce_lead_times_v1', JSON.stringify(leadTimeSettings));
@@ -1867,6 +1876,46 @@ const handleLogout = async () => {
   const [dataValidationWarnings, setDataValidationWarnings] = useState([]);
   const [showValidationModal, setShowValidationModal] = useState(false);
   const [pendingProcessAction, setPendingProcessAction] = useState(null);
+  
+  // Confirmation dialog for destructive actions
+  const [confirmDialog, setConfirmDialog] = useState({ show: false, title: '', message: '', onConfirm: null, destructive: false });
+  
+  const showConfirm = useCallback((title, message, onConfirm, destructive = true) => {
+    setConfirmDialog({ show: true, title, message, onConfirm, destructive });
+  }, []);
+  
+  const ConfirmDialog = () => {
+    if (!confirmDialog.show) return null;
+    return (
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => setConfirmDialog(d => ({ ...d, show: false }))}>
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full shadow-2xl" onClick={e => e.stopPropagation()}>
+          <div className="flex items-start gap-4 mb-4">
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${confirmDialog.destructive ? 'bg-rose-500/20' : 'bg-amber-500/20'}`}>
+              <AlertTriangle className={`w-6 h-6 ${confirmDialog.destructive ? 'text-rose-400' : 'text-amber-400'}`} />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-white mb-1">{confirmDialog.title}</h3>
+              <p className="text-slate-400 text-sm">{confirmDialog.message}</p>
+            </div>
+          </div>
+          <div className="flex gap-3 justify-end">
+            <button 
+              onClick={() => setConfirmDialog(d => ({ ...d, show: false }))}
+              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-medium transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              onClick={() => { confirmDialog.onConfirm?.(); setConfirmDialog(d => ({ ...d, show: false })); }}
+              className={`px-4 py-2 rounded-xl font-medium transition-colors ${confirmDialog.destructive ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-amber-600 hover:bg-amber-500 text-white'}`}
+            >
+              {confirmDialog.destructive ? 'Delete' : 'Confirm'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
   
   // Amazon Forecasts (from Amazon's SKU Economics forecast reports)
   const [amazonForecasts, setAmazonForecasts] = useState(() => {
@@ -4344,8 +4393,8 @@ const savePeriods = async (d) => {
   const reprocessWeek = useCallback((weekKey) => {
     try {
     const cogsLookup = { ...savedCogs };
-    if (!reprocessFiles.amazon || !reprocessFiles.shopify) { alert('Upload Amazon & Shopify files'); return; }
-    if (Object.keys(cogsLookup).length === 0) { alert('Set up COGS first'); return; }
+    if (!reprocessFiles.amazon || !reprocessFiles.shopify) { setToast({ message: 'Upload Amazon & Shopify files first', type: 'error' }); return; }
+    if (Object.keys(cogsLookup).length === 0) { setToast({ message: 'Set up COGS first via Store → COGS', type: 'error' }); return; }
 
     let amzRev = 0, amzUnits = 0, amzRet = 0, amzProfit = 0, amzCogs = 0, amzFees = 0, amzAds = 0;
     const amazonSkuData = {};
@@ -4463,7 +4512,7 @@ const savePeriods = async (d) => {
     setReprocessAdSpend({ meta: '', google: '' });
     } catch (err) {
       console.error('Reprocess error:', err);
-      alert('Error reprocessing: ' + err.message);
+      setToast({ message: 'Error reprocessing: ' + err.message, type: 'error' });
     }
   }, [reprocessFiles, reprocessAdSpend, allWeeksData, savedCogs]);
 
@@ -4720,8 +4769,8 @@ const savePeriods = async (d) => {
   // Validation Modal Component (defined inline for access to state)
   const processSales = useCallback(() => {
     const cogsLookup = getCogsLookup();
-    if (!weekEnding) { alert('Please select a week ending date'); return; }
-    if (!files.amazon && !files.shopify) { alert('Please upload at least one data file (Amazon or Shopify)'); return; }
+    if (!weekEnding) { setToast({ message: 'Please select a week ending date', type: 'error' }); return; }
+    if (!files.amazon && !files.shopify) { setToast({ message: 'Upload at least one data file (Amazon or Shopify)', type: 'error' }); return; }
     
     // COGS is optional - just warn but proceed
     const noCogs = Object.keys(cogsLookup).length === 0;
@@ -4854,8 +4903,8 @@ const savePeriods = async (d) => {
 
   // Process daily upload
   const processDailyUpload = useCallback(async () => {
-    if (!selectedDay) { alert('Please select a date'); return; }
-    if (!dailyFiles.amazon && !dailyFiles.shopify) { alert('Upload at least one data file'); return; }
+    if (!selectedDay) { setToast({ message: 'Please select a date', type: 'error' }); return; }
+    if (!dailyFiles.amazon && !dailyFiles.shopify) { setToast({ message: 'Upload at least one data file', type: 'error' }); return; }
     
     const cogsLookup = getCogsLookup();
     setIsProcessing(true);
@@ -5550,8 +5599,8 @@ const savePeriods = async (d) => {
 
   const processBulkImport = useCallback(() => {
     const cogsLookup = getCogsLookup();
-    if (!files.amazon || !files.shopify) { alert('Upload Amazon & Shopify files'); return; }
-    if (Object.keys(cogsLookup).length === 0) { alert('Set up COGS first'); return; }
+    if (!files.amazon || !files.shopify) { setToast({ message: 'Upload Amazon & Shopify files', type: 'error' }); return; }
+    if (Object.keys(cogsLookup).length === 0) { setToast({ message: 'Set up COGS first via Store → COGS', type: 'error' }); return; }
     setIsProcessing(true); setBulkImportResult(null);
 
     const amazonByWeek = {};
@@ -5653,10 +5702,10 @@ const savePeriods = async (d) => {
   }, [files, allWeeksData, getCogsLookup]);
 
   const processCustomPeriod = useCallback(() => {
-    if (!customStartDate || !customEndDate) { alert('Select dates'); return; }
+    if (!customStartDate || !customEndDate) { setToast({ message: 'Select start and end dates', type: 'error' }); return; }
     const start = new Date(customStartDate + 'T00:00:00'), end = new Date(customEndDate + 'T00:00:00');
     const weeksInRange = Object.entries(allWeeksData).filter(([w]) => { const d = new Date(w + 'T00:00:00'); return d >= start && d <= end; });
-    if (!weeksInRange.length) { alert('No data in range'); return; }
+    if (!weeksInRange.length) { setToast({ message: 'No data found in selected date range', type: 'error' }); return; }
 
     const agg = { startDate: customStartDate, endDate: customEndDate, weeksIncluded: weeksInRange.length,
       amazon: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 }, shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
@@ -5683,8 +5732,8 @@ const savePeriods = async (d) => {
   // Process a period (month/year) without weekly breakdown
   const processPeriod = useCallback(() => {
     const cogsLookup = { ...savedCogs };
-    if (!periodFiles.amazon || !periodFiles.shopify || !periodLabel.trim()) { alert('Upload Amazon & Shopify files and enter a label (e.g., "January 2025")'); return; }
-    if (Object.keys(cogsLookup).length === 0) { alert('Set up COGS first via the COGS button'); return; }
+    if (!periodFiles.amazon || !periodFiles.shopify || !periodLabel.trim()) { setToast({ message: 'Upload Amazon & Shopify files and enter a label (e.g., "January 2025")', type: 'error' }); return; }
+    if (Object.keys(cogsLookup).length === 0) { setToast({ message: 'Set up COGS first via Store → COGS', type: 'error' }); return; }
     
     // Validate data before processing
     const amazonValidation = validateUploadData('amazon', periodFiles.amazon);
@@ -5872,7 +5921,7 @@ const savePeriods = async (d) => {
     const hasAmazonApi = amazonCredentials.connected && amazonCredentials.refreshToken;
     
     if (!hasAmazonFile && !hasAmazonApi) { 
-      alert('Upload Amazon FBA file or connect Amazon SP-API, and select a date'); 
+      setToast({ message: 'Upload Amazon FBA file or connect Amazon SP-API', type: 'error' }); 
       return; 
     }
     
@@ -5883,7 +5932,7 @@ const savePeriods = async (d) => {
       setInvSnapshotDate(snapshotDate);
     }
     if (!snapshotDate) {
-      alert('Please select a snapshot date');
+      setToast({ message: 'Please select a snapshot date', type: 'error' });
       return;
     }
     setIsProcessing(true);
@@ -18136,7 +18185,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               
               {!hasCogs && <div className="bg-amber-900/30 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" /><div><p className="text-amber-300 font-medium">COGS not set up</p><p className="text-amber-200/70 text-sm">Upload a COGS file or configure in settings for profit tracking</p></div></div>}
               
-              <button onClick={processPeriod} disabled={isProcessing || !periodFiles.amazon || !periodFiles.shopify || !periodLabel.trim() || !hasCogs} className="w-full bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Save Period Data'}</button>
+              <button onClick={processPeriod} disabled={isProcessing || !periodFiles.amazon || !periodFiles.shopify || !periodLabel.trim() || !hasCogs} className="w-full bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl flex items-center justify-center gap-2">{isProcessing ? <><Loader2 className="w-5 h-5 animate-spin" />Processing...</> : 'Save Period Data'}</button>
             </div>
           )}
           
@@ -18725,8 +18774,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     <FileBox type="threepl" label="3PL Inventory" desc="Products export (if Packiyo not connected)" isInv />
                   </div>
                   
-                  <button onClick={processInventory} disabled={isProcessing || (!invFiles.amazon && !amazonCredentials.connected) || !invSnapshotDate} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-3 rounded-xl">
-                    {isProcessing ? 'Processing...' : 'Process Inventory Files'}
+                  <button onClick={processInventory} disabled={isProcessing || (!invFiles.amazon && !amazonCredentials.connected) || !invSnapshotDate} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2">
+                    {isProcessing ? <><Loader2 className="w-5 h-5 animate-spin" />Processing...</> : 'Process Inventory Files'}
                   </button>
                 </div>
               </details>
@@ -20562,7 +20611,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           </div>
           {!hasCogs && <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6"><p className="text-amber-400 font-semibold">COGS Required</p><p className="text-slate-300 text-sm">Click "COGS" button above first.</p></div>}
           {bulkImportResult && <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-2xl p-5 mb-6"><h3 className="text-emerald-400 font-semibold mb-2">Import Complete!</h3><p className="text-slate-300">Created <span className="text-white font-bold">{bulkImportResult.weeksCreated}</span> weeks</p><p className="text-slate-400 text-sm">{bulkImportResult.dateRange}</p></div>}
-          <button onClick={processBulkImport} disabled={isProcessing || !files.amazon || !files.shopify || !hasCogs} className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl">{isProcessing ? 'Processing...' : 'Import & Split'}</button>
+          <button onClick={processBulkImport} disabled={isProcessing || !files.amazon || !files.shopify || !hasCogs} className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl flex items-center justify-center gap-2">{isProcessing ? <><Loader2 className="w-5 h-5 animate-spin" />Processing...</> : 'Import & Split'}</button>
         </div>
       </div>
     );
@@ -20978,9 +21027,15 @@ if (shopifySkuWithShipping.length > 0) {
           <div className="max-w-7xl mx-auto">
             <Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} />
             <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
-            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mt-6">
-              <h2 className="text-xl font-bold mb-2">Weekly View</h2>
-              <p className="text-slate-400">No data found for this week yet. Upload daily Amazon/Shopify files or run a sync, and this week will populate automatically.</p>
+            <div className="bg-gradient-to-br from-slate-800/50 to-slate-900/50 rounded-2xl border border-slate-700 p-8 mt-6 text-center">
+              <div className="w-16 h-16 rounded-2xl bg-slate-700/50 flex items-center justify-center mx-auto mb-4">
+                <Calendar className="w-8 h-8 text-slate-500" />
+              </div>
+              <h2 className="text-xl font-bold text-white mb-2">No Data for This Week</h2>
+              <p className="text-slate-400 mb-6 max-w-md mx-auto">Upload daily Amazon/Shopify files or run a sync, and this week will populate automatically.</p>
+              <button onClick={() => { setView('upload'); setUploadTab('amazon-bulk'); }} className="px-6 py-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-medium inline-flex items-center gap-2">
+                <Upload className="w-5 h-5" />Upload Sales Data
+              </button>
             </div>
           </div>
         </div>
@@ -26809,9 +26864,46 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       return hasStock && noRecentSales;
     }).slice(0, 10) : [];
     
-    const SkuTable = ({ data, title, icon, color, showProfit = false, showGrowth = false, showProfitPerUnit = false }) => (
+    // Sortable header component
+    const SortableHeader = ({ column, label, align = 'left', sortCol, sortDir, onSort }) => (
+      <th 
+        className={`text-${align} text-slate-400 font-medium py-2 cursor-pointer hover:text-white transition-colors select-none`}
+        onClick={() => onSort(column)}
+      >
+        <span className="inline-flex items-center gap-1">
+          {label}
+          {sortCol === column && (
+            <span className="text-cyan-400">{sortDir === 'desc' ? '↓' : '↑'}</span>
+          )}
+        </span>
+      </th>
+    );
+    
+    const SkuTable = ({ data, title, icon, color, showProfit = false, showGrowth = false, showProfitPerUnit = false, sortable = false }) => {
+      // For sortable tables, use state-driven sorting
+      const sortedData = sortable && skuSortColumn ? [...data].sort((a, b) => {
+        const aVal = a[skuSortColumn] ?? 0;
+        const bVal = b[skuSortColumn] ?? 0;
+        return skuSortDirection === 'desc' ? bVal - aVal : aVal - bVal;
+      }) : data;
+      
+      const handleSort = (col) => {
+        if (skuSortColumn === col) {
+          setSkuSortDirection(d => d === 'desc' ? 'asc' : 'desc');
+        } else {
+          setSkuSortColumn(col);
+          setSkuSortDirection('desc');
+        }
+      };
+      
+      return (
       <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-        <h3 className={`text-lg font-semibold ${color} mb-4 flex items-center gap-2`}>{icon}{title}</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className={`text-lg font-semibold ${color} flex items-center gap-2`}>{icon}{title}</h3>
+          {sortable && (
+            <span className="text-xs text-slate-500">Click headers to sort</span>
+          )}
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -26819,34 +26911,47 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 <th className="text-left text-slate-400 font-medium py-2">#</th>
                 <th className="text-left text-slate-400 font-medium py-2">Product</th>
                 <th className="text-left text-slate-400 font-medium py-2">Channel</th>
-                <th className="text-right text-slate-400 font-medium py-2">Revenue</th>
-                <th className="text-right text-slate-400 font-medium py-2">Units</th>
-                {showProfit && <th className="text-right text-slate-400 font-medium py-2">Profit</th>}
-                {showProfitPerUnit && <th className="text-right text-slate-400 font-medium py-2">$/Unit</th>}
-                {showProfitPerUnit && <th className="text-right text-slate-400 font-medium py-2">Margin</th>}
-                {showGrowth && <th className="text-right text-slate-400 font-medium py-2">Growth</th>}
+                {sortable ? (
+                  <>
+                    <SortableHeader column="revenue" label="Revenue" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />
+                    <SortableHeader column="units" label="Units" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />
+                    {showProfit && <SortableHeader column="profit" label="Profit" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />}
+                    {showProfitPerUnit && <SortableHeader column="profitPerUnit" label="$/Unit" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />}
+                    {showProfitPerUnit && <SortableHeader column="margin" label="Margin" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />}
+                    {showGrowth && <SortableHeader column="growth" label="Growth" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />}
+                  </>
+                ) : (
+                  <>
+                    <th className="text-right text-slate-400 font-medium py-2">Revenue</th>
+                    <th className="text-right text-slate-400 font-medium py-2">Units</th>
+                    {showProfit && <th className="text-right text-slate-400 font-medium py-2">Profit</th>}
+                    {showProfitPerUnit && <th className="text-right text-slate-400 font-medium py-2">$/Unit</th>}
+                    {showProfitPerUnit && <th className="text-right text-slate-400 font-medium py-2">Margin</th>}
+                    {showGrowth && <th className="text-right text-slate-400 font-medium py-2">Growth</th>}
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
-              {data.map((s, i) => (
-                <tr key={s.sku + s.channel + i} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                  <td className="py-2 text-slate-500">{i + 1}</td>
-                  <td className="py-2"><div className="max-w-[200px] truncate text-white" title={savedProductNames[s.sku] || s.name || s.sku}>{savedProductNames[s.sku] || s.name || s.sku}</div></td>
-                  <td className="py-2"><span className={`text-xs px-2 py-0.5 rounded ${s.channel === 'Amazon' ? 'bg-orange-500/20 text-orange-400' : s.channel === 'Amazon + Shopify' ? 'bg-purple-500/20 text-purple-400' : 'bg-green-500/20 text-green-400'}`}>{s.channel}</span></td>
-                  <td className="py-2 text-right text-white">{formatCurrency(s.revenue)}</td>
-                  <td className="py-2 text-right text-white">{formatNumber(s.units)}</td>
-                  {showProfit && <td className={`py-2 text-right ${s.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profit)}</td>}
-                  {showProfitPerUnit && <td className={`py-2 text-right ${s.profitPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profitPerUnit)}</td>}
-                  {showProfitPerUnit && <td className={`py-2 text-right ${s.margin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.margin.toFixed(1)}%</td>}
-                  {showGrowth && <td className={`py-2 text-right ${s.growth >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.growth > 0 ? '+' : ''}{s.growth.toFixed(0)}%</td>}
+              {sortedData.map((s, i) => (
+                <tr key={s.sku + s.channel + i} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors">
+                  <td className="py-2.5 text-slate-500">{i + 1}</td>
+                  <td className="py-2.5"><div className="max-w-[200px] truncate text-white font-medium" title={savedProductNames[s.sku] || s.name || s.sku}>{savedProductNames[s.sku] || s.name || s.sku}</div></td>
+                  <td className="py-2.5"><span className={`text-xs px-2 py-0.5 rounded ${s.channel === 'Amazon' ? 'bg-orange-500/20 text-orange-400' : s.channel === 'Amazon + Shopify' ? 'bg-purple-500/20 text-purple-400' : 'bg-green-500/20 text-green-400'}`}>{s.channel}</span></td>
+                  <td className="py-2.5 text-right text-white font-medium">{formatCurrency(s.revenue)}</td>
+                  <td className="py-2.5 text-right text-white">{formatNumber(s.units)}</td>
+                  {showProfit && <td className={`py-2.5 text-right font-medium ${s.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profit)}</td>}
+                  {showProfitPerUnit && <td className={`py-2.5 text-right ${s.profitPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profitPerUnit)}</td>}
+                  {showProfitPerUnit && <td className={`py-2.5 text-right ${s.margin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.margin.toFixed(1)}%</td>}
+                  {showGrowth && <td className={`py-2.5 text-right font-medium ${s.growth >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.growth > 0 ? '+' : ''}{s.growth.toFixed(0)}%</td>}
                 </tr>
               ))}
-              {data.length === 0 && <tr><td colSpan={showProfit ? 6 : showProfitPerUnit ? 8 : showGrowth ? 6 : 5} className="py-4 text-center text-slate-500">No data available</td></tr>}
+              {sortedData.length === 0 && <tr><td colSpan={showProfit ? 6 : showProfitPerUnit ? 8 : showGrowth ? 6 : 5} className="py-8 text-center text-slate-500">No data available</td></tr>}
             </tbody>
           </table>
         </div>
       </div>
-    );
+    );};
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
@@ -26991,6 +27096,100 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             <SkuTable data={risingStars} title="Rising Stars (4wk growth)" icon={<Flame className="w-5 h-5" />} color="text-orange-400" showGrowth showProfitPerUnit />
             <SkuTable data={declining} title="Watch List (Declining)" icon={<TrendingDown className="w-5 h-5" />} color="text-rose-400" showGrowth showProfitPerUnit />
+          </div>
+          
+          {/* All Products - Searchable & Sortable */}
+          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-4">
+              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                <Database className="w-5 h-5 text-cyan-400" />
+                All Products ({allSkus.length})
+              </h3>
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Search SKU or name..."
+                    value={skuSearchQuery}
+                    onChange={(e) => setSkuSearchQuery(e.target.value)}
+                    className="w-64 bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 pl-10 text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+                  />
+                  <Eye className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                </div>
+                <span className="text-xs text-slate-500">Click headers to sort</span>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700">
+                    <th className="text-left text-slate-400 font-medium py-2 px-2">#</th>
+                    <th className="text-left text-slate-400 font-medium py-2 px-2">Product</th>
+                    <th className="text-left text-slate-400 font-medium py-2 px-2">Channel</th>
+                    <th 
+                      className="text-right text-slate-400 font-medium py-2 px-2 cursor-pointer hover:text-white transition-colors select-none"
+                      onClick={() => { setSkuSortColumn('revenue'); setSkuSortDirection(d => skuSortColumn === 'revenue' ? (d === 'desc' ? 'asc' : 'desc') : 'desc'); }}
+                    >
+                      Revenue {skuSortColumn === 'revenue' && <span className="text-cyan-400">{skuSortDirection === 'desc' ? '↓' : '↑'}</span>}
+                    </th>
+                    <th 
+                      className="text-right text-slate-400 font-medium py-2 px-2 cursor-pointer hover:text-white transition-colors select-none"
+                      onClick={() => { setSkuSortColumn('units'); setSkuSortDirection(d => skuSortColumn === 'units' ? (d === 'desc' ? 'asc' : 'desc') : 'desc'); }}
+                    >
+                      Units {skuSortColumn === 'units' && <span className="text-cyan-400">{skuSortDirection === 'desc' ? '↓' : '↑'}</span>}
+                    </th>
+                    <th 
+                      className="text-right text-slate-400 font-medium py-2 px-2 cursor-pointer hover:text-white transition-colors select-none"
+                      onClick={() => { setSkuSortColumn('profit'); setSkuSortDirection(d => skuSortColumn === 'profit' ? (d === 'desc' ? 'asc' : 'desc') : 'desc'); }}
+                    >
+                      Profit {skuSortColumn === 'profit' && <span className="text-cyan-400">{skuSortDirection === 'desc' ? '↓' : '↑'}</span>}
+                    </th>
+                    <th 
+                      className="text-right text-slate-400 font-medium py-2 px-2 cursor-pointer hover:text-white transition-colors select-none"
+                      onClick={() => { setSkuSortColumn('margin'); setSkuSortDirection(d => skuSortColumn === 'margin' ? (d === 'desc' ? 'asc' : 'desc') : 'desc'); }}
+                    >
+                      Margin {skuSortColumn === 'margin' && <span className="text-cyan-400">{skuSortDirection === 'desc' ? '↓' : '↑'}</span>}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...allSkus]
+                    .filter(s => !skuSearchQuery || 
+                      s.sku.toLowerCase().includes(skuSearchQuery.toLowerCase()) || 
+                      (savedProductNames[s.sku] || s.name || '').toLowerCase().includes(skuSearchQuery.toLowerCase())
+                    )
+                    .sort((a, b) => {
+                      const aVal = a[skuSortColumn] ?? 0;
+                      const bVal = b[skuSortColumn] ?? 0;
+                      return skuSortDirection === 'desc' ? bVal - aVal : aVal - bVal;
+                    })
+                    .slice(0, 50)
+                    .map((s, i) => (
+                    <tr key={s.sku + i} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors">
+                      <td className="py-2.5 px-2 text-slate-500">{i + 1}</td>
+                      <td className="py-2.5 px-2">
+                        <div className="max-w-[250px]">
+                          <p className="text-white font-medium truncate">{savedProductNames[s.sku] || s.name || s.sku}</p>
+                          <p className="text-slate-500 text-xs truncate">{s.sku}</p>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-2">
+                        <span className={`text-xs px-2 py-0.5 rounded ${s.channel === 'Amazon' ? 'bg-orange-500/20 text-orange-400' : s.channel === 'Amazon + Shopify' ? 'bg-purple-500/20 text-purple-400' : 'bg-green-500/20 text-green-400'}`}>
+                          {s.channel}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-2 text-right text-white font-medium">{formatCurrency(s.revenue)}</td>
+                      <td className="py-2.5 px-2 text-right text-white">{formatNumber(s.units)}</td>
+                      <td className={`py-2.5 px-2 text-right font-medium ${s.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profit)}</td>
+                      <td className={`py-2.5 px-2 text-right ${s.margin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.margin.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {allSkus.filter(s => !skuSearchQuery || s.sku.toLowerCase().includes(skuSearchQuery.toLowerCase()) || (savedProductNames[s.sku] || s.name || '').toLowerCase().includes(skuSearchQuery.toLowerCase())).length > 50 && (
+                <p className="text-center text-slate-500 text-sm mt-4">Showing first 50 results. Use search to find specific products.</p>
+              )}
+            </div>
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -28194,14 +28393,33 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     const weeklyBreakdown = [];
     
-    // Calculate percentages
-    const pcts = {
-      cogs: totals.revenue > 0 ? (totals.cogs / totals.revenue) * 100 : 0,
-      amazonFees: totals.revenue > 0 ? (totals.amazonFees / totals.revenue) * 100 : 0,
-      threeplCosts: totals.revenue > 0 ? (totals.threeplCosts / totals.revenue) * 100 : 0,
-      adSpend: totals.revenue > 0 ? (totals.adSpend / totals.revenue) * 100 : 0,
-      profit: totals.revenue > 0 ? (totals.profit / totals.revenue) * 100 : 0,
+    // Calculate percentages with safeguards
+    // Cap percentages to reasonable values and handle bad data
+    const safePercent = (value, total) => {
+      if (total <= 0 || isNaN(value) || !isFinite(value)) return 0;
+      const pct = (value / total) * 100;
+      // Cap at 100% - any higher indicates bad data
+      return Math.min(Math.max(pct, 0), 100);
     };
+    
+    const pcts = {
+      cogs: safePercent(totals.cogs, totals.revenue),
+      amazonFees: safePercent(totals.amazonFees, totals.revenue),
+      threeplCosts: safePercent(totals.threeplCosts, totals.revenue),
+      adSpend: safePercent(totals.adSpend, totals.revenue),
+      profit: totals.revenue > 0 ? Math.max(Math.min((totals.profit / totals.revenue) * 100, 100), -100) : 0,
+    };
+    
+    // Validate: if costs exceed revenue significantly, recalculate profit from other values
+    const totalCostPct = pcts.cogs + pcts.amazonFees + pcts.threeplCosts + pcts.adSpend;
+    if (totalCostPct > 100) {
+      // Normalize costs to fit within 100% minus profit
+      const scaleFactor = (100 - Math.abs(pcts.profit)) / totalCostPct;
+      pcts.cogs *= scaleFactor;
+      pcts.amazonFees *= scaleFactor;
+      pcts.threeplCosts *= scaleFactor;
+      pcts.adSpend *= scaleFactor;
+    }
     
     // Prior period percentages
     const priorPcts = {
@@ -28508,7 +28726,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             <div className="mt-4 pt-4 border-t border-slate-700 flex items-center justify-between">
               <p className="text-slate-400 text-sm">For every <span className="text-white font-semibold">$1,000</span> in revenue:</p>
               <p className="text-lg font-bold">
-                You keep <span className={pcts.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{formatCurrency(pcts.profit * 10)}</span>
+                {pcts.profit >= 0 
+                  ? <span>You keep <span className="text-emerald-400">{formatCurrency(pcts.profit * 10)}</span></span>
+                  : <span>You lose <span className="text-rose-400">{formatCurrency(Math.abs(pcts.profit * 10))}</span></span>
+                }
               </p>
             </div>
           </div>
@@ -28761,39 +28982,95 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             </div>
           )}
           
-          {/* Break-even Analysis */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-            <h3 className="text-lg font-semibold text-white mb-4">Break-Even Analysis</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <p className="text-slate-400 text-sm mb-2">Your average costs are <span className="text-white font-semibold">{(100 - pcts.profit).toFixed(1)}%</span> of revenue</p>
-                <p className="text-slate-400 text-sm mb-2">For every <span className="text-white font-semibold">$1,000</span> in revenue, you keep <span className={`font-semibold ${pcts.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(pcts.profit * 10)}</span></p>
-                <p className="text-slate-400 text-sm mb-4">Average Order Value: <span className="text-white font-semibold">{formatCurrency(avgOrderValue)}</span></p>
+          {/* Break-even Analysis - Redesigned */}
+          <div className="bg-gradient-to-br from-slate-800/80 to-slate-900/80 rounded-2xl border border-slate-700 p-6">
+            <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+              <Calculator className="w-5 h-5 text-violet-400" />
+              Break-Even Analysis
+            </h3>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Left side - Key metrics */}
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-slate-900/50 rounded-xl p-4">
+                    <p className="text-slate-500 text-xs uppercase mb-1">Cost Ratio</p>
+                    <p className="text-2xl font-bold text-white">{(100 - pcts.profit).toFixed(1)}%</p>
+                    <p className="text-slate-400 text-xs">of revenue</p>
+                  </div>
+                  <div className="bg-slate-900/50 rounded-xl p-4">
+                    <p className="text-slate-500 text-xs uppercase mb-1">Keep Per $1,000</p>
+                    <p className={`text-2xl font-bold ${pcts.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(Math.max(0, pcts.profit) * 10)}</p>
+                    <p className="text-slate-400 text-xs">net profit</p>
+                  </div>
+                </div>
                 
-                <div className="bg-slate-900/50 rounded-lg p-4">
-                  <p className="text-white font-semibold mb-2">🎯 To increase margin by 5%:</p>
-                  <ul className="text-slate-400 text-sm space-y-1">
-                    <li>• Reduce COGS by {formatCurrency(totals.revenue * 0.05)} (negotiate suppliers)</li>
-                    <li>• Cut ad spend by {((totals.adSpend * 0.05 / totals.revenue) * 100 / pcts.adSpend * 100).toFixed(0)}% (optimize targeting)</li>
-                    <li>• Increase prices by ~{(5 / (100 - pcts.profit) * 100).toFixed(1)}%</li>
+                <div className="bg-slate-900/50 rounded-xl p-4">
+                  <p className="text-slate-500 text-xs uppercase mb-1">Average Order Value</p>
+                  <p className="text-xl font-bold text-white">{formatCurrency(avgOrderValue)}</p>
+                </div>
+                
+                <div className="bg-violet-900/20 border border-violet-500/20 rounded-xl p-4">
+                  <p className="text-violet-300 font-semibold mb-3 flex items-center gap-2">
+                    <Target className="w-4 h-4" />
+                    To increase margin by 5%:
+                  </p>
+                  <ul className="text-slate-300 text-sm space-y-2">
+                    <li className="flex items-start gap-2">
+                      <span className="text-rose-400">•</span>
+                      <span>Reduce COGS by <span className="text-white font-medium">{formatCurrency(totals.revenue * 0.05)}</span> (negotiate suppliers)</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-purple-400">•</span>
+                      <span>Cut ad spend by <span className="text-white font-medium">{pcts.adSpend > 0 ? `${Math.round(5 / pcts.adSpend * 100)}%` : 'N/A'}</span> (optimize targeting)</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-amber-400">•</span>
+                      <span>Increase prices by <span className="text-white font-medium">~{(100 - pcts.profit) > 0 ? (5 / (100 - pcts.profit) * 100).toFixed(1) : '0'}%</span></span>
+                    </li>
                   </ul>
                 </div>
               </div>
-              <div className="bg-slate-900/50 rounded-lg p-4">
-                <p className="text-slate-500 text-xs uppercase mb-2">Revenue Breakdown</p>
-                <div className="h-6 bg-slate-700 rounded-full overflow-hidden flex mb-2">
-                  <div className="bg-rose-500 h-full" style={{ width: `${pcts.cogs}%` }} title={`COGS: ${pcts.cogs.toFixed(1)}%`} />
-                  <div className="bg-orange-500 h-full" style={{ width: `${pcts.amazonFees}%` }} title={`Fees: ${pcts.amazonFees.toFixed(1)}%`} />
-                  <div className="bg-blue-500 h-full" style={{ width: `${pcts.threeplCosts}%` }} title={`3PL: ${pcts.threeplCosts.toFixed(1)}%`} />
-                  <div className="bg-purple-500 h-full" style={{ width: `${pcts.adSpend}%` }} title={`Ads: ${pcts.adSpend.toFixed(1)}%`} />
-                  <div className={`${pcts.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-600'} h-full`} style={{ width: `${Math.abs(pcts.profit)}%` }} />
+              
+              {/* Right side - Visual breakdown */}
+              <div className="bg-slate-900/50 rounded-xl p-5">
+                <p className="text-slate-400 text-sm font-medium mb-4">Revenue Breakdown</p>
+                
+                {/* Stacked bar */}
+                <div className="h-8 bg-slate-700 rounded-lg overflow-hidden flex mb-4">
+                  {pcts.cogs > 0 && <div className="bg-rose-500 h-full transition-all" style={{ width: `${pcts.cogs}%` }} />}
+                  {pcts.amazonFees > 0 && <div className="bg-orange-500 h-full transition-all" style={{ width: `${pcts.amazonFees}%` }} />}
+                  {pcts.threeplCosts > 0 && <div className="bg-blue-500 h-full transition-all" style={{ width: `${pcts.threeplCosts}%` }} />}
+                  {pcts.adSpend > 0 && <div className="bg-purple-500 h-full transition-all" style={{ width: `${pcts.adSpend}%` }} />}
+                  {pcts.profit !== 0 && <div className={`${pcts.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-600'} h-full transition-all`} style={{ width: `${Math.abs(pcts.profit)}%` }} />}
                 </div>
-                <div className="flex flex-wrap gap-3 text-xs">
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-rose-500 rounded" />COGS {pcts.cogs.toFixed(0)}%</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-orange-500 rounded" />Fees {pcts.amazonFees.toFixed(0)}%</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-500 rounded" />3PL {pcts.threeplCosts.toFixed(0)}%</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-purple-500 rounded" />Ads {pcts.adSpend.toFixed(0)}%</span>
-                  <span className="flex items-center gap-1"><span className={`w-2 h-2 ${pcts.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-600'} rounded`} />Profit {pcts.profit.toFixed(0)}%</span>
+                
+                {/* Legend - Grid layout for better readability */}
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="w-3 h-3 bg-rose-500 rounded-sm flex-shrink-0" />
+                    <span className="text-slate-300">COGS</span>
+                    <span className="text-white font-medium ml-auto">{pcts.cogs.toFixed(1)}%</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-3 h-3 bg-orange-500 rounded-sm flex-shrink-0" />
+                    <span className="text-slate-300">Fees</span>
+                    <span className="text-white font-medium ml-auto">{pcts.amazonFees.toFixed(1)}%</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-3 h-3 bg-blue-500 rounded-sm flex-shrink-0" />
+                    <span className="text-slate-300">3PL</span>
+                    <span className="text-white font-medium ml-auto">{pcts.threeplCosts.toFixed(1)}%</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-3 h-3 bg-purple-500 rounded-sm flex-shrink-0" />
+                    <span className="text-slate-300">Ads</span>
+                    <span className="text-white font-medium ml-auto">{pcts.adSpend.toFixed(1)}%</span>
+                  </div>
+                  <div className="flex items-center gap-2 col-span-2 pt-2 border-t border-slate-700">
+                    <span className={`w-3 h-3 ${pcts.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-600'} rounded-sm flex-shrink-0`} />
+                    <span className="text-slate-300 font-medium">Net Profit</span>
+                    <span className={`font-bold ml-auto ${pcts.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{pcts.profit.toFixed(1)}%</span>
+                  </div>
                 </div>
               </div>
             </div>
