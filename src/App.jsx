@@ -16199,7 +16199,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     };
     
     // Data Health Check - detect discrepancies between stored weekly and derived daily data
-    const dataHealthCheck = useMemo(() => {
+    // (computed inline, not as a hook, since we're inside a conditional)
+    const dataHealthCheck = (() => {
       const issues = [];
       const derivedWeeks = deriveWeeksFromDays(allDaysData || {});
       
@@ -16243,7 +16244,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           ? 'Data is consistent' 
           : `${issues.length} week(s) have data discrepancies`
       };
-    }, [allWeeksData, allDaysData]);
+    })();
     
     // DraggableWidget - minimal wrapper that just adds drag/drop to any widget
     const DraggableWidget = ({ id, children, className = '', isStacked = false, stackId = null }) => {
