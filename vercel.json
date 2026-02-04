@@ -1,20 +1,17 @@
 {
-  "functions": {
-    "api/chat.js": {
-      "maxDuration": 120,
-      "memory": 1024
-    },
-    "api/shopify/sync.js": {
-      "maxDuration": 120,
-      "memory": 1024
-    },
-    "api/packiyo/sync.js": {
-      "maxDuration": 60,
-      "memory": 512
-    },
-    "api/amazon/sync.js": {
-      "maxDuration": 120,
-      "memory": 1024
+  "rewrites": [
+    { "source": "/terms", "destination": "/terms.html" },
+    { "source": "/privacy", "destination": "/privacy.html" },
+    { "source": "/api/:path*", "destination": "/api/:path*" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "X-XSS-Protection", "value": "1; mode=block" }
+      ]
     }
-  }
+  ]
 }

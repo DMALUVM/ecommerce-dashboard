@@ -1824,6 +1824,27 @@ const handleLogout = async () => {
     }
   }, [aiMessages]);
   
+  // Listen for QBO OAuth callback from popup window
+  useEffect(() => {
+    const handleQBOMessage = (event) => {
+      if (event.data?.type === 'QBO_AUTH_SUCCESS') {
+        console.log('QBO OAuth success received');
+        setQboCredentials(prev => ({
+          ...prev,
+          accessToken: event.data.accessToken,
+          refreshToken: event.data.refreshToken,
+          realmId: event.data.realmId || prev.realmId,
+          connected: true,
+          lastSync: null,
+        }));
+        setToast({ message: 'Connected to QuickBooks Online!', type: 'success' });
+      }
+    };
+    
+    window.addEventListener('message', handleQBOMessage);
+    return () => window.removeEventListener('message', handleQBOMessage);
+  }, []);
+  
   // 4. Browser Notifications
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   
@@ -37999,31 +38020,86 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 <button
                   onClick={async () => {
                     setToast({ message: 'Syncing from QuickBooks...', type: 'info' });
+                    
+                    let currentAccessToken = qboCredentials.accessToken;
+                    
                     try {
-                      const res = await fetch('/api/qbo/sync', {
+                      // First, try to sync with current token
+                      let res = await fetch('/api/qbo/sync', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                           realmId: qboCredentials.realmId,
-                          accessToken: qboCredentials.accessToken,
+                          accessToken: currentAccessToken,
                           refreshToken: qboCredentials.refreshToken,
                         }),
                       });
                       
+                      // If token expired, try to refresh
+                      if (res.status === 401) {
+                        setToast({ message: 'Token expired, refreshing...', type: 'info' });
+                        
+                        const refreshRes = await fetch('/api/qbo/refresh', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            refreshToken: qboCredentials.refreshToken,
+                          }),
+                        });
+                        
+                        if (refreshRes.ok) {
+                          const refreshData = await refreshRes.json();
+                          currentAccessToken = refreshData.accessToken;
+                          
+                          // Update stored tokens
+                          setQboCredentials(p => ({
+                            ...p,
+                            accessToken: refreshData.accessToken,
+                            refreshToken: refreshData.refreshToken || p.refreshToken,
+                          }));
+                          
+                          // Retry sync with new token
+                          res = await fetch('/api/qbo/sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              realmId: qboCredentials.realmId,
+                              accessToken: currentAccessToken,
+                              refreshToken: refreshData.refreshToken || qboCredentials.refreshToken,
+                            }),
+                          });
+                        } else {
+                          const refreshError = await refreshRes.json();
+                          if (refreshError.needsReauth) {
+                            setQboCredentials(p => ({ ...p, connected: false, accessToken: '', refreshToken: '' }));
+                            throw new Error('Session expired. Please reconnect to QuickBooks.');
+                          }
+                          throw new Error('Failed to refresh token');
+                        }
+                      }
+                      
                       if (res.ok) {
                         const data = await res.json();
-                        // Process transactions similar to QBO CSV upload
-                        if (data.transactions) {
-                          setBankingData(prev => ({
-                            ...prev,
-                            transactions: [...(prev?.transactions || []), ...data.transactions],
-                            lastUpdated: new Date().toISOString(),
-                          }));
+                        if (data.transactions && data.transactions.length > 0) {
+                          // Merge with existing transactions, avoiding duplicates by qboId
+                          setBankingData(prev => {
+                            const existingIds = new Set((prev?.transactions || []).map(t => t.qboId).filter(Boolean));
+                            const newTransactions = data.transactions.filter(t => !existingIds.has(t.qboId));
+                            return {
+                              ...prev,
+                              transactions: [...(prev?.transactions || []), ...newTransactions],
+                              lastUpdated: new Date().toISOString(),
+                              lastUpload: new Date().toISOString(),
+                            };
+                          });
                           setQboCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
                           setToast({ message: `Synced ${data.transactions.length} transactions from QuickBooks`, type: 'success' });
+                        } else {
+                          setToast({ message: 'No new transactions found', type: 'info' });
                         }
                       } else {
-                        throw new Error('Sync failed');
+                        const errorData = await res.json();
+                        throw new Error(errorData.error || 'Sync failed');
                       }
                     } catch (err) {
                       setToast({ message: 'QuickBooks sync failed: ' + err.message, type: 'error' });
