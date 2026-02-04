@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart, Sparkles, Keyboard } from 'lucide-react';
 // Extracted utilities (keep App.jsx lean)
 import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
@@ -1667,6 +1667,70 @@ const handleLogout = async () => {
   // Help modal
   const [showUploadHelp, setShowUploadHelp] = useState(false);
   
+  // ========== NEW MAJOR FEATURES ==========
+  
+  // 1. Onboarding Wizard for new users
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(0);
+  const [onboardingComplete, setOnboardingComplete] = useState(() => {
+    try { return safeLocalStorageGet('ecommerce_onboarding_complete_v1', false); } catch { return false; }
+  });
+  
+  // 2. PDF Report Export
+  const [showPdfExport, setShowPdfExport] = useState(false);
+  const [pdfExportConfig, setPdfExportConfig] = useState({
+    reportType: 'weekly', // weekly, monthly, custom
+    dateRange: { start: '', end: '' },
+    includeSections: {
+      summary: true,
+      revenue: true,
+      profitability: true,
+      skuBreakdown: true,
+      inventory: true,
+      ads: true,
+      trends: true,
+    },
+    branding: {
+      showLogo: true,
+      showStoreName: true,
+    }
+  });
+  const [pdfGenerating, setPdfGenerating] = useState(false);
+  
+  // 3. Industry Benchmarks
+  const [showBenchmarks, setShowBenchmarks] = useState(false);
+  const [benchmarkCategory, setBenchmarkCategory] = useState('beauty'); // beauty, supplements, home, electronics, apparel, general
+  const INDUSTRY_BENCHMARKS = {
+    beauty: { name: 'Beauty & Personal Care', avgMargin: 42, avgTacos: 18, avgAov: 38, avgReturnRate: 8 },
+    supplements: { name: 'Supplements & Health', avgMargin: 55, avgTacos: 22, avgAov: 45, avgReturnRate: 5 },
+    home: { name: 'Home & Kitchen', avgMargin: 35, avgTacos: 15, avgAov: 52, avgReturnRate: 12 },
+    electronics: { name: 'Electronics & Accessories', avgMargin: 28, avgTacos: 20, avgAov: 75, avgReturnRate: 15 },
+    apparel: { name: 'Apparel & Fashion', avgMargin: 48, avgTacos: 25, avgAov: 42, avgReturnRate: 22 },
+    general: { name: 'General Merchandise', avgMargin: 38, avgTacos: 18, avgAov: 35, avgReturnRate: 10 },
+  };
+  
+  // 4. Push Notifications for inventory/alerts
+  const [notificationSettings, setNotificationSettings] = useState(() => {
+    try { 
+      return safeLocalStorageGet('ecommerce_notifications_v1', {
+        enabled: false,
+        permission: 'default', // default, granted, denied
+        alerts: {
+          lowInventory: true,
+          criticalInventory: true,
+          overdueBills: true,
+          goalsMissed: true,
+          salesTaxDeadlines: true,
+          weeklyReport: false,
+        }
+      }); 
+    } catch { 
+      return { enabled: false, permission: 'default', alerts: { lowInventory: true, criticalInventory: true, overdueBills: true, goalsMissed: true, salesTaxDeadlines: true, weeklyReport: false } }; 
+    }
+  });
+  
+  // ========== END NEW MAJOR FEATURES ==========
+  
   // NEW FEATURES STATE
   // 1. Dashboard Widget Customization (DEFAULT_DASHBOARD_WIDGETS defined at module level)
   const [widgetConfig, setWidgetConfig] = useState(() => {
@@ -1845,6 +1909,32 @@ const handleLogout = async () => {
     return () => window.removeEventListener('message', handleQBOMessage);
   }, []);
   
+  // Persist onboarding completion
+  useEffect(() => {
+    if (onboardingComplete) {
+      localStorage.setItem('ecommerce_onboarding_complete_v1', JSON.stringify(true));
+    }
+  }, [onboardingComplete]);
+  
+  // Persist notification settings
+  useEffect(() => {
+    localStorage.setItem('ecommerce_notifications_v1', JSON.stringify(notificationSettings));
+  }, [notificationSettings]);
+  
+  // Check if new user needs onboarding (no data and not completed)
+  useEffect(() => {
+    const hasAnyData = Object.keys(allWeeksData).length > 0 || 
+                       Object.keys(allDaysData).length > 0 || 
+                       Object.keys(allPeriodsData).length > 0;
+    
+    // Show onboarding for new users who haven't completed it
+    if (!hasAnyData && !onboardingComplete && session) {
+      // Small delay to let the app fully load
+      const timer = setTimeout(() => setShowOnboarding(true), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [allWeeksData, allDaysData, allPeriodsData, onboardingComplete, session]);
+  
   // 4. Browser Notifications
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   
@@ -1957,6 +2047,741 @@ const handleLogout = async () => {
               {confirmDialog.destructive && <Trash2 className="w-4 h-4" />}
               {confirmDialog.confirmText || (confirmDialog.destructive ? 'Delete' : 'Confirm')}
             </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  
+  // ========== ONBOARDING WIZARD ==========
+  const OnboardingWizard = () => {
+    if (!showOnboarding) return null;
+    
+    const steps = [
+      { id: 'welcome', title: 'Welcome!', icon: Sparkles },
+      { id: 'store', title: 'Your Store', icon: Store },
+      { id: 'data', title: 'Upload Data', icon: Upload },
+      { id: 'cogs', title: 'Product Costs', icon: DollarSign },
+      { id: 'goals', title: 'Set Goals', icon: Target },
+      { id: 'complete', title: 'All Set!', icon: Check },
+    ];
+    
+    const currentStep = steps[onboardingStep];
+    const progress = ((onboardingStep + 1) / steps.length) * 100;
+    
+    const nextStep = () => {
+      if (onboardingStep < steps.length - 1) {
+        setOnboardingStep(s => s + 1);
+      } else {
+        // Complete onboarding
+        setOnboardingComplete(true);
+        setShowOnboarding(false);
+        setOnboardingStep(0);
+        setToast({ message: '🎉 Setup complete! Welcome to your dashboard.', type: 'success' });
+      }
+    };
+    
+    const prevStep = () => {
+      if (onboardingStep > 0) setOnboardingStep(s => s - 1);
+    };
+    
+    const skipOnboarding = () => {
+      setOnboardingComplete(true);
+      setShowOnboarding(false);
+      setOnboardingStep(0);
+    };
+    
+    return (
+      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+        <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-3xl border border-slate-700 w-full max-w-2xl shadow-2xl overflow-hidden">
+          {/* Progress bar */}
+          <div className="h-1 bg-slate-700">
+            <div 
+              className="h-full bg-gradient-to-r from-violet-500 to-purple-500 transition-all duration-500"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          
+          {/* Step indicators */}
+          <div className="flex justify-center gap-2 pt-6 pb-2">
+            {steps.map((step, i) => (
+              <div 
+                key={step.id}
+                className={`w-2 h-2 rounded-full transition-all ${
+                  i === onboardingStep ? 'w-8 bg-violet-500' : 
+                  i < onboardingStep ? 'bg-violet-500' : 'bg-slate-600'
+                }`}
+              />
+            ))}
+          </div>
+          
+          {/* Content */}
+          <div className="p-8">
+            {/* Welcome Step */}
+            {currentStep.id === 'welcome' && (
+              <div className="text-center">
+                <div className="w-20 h-20 bg-gradient-to-br from-violet-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-violet-500/30">
+                  <Sparkles className="w-10 h-10 text-white" />
+                </div>
+                <h2 className="text-3xl font-bold text-white mb-3">Welcome to Your Dashboard!</h2>
+                <p className="text-slate-400 text-lg mb-6 max-w-md mx-auto">
+                  Let's get you set up in just a few minutes. We'll help you configure your store for accurate tracking.
+                </p>
+                <div className="grid grid-cols-3 gap-4 max-w-lg mx-auto mt-8">
+                  <div className="bg-slate-800/50 rounded-xl p-4 text-center">
+                    <TrendingUp className="w-6 h-6 text-emerald-400 mx-auto mb-2" />
+                    <p className="text-sm text-slate-300">Track Sales</p>
+                  </div>
+                  <div className="bg-slate-800/50 rounded-xl p-4 text-center">
+                    <PieChart className="w-6 h-6 text-violet-400 mx-auto mb-2" />
+                    <p className="text-sm text-slate-300">See Profits</p>
+                  </div>
+                  <div className="bg-slate-800/50 rounded-xl p-4 text-center">
+                    <Package className="w-6 h-6 text-amber-400 mx-auto mb-2" />
+                    <p className="text-sm text-slate-300">Manage Inventory</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Store Setup Step */}
+            {currentStep.id === 'store' && (
+              <div className="text-center">
+                <div className="w-16 h-16 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                  <Store className="w-8 h-8 text-white" />
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-2">Name Your Store</h2>
+                <p className="text-slate-400 mb-6">This will appear on your dashboard and reports.</p>
+                
+                <div className="max-w-sm mx-auto space-y-4">
+                  <input
+                    type="text"
+                    placeholder="e.g., My Brand Store"
+                    value={storeName}
+                    onChange={(e) => setStoreName(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500 text-center text-lg"
+                  />
+                  <p className="text-slate-500 text-sm">You can change this anytime in Settings</p>
+                </div>
+              </div>
+            )}
+            
+            {/* Data Upload Step */}
+            {currentStep.id === 'data' && (
+              <div className="text-center">
+                <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                  <Upload className="w-8 h-8 text-white" />
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-2">Upload Your First Data</h2>
+                <p className="text-slate-400 mb-6">You can upload Amazon or Shopify reports to get started.</p>
+                
+                <div className="grid grid-cols-2 gap-4 max-w-md mx-auto">
+                  <button
+                    onClick={() => { setShowOnboarding(false); setView('upload'); setUploadTab('amazon-bulk'); }}
+                    className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-4 hover:border-orange-500/60 transition-all group"
+                  >
+                    <ShoppingCart className="w-8 h-8 text-orange-400 mx-auto mb-2 group-hover:scale-110 transition-transform" />
+                    <p className="text-white font-medium">Amazon</p>
+                    <p className="text-orange-400 text-xs mt-1">SKU Economics, Payments</p>
+                  </button>
+                  <button
+                    onClick={() => { setShowOnboarding(false); setView('upload'); setUploadTab('shopify-sync'); }}
+                    className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-4 hover:border-green-500/60 transition-all group"
+                  >
+                    <Store className="w-8 h-8 text-green-400 mx-auto mb-2 group-hover:scale-110 transition-transform" />
+                    <p className="text-white font-medium">Shopify</p>
+                    <p className="text-green-400 text-xs mt-1">API Sync or CSV</p>
+                  </button>
+                </div>
+                
+                <p className="text-slate-500 text-sm mt-6">
+                  You can skip this for now and upload data later
+                </p>
+              </div>
+            )}
+            
+            {/* COGS Setup Step */}
+            {currentStep.id === 'cogs' && (
+              <div className="text-center">
+                <div className="w-16 h-16 bg-gradient-to-br from-amber-500 to-orange-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                  <DollarSign className="w-8 h-8 text-white" />
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-2">Set Up Product Costs</h2>
+                <p className="text-slate-400 mb-6">COGS (Cost of Goods Sold) helps calculate your true profit margins.</p>
+                
+                <div className="bg-slate-800/50 rounded-xl p-4 max-w-md mx-auto mb-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-slate-300">COGS Status</span>
+                    {Object.keys(savedCogs).filter(k => savedCogs[k]?.cost > 0).length > 0 ? (
+                      <span className="text-emerald-400 flex items-center gap-1">
+                        <Check className="w-4 h-4" />
+                        {Object.keys(savedCogs).filter(k => savedCogs[k]?.cost > 0).length} SKUs configured
+                      </span>
+                    ) : (
+                      <span className="text-amber-400">Not configured</span>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => { setShowOnboarding(false); setShowCogsManager(true); }}
+                    className="w-full py-2 bg-amber-600 hover:bg-amber-500 rounded-lg text-white font-medium transition-colors"
+                  >
+                    Open COGS Manager
+                  </button>
+                </div>
+                
+                <p className="text-slate-500 text-sm">
+                  You can upload a CSV with SKU costs or enter them manually
+                </p>
+              </div>
+            )}
+            
+            {/* Goals Step */}
+            {currentStep.id === 'goals' && (
+              <div className="text-center">
+                <div className="w-16 h-16 bg-gradient-to-br from-violet-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                  <Target className="w-8 h-8 text-white" />
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-2">Set Your Goals</h2>
+                <p className="text-slate-400 mb-6">Track progress towards your revenue and profit targets.</p>
+                
+                <div className="max-w-sm mx-auto space-y-4">
+                  <div>
+                    <label className="block text-slate-400 text-sm mb-1 text-left">Weekly Revenue Goal</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
+                      <input
+                        type="number"
+                        placeholder="10000"
+                        value={goals.weeklyRevenue || ''}
+                        onChange={(e) => setGoals(g => ({ ...g, weeklyRevenue: parseFloat(e.target.value) || 0 }))}
+                        className="w-full bg-slate-800 border border-slate-600 rounded-xl pl-8 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 text-sm mb-1 text-left">Monthly Revenue Goal</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
+                      <input
+                        type="number"
+                        placeholder="40000"
+                        value={goals.monthlyRevenue || ''}
+                        onChange={(e) => setGoals(g => ({ ...g, monthlyRevenue: parseFloat(e.target.value) || 0 }))}
+                        className="w-full bg-slate-800 border border-slate-600 rounded-xl pl-8 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Complete Step */}
+            {currentStep.id === 'complete' && (
+              <div className="text-center">
+                <div className="w-20 h-20 bg-gradient-to-br from-emerald-500 to-green-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg shadow-emerald-500/30">
+                  <Check className="w-10 h-10 text-white" />
+                </div>
+                <h2 className="text-3xl font-bold text-white mb-3">You're All Set!</h2>
+                <p className="text-slate-400 text-lg mb-6 max-w-md mx-auto">
+                  Your dashboard is ready. Start exploring your data and tracking your business performance.
+                </p>
+                
+                <div className="bg-slate-800/50 rounded-xl p-4 max-w-md mx-auto">
+                  <p className="text-slate-300 text-sm mb-3">Quick tips:</p>
+                  <ul className="text-left text-sm text-slate-400 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <Keyboard className="w-4 h-4 text-violet-400 mt-0.5" />
+                      Press <kbd className="px-1.5 py-0.5 bg-slate-700 rounded text-xs">Shift + ?</kbd> to see keyboard shortcuts
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <MessageSquare className="w-4 h-4 text-violet-400 mt-0.5" />
+                      Click the AI button to ask questions about your data
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Settings className="w-4 h-4 text-violet-400 mt-0.5" />
+                      Customize thresholds and alerts in Settings
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+          
+          {/* Footer */}
+          <div className="px-8 pb-8 flex items-center justify-between">
+            <button
+              onClick={skipOnboarding}
+              className="text-slate-500 hover:text-slate-300 text-sm transition-colors"
+            >
+              Skip setup
+            </button>
+            
+            <div className="flex items-center gap-3">
+              {onboardingStep > 0 && (
+                <button
+                  onClick={prevStep}
+                  className="px-5 py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-medium transition-colors flex items-center gap-2"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Back
+                </button>
+              )}
+              <button
+                onClick={nextStep}
+                className="px-6 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white rounded-xl font-medium shadow-lg shadow-violet-500/25 transition-all hover:scale-[1.02] flex items-center gap-2"
+              >
+                {onboardingStep === steps.length - 1 ? 'Get Started' : 'Continue'}
+                {onboardingStep < steps.length - 1 && <ChevronRight className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  
+  // ========== PDF REPORT EXPORT MODAL ==========
+  const PdfExportModal = () => {
+    if (!showPdfExport) return null;
+    
+    const generatePdf = async () => {
+      setPdfGenerating(true);
+      
+      try {
+        // Calculate metrics for the report
+        const sortedWeeks = Object.keys(allWeeksData).sort().reverse();
+        const sortedDays = Object.keys(allDaysData).sort().reverse();
+        
+        // Get date range based on config
+        let reportWeeks = [];
+        let reportTitle = '';
+        
+        if (pdfExportConfig.reportType === 'weekly') {
+          reportWeeks = sortedWeeks.slice(0, 1);
+          reportTitle = `Weekly Report - ${reportWeeks[0] || 'No Data'}`;
+        } else if (pdfExportConfig.reportType === 'monthly') {
+          reportWeeks = sortedWeeks.slice(0, 4);
+          reportTitle = `Monthly Report - ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`;
+        } else {
+          // Custom date range - filter weeks
+          reportWeeks = sortedWeeks.filter(w => {
+            if (!pdfExportConfig.dateRange.start || !pdfExportConfig.dateRange.end) return true;
+            return w >= pdfExportConfig.dateRange.start && w <= pdfExportConfig.dateRange.end;
+          });
+          reportTitle = `Custom Report - ${pdfExportConfig.dateRange.start} to ${pdfExportConfig.dateRange.end}`;
+        }
+        
+        // Aggregate metrics
+        let totalRevenue = 0, totalProfit = 0, totalOrders = 0, totalUnits = 0, totalAdSpend = 0;
+        reportWeeks.forEach(week => {
+          const data = allWeeksData[week];
+          if (data?.total) {
+            totalRevenue += data.total.revenue || 0;
+            totalProfit += data.total.profit || 0;
+            totalOrders += data.total.orders || 0;
+            totalUnits += data.total.units || 0;
+            totalAdSpend += data.total.adSpend || 0;
+          }
+        });
+        
+        const margin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+        const tacos = totalRevenue > 0 ? (totalAdSpend / totalRevenue) * 100 : 0;
+        const aov = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+        
+        // Create HTML for PDF
+        const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 40px; }
+    .header { text-align: center; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px solid #334155; }
+    .logo { font-size: 14px; color: #8b5cf6; margin-bottom: 8px; }
+    h1 { font-size: 28px; color: #ffffff; margin-bottom: 8px; }
+    .date { color: #64748b; font-size: 14px; }
+    .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 40px; }
+    .metric { background: #1e293b; border-radius: 12px; padding: 20px; text-align: center; }
+    .metric-value { font-size: 28px; font-weight: bold; color: #ffffff; }
+    .metric-label { font-size: 12px; color: #94a3b8; margin-top: 4px; text-transform: uppercase; }
+    .metric.positive .metric-value { color: #4ade80; }
+    .metric.negative .metric-value { color: #f87171; }
+    .section { margin-bottom: 30px; }
+    .section-title { font-size: 18px; font-weight: 600; color: #ffffff; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid #334155; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #334155; }
+    th { color: #94a3b8; font-size: 12px; text-transform: uppercase; font-weight: 500; }
+    td { color: #e2e8f0; }
+    .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #334155; text-align: center; color: #64748b; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    ${pdfExportConfig.branding.showStoreName && storeName ? `<div class="logo">${storeName.toUpperCase()}</div>` : ''}
+    <h1>${reportTitle}</h1>
+    <div class="date">Generated ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>
+  </div>
+  
+  ${pdfExportConfig.includeSections.summary ? `
+  <div class="metrics">
+    <div class="metric">
+      <div class="metric-value">$${totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+      <div class="metric-label">Total Revenue</div>
+    </div>
+    <div class="metric ${totalProfit >= 0 ? 'positive' : 'negative'}">
+      <div class="metric-value">$${Math.abs(totalProfit).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+      <div class="metric-label">Net Profit</div>
+    </div>
+    <div class="metric ${margin >= 20 ? 'positive' : margin >= 10 ? '' : 'negative'}">
+      <div class="metric-value">${margin.toFixed(1)}%</div>
+      <div class="metric-label">Profit Margin</div>
+    </div>
+    <div class="metric">
+      <div class="metric-value">${totalOrders.toLocaleString()}</div>
+      <div class="metric-label">Total Orders</div>
+    </div>
+    <div class="metric">
+      <div class="metric-value">$${aov.toFixed(2)}</div>
+      <div class="metric-label">Avg Order Value</div>
+    </div>
+    <div class="metric ${tacos <= 20 ? 'positive' : tacos <= 30 ? '' : 'negative'}">
+      <div class="metric-value">${tacos.toFixed(1)}%</div>
+      <div class="metric-label">TACOS</div>
+    </div>
+  </div>
+  ` : ''}
+  
+  ${pdfExportConfig.includeSections.revenue && reportWeeks.length > 0 ? `
+  <div class="section">
+    <div class="section-title">Weekly Breakdown</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Week</th>
+          <th>Revenue</th>
+          <th>Profit</th>
+          <th>Orders</th>
+          <th>Margin</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${reportWeeks.slice(0, 8).map(week => {
+          const data = allWeeksData[week];
+          const rev = data?.total?.revenue || 0;
+          const prof = data?.total?.profit || 0;
+          const ord = data?.total?.orders || 0;
+          const m = rev > 0 ? (prof / rev) * 100 : 0;
+          return `
+            <tr>
+              <td>${week}</td>
+              <td>$${rev.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+              <td style="color: ${prof >= 0 ? '#4ade80' : '#f87171'}">$${prof.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+              <td>${ord}</td>
+              <td>${m.toFixed(1)}%</td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>
+  ` : ''}
+  
+  <div class="footer">
+    <p>Generated by E-Commerce Dashboard • ecommdashboard.com</p>
+  </div>
+</body>
+</html>
+        `;
+        
+        // Create blob and download
+        const blob = new Blob([html], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${storeName || 'Dashboard'}_Report_${new Date().toISOString().split('T')[0]}.html`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        setToast({ message: 'Report exported! Open in browser and print to PDF.', type: 'success' });
+        setShowPdfExport(false);
+      } catch (err) {
+        setToast({ message: 'Error generating report: ' + err.message, type: 'error' });
+      } finally {
+        setPdfGenerating(false);
+      }
+    };
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => setShowPdfExport(false)}>
+        <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl border border-slate-700 w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()}>
+          <div className="p-6 border-b border-slate-700">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-violet-500/20 rounded-xl flex items-center justify-center">
+                <FileText className="w-5 h-5 text-violet-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-white">Export Report</h3>
+                <p className="text-slate-400 text-sm">Generate a professional PDF report</p>
+              </div>
+            </div>
+          </div>
+          
+          <div className="p-6 space-y-4">
+            {/* Report Type */}
+            <div>
+              <label className="block text-sm text-slate-300 mb-2">Report Type</label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: 'weekly', label: 'Weekly' },
+                  { id: 'monthly', label: 'Monthly' },
+                  { id: 'custom', label: 'Custom' },
+                ].map(type => (
+                  <button
+                    key={type.id}
+                    onClick={() => setPdfExportConfig(c => ({ ...c, reportType: type.id }))}
+                    className={`py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
+                      pdfExportConfig.reportType === type.id
+                        ? 'bg-violet-600 text-white'
+                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                    }`}
+                  >
+                    {type.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            {/* Custom Date Range */}
+            {pdfExportConfig.reportType === 'custom' && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Start Date</label>
+                  <input
+                    type="date"
+                    value={pdfExportConfig.dateRange.start}
+                    onChange={(e) => setPdfExportConfig(c => ({ ...c, dateRange: { ...c.dateRange, start: e.target.value } }))}
+                    className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">End Date</label>
+                  <input
+                    type="date"
+                    value={pdfExportConfig.dateRange.end}
+                    onChange={(e) => setPdfExportConfig(c => ({ ...c, dateRange: { ...c.dateRange, end: e.target.value } }))}
+                    className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white"
+                  />
+                </div>
+              </div>
+            )}
+            
+            {/* Sections to Include */}
+            <div>
+              <label className="block text-sm text-slate-300 mb-2">Include Sections</label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { id: 'summary', label: 'Summary Metrics' },
+                  { id: 'revenue', label: 'Revenue Breakdown' },
+                  { id: 'profitability', label: 'Profitability' },
+                  { id: 'skuBreakdown', label: 'SKU Analysis' },
+                  { id: 'inventory', label: 'Inventory Status' },
+                  { id: 'ads', label: 'Ad Performance' },
+                ].map(section => (
+                  <label key={section.id} className="flex items-center gap-2 p-2 bg-slate-700/50 rounded-lg cursor-pointer hover:bg-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={pdfExportConfig.includeSections[section.id]}
+                      onChange={(e) => setPdfExportConfig(c => ({ 
+                        ...c, 
+                        includeSections: { ...c.includeSections, [section.id]: e.target.checked }
+                      }))}
+                      className="w-4 h-4 rounded border-slate-500 text-violet-600 focus:ring-violet-500"
+                    />
+                    <span className="text-sm text-slate-300">{section.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            
+            {/* Branding */}
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={pdfExportConfig.branding.showStoreName}
+                  onChange={(e) => setPdfExportConfig(c => ({ 
+                    ...c, 
+                    branding: { ...c.branding, showStoreName: e.target.checked }
+                  }))}
+                  className="w-4 h-4 rounded border-slate-500 text-violet-600 focus:ring-violet-500"
+                />
+                <span className="text-sm text-slate-300">Include store name</span>
+              </label>
+            </div>
+          </div>
+          
+          <div className="p-6 border-t border-slate-700 flex gap-3">
+            <button
+              onClick={() => setShowPdfExport(false)}
+              className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-medium transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={generatePdf}
+              disabled={pdfGenerating}
+              className="flex-1 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white rounded-xl font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {pdfGenerating ? (
+                <><Loader2 className="w-4 h-4 animate-spin" />Generating...</>
+              ) : (
+                <><Download className="w-4 h-4" />Export Report</>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  
+  // ========== INDUSTRY BENCHMARKS MODAL ==========
+  const BenchmarksModal = () => {
+    if (!showBenchmarks) return null;
+    
+    // Calculate user's current metrics
+    const sortedWeeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
+    let totalRevenue = 0, totalProfit = 0, totalOrders = 0, totalAdSpend = 0, totalReturns = 0;
+    
+    sortedWeeks.forEach(week => {
+      const data = allWeeksData[week];
+      if (data?.total) {
+        totalRevenue += data.total.revenue || 0;
+        totalProfit += data.total.profit || 0;
+        totalOrders += data.total.orders || 0;
+        totalAdSpend += data.total.adSpend || 0;
+      }
+    });
+    
+    const userMetrics = {
+      margin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
+      tacos: totalRevenue > 0 ? (totalAdSpend / totalRevenue) * 100 : 0,
+      aov: totalOrders > 0 ? totalRevenue / totalOrders : 0,
+      returnRate: 0, // Would need return data
+    };
+    
+    const benchmark = INDUSTRY_BENCHMARKS[benchmarkCategory];
+    
+    const compareMetric = (user, industry, higherIsBetter = true) => {
+      const diff = user - industry;
+      const pct = industry > 0 ? (diff / industry) * 100 : 0;
+      const isGood = higherIsBetter ? diff >= 0 : diff <= 0;
+      return { diff, pct, isGood };
+    };
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => setShowBenchmarks(false)}>
+        <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl border border-slate-700 w-full max-w-2xl shadow-2xl" onClick={e => e.stopPropagation()}>
+          <div className="p-6 border-b border-slate-700">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-amber-500/20 rounded-xl flex items-center justify-center">
+                  <BarChart3 className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Industry Benchmarks</h3>
+                  <p className="text-slate-400 text-sm">Compare your performance to industry averages</p>
+                </div>
+              </div>
+              <button onClick={() => setShowBenchmarks(false)} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+          </div>
+          
+          <div className="p-6">
+            {/* Category Selector */}
+            <div className="mb-6">
+              <label className="block text-sm text-slate-400 mb-2">Your Industry</label>
+              <div className="grid grid-cols-3 gap-2">
+                {Object.entries(INDUSTRY_BENCHMARKS).map(([key, val]) => (
+                  <button
+                    key={key}
+                    onClick={() => setBenchmarkCategory(key)}
+                    className={`py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
+                      benchmarkCategory === key
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                    }`}
+                  >
+                    {val.name.split(' ')[0]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            {/* Comparison Grid */}
+            <div className="space-y-4">
+              {[
+                { label: 'Profit Margin', user: userMetrics.margin, industry: benchmark.avgMargin, suffix: '%', higherIsBetter: true },
+                { label: 'TACOS (Ad Spend %)', user: userMetrics.tacos, industry: benchmark.avgTacos, suffix: '%', higherIsBetter: false },
+                { label: 'Avg Order Value', user: userMetrics.aov, industry: benchmark.avgAov, prefix: '$', higherIsBetter: true },
+              ].map(metric => {
+                const comparison = compareMetric(metric.user, metric.industry, metric.higherIsBetter);
+                return (
+                  <div key={metric.label} className="bg-slate-800/50 rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-slate-300 font-medium">{metric.label}</span>
+                      <span className={`text-sm px-2 py-1 rounded-full ${
+                        comparison.isGood ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+                      }`}>
+                        {comparison.isGood ? '↑' : '↓'} {Math.abs(comparison.pct).toFixed(0)}% {comparison.isGood ? 'above' : 'below'} avg
+                      </span>
+                    </div>
+                    <div className="flex items-end gap-4">
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between text-sm mb-1">
+                          <span className="text-slate-500">You</span>
+                          <span className="text-white font-semibold">
+                            {metric.prefix || ''}{metric.user.toFixed(1)}{metric.suffix || ''}
+                          </span>
+                        </div>
+                        <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full ${comparison.isGood ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                            style={{ width: `${Math.min(100, (metric.user / Math.max(metric.user, metric.industry)) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between text-sm mb-1">
+                          <span className="text-slate-500">Industry Avg</span>
+                          <span className="text-slate-400 font-medium">
+                            {metric.prefix || ''}{metric.industry.toFixed(1)}{metric.suffix || ''}
+                          </span>
+                        </div>
+                        <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-slate-500 rounded-full"
+                            style={{ width: `${Math.min(100, (metric.industry / Math.max(metric.user, metric.industry)) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            
+            {/* Industry Info */}
+            <div className="mt-6 p-4 bg-slate-800/30 rounded-xl">
+              <p className="text-slate-400 text-sm">
+                <strong className="text-white">{benchmark.name}</strong> benchmarks are based on aggregated industry data. 
+                Your actual performance may vary based on specific product categories, pricing strategy, and market conditions.
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -15669,6 +16494,16 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     );
   }
 
+  // ========== GLOBAL MODALS (render on any view) ==========
+  const GlobalModals = () => (
+    <>
+      <OnboardingWizard />
+      <PdfExportModal />
+      <BenchmarksModal />
+      <ConfirmDialog />
+    </>
+  );
+
   // VIEWS
   
   // ==================== DASHBOARD VIEW ====================
@@ -16442,7 +17277,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} />
+        <div className="max-w-7xl mx-auto"><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><BenchmarksModal />
           
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -16601,7 +17436,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 ) : (
                   <button onClick={() => setView('analytics')} className="p-2 hover:bg-slate-700 rounded text-slate-500" title="Need 4+ weeks for forecast"><TrendingUp className="w-4 h-4" /></button>
                 )}
-                <button onClick={() => setShowExportModal(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Export Data"><FileDown className="w-4 h-4" /></button>
+                <button onClick={() => setShowExportModal(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Export CSV"><FileDown className="w-4 h-4" /></button>
+                <button onClick={() => setShowPdfExport(true)} className="p-2 hover:bg-slate-700 rounded text-violet-400" title="Export PDF Report"><FileText className="w-4 h-4" /></button>
+                <button onClick={() => setShowBenchmarks(true)} className="p-2 hover:bg-slate-700 rounded text-amber-400" title="Industry Benchmarks"><BarChart3 className="w-4 h-4" /></button>
                 <button onClick={() => setShowUploadHelp(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Help"><HelpCircle className="w-4 h-4" /></button>
               </div>
             </div>
@@ -38374,20 +39211,153 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             </SettingRow>
           </SettingSection>
           
-          {/* Notifications (Feature 4) */}
-          <SettingSection title="🔔 Notifications">
-            <SettingRow label="Browser Notifications" desc="Get alerts for low stock and tax deadlines">
-              {notificationsEnabled ? (
+          {/* Notifications (Feature 4) - Enhanced */}
+          <SettingSection title="🔔 Push Notifications">
+            <SettingRow label="Enable Notifications" desc="Get browser push notifications for important alerts">
+              {notificationSettings.enabled && notificationSettings.permission === 'granted' ? (
                 <div className="flex items-center gap-2">
                   <Bell className="w-4 h-4 text-emerald-400" />
                   <span className="text-emerald-400 text-sm">Enabled</span>
+                  <button 
+                    onClick={() => setNotificationSettings(s => ({ ...s, enabled: false }))}
+                    className="ml-2 text-xs text-slate-500 hover:text-slate-300"
+                  >
+                    Disable
+                  </button>
                 </div>
+              ) : notificationSettings.permission === 'denied' ? (
+                <div className="text-rose-400 text-sm">Blocked - enable in browser settings</div>
               ) : (
-                <button onClick={requestNotifications} className="px-4 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2">
+                <button 
+                  onClick={async () => {
+                    if ('Notification' in window) {
+                      const permission = await Notification.requestPermission();
+                      if (permission === 'granted') {
+                        setNotificationSettings(s => ({ ...s, enabled: true, permission: 'granted' }));
+                        new Notification('Notifications Enabled!', {
+                          body: 'You will now receive alerts for inventory and deadlines.',
+                          icon: storeLogo || '/favicon.ico'
+                        });
+                        setToast({ message: 'Push notifications enabled!', type: 'success' });
+                      } else {
+                        setNotificationSettings(s => ({ ...s, permission }));
+                        setToast({ message: 'Notification permission denied', type: 'error' });
+                      }
+                    } else {
+                      setToast({ message: 'Your browser does not support notifications', type: 'error' });
+                    }
+                  }} 
+                  className="px-4 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2"
+                >
                   <Bell className="w-4 h-4" />Enable Notifications
                 </button>
               )}
             </SettingRow>
+            
+            {notificationSettings.enabled && (
+              <>
+                <div className="border-t border-slate-700/50 my-4" />
+                <p className="text-slate-400 text-sm mb-3">Notify me about:</p>
+                
+                <SettingRow label="Low Inventory" desc="When products fall below reorder threshold">
+                  <button
+                    onClick={() => setNotificationSettings(s => ({ 
+                      ...s, 
+                      alerts: { ...s.alerts, lowInventory: !s.alerts.lowInventory } 
+                    }))}
+                    className={`w-12 h-6 rounded-full transition-colors relative ${
+                      notificationSettings.alerts.lowInventory ? 'bg-emerald-500' : 'bg-slate-600'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all ${
+                      notificationSettings.alerts.lowInventory ? 'left-6' : 'left-0.5'
+                    }`} />
+                  </button>
+                </SettingRow>
+                
+                <SettingRow label="Critical Inventory" desc="When products have < 7 days of stock">
+                  <button
+                    onClick={() => setNotificationSettings(s => ({ 
+                      ...s, 
+                      alerts: { ...s.alerts, criticalInventory: !s.alerts.criticalInventory } 
+                    }))}
+                    className={`w-12 h-6 rounded-full transition-colors relative ${
+                      notificationSettings.alerts.criticalInventory ? 'bg-emerald-500' : 'bg-slate-600'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all ${
+                      notificationSettings.alerts.criticalInventory ? 'left-6' : 'left-0.5'
+                    }`} />
+                  </button>
+                </SettingRow>
+                
+                <SettingRow label="Overdue Bills" desc="When invoices pass their due date">
+                  <button
+                    onClick={() => setNotificationSettings(s => ({ 
+                      ...s, 
+                      alerts: { ...s.alerts, overdueBills: !s.alerts.overdueBills } 
+                    }))}
+                    className={`w-12 h-6 rounded-full transition-colors relative ${
+                      notificationSettings.alerts.overdueBills ? 'bg-emerald-500' : 'bg-slate-600'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all ${
+                      notificationSettings.alerts.overdueBills ? 'left-6' : 'left-0.5'
+                    }`} />
+                  </button>
+                </SettingRow>
+                
+                <SettingRow label="Sales Tax Deadlines" desc="Reminder before tax filing dates">
+                  <button
+                    onClick={() => setNotificationSettings(s => ({ 
+                      ...s, 
+                      alerts: { ...s.alerts, salesTaxDeadlines: !s.alerts.salesTaxDeadlines } 
+                    }))}
+                    className={`w-12 h-6 rounded-full transition-colors relative ${
+                      notificationSettings.alerts.salesTaxDeadlines ? 'bg-emerald-500' : 'bg-slate-600'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all ${
+                      notificationSettings.alerts.salesTaxDeadlines ? 'left-6' : 'left-0.5'
+                    }`} />
+                  </button>
+                </SettingRow>
+                
+                <SettingRow label="Goals Missed" desc="When weekly/monthly goals aren't met">
+                  <button
+                    onClick={() => setNotificationSettings(s => ({ 
+                      ...s, 
+                      alerts: { ...s.alerts, goalsMissed: !s.alerts.goalsMissed } 
+                    }))}
+                    className={`w-12 h-6 rounded-full transition-colors relative ${
+                      notificationSettings.alerts.goalsMissed ? 'bg-emerald-500' : 'bg-slate-600'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all ${
+                      notificationSettings.alerts.goalsMissed ? 'left-6' : 'left-0.5'
+                    }`} />
+                  </button>
+                </SettingRow>
+                
+                <div className="mt-4 p-3 bg-slate-800/50 rounded-lg">
+                  <button
+                    onClick={() => {
+                      if ('Notification' in window && Notification.permission === 'granted') {
+                        new Notification('Test Notification', {
+                          body: 'Push notifications are working correctly!',
+                          icon: storeLogo || '/favicon.ico'
+                        });
+                      }
+                    }}
+                    className="text-sm text-violet-400 hover:text-violet-300 flex items-center gap-2"
+                  >
+                    <Bell className="w-4 h-4" />
+                    Send Test Notification
+                  </button>
+                </div>
+              </>
+            )}
+            
             <SettingRow label="Sales Tax Alert Days" desc="Days before due date to show alert">
               <NumberInput value={currentLocalSettings.alertSalesTaxDays || 7} onChange={(v) => updateSetting('alertSalesTaxDays', v)} min={1} max={30} suffix="days" />
             </SettingRow>
@@ -38752,8 +39722,36 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               <span>•</span>
               <span>{Object.keys(allPeriodsData).length} periods saved</span>
               <span>•</span>
-              <span>{Object.keys(savedCogs).length} SKUs configured</span>
+              <span>{Object.keys(savedCogs).filter(k => savedCogs[k]?.cost > 0).length} SKUs configured</span>
             </div>
+            
+            {/* Quick Actions */}
+            <div className="flex justify-center gap-3 mt-4 pt-4 border-t border-slate-700/50">
+              <button
+                onClick={() => { setShowOnboarding(true); setOnboardingStep(0); }}
+                className="text-xs text-slate-400 hover:text-violet-400 flex items-center gap-1 transition-colors"
+              >
+                <Sparkles className="w-3 h-3" />
+                Restart Setup Guide
+              </button>
+              <span className="text-slate-600">•</span>
+              <button
+                onClick={() => setShowBenchmarks(true)}
+                className="text-xs text-slate-400 hover:text-amber-400 flex items-center gap-1 transition-colors"
+              >
+                <BarChart3 className="w-3 h-3" />
+                Industry Benchmarks
+              </button>
+              <span className="text-slate-600">•</span>
+              <button
+                onClick={() => setShowPdfExport(true)}
+                className="text-xs text-slate-400 hover:text-emerald-400 flex items-center gap-1 transition-colors"
+              >
+                <FileText className="w-3 h-3" />
+                Export Report
+              </button>
+            </div>
+            
             {/* Legal Links */}
             <div className="flex justify-center gap-4 mt-4 pt-4 border-t border-slate-700/50">
               <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-xs text-slate-500 hover:text-violet-400 transition-colors">
@@ -38771,5 +39769,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     );
   }
 
-  return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center"><div className="w-12 h-12 border-4 border-violet-500 border-t-transparent rounded-full animate-spin" /></div>;
+  // Global modals that should render on any view
+  const globalModalsElement = (
+    <>
+      <OnboardingWizard />
+      <PdfExportModal />
+      <BenchmarksModal />
+      <ConfirmDialog />
+    </>
+  );
+
+  return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">{globalModalsElement}<div className="w-12 h-12 border-4 border-violet-500 border-t-transparent rounded-full animate-spin" /></div>;
 }
