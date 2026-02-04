@@ -34850,8 +34850,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const normalizeVendor = (vendor) => {
       if (!vendor) return vendor;
       const v = vendor.toLowerCase().trim();
+      
+      // Combine Marpac variants
+      if (v.includes('marpac')) return 'Marpac';
+      
       // Combine Formunova variants
       if (v.includes('formunova')) return 'FormuNova';
+      
+      // Combine Amazon variants (but keep as vendor, not the marketplace)
+      if (v.includes('amazon') && !v.includes('seller') && !v.includes('marketplace')) {
+        // This is Amazon as a vendor (ads, services, etc), not Amazon marketplace income
+        if (v.includes('advertising') || v.includes('ads')) return 'Amazon Advertising';
+        return 'Amazon';
+      }
+      
       // Add other vendor normalizations as needed
       return vendor;
     };
