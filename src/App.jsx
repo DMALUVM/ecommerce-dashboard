@@ -1256,6 +1256,19 @@ export default function Dashboard() {
   
   // Shopify Integration
   const [shopifyCredentials, setShopifyCredentials] = useState({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
+  
+  // QuickBooks Online API Integration
+  const [qboCredentials, setQboCredentials] = useState({ 
+    clientId: '', 
+    clientSecret: '', 
+    realmId: '', // Company ID
+    accessToken: '',
+    refreshToken: '',
+    connected: false, 
+    lastSync: null,
+    syncFrequency: 'daily', // daily, weekly, manual
+    autoSync: false
+  });
   const [shopifySyncStatus, setShopifySyncStatus] = useState({ loading: false, error: null, progress: '' });
   const [shopifySyncRange, setShopifySyncRange] = useState({ start: '', end: '' });
   const [shopifySyncPreview, setShopifySyncPreview] = useState(null);
@@ -1878,38 +1891,50 @@ const handleLogout = async () => {
   const [pendingProcessAction, setPendingProcessAction] = useState(null);
   
   // Confirmation dialog for destructive actions
-  const [confirmDialog, setConfirmDialog] = useState({ show: false, title: '', message: '', onConfirm: null, destructive: false });
+  const [confirmDialog, setConfirmDialog] = useState({ show: false, title: '', message: '', onConfirm: null, destructive: false, confirmText: null });
   
-  const showConfirm = useCallback((title, message, onConfirm, destructive = true) => {
-    setConfirmDialog({ show: true, title, message, onConfirm, destructive });
+  const showConfirm = useCallback((title, message, onConfirm, destructive = true, confirmText = null) => {
+    setConfirmDialog({ show: true, title, message, onConfirm, destructive, confirmText });
+  }, []);
+  
+  // Success animation state
+  const [showSuccessAnimation, setShowSuccessAnimation] = useState(false);
+  const triggerSuccessAnimation = useCallback(() => {
+    setShowSuccessAnimation(true);
+    setTimeout(() => setShowSuccessAnimation(false), 1500);
   }, []);
   
   const ConfirmDialog = () => {
     if (!confirmDialog.show) return null;
     return (
       <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => setConfirmDialog(d => ({ ...d, show: false }))}>
-        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full shadow-2xl" onClick={e => e.stopPropagation()}>
-          <div className="flex items-start gap-4 mb-4">
-            <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${confirmDialog.destructive ? 'bg-rose-500/20' : 'bg-amber-500/20'}`}>
+        <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl border border-slate-700 p-6 max-w-md w-full shadow-2xl transform transition-all" onClick={e => e.stopPropagation()}>
+          <div className="flex items-start gap-4 mb-5">
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${confirmDialog.destructive ? 'bg-rose-500/20 ring-2 ring-rose-500/30' : 'bg-amber-500/20 ring-2 ring-amber-500/30'}`}>
               <AlertTriangle className={`w-6 h-6 ${confirmDialog.destructive ? 'text-rose-400' : 'text-amber-400'}`} />
             </div>
             <div>
               <h3 className="text-lg font-semibold text-white mb-1">{confirmDialog.title}</h3>
-              <p className="text-slate-400 text-sm">{confirmDialog.message}</p>
+              <p className="text-slate-400 text-sm leading-relaxed">{confirmDialog.message}</p>
             </div>
           </div>
           <div className="flex gap-3 justify-end">
             <button 
               onClick={() => setConfirmDialog(d => ({ ...d, show: false }))}
-              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-medium transition-colors"
+              className="px-5 py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-medium transition-all hover:scale-[1.02]"
             >
               Cancel
             </button>
             <button 
               onClick={() => { confirmDialog.onConfirm?.(); setConfirmDialog(d => ({ ...d, show: false })); }}
-              className={`px-4 py-2 rounded-xl font-medium transition-colors ${confirmDialog.destructive ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-amber-600 hover:bg-amber-500 text-white'}`}
+              className={`px-5 py-2.5 rounded-xl font-medium transition-all hover:scale-[1.02] flex items-center gap-2 ${
+                confirmDialog.destructive 
+                  ? 'bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white shadow-lg shadow-rose-500/20' 
+                  : 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-lg shadow-amber-500/20'
+              }`}
             >
-              {confirmDialog.destructive ? 'Delete' : 'Confirm'}
+              {confirmDialog.destructive && <Trash2 className="w-4 h-4" />}
+              {confirmDialog.confirmText || (confirmDialog.destructive ? 'Delete' : 'Confirm')}
             </button>
           </div>
         </div>
@@ -16173,6 +16198,53 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       return stacks[widgetId] || null;
     };
     
+    // Data Health Check - detect discrepancies between stored weekly and derived daily data
+    const dataHealthCheck = useMemo(() => {
+      const issues = [];
+      const derivedWeeks = deriveWeeksFromDays(allDaysData || {});
+      
+      // Check last 4 weeks with data
+      const weeksToCheck = Object.keys(allWeeksData)
+        .filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0)
+        .sort()
+        .slice(-4);
+      
+      weeksToCheck.forEach(weekKey => {
+        const stored = allWeeksData[weekKey];
+        const derived = derivedWeeks[weekKey];
+        
+        if (stored && derived) {
+          const storedRev = stored.total?.revenue || 0;
+          const derivedRev = derived.total?.revenue || 0;
+          
+          // If both have revenue and they differ by more than 5%, flag it
+          if (storedRev > 0 && derivedRev > 0) {
+            const diff = Math.abs(storedRev - derivedRev);
+            const diffPct = (diff / Math.max(storedRev, derivedRev)) * 100;
+            
+            if (diffPct > 5) {
+              issues.push({
+                week: weekKey,
+                storedRev,
+                derivedRev,
+                diff,
+                diffPct,
+                message: `Week ${weekKey}: Stored ($${storedRev.toFixed(0)}) vs Daily ($${derivedRev.toFixed(0)}) differ by ${diffPct.toFixed(0)}%`
+              });
+            }
+          }
+        }
+      });
+      
+      return {
+        healthy: issues.length === 0,
+        issues,
+        message: issues.length === 0 
+          ? 'Data is consistent' 
+          : `${issues.length} week(s) have data discrepancies`
+      };
+    }, [allWeeksData, allDaysData]);
+    
     // DraggableWidget - minimal wrapper that just adds drag/drop to any widget
     const DraggableWidget = ({ id, children, className = '', isStacked = false, stackId = null }) => {
       const isDragging = draggedWidgetId === id;
@@ -16344,7 +16416,33 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               )}
               <div>
                 <h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'E-Commerce Dashboard'}</h1>
-                <p className="text-slate-400">Business performance overview</p>
+                <div className="flex items-center gap-3">
+                  <p className="text-slate-400">Business performance overview</p>
+                  {/* Data Health Indicator */}
+                  {hasData && (
+                    <button 
+                      onClick={() => {
+                        if (!dataHealthCheck.healthy) {
+                          setToast({ 
+                            message: `Data discrepancies detected: ${dataHealthCheck.issues.map(i => i.message).join('; ')}. Using daily-derived totals for accuracy.`, 
+                            type: 'warning' 
+                          });
+                        } else {
+                          setToast({ message: 'All data is consistent ✓', type: 'success' });
+                        }
+                      }}
+                      className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                        dataHealthCheck.healthy 
+                          ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30' 
+                          : 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 animate-pulse'
+                      }`}
+                      title={dataHealthCheck.message}
+                    >
+                      {dataHealthCheck.healthy ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                      <span>{dataHealthCheck.healthy ? 'Data OK' : 'Check Data'}</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-3 flex-wrap">
@@ -23538,10 +23636,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                 <Settings className="w-4 h-4" />
                               </button>
                               <button onClick={() => {
-                                if (confirm('Delete this purchase order?')) {
-                                  setProductionPipeline(prev => prev.filter(p => p.id !== item.id));
-                                  setToast({ message: 'Purchase order deleted', type: 'success' });
-                                }
+                                setConfirmDialog({
+                                  show: true,
+                                  title: 'Delete Purchase Order?',
+                                  message: `This will remove "${item.name || 'this order'}" from your pipeline. This cannot be undone.`,
+                                  destructive: true,
+                                  onConfirm: () => {
+                                    setProductionPipeline(prev => prev.filter(p => p.id !== item.id));
+                                    setToast({ message: 'Purchase order deleted', type: 'success' });
+                                  }
+                                });
                               }} className="p-1.5 hover:bg-rose-900/50 rounded text-slate-400 hover:text-rose-400">
                                 <Trash2 className="w-4 h-4" />
                               </button>
@@ -37829,6 +37933,215 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               ℹ️ Inventory sources are additive and don't overwrite each other. Amazon FBA/AWD, 3PL (Packiyo), and Wormans Mill (Shopify) inventories are tracked separately.
             </p>
           </SettingSection>
+          
+          {/* QuickBooks Online API Connection */}
+          <SettingSection title="💳 QuickBooks Online API">
+            <p className="text-slate-400 text-sm mb-4">Connect to QuickBooks Online to automatically sync bank transactions, eliminating manual CSV uploads</p>
+            
+            {qboCredentials.connected ? (
+              <div className="space-y-4">
+                <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-emerald-500/20 rounded-full flex items-center justify-center">
+                        <Check className="w-5 h-5 text-emerald-400" />
+                      </div>
+                      <div>
+                        <p className="text-emerald-400 font-medium">Connected to QuickBooks</p>
+                        <p className="text-slate-400 text-sm">Company ID: {qboCredentials.realmId}</p>
+                        {qboCredentials.lastSync && (
+                          <p className="text-slate-500 text-xs">Last sync: {new Date(qboCredentials.lastSync).toLocaleString()}</p>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setConfirmDialog({
+                          show: true,
+                          title: 'Disconnect QuickBooks?',
+                          message: 'Your synced transactions will remain, but auto-sync will stop.',
+                          confirmText: 'Disconnect',
+                          destructive: true,
+                          onConfirm: () => {
+                            setQboCredentials({ clientId: '', clientSecret: '', realmId: '', accessToken: '', refreshToken: '', connected: false, lastSync: null, syncFrequency: 'daily', autoSync: false });
+                            setToast({ message: 'QuickBooks disconnected', type: 'success' });
+                          }
+                        });
+                      }}
+                      className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                </div>
+                
+                <SettingRow label="Auto-Sync" desc="Automatically sync transactions">
+                  <Toggle 
+                    checked={qboCredentials.autoSync} 
+                    onChange={(v) => setQboCredentials(p => ({ ...p, autoSync: v }))} 
+                  />
+                </SettingRow>
+                
+                {qboCredentials.autoSync && (
+                  <SettingRow label="Sync Frequency" desc="How often to pull new transactions">
+                    <select
+                      value={qboCredentials.syncFrequency}
+                      onChange={(e) => setQboCredentials(p => ({ ...p, syncFrequency: e.target.value }))}
+                      className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    >
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                    </select>
+                  </SettingRow>
+                )}
+                
+                <button
+                  onClick={async () => {
+                    setToast({ message: 'Syncing from QuickBooks...', type: 'info' });
+                    try {
+                      const res = await fetch('/api/qbo/sync', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          realmId: qboCredentials.realmId,
+                          accessToken: qboCredentials.accessToken,
+                          refreshToken: qboCredentials.refreshToken,
+                        }),
+                      });
+                      
+                      if (res.ok) {
+                        const data = await res.json();
+                        // Process transactions similar to QBO CSV upload
+                        if (data.transactions) {
+                          setBankingData(prev => ({
+                            ...prev,
+                            transactions: [...(prev?.transactions || []), ...data.transactions],
+                            lastUpdated: new Date().toISOString(),
+                          }));
+                          setQboCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+                          setToast({ message: `Synced ${data.transactions.length} transactions from QuickBooks`, type: 'success' });
+                        }
+                      } else {
+                        throw new Error('Sync failed');
+                      }
+                    } catch (err) {
+                      setToast({ message: 'QuickBooks sync failed: ' + err.message, type: 'error' });
+                    }
+                  }}
+                  className="w-full px-4 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-xl text-white font-medium flex items-center justify-center gap-2"
+                >
+                  <RefreshCw className="w-4 h-4" />Sync Now
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-slate-900/50 rounded-xl p-4">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-slate-300 text-sm font-medium mb-2">Client ID</label>
+                      <input
+                        type="text"
+                        placeholder="Your QBO app Client ID"
+                        value={qboCredentials.clientId}
+                        onChange={(e) => setQboCredentials(p => ({ ...p, clientId: e.target.value }))}
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 text-sm font-medium mb-2">Client Secret</label>
+                      <input
+                        type="password"
+                        placeholder="Your QBO app Client Secret"
+                        value={qboCredentials.clientSecret}
+                        onChange={(e) => setQboCredentials(p => ({ ...p, clientSecret: e.target.value }))}
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 text-sm font-medium mb-2">Company ID (Realm ID)</label>
+                      <input
+                        type="text"
+                        placeholder="Your QuickBooks company ID"
+                        value={qboCredentials.realmId}
+                        onChange={(e) => setQboCredentials(p => ({ ...p, realmId: e.target.value }))}
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                      <p className="text-slate-500 text-xs mt-1">Found in your QBO URL: ...app.qbo.intuit.com/app/homepage?companyId=<strong>123456789</strong></p>
+                    </div>
+                    
+                    <button
+                      onClick={async () => {
+                        if (!qboCredentials.clientId || !qboCredentials.clientSecret) {
+                          setToast({ message: 'Please enter Client ID and Client Secret', type: 'error' });
+                          return;
+                        }
+                        
+                        setToast({ message: 'Initiating QuickBooks OAuth...', type: 'info' });
+                        
+                        try {
+                          // Redirect to QBO OAuth
+                          const res = await fetch('/api/qbo/auth', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              clientId: qboCredentials.clientId,
+                              clientSecret: qboCredentials.clientSecret,
+                              realmId: qboCredentials.realmId,
+                            }),
+                          });
+                          
+                          if (res.ok) {
+                            const data = await res.json();
+                            if (data.authUrl) {
+                              // Open OAuth window
+                              window.open(data.authUrl, 'qbo-oauth', 'width=600,height=700');
+                            } else if (data.accessToken) {
+                              // Direct token (for testing)
+                              setQboCredentials(p => ({ 
+                                ...p, 
+                                accessToken: data.accessToken,
+                                refreshToken: data.refreshToken,
+                                connected: true, 
+                                lastSync: null 
+                              }));
+                              setToast({ message: 'Connected to QuickBooks!', type: 'success' });
+                            }
+                          } else {
+                            throw new Error('Authentication failed');
+                          }
+                        } catch (err) {
+                          setToast({ message: 'QuickBooks connection failed: ' + err.message, type: 'error' });
+                        }
+                      }}
+                      disabled={!qboCredentials.clientId || !qboCredentials.clientSecret}
+                      className="w-full px-4 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 rounded-xl text-white font-medium flex items-center justify-center gap-2"
+                    >
+                      <Landmark className="w-4 h-4" />Connect to QuickBooks
+                    </button>
+                  </div>
+                </div>
+                
+                <details className="bg-slate-800/30 rounded-xl p-4">
+                  <summary className="text-slate-300 font-medium cursor-pointer">Getting Your QuickBooks API Credentials</summary>
+                  <div className="mt-4 space-y-3 text-slate-400 text-sm">
+                    <p><strong className="text-white">1.</strong> Go to <a href="https://developer.intuit.com" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:underline">developer.intuit.com</a> and sign in</p>
+                    <p><strong className="text-white">2.</strong> Create a new app or select existing app</p>
+                    <p><strong className="text-white">3.</strong> Go to Keys & OAuth → Production Keys</p>
+                    <p><strong className="text-white">4.</strong> Copy Client ID and Client Secret</p>
+                    <p><strong className="text-white">5.</strong> Add this redirect URI: <code className="bg-slate-900 px-2 py-1 rounded text-xs">{typeof window !== 'undefined' ? window.location.origin : ''}/api/qbo/callback</code></p>
+                    <p><strong className="text-white">6.</strong> Your Company ID is in the QBO URL when logged in</p>
+                  </div>
+                </details>
+                
+                <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4">
+                  <p className="text-amber-300 text-sm flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                    <span>QBO API requires a backend server to handle OAuth. If you're running this locally, you can still use CSV uploads on the Banking page.</span>
+                  </p>
+                </div>
+              </div>
+            )}
+          </SettingSection>
             </>
           )}
           
@@ -38296,31 +38609,38 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 <p className="text-rose-400 font-semibold mb-2">Delete All My Data</p>
                 <p className="text-slate-300 text-sm mb-4">This will permanently delete all your data from the cloud. This action cannot be undone. We recommend exporting a backup first.</p>
                 <button 
-                  onClick={async () => {
-                    if (!confirm('Are you sure you want to delete ALL your data? This cannot be undone!')) return;
-                    if (!confirm('FINAL WARNING: All weeks, periods, inventory, forecasts, invoices, and settings will be permanently deleted. Continue?')) return;
-                    try {
-                      // Delete from Supabase
-                      if (supabase && session?.user?.id) {
-                        await supabase.from('app_data').delete().eq('user_id', session.user.id);
+                  onClick={() => {
+                    setConfirmDialog({
+                      show: true,
+                      title: '⚠️ Delete ALL Data?',
+                      message: 'This will permanently delete ALL your data including weeks, periods, inventory, forecasts, invoices, and settings. This CANNOT be undone. Export a backup first!',
+                      destructive: true,
+                      confirmText: 'Delete Everything',
+                      onConfirm: async () => {
+                        try {
+                          // Delete from Supabase
+                          if (supabase && session?.user?.id) {
+                            await supabase.from('app_data').delete().eq('user_id', session.user.id);
+                          }
+                          // Clear localStorage
+                          localStorage.clear();
+                          // Reset all state
+                          setAllWeeksData({});
+                          setAllPeriodsData({});
+                          setInvHistory({});
+                          setSavedCogs({});
+                          setInvoices([]);
+                          setAmazonForecasts({});
+                          setWeekNotes({});
+                          setGoals({ weeklyRevenue: 0, weeklyProfit: 0, monthlyRevenue: 0, monthlyProfit: 0 });
+                          setStoreName('');
+                          setStoreLogo(null);
+                          setToast({ message: 'All data deleted successfully', type: 'success' });
+                        } catch (err) {
+                          setToast({ message: 'Error deleting data: ' + err.message, type: 'error' });
+                        }
                       }
-                      // Clear localStorage
-                      localStorage.clear();
-                      // Reset all state
-                      setAllWeeksData({});
-                      setAllPeriodsData({});
-                      setInvHistory({});
-                      setSavedCogs({});
-                      setInvoices([]);
-                      setAmazonForecasts({});
-                      setWeekNotes({});
-                      setGoals({ weeklyRevenue: 0, weeklyProfit: 0, monthlyRevenue: 0, monthlyProfit: 0 });
-                      setStoreName('');
-                      setStoreLogo(null);
-                      setToast({ message: 'All data deleted successfully', type: 'success' });
-                    } catch (err) {
-                      setToast({ message: 'Error deleting data: ' + err.message, type: 'error' });
-                    }
+                    });
                   }}
                   className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300 flex items-center gap-2"
                 >
