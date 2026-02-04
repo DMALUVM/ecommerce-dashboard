@@ -37,6 +37,7 @@ export default async function handler(req, res) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            syncType: 'velocity', // Use velocity for cron sync (gets sales data)
             refreshToken: amazonCredentials?.refreshToken || process.env.AMAZON_REFRESH_TOKEN,
             clientId: amazonCredentials?.clientId || process.env.AMAZON_CLIENT_ID,
             clientSecret: amazonCredentials?.clientSecret || process.env.AMAZON_CLIENT_SECRET,
@@ -95,6 +96,7 @@ export default async function handler(req, res) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            syncType: 'inventory', // Use inventory for cron sync
             apiKey: packiyoCredentials?.apiKey || process.env.PACKIYO_API_KEY,
             customerId: packiyoCredentials?.customerId || process.env.PACKIYO_CUSTOMER_ID || '134',
             baseUrl: packiyoCredentials?.baseUrl || 'https://excel3pl.packiyo.com/api/v1',

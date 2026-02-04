@@ -10790,6 +10790,7 @@ const savePeriods = async (d) => {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
+                syncType: 'velocity', // Use velocity for auto-sync (gets sales data)
                 refreshToken: amazonCredentials.refreshToken,
                 clientId: amazonCredentials.clientId,
                 clientSecret: amazonCredentials.clientSecret,
@@ -10866,6 +10867,7 @@ const savePeriods = async (d) => {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
+                syncType: 'inventory', // Use inventory for auto-sync
                 apiKey: packiyoCredentials.apiKey,
                 customerId: packiyoCredentials.customerId,
                 baseUrl: packiyoCredentials.baseUrl,
