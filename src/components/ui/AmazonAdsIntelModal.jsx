@@ -897,9 +897,19 @@ const AmazonAdsIntelModal = ({
       
       if (trackingUpdated && setAllDaysData) {
         setAllDaysData(currentDays);
-        if (setAmazonCampaigns) setAmazonCampaigns(currentCampaigns);
+        // Update lastUpdated on amazonCampaigns to clear the staleness alert
+        if (setAmazonCampaigns) {
+          const newCampaigns = {
+            ...currentCampaigns,
+            lastUpdated: new Date().toISOString(),
+            // Also store the date range of data we have
+            historicalDaily: newIntel.historicalDaily || currentCampaigns.historicalDaily,
+            historicalLastUpdated: newIntel.historicalDaily ? new Date().toISOString() : currentCampaigns.historicalLastUpdated,
+          };
+          setAmazonCampaigns(newCampaigns);
+          try { localStorage.setItem('ecommerce_amazon_campaigns_v1', JSON.stringify(newCampaigns)); } catch(e) {}
+        }
         try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(currentDays)); } catch(e) {}
-        try { localStorage.setItem('ecommerce_amazon_campaigns_v1', JSON.stringify(currentCampaigns)); } catch(e) {}
       }
       
       if (queueCloudSave) queueCloudSave();

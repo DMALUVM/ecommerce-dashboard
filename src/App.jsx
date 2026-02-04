@@ -38911,37 +38911,81 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           const currentSnapshot = invHistory[targetDate];
                           console.log('Current snapshot items:', currentSnapshot.items?.length);
                           const packiyoData = data.inventoryBySku;
+                          
+                          // Debug: log the keys/SKUs from both sources
+                          console.log('Packiyo SKUs:', Object.keys(packiyoData).slice(0, 5), '... total:', Object.keys(packiyoData).length);
+                          console.log('Snapshot SKUs:', currentSnapshot.items?.slice(0, 5).map(i => i.sku), '... total:', currentSnapshot.items?.length);
+                          
                           const today = new Date();
                           const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
                           const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
                           
-                          // Create lookup that handles "Shop" suffix variations
-                          // e.g., DDPE0022Shop should match DDPE0022
+                          // Create lookup that handles "Shop" suffix variations AND case insensitivity
+                          // e.g., DDPE0022Shop should match DDPE0022 and ddpe0022
                           const packiyoLookup = {};
                           Object.entries(packiyoData).forEach(([sku, item]) => {
-                            packiyoLookup[sku] = item;
+                            const trimmedSku = (sku || '').trim();
+                            const lowerSku = trimmedSku.toLowerCase();
+                            
+                            // Index by exact SKU
+                            packiyoLookup[trimmedSku] = item;
+                            // Index by lowercase
+                            packiyoLookup[lowerSku] = item;
+                            
                             // Also index without "Shop" suffix
-                            if (sku.endsWith('Shop')) {
-                              packiyoLookup[sku.replace(/Shop$/, '')] = item;
+                            if (trimmedSku.endsWith('Shop')) {
+                              const baseSku = trimmedSku.replace(/Shop$/, '');
+                              packiyoLookup[baseSku] = item;
+                              packiyoLookup[baseSku.toLowerCase()] = item;
+                            }
+                            // Handle lowercase "shop" suffix too
+                            if (lowerSku.endsWith('shop')) {
+                              const baseSku = lowerSku.replace(/shop$/, '');
+                              packiyoLookup[baseSku] = item;
                             }
                             // And with "Shop" suffix if it doesn't have one
-                            if (!sku.endsWith('Shop')) {
-                              packiyoLookup[sku + 'Shop'] = item;
+                            if (!lowerSku.endsWith('shop')) {
+                              packiyoLookup[trimmedSku + 'Shop'] = item;
+                              packiyoLookup[lowerSku + 'shop'] = item;
                             }
                           });
+                          
+                          console.log('PackiyoLookup total keys:', Object.keys(packiyoLookup).length);
                           
                           // Update each item's 3PL quantity and recalculate stockout dates
                           let newTplTotal = 0;
                           let newTplValue = 0;
                           let matchedCount = 0;
+                          
+                          // Debug: Log first few SKUs from both sources to diagnose mismatch
+                          const packiyoSkuList = Object.keys(packiyoLookup).slice(0, 10);
+                          const snapshotSkuList = currentSnapshot.items.slice(0, 10).map(i => i.sku);
+                          console.log('Packiyo lookup SKUs (first 10):', packiyoSkuList);
+                          console.log('Snapshot item SKUs (first 10):', snapshotSkuList);
+                          
                           const updatedItems = currentSnapshot.items.map(item => {
-                            // Try exact match first, then variations
-                            const packiyoItem = packiyoLookup[item.sku];
+                            // Try multiple matching strategies
+                            const itemSku = (item.sku || '').trim();
+                            const itemSkuLower = itemSku.toLowerCase();
+                            
+                            // Try exact match first, then case-insensitive, then variations
+                            let packiyoItem = packiyoLookup[itemSku] || 
+                                             packiyoLookup[itemSkuLower] ||
+                                             packiyoLookup[itemSku + 'Shop'] ||
+                                             packiyoLookup[itemSkuLower + 'shop'] ||
+                                             packiyoLookup[itemSku.replace(/Shop$/i, '')] ||
+                                             packiyoLookup[itemSkuLower.replace(/shop$/i, '')];
+                            
                             // Handle both snake_case and camelCase field names
                             const newTplQty = packiyoItem?.quantityOnHand || packiyoItem?.quantity_on_hand || packiyoItem?.totalQty || 0;
                             const newTplInbound = packiyoItem?.quantityInbound || packiyoItem?.quantity_inbound || 0;
                             
-                            if (packiyoItem) matchedCount++;
+                            if (packiyoItem) {
+                              matchedCount++;
+                              if (matchedCount <= 3) {
+                                console.log(`Matched SKU "${itemSku}" -> qty=${newTplQty}`);
+                              }
+                            }
                             
                             newTplTotal += newTplQty;
                             newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
@@ -38984,6 +39028,94 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           console.log('Matched existing items:', matchedCount);
                           console.log('FINAL newTplTotal:', newTplTotal);
                           console.log('FINAL newTplValue:', newTplValue);
+                          
+                          // If no matches were found, we need to add Packiyo items as new items
+                          // Filter out 0-qty items (digital products) from Packiyo
+                          const physicalPackiyoItems = Object.entries(packiyoData)
+                            .filter(([sku, item]) => {
+                              const qty = item.quantityOnHand || item.quantity_on_hand || item.totalQty || 0;
+                              return qty > 0; // Only physical products with inventory
+                            });
+                          
+                          console.log('Physical Packiyo items (qty > 0):', physicalPackiyoItems.length);
+                          
+                          // If no matches, add Packiyo items directly
+                          if (matchedCount === 0 && physicalPackiyoItems.length > 0) {
+                            console.log('No SKU matches found - creating items from Packiyo directly');
+                            
+                            // Create new items from Packiyo physical products
+                            const packiyoOnlyItems = physicalPackiyoItems.map(([sku, item]) => {
+                              const qty = item.quantityOnHand || item.quantity_on_hand || item.totalQty || 0;
+                              const cost = item.cost || savedCogs[sku] || 0;
+                              const inbound = item.quantityInbound || item.quantity_inbound || 0;
+                              
+                              newTplTotal += qty;
+                              newTplValue += qty * cost;
+                              
+                              return {
+                                sku: sku.replace(/Shop$/, ''), // Normalize SKU
+                                name: item.name || savedProductNames[sku] || sku,
+                                threeplQty: qty,
+                                threeplInbound: inbound,
+                                amazonQty: 0,
+                                homeQty: 0,
+                                totalQty: qty,
+                                cost,
+                                totalValue: qty * cost,
+                                source: 'packiyo',
+                                daysOfSupply: 999,
+                                weeklyVel: 0,
+                              };
+                            });
+                            
+                            // Combine with any existing items that have Amazon data
+                            const existingWithData = updatedItems.filter(i => (i.amazonQty || 0) > 0 || (i.homeQty || 0) > 0);
+                            const combinedItems = [...existingWithData, ...packiyoOnlyItems];
+                            combinedItems.sort((a, b) => b.totalValue - a.totalValue);
+                            
+                            console.log('Created', packiyoOnlyItems.length, 'items from Packiyo');
+                            console.log('Combined total items:', combinedItems.length);
+                            
+                            updatedItems.length = 0;
+                            updatedItems.push(...combinedItems);
+                          } else if (matchedCount < physicalPackiyoItems.length) {
+                            // Some Packiyo items weren't matched - add them as new items
+                            const matchedSkus = new Set(updatedItems.filter(i => i.threeplQty > 0).map(i => i.sku.toLowerCase()));
+                            
+                            const unmatchedPackiyoItems = physicalPackiyoItems
+                              .filter(([sku]) => {
+                                const normalizedSku = sku.replace(/Shop$/, '').toLowerCase();
+                                return !matchedSkus.has(normalizedSku) && !matchedSkus.has(sku.toLowerCase());
+                              })
+                              .map(([sku, item]) => {
+                                const qty = item.quantityOnHand || item.quantity_on_hand || item.totalQty || 0;
+                                const cost = item.cost || savedCogs[sku] || 0;
+                                const inbound = item.quantityInbound || item.quantity_inbound || 0;
+                                
+                                newTplTotal += qty;
+                                newTplValue += qty * cost;
+                                
+                                return {
+                                  sku: sku.replace(/Shop$/, ''),
+                                  name: item.name || savedProductNames[sku] || sku,
+                                  threeplQty: qty,
+                                  threeplInbound: inbound,
+                                  amazonQty: 0,
+                                  homeQty: 0,
+                                  totalQty: qty,
+                                  cost,
+                                  totalValue: qty * cost,
+                                  source: 'packiyo',
+                                  daysOfSupply: 999,
+                                  weeklyVel: 0,
+                                };
+                              });
+                            
+                            if (unmatchedPackiyoItems.length > 0) {
+                              console.log('Adding', unmatchedPackiyoItems.length, 'unmatched Packiyo items');
+                              updatedItems.push(...unmatchedPackiyoItems);
+                            }
+                          }
                           
                           // Sort by total value
                           updatedItems.sort((a, b) => b.totalValue - a.totalValue);
