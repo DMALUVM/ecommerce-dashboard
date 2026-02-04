@@ -34846,21 +34846,99 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
   if (view === 'banking') {
     const now = new Date();
     
+    // Helper to normalize vendor names (combine similar vendors)
+    const normalizeVendor = (vendor) => {
+      if (!vendor) return vendor;
+      const v = vendor.toLowerCase().trim();
+      // Combine Formunova variants
+      if (v.includes('formunova')) return 'FormuNova';
+      // Add other vendor normalizations as needed
+      return vendor;
+    };
+    
+    // Helper to normalize category names (combine COGS variants)
+    const normalizeCategory = (cat) => {
+      if (!cat) return 'Uncategorized';
+      const c = cat.toLowerCase();
+      // Combine all COGS variants
+      if (c.includes('cost of goods sold') || c.startsWith('cogs')) {
+        return 'Cost of Goods Sold';
+      }
+      return cat;
+    };
+    
+    // Helper to detect if a transaction is a credit card payment (not a real expense)
+    const isCreditCardPayment = (t) => {
+      const desc = (t.description || '').toLowerCase();
+      const cat = (t.topCategory || t.category || '').toLowerCase();
+      const account = (t.account || '').toLowerCase();
+      
+      // Check if this is a payment TO a credit card (transfer, not expense)
+      const isPaymentToCard = (
+        desc.includes('payment') && (
+          desc.includes('card') ||
+          desc.includes('amex') ||
+          desc.includes('visa') ||
+          desc.includes('mastercard') ||
+          desc.includes('credit')
+        )
+      ) || (
+        desc.includes('autopay') && desc.includes('card')
+      ) || (
+        // Category is a credit card account
+        cat.includes('card') && (cat.includes('(') || cat.includes('business'))
+      ) || (
+        // Account name looks like credit card payment
+        account.includes('platinum') ||
+        account.includes('prime card') ||
+        (account.includes('card') && account.includes('('))
+      );
+      
+      return isPaymentToCard;
+    };
+    
     // Transform transactions to ensure they have required flags (handles legacy QBO syncs)
     const transformedTxns = (bankingData.transactions || []).map(t => {
-      // If already has flags, use them
+      // Normalize vendor and category
+      const normalizedVendor = normalizeVendor(t.vendor);
+      const normalizedCategory = normalizeCategory(t.topCategory || t.category || t.account);
+      
+      // If already has flags, use them but check for credit card payment
       if (t.isIncome !== undefined || t.isExpense !== undefined) {
-        return t;
+        // Check if this "expense" is actually a credit card payment (transfer)
+        if (t.isExpense && isCreditCardPayment(t)) {
+          return {
+            ...t,
+            vendor: normalizedVendor,
+            topCategory: normalizedCategory,
+            isExpense: false,
+            isTransfer: true,
+            originalIsExpense: true, // Keep track for debugging
+          };
+        }
+        return {
+          ...t,
+          vendor: normalizedVendor,
+          topCategory: normalizedCategory,
+        };
       }
+      
       // Transform based on type field (from QBO API)
-      const isIncome = t.type === 'income' || (t.type === 'transfer' && (t.amount > 0 || t.originalAmount > 0));
-      const isExpense = t.type === 'expense' || t.type === 'bill' || (t.type === 'transfer' && (t.amount < 0 || t.originalAmount < 0));
+      let isIncome = t.type === 'income' || (t.type === 'transfer' && (t.amount > 0 || t.originalAmount > 0));
+      let isExpense = t.type === 'expense' || t.type === 'bill' || (t.type === 'transfer' && (t.amount < 0 || t.originalAmount < 0));
+      
+      // Check if this "expense" is actually a credit card payment
+      if (isExpense && isCreditCardPayment(t)) {
+        isExpense = false;
+      }
+      
       return {
         ...t,
         isIncome,
         isExpense,
         amount: Math.abs(t.amount || t.originalAmount || 0),
-        topCategory: t.topCategory || t.category || t.account || 'Uncategorized',
+        topCategory: normalizedCategory,
+        vendor: normalizedVendor,
       };
     });
     
@@ -34884,21 +34962,22 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const dateFilter = getDateFilter();
     const filteredTxns = sortedTxns.filter(t => t.date >= dateFilter);
     
-    // Calculate totals
+    // Calculate totals (excluding credit card payments which would double-count)
     const totalIncome = filteredTxns.filter(t => t.isIncome).reduce((s, t) => s + t.amount, 0);
     const totalExpenses = filteredTxns.filter(t => t.isExpense).reduce((s, t) => s + t.amount, 0);
     const netCashFlow = totalIncome - totalExpenses;
     
-    // Group by category for filtered transactions
+    // Group by category for filtered transactions (with normalized categories)
     const expensesByCategory = {};
     const incomeByCategory = {};
     filteredTxns.forEach(t => {
+      const cat = normalizeCategory(t.topCategory);
       if (t.isExpense) {
-        if (!expensesByCategory[t.topCategory]) expensesByCategory[t.topCategory] = 0;
-        expensesByCategory[t.topCategory] += t.amount;
+        if (!expensesByCategory[cat]) expensesByCategory[cat] = 0;
+        expensesByCategory[cat] += t.amount;
       } else if (t.isIncome) {
-        if (!incomeByCategory[t.topCategory]) incomeByCategory[t.topCategory] = 0;
-        incomeByCategory[t.topCategory] += t.amount;
+        if (!incomeByCategory[cat]) incomeByCategory[cat] = 0;
+        incomeByCategory[cat] += t.amount;
       }
     });
     
@@ -36753,8 +36832,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   if (t.isExpense) {
                     monthlyData[month].expenses += t.amount;
                     monthlyData[month].net -= t.amount;
-                    // Track by category
-                    const cat = t.topCategory || 'Uncategorized';
+                    // Track by normalized category
+                    const cat = normalizeCategory(t.topCategory);
                     monthlyData[month].byCategory[cat] = (monthlyData[month].byCategory[cat] || 0) + t.amount;
                   }
                 });
@@ -36770,8 +36849,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 const lastMonthData = monthlyData[lastMonth] || { income: 0, expenses: 0, net: 0, byCategory: {} };
                 const twoMonthsAgoData = monthlyData[twoMonthsAgo] || { income: 0, expenses: 0, net: 0, byCategory: {} };
                 
-                // Get COGS for this month
-                const monthCOGS = currentMonthData.byCategory['Cost of goods sold'] || currentMonthData.byCategory['Cost of Goods Sold'] || 0;
+                // Get COGS for this month (using normalized category name)
+                const monthCOGS = currentMonthData.byCategory['Cost of Goods Sold'] || 0;
                 const monthOpEx = currentMonthData.expenses - monthCOGS;
                 
                 // Operating metrics
@@ -37753,34 +37832,33 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 // Use the main banking date range filter for consistency
                 const vendorDateFilter = dateFilter;
                 
-                // Calculate vendor spending from filtered transactions
+                // Calculate vendor spending from filtered transactions (only real expenses, not CC payments)
                 const vendorSpendingFromTxns = {};
-                sortedTxns.filter(t => t.date >= vendorDateFilter).forEach(t => {
-                  if (t.vendor && (t.type === 'expense' || t.type === 'bill' || t.isExpense)) {
-                    if (!vendorSpendingFromTxns[t.vendor]) {
-                      vendorSpendingFromTxns[t.vendor] = { 
-                        name: t.vendor, 
-                        totalSpent: 0, 
-                        transactionCount: 0,
-                        categories: {},
-                        lastTransaction: null,
-                      };
-                    }
-                    vendorSpendingFromTxns[t.vendor].totalSpent += Math.abs(t.amount);
-                    vendorSpendingFromTxns[t.vendor].transactionCount += 1;
-                    const cat = t.topCategory || t.category || 'Uncategorized';
-                    vendorSpendingFromTxns[t.vendor].categories[cat] = 
-                      (vendorSpendingFromTxns[t.vendor].categories[cat] || 0) + Math.abs(t.amount);
-                    if (!vendorSpendingFromTxns[t.vendor].lastTransaction || t.date > vendorSpendingFromTxns[t.vendor].lastTransaction) {
-                      vendorSpendingFromTxns[t.vendor].lastTransaction = t.date;
-                    }
+                sortedTxns.filter(t => t.date >= vendorDateFilter && t.isExpense).forEach(t => {
+                  const vendorName = t.vendor || 'Unknown Vendor';
+                  if (!vendorSpendingFromTxns[vendorName]) {
+                    vendorSpendingFromTxns[vendorName] = { 
+                      name: vendorName, 
+                      totalSpent: 0, 
+                      transactionCount: 0,
+                      categories: {},
+                      lastTransaction: null,
+                    };
+                  }
+                  vendorSpendingFromTxns[vendorName].totalSpent += Math.abs(t.amount);
+                  vendorSpendingFromTxns[vendorName].transactionCount += 1;
+                  // Use normalized category
+                  const cat = normalizeCategory(t.topCategory || t.category);
+                  vendorSpendingFromTxns[vendorName].categories[cat] = 
+                    (vendorSpendingFromTxns[vendorName].categories[cat] || 0) + Math.abs(t.amount);
+                  if (!vendorSpendingFromTxns[vendorName].lastTransaction || t.date > vendorSpendingFromTxns[vendorName].lastTransaction) {
+                    vendorSpendingFromTxns[vendorName].lastTransaction = t.date;
                   }
                 });
                 
-                // Also include QBO vendor data but filter by date if possible
-                const qboVendors = bankingData.vendors || [];
+                // Filter out "Unknown Vendor" and sort
                 const displayVendors = Object.values(vendorSpendingFromTxns)
-                  .filter(v => v.totalSpent > 0)
+                  .filter(v => v.totalSpent > 0 && v.name !== 'Unknown Vendor')
                   .sort((a, b) => b.totalSpent - a.totalSpent);
                 
                 const totalVendorSpend = displayVendors.reduce((s, v) => s + v.totalSpent, 0);
