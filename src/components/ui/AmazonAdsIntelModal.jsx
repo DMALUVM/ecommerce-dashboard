@@ -80,6 +80,95 @@ const normalizeDate = (d) => {
   return s;
 };
 
+// Helper to parse numeric values from CSV
+const parseNum = (v) => {
+  if (v === null || v === undefined || v === '' || v === 'null') return 0;
+  const s = String(v).replace(/[$,%"\s]/g, '');
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+};
+
+// ============ WRITE DAILY DATA TO TRACKING ============
+// This function takes daily overview rows and merges them into allDaysData and amazonCampaigns
+const writeDailyToTracking = (rows, currentDays = {}, currentCampaigns = {}) => {
+  const updatedDays = { ...currentDays };
+  const updatedCampaigns = { ...currentCampaigns };
+  
+  rows.forEach(row => {
+    const date = normalizeDate(row['date'] || row['Date']);
+    if (!date) return;
+    
+    // Extract campaign name if present
+    const campaign = row['Campaign Name'] || row['campaign'] || row['Campaign'] || '';
+    
+    // Parse metrics
+    const spend = parseNum(row['Spend']);
+    const revenue = parseNum(row['Revenue']);
+    const adRevenue = parseNum(row['Ad Revenue'] || row['revenue']);
+    const orders = parseNum(row['Orders']);
+    const impressions = parseNum(row['Impressions']);
+    const clicks = parseNum(row['Clicks']);
+    const totalRevenue = parseNum(row['Total Revenue']);
+    const totalUnits = parseNum(row['Total Units Ordered'] || row['Total Units']);
+    
+    // Skip rows with no meaningful data
+    if (spend === 0 && revenue === 0 && orders === 0 && impressions === 0) return;
+    
+    // Initialize day if not exists
+    if (!updatedDays[date]) {
+      updatedDays[date] = {
+        amazon: { sales: 0, units: 0, refunds: 0, adSpend: 0, adRevenue: 0, orders: 0 }
+      };
+    }
+    
+    // Initialize amazon object if not exists
+    if (!updatedDays[date].amazon) {
+      updatedDays[date].amazon = { sales: 0, units: 0, refunds: 0, adSpend: 0, adRevenue: 0, orders: 0 };
+    }
+    
+    // Aggregate ad metrics into the day
+    updatedDays[date].amazon.adSpend = (updatedDays[date].amazon.adSpend || 0) + spend;
+    updatedDays[date].amazon.adRevenue = (updatedDays[date].amazon.adRevenue || 0) + (adRevenue || revenue);
+    updatedDays[date].amazon.adOrders = (updatedDays[date].amazon.adOrders || 0) + orders;
+    updatedDays[date].amazon.adImpressions = (updatedDays[date].amazon.adImpressions || 0) + impressions;
+    updatedDays[date].amazon.adClicks = (updatedDays[date].amazon.adClicks || 0) + clicks;
+    
+    // If we have total revenue/units, use those for overall sales
+    if (totalRevenue > 0) {
+      updatedDays[date].amazon.sales = Math.max(updatedDays[date].amazon.sales || 0, totalRevenue);
+    }
+    if (totalUnits > 0) {
+      updatedDays[date].amazon.units = Math.max(updatedDays[date].amazon.units || 0, totalUnits);
+    }
+    
+    // Track campaign-level data if campaign name is present
+    if (campaign) {
+      if (!updatedCampaigns[campaign]) {
+        updatedCampaigns[campaign] = { 
+          name: campaign, 
+          totalSpend: 0, 
+          totalRevenue: 0, 
+          totalOrders: 0,
+          days: {}
+        };
+      }
+      
+      updatedCampaigns[campaign].totalSpend += spend;
+      updatedCampaigns[campaign].totalRevenue += (adRevenue || revenue);
+      updatedCampaigns[campaign].totalOrders += orders;
+      
+      if (!updatedCampaigns[campaign].days[date]) {
+        updatedCampaigns[campaign].days[date] = { spend: 0, revenue: 0, orders: 0 };
+      }
+      updatedCampaigns[campaign].days[date].spend += spend;
+      updatedCampaigns[campaign].days[date].revenue += (adRevenue || revenue);
+      updatedCampaigns[campaign].days[date].orders += orders;
+    }
+  });
+  
+  return { updatedDays, updatedCampaigns };
+};
+
 // ============ DAILY OVERVIEW / HISTORICAL AGGREGATION ============
 
 const aggregateDailyOverview = (rows) => {
