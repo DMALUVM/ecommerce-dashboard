@@ -7436,6 +7436,17 @@ const savePeriods = async (d) => {
     });
     
     console.log('SKU deduplication: allSkus =', allSkus.size, ', uniqueSkus =', uniqueSkus.length);
+    console.log('Velocity data available:', {
+      amazonSkuVelocityCount: Object.keys(amazonSkuVelocity).length,
+      shopifySkuVelocityCount: Object.keys(shopifySkuVelocity).length,
+      sampleAmazonSku: Object.keys(amazonSkuVelocity)[0],
+      sampleShopifySku: Object.keys(shopifySkuVelocity)[0],
+    });
+    
+    // Log first few velocity values for debugging
+    if (Object.keys(shopifySkuVelocity).length > 0) {
+      console.log('Sample Shopify velocities:', Object.entries(shopifySkuVelocity).slice(0, 5));
+    }
     
     const items = [];
     let critical = 0, low = 0, healthy = 0, overstock = 0;
@@ -7457,11 +7468,24 @@ const savePeriods = async (d) => {
       
       // Get velocity from both weekly data AND Amazon inventory file
       // Priority: weekly sales data > t30 from inventory file
-      const amzVelFromWeekly = amazonSkuVelocity[sku] || amzVelLower[skuLower] || 0;
+      
+      // For velocity lookup, also try without "Shop" suffix since Shopify stores velocity under base SKU
+      const skuWithoutShop = sku.replace(/shop$/i, '');
+      const skuWithoutShopLower = skuWithoutShop.toLowerCase();
+      const skuWithoutShopUpper = skuWithoutShop.toUpperCase();
+      const skuWithShop = skuWithoutShop + 'Shop';
+      const skuWithShopLower = skuWithShop.toLowerCase();
+      
+      const amzVelFromWeekly = amazonSkuVelocity[sku] || amzVelLower[skuLower] || 
+                               amazonSkuVelocity[skuWithoutShop] || amzVelLower[skuWithoutShopLower] ||
+                               amazonSkuVelocity[skuWithoutShopUpper] || amazonSkuVelocity[skuWithShop] || 0;
       const amzVelFromInv = a.amzWeeklyVel || 0; // This comes from t30 in inventory file
       const amzVel = amzVelFromWeekly > 0 ? amzVelFromWeekly : amzVelFromInv;
       
-      const shopVel = shopifySkuVelocity[sku] || shopVelLower[skuLower] || 0;
+      const shopVel = shopifySkuVelocity[sku] || shopVelLower[skuLower] || 
+                      shopifySkuVelocity[skuWithoutShop] || shopVelLower[skuWithoutShopLower] ||
+                      shopifySkuVelocity[skuWithoutShopUpper] || shopifySkuVelocity[skuWithShop] ||
+                      shopVelLower[skuWithShopLower] || 0;
       const totalVel = amzVel + shopVel;
       
       // Apply learned corrections
