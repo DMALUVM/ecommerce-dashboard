@@ -34857,12 +34857,35 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       // Combine Formunova variants
       if (v.includes('formunova')) return 'FormuNova';
       
+      // Combine Alibaba variants
+      if (v.includes('alibaba')) return 'Alibaba';
+      
+      // Combine 3PL services under Excel 3PL
+      if (v.includes('3pl') || v.includes('excel 3pl') || v.includes('excel3pl')) return 'Excel 3PL';
+      
+      // Combine Shulman Rogers variants (law firm)
+      if (v.includes('shulman rogers') || v.includes('shulman') || (v.includes('rogers') && v.includes('law'))) return 'Shulman Rogers';
+      
       // Combine Amazon variants (but keep as vendor, not the marketplace)
       if (v.includes('amazon') && !v.includes('seller') && !v.includes('marketplace')) {
-        // This is Amazon as a vendor (ads, services, etc), not Amazon marketplace income
         if (v.includes('advertising') || v.includes('ads')) return 'Amazon Advertising';
         return 'Amazon';
       }
+      
+      // Combine Shopify variants
+      if (v.includes('shopify')) return 'Shopify';
+      
+      // Combine PayPal variants
+      if (v.includes('paypal')) return 'PayPal';
+      
+      // Combine UPS variants
+      if (v.includes('ups') && (v.includes('ship') || v.includes('freight') || v.length < 10)) return 'UPS';
+      
+      // Combine FedEx variants
+      if (v.includes('fedex')) return 'FedEx';
+      
+      // Combine USPS variants
+      if (v.includes('usps') || v.includes('postal')) return 'USPS';
       
       // Add other vendor normalizations as needed
       return vendor;
@@ -37864,16 +37887,36 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 sortedTxns.filter(t => t.date >= vendorDateFilter && t.isExpense).forEach(t => {
                   // Use vendor name if available, otherwise try to extract from description
                   let vendorName = t.vendor;
+                  const desc = (t.description || '').toLowerCase();
+                  const memo = (t.memo || '').toLowerCase();
+                  const combined = desc + ' ' + memo;
                   
+                  // First check if description/memo contains known vendor patterns
+                  // This catches payments where vendor field isn't set but description mentions the vendor
                   if (!vendorName || vendorName === '' || vendorName === 'Unknown Vendor') {
-                    // Try to extract vendor from description
-                    const desc = t.description || '';
-                    if (desc && desc.length > 2) {
-                      // Take first part before common separators
-                      vendorName = desc.split(' - ')[0].split(',')[0].split('#')[0].trim();
-                      // Skip if too long or too short
-                      if (vendorName.length < 2 || vendorName.length > 60) {
-                        vendorName = null;
+                    // Check for known vendors in description
+                    if (combined.includes('shulman')) {
+                      vendorName = 'Shulman Rogers';
+                    } else if (combined.includes('marpac')) {
+                      vendorName = 'Marpac';
+                    } else if (combined.includes('formunova')) {
+                      vendorName = 'FormuNova';
+                    } else if (combined.includes('alibaba')) {
+                      vendorName = 'Alibaba';
+                    } else if (combined.includes('3pl') || combined.includes('excel')) {
+                      vendorName = 'Excel 3PL';
+                    } else if (combined.includes('amazon')) {
+                      vendorName = 'Amazon';
+                    } else if (combined.includes('shopify')) {
+                      vendorName = 'Shopify';
+                    } else {
+                      // Try to extract vendor from description
+                      const rawDesc = t.description || '';
+                      if (rawDesc && rawDesc.length > 2) {
+                        vendorName = rawDesc.split(' - ')[0].split(',')[0].split('#')[0].trim();
+                        if (vendorName.length < 2 || vendorName.length > 60) {
+                          vendorName = null;
+                        }
                       }
                     }
                   }
