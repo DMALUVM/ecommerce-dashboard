@@ -34892,6 +34892,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       return cat;
     };
     
+    // Helper to detect if a category is actually a bank/credit card account (not a real expense category)
+    // These are PAYMENTS to accounts, not expenses - they would double-count
+    const isAccountCategory = (cat) => {
+      if (!cat) return false;
+      const c = cat.toLowerCase();
+      return (
+        // Credit card accounts
+        c.includes('card') && (c.includes('(') || c.includes('business') || c.includes('platinum') || c.includes('prime')) ||
+        // Bank accounts
+        c.includes('operations') && c.includes('(') ||
+        c.includes('checking') && c.includes('(') ||
+        c.includes('savings') && c.includes('(') ||
+        // Generic account patterns
+        /\(\d{4}\)/.test(cat) // Has (1234) pattern - account number
+      );
+    };
+    
     // Transform transactions to ensure they have correct flags
     // ALWAYS re-calculate flags based on QBO type to fix any bad cached data
     const transformedTxns = (bankingData.transactions || []).map(t => {
@@ -34902,6 +34919,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       // Transfers are NOT income or expense - they just move money between accounts
       const isTransfer = t.type === 'transfer' || t.qboType === 'Transfer';
       
+      // Check if the category is actually an account (credit card/bank) - these are payments, not expenses
+      const categoryIsAccount = isAccountCategory(t.topCategory || t.category);
+      
       // Determine income/expense based on QBO type (most reliable)
       let isIncome = false;
       let isExpense = false;
@@ -34910,11 +34930,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         if (t.qboType === 'Deposit' || t.type === 'income') {
           isIncome = true;
         } else if (t.qboType === 'Purchase' || t.qboType === 'Bill' || t.type === 'expense' || t.type === 'bill') {
-          isExpense = true;
+          // Only count as expense if the category is a REAL expense category
+          // Not a credit card or bank account (which would be a payment/transfer)
+          if (categoryIsAccount) {
+            // This is a payment TO a credit card or bank account - it's a transfer, not an expense
+            // The actual expense was already recorded when the purchase was made on the card
+            isExpense = false;
+          } else {
+            isExpense = true;
+          }
         } else if (t.isIncome !== undefined) {
           // Fall back to existing flags for non-QBO transactions
           isIncome = t.isIncome;
-          isExpense = t.isExpense;
+          isExpense = t.isExpense && !categoryIsAccount;
         }
       }
       
@@ -34922,7 +34950,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         ...t,
         isIncome,
         isExpense,
-        isTransfer,
+        isTransfer: isTransfer || categoryIsAccount,
         amount: Math.abs(t.amount || t.originalAmount || 0),
         topCategory: normalizedCategory,
         vendor: normalizedVendor,
