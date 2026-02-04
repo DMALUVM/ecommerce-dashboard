@@ -21145,17 +21145,162 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             const updatedCreds = { ...shopifyCredentials, lastSync: new Date().toISOString() };
                             setShopifyCredentials(updatedCreds);
                             
+                            // ========== AUTO-LEARNING: Compare predicted vs actual ==========
+                            // This runs after each Shopify sync to improve velocity predictions
+                            let learningToastShown = false;
+                            try {
+                              console.log('=== AUTO-LEARNING: Comparing predicted vs actual velocity ===');
+                              
+                              // Get last complete week's data
+                              const today = new Date();
+                              const dayOfWeek = today.getDay();
+                              const lastSunday = new Date(today);
+                              lastSunday.setDate(today.getDate() - dayOfWeek - 7); // Go back to start of last complete week
+                              const lastSaturday = new Date(lastSunday);
+                              lastSaturday.setDate(lastSunday.getDate() + 6);
+                              
+                              const formatDate = (d) => d.toISOString().split('T')[0];
+                              const weekStart = formatDate(lastSunday);
+                              const weekEnd = formatDate(lastSaturday);
+                              
+                              console.log('Analyzing complete week:', weekStart, 'to', weekEnd);
+                              
+                              // Collect actual sales for the week
+                              const actualSalesBySku = {};
+                              let daysFound = 0;
+                              
+                              for (let d = new Date(lastSunday); d <= lastSaturday; d.setDate(d.getDate() + 1)) {
+                                const dateKey = formatDate(d);
+                                const dayData = updatedDays[dateKey];
+                                if (!dayData) continue;
+                                daysFound++;
+                                
+                                // Shopify sales
+                                const shopifySkuData = dayData?.shopify?.skuData;
+                                const shopifyList = Array.isArray(shopifySkuData) ? shopifySkuData : Object.values(shopifySkuData || {});
+                                shopifyList.forEach(item => {
+                                  if (!item.sku) return;
+                                  const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
+                                  if (!actualSalesBySku[normalizedSku]) actualSalesBySku[normalizedSku] = { units: 0, revenue: 0 };
+                                  actualSalesBySku[normalizedSku].units += item.unitsSold || item.units || 0;
+                                  actualSalesBySku[normalizedSku].revenue += item.netSales || item.revenue || 0;
+                                });
+                                
+                                // Amazon sales
+                                const amazonSkuData = dayData?.amazon?.skuData;
+                                const amazonList = Array.isArray(amazonSkuData) ? amazonSkuData : Object.values(amazonSkuData || {});
+                                amazonList.forEach(item => {
+                                  if (!item.sku) return;
+                                  const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
+                                  if (!actualSalesBySku[normalizedSku]) actualSalesBySku[normalizedSku] = { units: 0, revenue: 0 };
+                                  actualSalesBySku[normalizedSku].units += item.unitsSold || item.units || 0;
+                                  actualSalesBySku[normalizedSku].revenue += item.netSales || item.netProceeds || item.revenue || 0;
+                                });
+                              }
+                              
+                              console.log('Found', daysFound, 'days of data,', Object.keys(actualSalesBySku).length, 'SKUs with sales');
+                              
+                              // Only proceed if we have at least 5 days of data
+                              if (daysFound >= 5 && Object.keys(actualSalesBySku).length > 0) {
+                                // Get current inventory with predicted velocities
+                                const latestInvKey = Object.keys(invHistory).sort().reverse()[0];
+                                const currentInv = latestInvKey ? invHistory[latestInvKey]?.items || [] : [];
+                                
+                                // Calculate correction factors
+                                let totalPredicted = 0;
+                                let totalActual = 0;
+                                const skuCorrections = {};
+                                
+                                currentInv.forEach(item => {
+                                  const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
+                                  const predicted = item.weeklyVel || item.rawWeeklyVel || 0;
+                                  const actual = actualSalesBySku[normalizedSku]?.units || 0;
+                                  
+                                  if (predicted > 0 && actual > 0) {
+                                    totalPredicted += predicted;
+                                    totalActual += actual;
+                                    
+                                    // Per-SKU correction: actual / predicted
+                                    const correction = actual / predicted;
+                                    // Clamp to reasonable range (0.5x to 2x)
+                                    const clampedCorrection = Math.max(0.5, Math.min(2.0, correction));
+                                    
+                                    skuCorrections[normalizedSku] = {
+                                      predicted,
+                                      actual,
+                                      correction: clampedCorrection,
+                                    };
+                                  }
+                                });
+                                
+                                // Calculate overall correction
+                                const overallCorrection = totalPredicted > 0 ? totalActual / totalPredicted : 1;
+                                const clampedOverall = Math.max(0.7, Math.min(1.5, overallCorrection));
+                                
+                                console.log('Predicted total:', totalPredicted.toFixed(0), '| Actual total:', totalActual.toFixed(0));
+                                console.log('Overall correction factor:', clampedOverall.toFixed(3));
+                                console.log('SKUs with corrections:', Object.keys(skuCorrections).length);
+                                
+                                // Update forecastCorrections state
+                                setForecastCorrections(prev => {
+                                  const newCorrections = { ...prev };
+                                  
+                                  // Update overall with exponential smoothing (70% old, 30% new)
+                                  const alpha = 0.3;
+                                  newCorrections.overall = {
+                                    units: (prev.overall?.units || 1) * (1 - alpha) + clampedOverall * alpha,
+                                    revenue: (prev.overall?.revenue || 1) * (1 - alpha) + clampedOverall * alpha,
+                                    profit: prev.overall?.profit || 1,
+                                  };
+                                  
+                                  // Update per-SKU corrections
+                                  if (!newCorrections.bySku) newCorrections.bySku = {};
+                                  Object.entries(skuCorrections).forEach(([sku, data]) => {
+                                    const existing = prev.bySku?.[sku] || { units: 1, samples: 0 };
+                                    newCorrections.bySku[sku] = {
+                                      units: existing.units * (1 - alpha) + data.correction * alpha,
+                                      samples: (existing.samples || 0) + 1,
+                                      lastActual: data.actual,
+                                      lastPredicted: data.predicted,
+                                      lastUpdated: new Date().toISOString(),
+                                    };
+                                  });
+                                  
+                                  // Update confidence based on samples
+                                  newCorrections.samplesUsed = (prev.samplesUsed || 0) + 1;
+                                  newCorrections.confidence = Math.min(100, (newCorrections.samplesUsed || 0) * 15);
+                                  newCorrections.lastUpdated = new Date().toISOString();
+                                  
+                                  console.log('Updated forecastCorrections - Confidence:', newCorrections.confidence, '%, Samples:', newCorrections.samplesUsed);
+                                  
+                                  return newCorrections;
+                                });
+                                
+                                learningToastShown = true;
+                                setToast({
+                                  message: `✓ Synced ${data.orderCount} orders | 🧠 Learning updated (${Object.keys(skuCorrections).length} SKUs calibrated)`,
+                                  type: 'success'
+                                });
+                              }
+                            } catch (learningErr) {
+                              console.error('Auto-learning error (non-fatal):', learningErr);
+                            }
+                            // ========== END AUTO-LEARNING ==========
+                            
                             setShopifySyncStatus({ loading: false, error: null, progress: '' });
                             setShopifySyncPreview(null);
                             
                             // Reset smart sync state
                             setShopifySmartSync({ enabled: true, missingDays: [], existingDays: [] });
                             
-                            const skippedCount = shopifySmartSync.enabled ? shopifySmartSync.existingDays.length : 0;
-                            setToast({ 
-                              message: `Synced ${data.orderCount} orders across ${syncedDayCount} days` + (skippedCount > 0 ? ` (skipped ${skippedCount} existing)` : ''), 
-                              type: 'success' 
-                            });
+                            // Only show basic toast if learning toast wasn't shown
+                            if (!learningToastShown) {
+                              const skippedCount = shopifySmartSync.enabled ? shopifySmartSync.existingDays.length : 0;
+                              setToast({ 
+                                message: `Synced ${data.orderCount} orders across ${syncedDayCount} days` + (skippedCount > 0 ? ` (skipped ${skippedCount} existing)` : ''), 
+                                type: 'success' 
+                              });
+                            }
                           } catch (err) {
                             setShopifySyncStatus({ loading: false, error: err.message, progress: '' });
                           }
@@ -39062,28 +39207,42 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           type: 'success' 
                         });
                         
-                        // ========== CALCULATE VELOCITY FROM SALES DATA ==========
-                        // Use allDaysData from state (already loaded and decompressed) instead of localStorage
-                        // Track Amazon and Shopify velocities SEPARATELY
+                        // ========== INDUSTRY-STANDARD VELOCITY CALCULATION ==========
+                        // Features:
+                        // 1. Weighted Moving Average (recent weeks count more)
+                        // 2. Separate Amazon/Shopify tracking
+                        // 3. Trend detection (acceleration/deceleration)
+                        // 4. Apply learned forecast corrections
+                        
                         const amazonVelocityLookup = {};
                         const shopifyVelocityLookup = {};
+                        const velocityTrends = {}; // Track if velocity is accelerating/decelerating
+                        const rawVelocityLookup = {}; // Store uncorrected velocity
+                        
                         try {
-                          console.log('=== PACKIYO SYNC: Calculating velocity from allDaysData state ===');
+                          console.log('=== PACKIYO SYNC: Industry-Standard Velocity Calculation ===');
                           console.log('allDaysData has', Object.keys(allDaysData).length, 'days');
+                          console.log('forecastCorrections confidence:', forecastCorrections?.confidence || 0, '%, samples:', forecastCorrections?.samplesUsed || 0);
                           
                           if (Object.keys(allDaysData).length > 0) {
-                            const dates = Object.keys(allDaysData).sort().reverse().slice(0, 28); // Last 28 days
-                            const weeksEquiv = dates.length / 7;
+                            // Get last 28 days sorted by date
+                            const allDates = Object.keys(allDaysData).sort().reverse();
+                            const last28Days = allDates.slice(0, 28);
+                            const last14Days = last28Days.slice(0, 14);
+                            const prior14Days = last28Days.slice(14, 28);
                             
-                            console.log('Using last', dates.length, 'days for velocity. Sample dates:', dates.slice(0, 3));
+                            console.log('Using last 28 days for velocity. Recent 14:', last14Days.slice(0, 3), '... Prior 14:', prior14Days.slice(0, 3));
                             
-                            // Count days with Shopify SKU data
+                            // Stats tracking
                             let daysWithShopifySkuData = 0;
                             let daysWithAmazonSkuData = 0;
                             let totalShopifyUnits = 0;
                             let totalAmazonUnits = 0;
                             let uniqueShopifySkus = new Set();
                             let uniqueAmazonSkus = new Set();
+                            
+                            // Temporary storage for weighted calculation
+                            const skuDailyUnits = {}; // { sku: { shopify: [day1, day2...], amazon: [day1, day2...] } }
                             
                             // Helper to store velocity under multiple key variants
                             const storeVelocity = (lookup, sku, velocity) => {
@@ -39097,59 +39256,119 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               
                               [sku, skuLower, skuUpper, baseSku, baseSkuLower, withShop, withShopLower, withShopUpper].forEach(key => {
                                 if (!lookup[key]) lookup[key] = 0;
-                                lookup[key] += velocity;
+                                lookup[key] = Math.max(lookup[key], velocity); // Use max to avoid double-counting
                               });
                             };
                             
-                            dates.forEach(date => {
+                            // Collect daily units for each SKU
+                            last28Days.forEach((date, dayIndex) => {
                               const day = allDaysData[date];
+                              const isRecent = dayIndex < 14; // First 14 days = recent
                               
                               // Process Shopify SKU data
                               const shopifySkuData = day?.shopify?.skuData;
                               const shopifyList = Array.isArray(shopifySkuData) ? shopifySkuData : Object.values(shopifySkuData || {});
                               
-                              if (shopifyList.length > 0) {
-                                daysWithShopifySkuData++;
-                              }
+                              if (shopifyList.length > 0) daysWithShopifySkuData++;
                               
                               shopifyList.forEach(item => {
                                 if (!item.sku) return;
-                                uniqueShopifySkus.add(item.sku);
+                                const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
+                                uniqueShopifySkus.add(normalizedSku);
                                 const units = item.unitsSold || item.units || 0;
                                 totalShopifyUnits += units;
-                                const velocity = weeksEquiv > 0 ? units / weeksEquiv : 0;
-                                storeVelocity(shopifyVelocityLookup, item.sku, velocity);
+                                
+                                if (!skuDailyUnits[normalizedSku]) {
+                                  skuDailyUnits[normalizedSku] = { shopify: [], amazon: [], recentShopify: 0, priorShopify: 0, recentAmazon: 0, priorAmazon: 0 };
+                                }
+                                skuDailyUnits[normalizedSku].shopify.push(units);
+                                if (isRecent) {
+                                  skuDailyUnits[normalizedSku].recentShopify += units;
+                                } else {
+                                  skuDailyUnits[normalizedSku].priorShopify += units;
+                                }
                               });
                               
                               // Process Amazon SKU data
                               const amazonSkuData = day?.amazon?.skuData;
                               const amazonList = Array.isArray(amazonSkuData) ? amazonSkuData : Object.values(amazonSkuData || {});
                               
-                              if (amazonList.length > 0) {
-                                daysWithAmazonSkuData++;
-                              }
+                              if (amazonList.length > 0) daysWithAmazonSkuData++;
                               
                               amazonList.forEach(item => {
                                 if (!item.sku) return;
-                                uniqueAmazonSkus.add(item.sku);
+                                const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
+                                uniqueAmazonSkus.add(normalizedSku);
                                 const units = item.unitsSold || item.units || 0;
                                 totalAmazonUnits += units;
-                                const velocity = weeksEquiv > 0 ? units / weeksEquiv : 0;
-                                storeVelocity(amazonVelocityLookup, item.sku, velocity);
+                                
+                                if (!skuDailyUnits[normalizedSku]) {
+                                  skuDailyUnits[normalizedSku] = { shopify: [], amazon: [], recentShopify: 0, priorShopify: 0, recentAmazon: 0, priorAmazon: 0 };
+                                }
+                                skuDailyUnits[normalizedSku].amazon.push(units);
+                                if (isRecent) {
+                                  skuDailyUnits[normalizedSku].recentAmazon += units;
+                                } else {
+                                  skuDailyUnits[normalizedSku].priorAmazon += units;
+                                }
                               });
+                            });
+                            
+                            // Calculate WEIGHTED velocity for each SKU
+                            // Formula: (Recent 2 weeks × 2 + Prior 2 weeks × 1) / 3 weeks equivalent
+                            // This gives 2x weight to recent performance
+                            Object.entries(skuDailyUnits).forEach(([sku, data]) => {
+                              // Shopify weighted velocity
+                              const shopifyRecent = data.recentShopify; // Units in last 14 days
+                              const shopifyPrior = data.priorShopify;   // Units in prior 14 days
+                              // Weighted: recent counts 2x, so it's like having 3 periods of 14 days
+                              const shopifyWeightedTotal = (shopifyRecent * 2) + shopifyPrior;
+                              const shopifyWeeksEquiv = 3 * 2; // 3 periods × 2 weeks each = 6 weeks equivalent
+                              const shopifyVel = shopifyWeeksEquiv > 0 ? shopifyWeightedTotal / shopifyWeeksEquiv : 0;
+                              
+                              // Amazon weighted velocity
+                              const amazonRecent = data.recentAmazon;
+                              const amazonPrior = data.priorAmazon;
+                              const amazonWeightedTotal = (amazonRecent * 2) + amazonPrior;
+                              const amazonVel = shopifyWeeksEquiv > 0 ? amazonWeightedTotal / shopifyWeeksEquiv : 0;
+                              
+                              // Store raw velocities
+                              storeVelocity(shopifyVelocityLookup, sku, shopifyVel);
+                              storeVelocity(amazonVelocityLookup, sku, amazonVel);
+                              
+                              // Calculate trend (is velocity accelerating or decelerating?)
+                              const recentWeeklyShopify = shopifyRecent / 2;
+                              const priorWeeklyShopify = shopifyPrior / 2;
+                              const recentWeeklyAmazon = amazonRecent / 2;
+                              const priorWeeklyAmazon = amazonPrior / 2;
+                              
+                              const shopifyTrend = priorWeeklyShopify > 0 ? ((recentWeeklyShopify - priorWeeklyShopify) / priorWeeklyShopify) : 0;
+                              const amazonTrend = priorWeeklyAmazon > 0 ? ((recentWeeklyAmazon - priorWeeklyAmazon) / priorWeeklyAmazon) : 0;
+                              
+                              velocityTrends[sku] = {
+                                shopifyTrend: Math.round(shopifyTrend * 100), // % change
+                                amazonTrend: Math.round(amazonTrend * 100),
+                                totalTrend: Math.round(((shopifyTrend + amazonTrend) / 2) * 100),
+                                accelerating: (shopifyTrend + amazonTrend) > 0.1, // >10% increase
+                                decelerating: (shopifyTrend + amazonTrend) < -0.1, // >10% decrease
+                              };
+                              
+                              // Store raw (uncorrected) velocity
+                              rawVelocityLookup[sku] = shopifyVel + amazonVel;
                             });
                             
                             console.log('Days with Shopify skuData:', daysWithShopifySkuData, '| Amazon skuData:', daysWithAmazonSkuData);
                             console.log('Total units - Shopify:', totalShopifyUnits, '| Amazon:', totalAmazonUnits);
                             console.log('Unique SKUs - Shopify:', uniqueShopifySkus.size, '| Amazon:', uniqueAmazonSkus.size);
-                            console.log('Shopify velocity lookup has', Object.keys(shopifyVelocityLookup).length, 'entries');
-                            console.log('Amazon velocity lookup has', Object.keys(amazonVelocityLookup).length, 'entries');
+                            console.log('Velocity entries calculated:', Object.keys(skuDailyUnits).length);
                             
-                            // Show sample velocities for Shopify-only SKUs
-                            const shopifyOnlySamples = ['ddpe0032shop', 'ddpe0005shop', 'ddpe0027shop'];
-                            console.log('Shopify-only SKU velocities:', shopifyOnlySamples.map(k => 
-                              `${k}: Shop=${(shopifyVelocityLookup[k] || 0).toFixed(2)}, Amz=${(amazonVelocityLookup[k] || 0).toFixed(2)}`
-                            ));
+                            // Show sample velocities with trends
+                            const shopifyOnlySamples = ['DDPE0032', 'DDPE0005', 'DDPE0027'];
+                            console.log('Sample SKU velocities (weighted):');
+                            shopifyOnlySamples.forEach(sku => {
+                              const trend = velocityTrends[sku];
+                              console.log(`  ${sku}: Shop=${(shopifyVelocityLookup[sku] || 0).toFixed(2)}/wk, Amz=${(amazonVelocityLookup[sku] || 0).toFixed(2)}/wk, Trend=${trend?.totalTrend || 0}%`);
+                            });
                           } else {
                             console.log('NO SALES DATA FOUND in allDaysData - velocity will be 0 for all items');
                           }
@@ -39157,35 +39376,52 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           console.error('Error calculating velocity:', e);
                         }
                         
-                        // Helper to get velocities for a SKU (returns { amazon, shopify, total })
+                        // Helper to get velocities for a SKU with forecast corrections applied
                         const getVelocitiesForSku = (sku) => {
-                          if (!sku) return { amazon: 0, shopify: 0, total: 0 };
+                          if (!sku) return { amazon: 0, shopify: 0, total: 0, corrected: 0, correctionApplied: false, trend: 0 };
                           
+                          const normalizedSku = sku.replace(/shop$/i, '').toUpperCase();
                           const variants = [
-                            sku,
-                            sku.toLowerCase(),
-                            sku.toUpperCase(),
-                            sku.replace(/shop$/i, ''),
-                            sku.replace(/shop$/i, '').toUpperCase(),
-                            sku.replace(/shop$/i, '').toLowerCase(),
-                            sku.replace(/shop$/i, '') + 'Shop',
-                            sku.replace(/shop$/i, '').toLowerCase() + 'shop',
-                            sku.replace(/shop$/i, '') + 'SHOP',
-                            sku.replace(/shop$/i, '').toUpperCase() + 'SHOP',
+                            sku, sku.toLowerCase(), sku.toUpperCase(),
+                            normalizedSku, normalizedSku.toLowerCase(),
+                            normalizedSku + 'Shop', normalizedSku.toLowerCase() + 'shop', normalizedSku + 'SHOP',
                           ];
                           
                           let amazon = 0, shopify = 0;
                           for (const variant of variants) {
-                            if (amazonVelocityLookup[variant] > 0 && amazon === 0) {
-                              amazon = amazonVelocityLookup[variant];
-                            }
-                            if (shopifyVelocityLookup[variant] > 0 && shopify === 0) {
-                              shopify = shopifyVelocityLookup[variant];
-                            }
+                            if (amazonVelocityLookup[variant] > 0 && amazon === 0) amazon = amazonVelocityLookup[variant];
+                            if (shopifyVelocityLookup[variant] > 0 && shopify === 0) shopify = shopifyVelocityLookup[variant];
                             if (amazon > 0 && shopify > 0) break;
                           }
                           
-                          return { amazon, shopify, total: amazon + shopify };
+                          const total = amazon + shopify;
+                          const trend = velocityTrends[normalizedSku]?.totalTrend || 0;
+                          
+                          // Apply forecast corrections if we have enough confidence
+                          let corrected = total;
+                          let correctionApplied = false;
+                          
+                          if (forecastCorrections?.confidence >= 30 && forecastCorrections?.samplesUsed >= 2) {
+                            // Check for SKU-specific correction first
+                            if (forecastCorrections.bySku?.[normalizedSku]?.samples >= 2) {
+                              corrected = total * (forecastCorrections.bySku[normalizedSku].units || 1);
+                              correctionApplied = true;
+                              // console.log(`Applied SKU correction to ${normalizedSku}: ${total.toFixed(2)} → ${corrected.toFixed(2)}`);
+                            } else if (forecastCorrections.overall?.units) {
+                              // Fall back to overall correction
+                              corrected = total * forecastCorrections.overall.units;
+                              correctionApplied = true;
+                            }
+                          }
+                          
+                          // Also apply trend adjustment for accelerating/decelerating products
+                          // If accelerating >20%, bump up by 10%. If decelerating >20%, reduce by 10%
+                          if (Math.abs(trend) > 20) {
+                            const trendAdjustment = trend > 0 ? 1.1 : 0.9;
+                            corrected = corrected * trendAdjustment;
+                          }
+                          
+                          return { amazon, shopify, total, corrected, correctionApplied, trend };
                         };
                         
                         // Update current inventory snapshot with fresh Packiyo 3PL data
@@ -39264,15 +39500,20 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             
                             const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
                             
-                            // Get velocities from lookup OR preserve existing
-                            const calculatedVel = getVelocitiesForSku(item.sku);
-                            const amzWeeklyVel = calculatedVel.amazon > 0 ? calculatedVel.amazon : (item.amzWeeklyVel || 0);
-                            const shopWeeklyVel = calculatedVel.shopify > 0 ? calculatedVel.shopify : (item.shopWeeklyVel || 0);
-                            const weeklyVel = amzWeeklyVel + shopWeeklyVel;
+                            // Get velocities from lookup with corrections applied
+                            const velocityData = getVelocitiesForSku(item.sku);
+                            const amzWeeklyVel = velocityData.amazon > 0 ? velocityData.amazon : (item.amzWeeklyVel || 0);
+                            const shopWeeklyVel = velocityData.shopify > 0 ? velocityData.shopify : (item.shopWeeklyVel || 0);
+                            const rawWeeklyVel = amzWeeklyVel + shopWeeklyVel;
+                            
+                            // Use CORRECTED velocity for DOS calculation (includes learning adjustments)
+                            const weeklyVel = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
+                            const correctionApplied = velocityData.correctionApplied;
+                            const velocityTrend = velocityData.trend;
                             
                             // Debug: Log velocity lookup for first few items
                             if (matchedCount <= 5) {
-                              console.log(`Velocity lookup for "${item.sku}": Amz=${amzWeeklyVel.toFixed(2)}, Shop=${shopWeeklyVel.toFixed(2)}, Total=${weeklyVel.toFixed(2)} (existing: amz=${item.amzWeeklyVel || 0}, shop=${item.shopWeeklyVel || 0})`);
+                              console.log(`Velocity for "${item.sku}": Raw=${rawWeeklyVel.toFixed(2)}, Corrected=${weeklyVel.toFixed(2)}, Trend=${velocityTrend}% ${correctionApplied ? '(correction applied)' : ''}`);
                             }
                             
                             const dos = weeklyVel > 0 ? Math.round((newTotalQty / weeklyVel) * 7) : 999;
@@ -39300,9 +39541,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               threeplInbound: newTplInbound,
                               totalQty: newTotalQty,
                               totalValue: newTotalQty * (item.cost || 0),
-                              weeklyVel, // Total velocity (Amazon + Shopify)
+                              weeklyVel, // Corrected total velocity (used for DOS)
+                              rawWeeklyVel, // Uncorrected velocity
                               amzWeeklyVel, // Amazon-only velocity
                               shopWeeklyVel, // Shopify-only velocity
+                              correctionApplied, // Whether forecast correction was applied
+                              velocityTrend, // % trend (positive = accelerating)
                               daysOfSupply: dos,
                               stockoutDate,
                               reorderByDate,
@@ -39351,11 +39595,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               const cost = item.cost || savedCogs[normalizedSku] || savedCogs[normalizedSku + 'Shop'] || 0;
                               const inbound = item.quantityInbound || item.quantity_inbound || 0;
                               
-                              // Get velocities from lookup (Amazon and Shopify separately)
-                              const velocities = getVelocitiesForSku(normalizedSku);
-                              const amzWeeklyVel = velocities.amazon;
-                              const shopWeeklyVel = velocities.shopify;
-                              const weeklyVel = velocities.total;
+                              // Get velocities from lookup with corrections
+                              const velocityData = getVelocitiesForSku(normalizedSku);
+                              const amzWeeklyVel = velocityData.amazon;
+                              const shopWeeklyVel = velocityData.shopify;
+                              const rawWeeklyVel = amzWeeklyVel + shopWeeklyVel;
+                              const weeklyVel = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
                               const dos = weeklyVel > 0 ? Math.round((qty / weeklyVel) * 7) : 999;
                               
                               // Calculate stockout and reorder dates
@@ -39389,8 +39634,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                 totalValue: qty * cost,
                                 source: 'packiyo',
                                 weeklyVel,
+                                rawWeeklyVel,
                                 amzWeeklyVel,
                                 shopWeeklyVel,
+                                correctionApplied: velocityData.correctionApplied,
+                                velocityTrend: velocityData.trend,
                                 daysOfSupply: dos,
                                 stockoutDate,
                                 reorderByDate,
@@ -39426,11 +39674,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                 const cost = item.cost || savedCogs[normalizedSku] || savedCogs[normalizedSku + 'Shop'] || 0;
                                 const inbound = item.quantityInbound || item.quantity_inbound || 0;
                                 
-                                // Get velocities from lookup (Amazon and Shopify separately)
-                                const velocities = getVelocitiesForSku(normalizedSku);
-                                const amzWeeklyVel = velocities.amazon;
-                                const shopWeeklyVel = velocities.shopify;
-                                const weeklyVel = velocities.total;
+                                // Get velocities from lookup with corrections
+                                const velocityData = getVelocitiesForSku(normalizedSku);
+                                const amzWeeklyVel = velocityData.amazon;
+                                const shopWeeklyVel = velocityData.shopify;
+                                const rawWeeklyVel = amzWeeklyVel + shopWeeklyVel;
+                                const weeklyVel = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
                                 const dos = weeklyVel > 0 ? Math.round((qty / weeklyVel) * 7) : 999;
                                 
                                 // Calculate stockout and reorder dates
@@ -39464,8 +39713,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                   totalValue: qty * cost,
                                   source: 'packiyo',
                                   weeklyVel,
+                                  rawWeeklyVel,
                                   amzWeeklyVel,
                                   shopWeeklyVel,
+                                  correctionApplied: velocityData.correctionApplied,
+                                  velocityTrend: velocityData.trend,
                                   daysOfSupply: dos,
                                   stockoutDate,
                                   reorderByDate,
