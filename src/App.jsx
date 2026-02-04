@@ -6807,18 +6807,52 @@ const savePeriods = async (d) => {
   const processInventory = useCallback(async () => {
     console.log('=== PROCESS INVENTORY v3.0 - DIRECT LOCALSTORAGE READ ===');
     
-    // DIRECT READ from localStorage to get Amazon SKU velocity data
+    // DIRECT READ from localStorage to get SKU velocity data
     // This bypasses any state loading issues
     let legacyDailyData = {};
     try {
+      // Try the current key first (where Shopify sync saves data)
+      let dailyRaw = localStorage.getItem('ecommerce_daily_sales_v1');
+      if (dailyRaw) {
+        legacyDailyData = JSON.parse(dailyRaw);
+        console.log('DIRECT localStorage read - ecommerce_daily_sales_v1:', Object.keys(legacyDailyData).length, 'days');
+      }
+      
+      // Also check legacy key and merge if it has additional data
       const legacyRaw = localStorage.getItem('dailySales');
       if (legacyRaw) {
-        legacyDailyData = JSON.parse(legacyRaw);
-        const datesWithAmazonSku = Object.keys(legacyDailyData).filter(d => legacyDailyData[d]?.amazon?.skuData?.length > 0);
-        console.log('DIRECT localStorage read - dailySales:', Object.keys(legacyDailyData).length, 'days,', datesWithAmazonSku.length, 'with Amazon skuData');
+        const legacyData = JSON.parse(legacyRaw);
+        console.log('Legacy dailySales found:', Object.keys(legacyData).length, 'days');
+        // Merge legacy data (newer data takes precedence)
+        Object.keys(legacyData).forEach(date => {
+          if (!legacyDailyData[date]) {
+            legacyDailyData[date] = legacyData[date];
+          }
+        });
+      }
+      
+      // Log data availability by channel
+      const datesWithAmazonSku = Object.keys(legacyDailyData).filter(d => {
+        const amzSku = legacyDailyData[d]?.amazon?.skuData;
+        return (Array.isArray(amzSku) && amzSku.length > 0) || (amzSku && typeof amzSku === 'object' && Object.keys(amzSku).length > 0);
+      });
+      const datesWithShopifySku = Object.keys(legacyDailyData).filter(d => {
+        const shopSku = legacyDailyData[d]?.shopify?.skuData;
+        return (Array.isArray(shopSku) && shopSku.length > 0) || (shopSku && typeof shopSku === 'object' && Object.keys(shopSku).length > 0);
+      });
+      console.log('Combined daily data:', Object.keys(legacyDailyData).length, 'days');
+      console.log('  - Days with Amazon skuData:', datesWithAmazonSku.length);
+      console.log('  - Days with Shopify skuData:', datesWithShopifySku.length);
+      
+      // Log sample Shopify SKU data structure if available
+      if (datesWithShopifySku.length > 0) {
+        const sampleDate = datesWithShopifySku[0];
+        const sampleSkuData = legacyDailyData[sampleDate]?.shopify?.skuData;
+        const firstSku = Array.isArray(sampleSkuData) ? sampleSkuData[0] : Object.values(sampleSkuData || {})[0];
+        console.log('Sample Shopify skuData from', sampleDate, ':', firstSku);
       }
     } catch (e) {
-      console.error('Failed to read dailySales from localStorage:', e);
+      console.error('Failed to read daily data from localStorage:', e);
     }
     
     // File is optional if Amazon SP-API is connected
@@ -6890,23 +6924,51 @@ const savePeriods = async (d) => {
       
       last28.forEach(d => {
         const dayData = legacyDailyData[d];
-        // Amazon SKU data - store only under original SKU
+        // Amazon SKU data - store under multiple key variants for flexible matching
         const amazonSkuData = dayData?.amazon?.skuData;
         const amazonSkuList = Array.isArray(amazonSkuData) ? amazonSkuData : Object.values(amazonSkuData || {});
         amazonSkuList.forEach(item => {
           if (!item.sku) return;
-          if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
           const units = item.unitsSold || item.units || 0;
-          amazonSkuVelocity[item.sku] += units / weeksEquiv;
+          const velocity = units / weeksEquiv;
+          
+          // Store under original SKU
+          if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
+          amazonSkuVelocity[item.sku] += velocity;
+          
+          // Also store under normalized variants
+          const baseSku = item.sku.replace(/shop$/i, '').toUpperCase();
+          const skuLower = item.sku.toLowerCase();
+          const baseSkuLower = baseSku.toLowerCase();
+          if (!amazonSkuVelocity[baseSku]) amazonSkuVelocity[baseSku] = 0;
+          if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = 0;
+          if (!amazonSkuVelocity[baseSkuLower]) amazonSkuVelocity[baseSkuLower] = 0;
+          amazonSkuVelocity[baseSku] += velocity;
+          amazonSkuVelocity[skuLower] += velocity;
+          amazonSkuVelocity[baseSkuLower] += velocity;
         });
-        // Shopify SKU data - store only under original SKU (handle both array and object formats)
+        // Shopify SKU data - store under multiple key variants for flexible matching
         const shopifySkuData = dayData?.shopify?.skuData;
         const shopifySkuList = Array.isArray(shopifySkuData) ? shopifySkuData : Object.values(shopifySkuData || {});
         shopifySkuList.forEach(item => {
           if (!item.sku) return;
-          if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
           const units = item.unitsSold || item.units || 0;
-          shopifySkuVelocity[item.sku] += units / weeksEquiv;
+          const velocity = units / weeksEquiv;
+          
+          // Store under original SKU
+          if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
+          shopifySkuVelocity[item.sku] += velocity;
+          
+          // Also store under normalized variants (without Shop suffix, uppercase, lowercase)
+          const baseSku = item.sku.replace(/shop$/i, '').toUpperCase();
+          const skuLower = item.sku.toLowerCase();
+          const baseSkuLower = baseSku.toLowerCase();
+          if (!shopifySkuVelocity[baseSku]) shopifySkuVelocity[baseSku] = 0;
+          if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = 0;
+          if (!shopifySkuVelocity[baseSkuLower]) shopifySkuVelocity[baseSkuLower] = 0;
+          shopifySkuVelocity[baseSku] += velocity;
+          shopifySkuVelocity[skuLower] += velocity;
+          shopifySkuVelocity[baseSkuLower] += velocity;
         });
       });
       
@@ -7499,10 +7561,17 @@ const savePeriods = async (d) => {
     // Log first few velocity values for debugging
     if (Object.keys(shopifySkuVelocity).length > 0) {
       console.log('Sample Shopify velocities:', Object.entries(shopifySkuVelocity).slice(0, 5));
+      console.log('Shopify velocity SKU formats:', Object.keys(shopifySkuVelocity).slice(0, 5));
+    }
+    if (Object.keys(amazonSkuVelocity).length > 0) {
+      console.log('Amazon velocity SKU formats:', Object.keys(amazonSkuVelocity).slice(0, 5));
     }
     
     const items = [];
     let critical = 0, low = 0, healthy = 0, overstock = 0;
+    
+    // DEBUG: Log first 3 items velocity matching attempt
+    let debugCount = 0;
 
     uniqueSkus.forEach(sku => {
       const skuLower = sku.toLowerCase();
@@ -7528,6 +7597,23 @@ const savePeriods = async (d) => {
       const skuWithoutShopUpper = skuWithoutShop.toUpperCase();
       const skuWithShop = skuWithoutShop + 'Shop';
       const skuWithShopLower = skuWithShop.toLowerCase();
+      
+      // DEBUG: Log velocity lookup attempts for first 3 items
+      if (debugCount < 3) {
+        console.log(`Velocity lookup for "${sku}":`, {
+          variants: [sku, skuLower, skuWithoutShop, skuWithoutShopLower, skuWithoutShopUpper, skuWithShop, skuWithShopLower],
+          shopifyMatches: {
+            exact: shopifySkuVelocity[sku],
+            lower: shopVelLower[skuLower],
+            withoutShop: shopifySkuVelocity[skuWithoutShop],
+            withoutShopLower: shopVelLower[skuWithoutShopLower],
+            withoutShopUpper: shopifySkuVelocity[skuWithoutShopUpper],
+            withShop: shopifySkuVelocity[skuWithShop],
+            withShopLower: shopVelLower[skuWithShopLower],
+          }
+        });
+        debugCount++;
+      }
       
       const amzVelFromWeekly = amazonSkuVelocity[sku] || amzVelLower[skuLower] || 
                                amazonSkuVelocity[skuWithoutShop] || amzVelLower[skuWithoutShopLower] ||
