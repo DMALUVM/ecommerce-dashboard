@@ -39062,28 +39062,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           type: 'success' 
                         });
                         
-                        // ========== CALCULATE VELOCITY FROM SHOPIFY SALES DATA ==========
-                        // Read daily sales from localStorage to calculate velocity
-                        // Use lsGet to handle LZ compression properly
+                        // ========== CALCULATE VELOCITY FROM SALES DATA ==========
+                        // Use allDaysData from state (already loaded and decompressed) instead of localStorage
                         const velocityLookup = {};
                         try {
-                          const dailyRaw = lsGet('ecommerce_daily_sales_v1');
-                          console.log('=== PACKIYO SYNC: Checking localStorage for sales data ===');
-                          console.log('ecommerce_daily_sales_v1 exists:', !!dailyRaw);
+                          console.log('=== PACKIYO SYNC: Calculating velocity from allDaysData state ===');
+                          console.log('allDaysData has', Object.keys(allDaysData).length, 'days');
                           
-                          if (dailyRaw) {
-                            const dailyData = typeof dailyRaw === 'string' ? JSON.parse(dailyRaw) : dailyRaw;
-                            const dates = Object.keys(dailyData).sort().reverse().slice(0, 28); // Last 28 days
+                          if (Object.keys(allDaysData).length > 0) {
+                            const dates = Object.keys(allDaysData).sort().reverse().slice(0, 28); // Last 28 days
                             const weeksEquiv = dates.length / 7;
                             
-                            console.log('Dates found:', dates.length, 'Sample dates:', dates.slice(0, 3));
+                            console.log('Using last', dates.length, 'days for velocity. Sample dates:', dates.slice(0, 3));
                             
                             // Count days with Shopify SKU data
                             let daysWithShopifySkuData = 0;
                             let totalShopifyUnits = 0;
+                            let uniqueShopifySkus = new Set();
                             
                             dates.forEach(date => {
-                              const day = dailyData[date];
+                              const day = allDaysData[date];
                               // Process Shopify SKU data
                               const shopifySkuData = day?.shopify?.skuData;
                               const shopifyList = Array.isArray(shopifySkuData) ? shopifySkuData : Object.values(shopifySkuData || {});
@@ -39094,6 +39092,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               
                               shopifyList.forEach(item => {
                                 if (!item.sku) return;
+                                uniqueShopifySkus.add(item.sku);
                                 const units = item.unitsSold || item.units || 0;
                                 totalShopifyUnits += units;
                                 const velocity = weeksEquiv > 0 ? units / weeksEquiv : 0;
@@ -39158,10 +39157,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             
                             console.log('Days with Shopify skuData:', daysWithShopifySkuData);
                             console.log('Total Shopify units:', totalShopifyUnits);
+                            console.log('Unique Shopify SKUs:', uniqueShopifySkus.size);
                             console.log('Velocity lookup has', Object.keys(velocityLookup).length, 'entries');
-                            console.log('Sample velocities:', Object.entries(velocityLookup).slice(0, 10).map(([k,v]) => `${k}: ${v.toFixed(2)}/wk`));
+                            
+                            // Show sample velocities for Shopify-only SKUs (DDPE0005 onwards typically)
+                            const shopifyOnlySamples = ['ddpe0032shop', 'ddpe0005shop', 'ddpe0027shop', 'DDPE0032', 'DDPE0005'];
+                            console.log('Shopify-only SKU velocities:', shopifyOnlySamples.map(k => `${k}: ${(velocityLookup[k] || 0).toFixed(2)}/wk`));
                           } else {
-                            console.log('NO SALES DATA FOUND - velocity will be 0 for all items');
+                            console.log('NO SALES DATA FOUND in allDaysData - velocity will be 0 for all items');
                           }
                         } catch (e) {
                           console.error('Error calculating velocity:', e);
