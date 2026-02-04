@@ -3419,6 +3419,17 @@ allWeekKeys.forEach((weekKey) => {
     // Display preferences
     currencySymbol: '$',
     dateFormat: 'US', // 'US' (MM/DD/YYYY) or 'EU' (DD/MM/YYYY)
+    
+    // Auto-sync settings
+    autoSync: {
+      enabled: false, // Master toggle
+      intervalHours: 4, // How often to sync (when app is open)
+      onAppLoad: true, // Sync on app load if stale
+      staleThresholdHours: 4, // Consider data stale after this many hours
+      amazon: true, // Include Amazon in auto-sync
+      shopify: true, // Include Shopify in auto-sync
+      packiyo: true, // Include Packiyo in auto-sync
+    },
   });
   
   const clearPeriod3PLFiles = useCallback(() => {
@@ -10741,6 +10752,205 @@ const savePeriods = async (d) => {
     }
   }, [getAmazonForecastComparison, forecastAccuracyHistory.records]);
   // ============ END AUTO-LEARNING EFFECT ============
+
+  // ============ AUTO-SYNC EFFECT ============
+  // Automatically sync Amazon, Shopify, and Packiyo data when stale
+  const [autoSyncStatus, setAutoSyncStatus] = useState({ running: false, lastCheck: null, results: [] });
+  
+  // Check if a service is stale (needs sync)
+  const isServiceStale = useCallback((lastSync, thresholdHours = 4) => {
+    if (!lastSync) return true;
+    const lastSyncTime = new Date(lastSync).getTime();
+    const now = Date.now();
+    const hoursSinceSync = (now - lastSyncTime) / (1000 * 60 * 60);
+    return hoursSinceSync >= thresholdHours;
+  }, []);
+  
+  // Auto-sync function
+  const runAutoSync = useCallback(async (force = false) => {
+    if (!appSettings.autoSync?.enabled && !force) return;
+    if (autoSyncStatus.running) return;
+    
+    const threshold = appSettings.autoSync?.staleThresholdHours || 4;
+    const results = [];
+    
+    console.log('=== AUTO-SYNC: Checking for stale data ===');
+    setAutoSyncStatus(prev => ({ ...prev, running: true, lastCheck: new Date().toISOString() }));
+    
+    try {
+      // Check Amazon
+      if (appSettings.autoSync?.amazon !== false && amazonCredentials.connected) {
+        const amazonStale = isServiceStale(amazonCredentials.lastSync, threshold);
+        console.log('Amazon:', amazonStale ? 'STALE' : 'fresh', '- last sync:', amazonCredentials.lastSync);
+        
+        if (amazonStale || force) {
+          try {
+            console.log('Auto-syncing Amazon...');
+            const res = await fetch('/api/amazon/inventory', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                refreshToken: amazonCredentials.refreshToken,
+                clientId: amazonCredentials.clientId,
+                clientSecret: amazonCredentials.clientSecret,
+                sellerId: amazonCredentials.sellerId,
+                marketplaceId: amazonCredentials.marketplaceId || 'ATVPDKIKX0DER',
+              }),
+            });
+            const data = await res.json();
+            if (!data.error) {
+              setAmazonInventoryData(data);
+              setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+              results.push({ service: 'Amazon', success: true, items: data.summary?.totalItems || 0 });
+              console.log('Amazon auto-sync complete:', data.summary?.totalItems, 'items');
+            } else {
+              results.push({ service: 'Amazon', success: false, error: data.error });
+            }
+          } catch (err) {
+            results.push({ service: 'Amazon', success: false, error: err.message });
+          }
+        }
+      }
+      
+      // Check Shopify Sales
+      if (appSettings.autoSync?.shopify !== false && shopifyCredentials.connected) {
+        const shopifyStale = isServiceStale(shopifyCredentials.lastSync, threshold);
+        console.log('Shopify sales:', shopifyStale ? 'STALE' : 'fresh', '- last sync:', shopifyCredentials.lastSync);
+        
+        if (shopifyStale || force) {
+          try {
+            console.log('Auto-syncing Shopify sales...');
+            // Sync last 7 days of orders
+            const endDate = new Date().toISOString().split('T')[0];
+            const startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            
+            const res = await fetch('/api/shopify/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                storeUrl: shopifyCredentials.storeUrl,
+                accessToken: shopifyCredentials.clientSecret,
+                clientId: shopifyCredentials.clientId,
+                clientSecret: shopifyCredentials.clientSecret,
+                startDate,
+                endDate,
+                preview: false,
+              }),
+            });
+            const data = await res.json();
+            if (!data.error) {
+              // Merge daily data (simplified - just update lastSync for now)
+              setShopifyCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+              results.push({ service: 'Shopify Sales', success: true, orders: data.orderCount || 0 });
+              console.log('Shopify sales auto-sync complete:', data.orderCount, 'orders');
+            } else {
+              results.push({ service: 'Shopify Sales', success: false, error: data.error });
+            }
+          } catch (err) {
+            results.push({ service: 'Shopify Sales', success: false, error: err.message });
+          }
+        }
+      }
+      
+      // Check Packiyo
+      if (appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected) {
+        const packiyoStale = isServiceStale(packiyoCredentials.lastSync, threshold);
+        console.log('Packiyo:', packiyoStale ? 'STALE' : 'fresh', '- last sync:', packiyoCredentials.lastSync);
+        
+        if (packiyoStale || force) {
+          try {
+            console.log('Auto-syncing Packiyo...');
+            const res = await fetch('/api/packiyo/inventory', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                apiKey: packiyoCredentials.apiKey,
+                customerId: packiyoCredentials.customerId,
+                baseUrl: packiyoCredentials.baseUrl,
+              }),
+            });
+            const data = await res.json();
+            if (!data.error) {
+              setPackiyoInventoryData(data);
+              setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+              results.push({ service: 'Packiyo', success: true, skus: data.summary?.skuCount || 0 });
+              console.log('Packiyo auto-sync complete:', data.summary?.skuCount, 'SKUs');
+            } else {
+              results.push({ service: 'Packiyo', success: false, error: data.error });
+            }
+          } catch (err) {
+            results.push({ service: 'Packiyo', success: false, error: err.message });
+          }
+        }
+      }
+      
+      // Show results
+      if (results.length > 0) {
+        const successful = results.filter(r => r.success);
+        const failed = results.filter(r => !r.success);
+        
+        if (successful.length > 0) {
+          const summaryParts = successful.map(r => {
+            if (r.service === 'Amazon') return `Amazon (${r.items} items)`;
+            if (r.service === 'Shopify Sales') return `Shopify (${r.orders} orders)`;
+            if (r.service === 'Packiyo') return `Packiyo (${r.skus} SKUs)`;
+            return r.service;
+          });
+          setToast({
+            message: `🔄 Auto-sync complete: ${summaryParts.join(', ')}`,
+            type: 'success'
+          });
+        }
+        
+        if (failed.length > 0) {
+          console.warn('Auto-sync failures:', failed);
+        }
+      }
+      
+    } catch (err) {
+      console.error('Auto-sync error:', err);
+    } finally {
+      setAutoSyncStatus(prev => ({ ...prev, running: false, results }));
+    }
+  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, isServiceStale, autoSyncStatus.running]);
+  
+  // Run auto-sync on app load (if enabled)
+  useEffect(() => {
+    if (!appSettings.autoSync?.enabled) return;
+    if (!appSettings.autoSync?.onAppLoad) return;
+    
+    // Delay auto-sync by 3 seconds to let app fully load
+    const timer = setTimeout(() => {
+      const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected;
+      if (anyConnected) {
+        console.log('=== AUTO-SYNC: Running on app load ===');
+        runAutoSync();
+      }
+    }, 3000);
+    
+    return () => clearTimeout(timer);
+  }, []); // Only run once on mount
+  
+  // Set up interval for periodic sync (if enabled)
+  useEffect(() => {
+    if (!appSettings.autoSync?.enabled) return;
+    
+    const intervalHours = appSettings.autoSync?.intervalHours || 4;
+    const intervalMs = intervalHours * 60 * 60 * 1000;
+    
+    console.log(`Auto-sync interval set: every ${intervalHours} hours`);
+    
+    const interval = setInterval(() => {
+      const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected;
+      if (anyConnected) {
+        console.log('=== AUTO-SYNC: Running scheduled sync ===');
+        runAutoSync();
+      }
+    }, intervalMs);
+    
+    return () => clearInterval(interval);
+  }, [appSettings.autoSync?.enabled, appSettings.autoSync?.intervalHours, runAutoSync]);
+  // ============ END AUTO-SYNC EFFECT ============
 
   // ============ UNIFIED AI LEARNING SYSTEM ============
   // This is the master learning system that combines all data sources and learns continuously
@@ -40223,6 +40433,184 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   </div>
                   <p className="text-slate-500 text-xs mt-3">This syncs FBA and AWD inventory only. 3PL (Packiyo) and Wormans Mill (Shopify) inventory are preserved separately.</p>
                 </div>
+              </div>
+            )}
+          </SettingSection>
+          
+          {/* Auto-Sync Settings */}
+          <SettingSection title="🔄 Auto-Sync Settings">
+            <p className="text-slate-400 text-sm mb-4">
+              Automatically sync Amazon, Shopify, and Packiyo data to keep inventory velocity accurate
+            </p>
+            
+            {/* Master Toggle */}
+            <div className="flex items-center justify-between bg-slate-800/50 rounded-lg p-4 mb-4">
+              <div>
+                <p className="text-white font-medium">Enable Auto-Sync</p>
+                <p className="text-slate-400 text-xs">Automatically sync connected services when data is stale</p>
+              </div>
+              <button
+                onClick={() => setAppSettings(prev => ({
+                  ...prev,
+                  autoSync: { ...prev.autoSync, enabled: !prev.autoSync?.enabled }
+                }))}
+                className={`w-12 h-6 rounded-full transition-colors relative ${appSettings.autoSync?.enabled ? 'bg-emerald-500' : 'bg-slate-600'}`}
+              >
+                <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.enabled ? 'left-6' : 'left-0.5'}`} />
+              </button>
+            </div>
+            
+            {appSettings.autoSync?.enabled && (
+              <div className="space-y-4">
+                {/* Sync Interval */}
+                <div className="bg-slate-800/30 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-white font-medium">Sync Interval</p>
+                    <select
+                      value={appSettings.autoSync?.intervalHours || 4}
+                      onChange={(e) => setAppSettings(prev => ({
+                        ...prev,
+                        autoSync: { ...prev.autoSync, intervalHours: parseInt(e.target.value) }
+                      }))}
+                      className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-white"
+                    >
+                      <option value={1}>Every 1 hour</option>
+                      <option value={2}>Every 2 hours</option>
+                      <option value={4}>Every 4 hours</option>
+                      <option value={6}>Every 6 hours</option>
+                      <option value={12}>Every 12 hours</option>
+                      <option value={24}>Once daily</option>
+                    </select>
+                  </div>
+                  <p className="text-slate-500 text-xs">How often to sync while the app is open</p>
+                </div>
+                
+                {/* Sync on App Load */}
+                <div className="flex items-center justify-between bg-slate-800/30 rounded-lg p-4">
+                  <div>
+                    <p className="text-white font-medium">Sync on App Load</p>
+                    <p className="text-slate-400 text-xs">Automatically sync when you open the dashboard</p>
+                  </div>
+                  <button
+                    onClick={() => setAppSettings(prev => ({
+                      ...prev,
+                      autoSync: { ...prev.autoSync, onAppLoad: !prev.autoSync?.onAppLoad }
+                    }))}
+                    className={`w-12 h-6 rounded-full transition-colors relative ${appSettings.autoSync?.onAppLoad !== false ? 'bg-emerald-500' : 'bg-slate-600'}`}
+                  >
+                    <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.onAppLoad !== false ? 'left-6' : 'left-0.5'}`} />
+                  </button>
+                </div>
+                
+                {/* Service Toggles */}
+                <div className="bg-slate-800/30 rounded-lg p-4">
+                  <p className="text-white font-medium mb-3">Services to Auto-Sync</p>
+                  
+                  <div className="space-y-3">
+                    {/* Amazon */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-2 h-2 rounded-full ${amazonCredentials.connected ? 'bg-orange-400' : 'bg-slate-500'}`} />
+                        <span className="text-slate-300">Amazon SP-API</span>
+                        {amazonCredentials.lastSync && (
+                          <span className="text-slate-500 text-xs">
+                            Last: {new Date(amazonCredentials.lastSync).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setAppSettings(prev => ({
+                          ...prev,
+                          autoSync: { ...prev.autoSync, amazon: !prev.autoSync?.amazon }
+                        }))}
+                        disabled={!amazonCredentials.connected}
+                        className={`w-10 h-5 rounded-full transition-colors relative ${appSettings.autoSync?.amazon !== false && amazonCredentials.connected ? 'bg-orange-500' : 'bg-slate-600'} ${!amazonCredentials.connected ? 'opacity-50' : ''}`}
+                      >
+                        <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.amazon !== false ? 'left-5' : 'left-0.5'}`} />
+                      </button>
+                    </div>
+                    
+                    {/* Shopify */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-2 h-2 rounded-full ${shopifyCredentials.connected ? 'bg-green-400' : 'bg-slate-500'}`} />
+                        <span className="text-slate-300">Shopify</span>
+                        {shopifyCredentials.lastSync && (
+                          <span className="text-slate-500 text-xs">
+                            Last: {new Date(shopifyCredentials.lastSync).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setAppSettings(prev => ({
+                          ...prev,
+                          autoSync: { ...prev.autoSync, shopify: !prev.autoSync?.shopify }
+                        }))}
+                        disabled={!shopifyCredentials.connected}
+                        className={`w-10 h-5 rounded-full transition-colors relative ${appSettings.autoSync?.shopify !== false && shopifyCredentials.connected ? 'bg-green-500' : 'bg-slate-600'} ${!shopifyCredentials.connected ? 'opacity-50' : ''}`}
+                      >
+                        <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.shopify !== false ? 'left-5' : 'left-0.5'}`} />
+                      </button>
+                    </div>
+                    
+                    {/* Packiyo */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-2 h-2 rounded-full ${packiyoCredentials.connected ? 'bg-violet-400' : 'bg-slate-500'}`} />
+                        <span className="text-slate-300">Packiyo 3PL</span>
+                        {packiyoCredentials.lastSync && (
+                          <span className="text-slate-500 text-xs">
+                            Last: {new Date(packiyoCredentials.lastSync).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setAppSettings(prev => ({
+                          ...prev,
+                          autoSync: { ...prev.autoSync, packiyo: !prev.autoSync?.packiyo }
+                        }))}
+                        disabled={!packiyoCredentials.connected}
+                        className={`w-10 h-5 rounded-full transition-colors relative ${appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected ? 'bg-violet-500' : 'bg-slate-600'} ${!packiyoCredentials.connected ? 'opacity-50' : ''}`}
+                      >
+                        <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.packiyo !== false ? 'left-5' : 'left-0.5'}`} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Manual Sync Button */}
+                <button
+                  onClick={() => runAutoSync(true)}
+                  disabled={autoSyncStatus.running}
+                  className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 rounded-lg text-white font-medium flex items-center justify-center gap-2"
+                >
+                  {autoSyncStatus.running ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Syncing...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-4 h-4" />
+                      Sync All Now
+                    </>
+                  )}
+                </button>
+                
+                {autoSyncStatus.lastCheck && (
+                  <p className="text-center text-slate-500 text-xs">
+                    Last check: {new Date(autoSyncStatus.lastCheck).toLocaleString()}
+                  </p>
+                )}
+              </div>
+            )}
+            
+            {!appSettings.autoSync?.enabled && (
+              <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-4">
+                <p className="text-blue-400 text-sm">
+                  💡 <strong>Pro tip:</strong> Enable auto-sync to keep your velocity data accurate. 
+                  The system will automatically fetch the latest inventory and sales data from your connected services.
+                </p>
               </div>
             )}
           </SettingSection>

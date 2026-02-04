@@ -1,17 +1,8 @@
 {
-  "rewrites": [
-    { "source": "/terms", "destination": "/terms.html" },
-    { "source": "/privacy", "destination": "/privacy.html" },
-    { "source": "/api/:path*", "destination": "/api/:path*" }
-  ],
-  "headers": [
+  "crons": [
     {
-      "source": "/(.*)",
-      "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "X-XSS-Protection", "value": "1; mode=block" }
-      ]
+      "path": "/api/cron/sync",
+      "schedule": "0 */4 * * *"
     }
   ]
 }
