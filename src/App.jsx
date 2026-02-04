@@ -4073,7 +4073,21 @@ const loadFromLocal = useCallback(() => {
     
     if (dailyData && Object.keys(dailyData).length > 0) {
       const daysWithAmazonSku = Object.keys(dailyData).filter(d => dailyData[d]?.amazon?.skuData?.length > 0);
-      console.log('Final dailyData:', Object.keys(dailyData).length, 'days,', daysWithAmazonSku.length, 'with Amazon skuData');
+      const daysWithShopifySku = Object.keys(dailyData).filter(d => {
+        const shopifySkuData = dailyData[d]?.shopify?.skuData;
+        return (Array.isArray(shopifySkuData) && shopifySkuData.length > 0) || 
+               (shopifySkuData && typeof shopifySkuData === 'object' && Object.keys(shopifySkuData).length > 0);
+      });
+      const daysWithShopifyRevenue = Object.keys(dailyData).filter(d => (dailyData[d]?.shopify?.revenue || 0) > 0);
+      console.log('Final dailyData:', Object.keys(dailyData).length, 'days');
+      console.log('  - Days with Amazon skuData:', daysWithAmazonSku.length);
+      console.log('  - Days with Shopify skuData:', daysWithShopifySku.length);
+      console.log('  - Days with Shopify revenue:', daysWithShopifyRevenue.length);
+      if (daysWithShopifySku.length > 0) {
+        const sampleDay = daysWithShopifySku[0];
+        const sampleData = dailyData[sampleDay]?.shopify?.skuData;
+        console.log('  - Sample Shopify day:', sampleDay, 'skuData:', Array.isArray(sampleData) ? sampleData.slice(0, 3) : Object.entries(sampleData || {}).slice(0, 3));
+      }
       setAllDaysData(dailyData);
     }
   } catch (err) {
@@ -6844,26 +6858,51 @@ const savePeriods = async (d) => {
     
     // FIRST: Calculate velocity from DIRECT localStorage read (most reliable)
     const legacyDates = Object.keys(legacyDailyData).sort().reverse();
-    const datesWithAmazonSku = legacyDates.filter(d => legacyDailyData[d]?.amazon?.skuData?.length > 0);
-    if (datesWithAmazonSku.length > 0) {
+    
+    // Check for dates with SKU data from EITHER channel
+    const hasSkuData = (dayData) => {
+      const amzSku = dayData?.amazon?.skuData;
+      const shopSku = dayData?.shopify?.skuData;
+      const amzHasData = (Array.isArray(amzSku) && amzSku.length > 0) || (amzSku && typeof amzSku === 'object' && Object.keys(amzSku).length > 0);
+      const shopHasData = (Array.isArray(shopSku) && shopSku.length > 0) || (shopSku && typeof shopSku === 'object' && Object.keys(shopSku).length > 0);
+      return amzHasData || shopHasData;
+    };
+    
+    const datesWithSkuData = legacyDates.filter(d => hasSkuData(legacyDailyData[d]));
+    const datesWithAmazonSku = legacyDates.filter(d => {
+      const amzSku = legacyDailyData[d]?.amazon?.skuData;
+      return (Array.isArray(amzSku) && amzSku.length > 0) || (amzSku && typeof amzSku === 'object' && Object.keys(amzSku).length > 0);
+    });
+    const datesWithShopifySku = legacyDates.filter(d => {
+      const shopSku = legacyDailyData[d]?.shopify?.skuData;
+      return (Array.isArray(shopSku) && shopSku.length > 0) || (shopSku && typeof shopSku === 'object' && Object.keys(shopSku).length > 0);
+    });
+    
+    if (datesWithSkuData.length > 0) {
       console.log('=== CALCULATING VELOCITY FROM DIRECT LOCALSTORAGE ===');
+      console.log('Dates with ANY skuData:', datesWithSkuData.length);
       console.log('Dates with Amazon skuData:', datesWithAmazonSku.length);
-      console.log('Sample dates:', datesWithAmazonSku.slice(0, 5));
+      console.log('Dates with Shopify skuData:', datesWithShopifySku.length);
+      console.log('Sample dates:', datesWithSkuData.slice(0, 5));
       
-      const last28 = datesWithAmazonSku.slice(0, 28);
+      const last28 = datesWithSkuData.slice(0, 28);
       const weeksEquiv = last28.length / 7;
       
       last28.forEach(d => {
         const dayData = legacyDailyData[d];
         // Amazon SKU data - store only under original SKU
-        (dayData?.amazon?.skuData || []).forEach(item => {
+        const amazonSkuData = dayData?.amazon?.skuData;
+        const amazonSkuList = Array.isArray(amazonSkuData) ? amazonSkuData : Object.values(amazonSkuData || {});
+        amazonSkuList.forEach(item => {
           if (!item.sku) return;
           if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
           const units = item.unitsSold || item.units || 0;
           amazonSkuVelocity[item.sku] += units / weeksEquiv;
         });
-        // Shopify SKU data - store only under original SKU
-        (dayData?.shopify?.skuData || []).forEach(item => {
+        // Shopify SKU data - store only under original SKU (handle both array and object formats)
+        const shopifySkuData = dayData?.shopify?.skuData;
+        const shopifySkuList = Array.isArray(shopifySkuData) ? shopifySkuData : Object.values(shopifySkuData || {});
+        shopifySkuList.forEach(item => {
           if (!item.sku) return;
           if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
           const units = item.unitsSold || item.units || 0;
@@ -6873,7 +6912,9 @@ const savePeriods = async (d) => {
       
       velocityDataSource = 'direct-localStorage';
       console.log('Amazon SKU velocity calculated for', Object.keys(amazonSkuVelocity).length, 'SKUs');
-      console.log('Sample velocities:', Object.entries(amazonSkuVelocity).slice(0, 6).map(([k,v]) => `${k}: ${v.toFixed(1)}/wk`));
+      console.log('Shopify SKU velocity calculated for', Object.keys(shopifySkuVelocity).length, 'SKUs');
+      console.log('Sample Amazon velocities:', Object.entries(amazonSkuVelocity).slice(0, 3).map(([k,v]) => `${k}: ${v.toFixed(1)}/wk`));
+      console.log('Sample Shopify velocities:', Object.entries(shopifySkuVelocity).slice(0, 3).map(([k,v]) => `${k}: ${v.toFixed(1)}/wk`));
     }
     
     // DEBUG: Log data availability
@@ -6990,27 +7031,39 @@ const savePeriods = async (d) => {
       let shopifySkuDataFound = 0;
       recentDays.slice(0, 5).forEach(d => {
         const day = allDaysData[d];
-        if (day?.amazon?.skuData?.length > 0) amazonSkuDataFound++;
-        if (day?.shopify?.skuData?.length > 0) shopifySkuDataFound++;
+        const amzSkuData = day?.amazon?.skuData;
+        const shopSkuData = day?.shopify?.skuData;
+        if ((Array.isArray(amzSkuData) && amzSkuData.length > 0) || (amzSkuData && typeof amzSkuData === 'object' && Object.keys(amzSkuData).length > 0)) amazonSkuDataFound++;
+        if ((Array.isArray(shopSkuData) && shopSkuData.length > 0) || (shopSkuData && typeof shopSkuData === 'object' && Object.keys(shopSkuData).length > 0)) shopifySkuDataFound++;
       });
       console.log('Days with Amazon skuData (of first 5):', amazonSkuDataFound);
       console.log('Days with Shopify skuData (of first 5):', shopifySkuDataFound);
       
       if (recentDays.length > 0) {
         const sampleDay = allDaysData[recentDays[0]];
+        const shopifySkuData = sampleDay?.shopify?.skuData;
+        const amazonSkuData = sampleDay?.amazon?.skuData;
+        const shopifySkuDataLen = Array.isArray(shopifySkuData) ? shopifySkuData.length : Object.keys(shopifySkuData || {}).length;
+        const amazonSkuDataLen = Array.isArray(amazonSkuData) ? amazonSkuData.length : Object.keys(amazonSkuData || {}).length;
         console.log('Sample day structure:', recentDays[0], {
           hasAmazon: !!sampleDay?.amazon,
-          hasAmazonSkuData: !!sampleDay?.amazon?.skuData,
-          amazonSkuDataLength: sampleDay?.amazon?.skuData?.length,
+          hasAmazonSkuData: !!amazonSkuData,
+          amazonSkuDataLength: amazonSkuDataLen,
+          amazonSkuDataType: Array.isArray(amazonSkuData) ? 'array' : typeof amazonSkuData,
           hasShopify: !!sampleDay?.shopify,
-          hasShopifySkuData: !!sampleDay?.shopify?.skuData,
-          shopifySkuDataLength: sampleDay?.shopify?.skuData?.length,
+          hasShopifySkuData: !!shopifySkuData,
+          shopifySkuDataLength: shopifySkuDataLen,
+          shopifySkuDataType: Array.isArray(shopifySkuData) ? 'array' : typeof shopifySkuData,
+          shopifyRevenue: sampleDay?.shopify?.revenue,
+          shopifyUnits: sampleDay?.shopify?.units,
         });
-        if (sampleDay?.amazon?.skuData?.length > 0) {
-          console.log('Amazon daily SKU sample:', sampleDay.amazon.skuData[0]);
+        if (amazonSkuDataLen > 0) {
+          const firstItem = Array.isArray(amazonSkuData) ? amazonSkuData[0] : Object.values(amazonSkuData)[0];
+          console.log('Amazon daily SKU sample:', firstItem);
         }
-        if (sampleDay?.shopify?.skuData?.length > 0) {
-          console.log('Shopify daily SKU sample:', sampleDay.shopify.skuData[0]);
+        if (shopifySkuDataLen > 0) {
+          const firstItem = Array.isArray(shopifySkuData) ? shopifySkuData[0] : Object.values(shopifySkuData)[0];
+          console.log('Shopify daily SKU sample:', firstItem);
         }
       }
       
