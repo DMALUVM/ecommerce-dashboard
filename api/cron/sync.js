@@ -25,11 +25,15 @@ export default async function handler(req, res) {
       packiyoCredentials,
     } = req.body || {};
     
-    // Amazon Sync
+    const baseUrl = process.env.VERCEL_URL 
+      ? `https://${process.env.VERCEL_URL}` 
+      : 'http://localhost:3000';
+    
+    // Amazon Sync - uses /api/amazon/sync
     if (amazonCredentials?.refreshToken || process.env.AMAZON_REFRESH_TOKEN) {
       try {
         console.log('Syncing Amazon...');
-        const amazonRes = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3000'}/api/amazon/inventory`, {
+        const amazonRes = await fetch(`${baseUrl}/api/amazon/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -43,8 +47,7 @@ export default async function handler(req, res) {
         const data = await amazonRes.json();
         results.push({
           service: 'Amazon',
-          success: !data.error,
-          items: data.summary?.totalItems || 0,
+          success: !data.error && amazonRes.ok,
           error: data.error,
         });
       } catch (err) {
@@ -52,14 +55,14 @@ export default async function handler(req, res) {
       }
     }
     
-    // Shopify Sync (last 7 days)
+    // Shopify Sync (last 7 days) - uses /api/shopify/sync
     if (shopifyCredentials?.clientSecret || process.env.SHOPIFY_ACCESS_TOKEN) {
       try {
         console.log('Syncing Shopify...');
         const endDate = new Date().toISOString().split('T')[0];
         const startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
         
-        const shopifyRes = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3000'}/api/shopify/sync`, {
+        const shopifyRes = await fetch(`${baseUrl}/api/shopify/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -75,7 +78,7 @@ export default async function handler(req, res) {
         const data = await shopifyRes.json();
         results.push({
           service: 'Shopify',
-          success: !data.error,
+          success: !data.error && shopifyRes.ok,
           orders: data.orderCount || 0,
           error: data.error,
         });
@@ -84,11 +87,11 @@ export default async function handler(req, res) {
       }
     }
     
-    // Packiyo Sync
+    // Packiyo Sync - uses /api/packiyo/sync
     if (packiyoCredentials?.apiKey || process.env.PACKIYO_API_KEY) {
       try {
         console.log('Syncing Packiyo...');
-        const packiyoRes = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3000'}/api/packiyo/inventory`, {
+        const packiyoRes = await fetch(`${baseUrl}/api/packiyo/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -100,8 +103,8 @@ export default async function handler(req, res) {
         const data = await packiyoRes.json();
         results.push({
           service: 'Packiyo',
-          success: !data.error,
-          skus: data.summary?.skuCount || 0,
+          success: !data.error && packiyoRes.ok,
+          skus: data.summary?.skuCount || data.products?.length || 0,
           error: data.error,
         });
       } catch (err) {

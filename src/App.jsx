@@ -10778,15 +10778,15 @@ const savePeriods = async (d) => {
     setAutoSyncStatus(prev => ({ ...prev, running: true, lastCheck: new Date().toISOString() }));
     
     try {
-      // Check Amazon
+      // Check Amazon - use /api/amazon/sync endpoint
       if (appSettings.autoSync?.amazon !== false && amazonCredentials.connected) {
         const amazonStale = isServiceStale(amazonCredentials.lastSync, threshold);
-        console.log('Amazon:', amazonStale ? 'STALE' : 'fresh', '- last sync:', amazonCredentials.lastSync);
+        console.log('Amazon:', amazonStale ? 'STALE - will sync' : 'fresh - skipping');
         
         if (amazonStale || force) {
           try {
             console.log('Auto-syncing Amazon...');
-            const res = await fetch('/api/amazon/inventory', {
+            const res = await fetch('/api/amazon/sync', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -10798,24 +10798,25 @@ const savePeriods = async (d) => {
               }),
             });
             const data = await res.json();
-            if (!data.error) {
-              setAmazonInventoryData(data);
+            if (!data.error && res.ok) {
               setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-              results.push({ service: 'Amazon', success: true, items: data.summary?.totalItems || 0 });
-              console.log('Amazon auto-sync complete:', data.summary?.totalItems, 'items');
+              results.push({ service: 'Amazon', success: true, message: 'Synced successfully' });
+              console.log('Amazon auto-sync complete');
             } else {
-              results.push({ service: 'Amazon', success: false, error: data.error });
+              results.push({ service: 'Amazon', success: false, error: data.error || `HTTP ${res.status}` });
+              console.warn('Amazon auto-sync failed:', data.error || res.status);
             }
           } catch (err) {
             results.push({ service: 'Amazon', success: false, error: err.message });
+            console.warn('Amazon auto-sync error:', err.message);
           }
         }
       }
       
-      // Check Shopify Sales
+      // Check Shopify Sales - use /api/shopify/sync endpoint
       if (appSettings.autoSync?.shopify !== false && shopifyCredentials.connected) {
         const shopifyStale = isServiceStale(shopifyCredentials.lastSync, threshold);
-        console.log('Shopify sales:', shopifyStale ? 'STALE' : 'fresh', '- last sync:', shopifyCredentials.lastSync);
+        console.log('Shopify:', shopifyStale ? 'STALE - will sync' : 'fresh - skipping');
         
         if (shopifyStale || force) {
           try {
@@ -10838,29 +10839,30 @@ const savePeriods = async (d) => {
               }),
             });
             const data = await res.json();
-            if (!data.error) {
-              // Merge daily data (simplified - just update lastSync for now)
+            if (!data.error && res.ok) {
               setShopifyCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-              results.push({ service: 'Shopify Sales', success: true, orders: data.orderCount || 0 });
-              console.log('Shopify sales auto-sync complete:', data.orderCount, 'orders');
+              results.push({ service: 'Shopify', success: true, orders: data.orderCount || 0 });
+              console.log('Shopify auto-sync complete:', data.orderCount, 'orders');
             } else {
-              results.push({ service: 'Shopify Sales', success: false, error: data.error });
+              results.push({ service: 'Shopify', success: false, error: data.error || `HTTP ${res.status}` });
+              console.warn('Shopify auto-sync failed:', data.error || res.status);
             }
           } catch (err) {
-            results.push({ service: 'Shopify Sales', success: false, error: err.message });
+            results.push({ service: 'Shopify', success: false, error: err.message });
+            console.warn('Shopify auto-sync error:', err.message);
           }
         }
       }
       
-      // Check Packiyo
+      // Check Packiyo - use /api/packiyo/sync endpoint
       if (appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected) {
         const packiyoStale = isServiceStale(packiyoCredentials.lastSync, threshold);
-        console.log('Packiyo:', packiyoStale ? 'STALE' : 'fresh', '- last sync:', packiyoCredentials.lastSync);
+        console.log('Packiyo:', packiyoStale ? 'STALE - will sync' : 'fresh - skipping');
         
         if (packiyoStale || force) {
           try {
             console.log('Auto-syncing Packiyo...');
-            const res = await fetch('/api/packiyo/inventory', {
+            const res = await fetch('/api/packiyo/sync', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -10870,41 +10872,54 @@ const savePeriods = async (d) => {
               }),
             });
             const data = await res.json();
-            if (!data.error) {
-              setPackiyoInventoryData(data);
+            if (!data.error && res.ok) {
+              if (data.products) {
+                setPackiyoInventoryData(data);
+              }
               setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-              results.push({ service: 'Packiyo', success: true, skus: data.summary?.skuCount || 0 });
-              console.log('Packiyo auto-sync complete:', data.summary?.skuCount, 'SKUs');
+              results.push({ service: 'Packiyo', success: true, skus: data.summary?.skuCount || data.products?.length || 0 });
+              console.log('Packiyo auto-sync complete:', data.summary?.skuCount || data.products?.length, 'SKUs');
             } else {
-              results.push({ service: 'Packiyo', success: false, error: data.error });
+              results.push({ service: 'Packiyo', success: false, error: data.error || `HTTP ${res.status}` });
+              console.warn('Packiyo auto-sync failed:', data.error || res.status);
             }
           } catch (err) {
             results.push({ service: 'Packiyo', success: false, error: err.message });
+            console.warn('Packiyo auto-sync error:', err.message);
           }
         }
       }
       
       // Show results
-      if (results.length > 0) {
-        const successful = results.filter(r => r.success);
-        const failed = results.filter(r => !r.success);
-        
-        if (successful.length > 0) {
-          const summaryParts = successful.map(r => {
-            if (r.service === 'Amazon') return `Amazon (${r.items} items)`;
-            if (r.service === 'Shopify Sales') return `Shopify (${r.orders} orders)`;
-            if (r.service === 'Packiyo') return `Packiyo (${r.skus} SKUs)`;
-            return r.service;
-          });
+      const successful = results.filter(r => r.success);
+      const failed = results.filter(r => !r.success);
+      
+      if (successful.length > 0) {
+        const summaryParts = successful.map(r => {
+          if (r.service === 'Amazon') return 'Amazon';
+          if (r.service === 'Shopify') return `Shopify (${r.orders} orders)`;
+          if (r.service === 'Packiyo') return `Packiyo (${r.skus} SKUs)`;
+          return r.service;
+        });
+        setToast({
+          message: `🔄 Auto-sync: ${summaryParts.join(', ')}`,
+          type: 'success'
+        });
+      }
+      
+      if (failed.length > 0) {
+        console.warn('Auto-sync failures:', failed);
+        // Only show error toast if ALL failed
+        if (successful.length === 0 && failed.length > 0) {
           setToast({
-            message: `🔄 Auto-sync complete: ${summaryParts.join(', ')}`,
-            type: 'success'
+            message: `Auto-sync failed: ${failed.map(f => f.service).join(', ')}`,
+            type: 'error'
           });
         }
-        
-        if (failed.length > 0) {
-          console.warn('Auto-sync failures:', failed);
-        }
+      }
+      
+      if (results.length === 0) {
+        console.log('Auto-sync: All data is fresh, nothing to sync');
       }
       
     } catch (err) {
@@ -23882,7 +23897,32 @@ if (shopifySkuWithShipping.length > 0) {
           )}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
             <div className="p-4 border-b border-slate-700 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-white">Products ({items.length})</h3>
+              <div className="flex items-center gap-4">
+                <h3 className="text-lg font-semibold text-white">Products ({items.length})</h3>
+                {/* AI Learning Status */}
+                {forecastCorrections.confidence >= 30 ? (
+                  <div className="flex items-center gap-2 px-3 py-1 bg-emerald-900/30 border border-emerald-500/30 rounded-full">
+                    <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                    <span className="text-emerald-400 text-xs font-medium">
+                      AI Learning Active ({forecastCorrections.confidence.toFixed(0)}% confidence)
+                    </span>
+                  </div>
+                ) : forecastCorrections.samplesUsed > 0 ? (
+                  <div className="flex items-center gap-2 px-3 py-1 bg-amber-900/30 border border-amber-500/30 rounded-full">
+                    <div className="w-2 h-2 bg-amber-400 rounded-full" />
+                    <span className="text-amber-400 text-xs font-medium">
+                      Learning... ({forecastCorrections.samplesUsed} samples, need 2+)
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-1 bg-slate-700/50 border border-slate-600/30 rounded-full">
+                    <div className="w-2 h-2 bg-slate-500 rounded-full" />
+                    <span className="text-slate-400 text-xs">
+                      Sync sales to enable AI learning
+                    </span>
+                  </div>
+                )}
+              </div>
               <div className="flex items-center gap-3">
                 <label className="flex items-center gap-2 text-sm text-slate-400">
                   <input 
