@@ -41,9 +41,9 @@ export default async function handler(req, res) {
       baseUrl 
     });
 
-    // Default to last 90 days if no startDate provided
+    // Default to last 365 days if no startDate provided (full year of data)
     const queryStartDate = startDate || 
-      new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     
     const queryEndDate = endDate || new Date().toISOString().split('T')[0];
 
@@ -363,21 +363,71 @@ export default async function handler(req, res) {
     }
 
     // ========== ANALYZE REVENUE BY CHANNEL (Amazon vs Shopify) ==========
-    // Parse deposits to identify income source
+    // Parse deposits to identify ACTUAL SALES income (not transfers, loans, refunds, etc.)
     const revenueByChannel = {
       amazon: { total: 0, byMonth: {}, transactions: [] },
       shopify: { total: 0, byMonth: {}, transactions: [] },
       other: { total: 0, byMonth: {}, transactions: [] },
     };
 
-    transactions.filter(t => t.type === 'income').forEach(t => {
+    // Only look at actual deposits (income), not transfers
+    transactions.filter(t => t.type === 'income' && t.qboType === 'Deposit').forEach(t => {
       const desc = (t.description + ' ' + t.memo + ' ' + (t.lineItems?.map(l => l.description).join(' ') || '')).toLowerCase();
       const month = t.date?.substring(0, 7); // YYYY-MM
       
+      // Skip if this looks like a loan, refund, or credit card related
+      const isNotRevenue = (
+        desc.includes('lending') ||
+        desc.includes('loan') ||
+        desc.includes('credit card') ||
+        desc.includes('refund') ||
+        desc.includes('reimbursement') ||
+        desc.includes('transfer from') ||
+        desc.includes('owner') ||
+        desc.includes('capital contribution') ||
+        desc.includes('investment')
+      );
+      
+      if (isNotRevenue) {
+        // Still track in other, but don't count as channel revenue
+        revenueByChannel.other.total += t.amount;
+        revenueByChannel.other.byMonth[month] = (revenueByChannel.other.byMonth[month] || 0) + t.amount;
+        return;
+      }
+      
       let channel = 'other';
-      if (desc.includes('amazon') || desc.includes('amzn') || desc.includes('seller central')) {
+      
+      // Amazon detection - look for specific payout patterns
+      const isAmazonPayout = (
+        (desc.includes('amazon') && (
+          desc.includes('payout') ||
+          desc.includes('settlement') ||
+          desc.includes('disbursement') ||
+          desc.includes('mktp') ||
+          desc.includes('marketplace') ||
+          desc.includes('services llc') ||
+          desc.includes('seller')
+        )) ||
+        desc.includes('amzn mktp') ||
+        desc.includes('amazon services') ||
+        desc.includes('amazon.com')
+      );
+      
+      // Shopify detection - look for specific payout patterns
+      const isShopifyPayout = (
+        (desc.includes('shopify') && (
+          desc.includes('payout') ||
+          desc.includes('payment') ||
+          desc.includes('inc')
+        )) ||
+        desc.includes('shop pay') ||
+        desc.includes('shopify inc') ||
+        desc.includes('shopify payout')
+      );
+      
+      if (isAmazonPayout) {
         channel = 'amazon';
-      } else if (desc.includes('shopify') || desc.includes('shop pay')) {
+      } else if (isShopifyPayout) {
         channel = 'shopify';
       }
       

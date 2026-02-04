@@ -34845,7 +34845,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
   // ==================== BANKING VIEW ====================
   if (view === 'banking') {
     const now = new Date();
-    const sortedTxns = [...(bankingData.transactions || [])].sort((a, b) => b.date.localeCompare(a.date));
+    
+    // Transform transactions to ensure they have required flags (handles legacy QBO syncs)
+    const transformedTxns = (bankingData.transactions || []).map(t => {
+      // If already has flags, use them
+      if (t.isIncome !== undefined || t.isExpense !== undefined) {
+        return t;
+      }
+      // Transform based on type field (from QBO API)
+      const isIncome = t.type === 'income' || (t.type === 'transfer' && (t.amount > 0 || t.originalAmount > 0));
+      const isExpense = t.type === 'expense' || t.type === 'bill' || (t.type === 'transfer' && (t.amount < 0 || t.originalAmount < 0));
+      return {
+        ...t,
+        isIncome,
+        isExpense,
+        amount: Math.abs(t.amount || t.originalAmount || 0),
+        topCategory: t.topCategory || t.category || t.account || 'Uncategorized',
+      };
+    });
+    
+    const sortedTxns = [...transformedTxns].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const categories = bankingData.categories || {};
     const accounts = bankingData.accounts || {};
     const monthlySnapshots = bankingData.monthlySnapshots || {};
@@ -37396,28 +37415,43 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               
               {/* Revenue Channels Tab - Amazon vs Shopify */}
               {bankingTab === 'channels' && (() => {
-                // Get revenue by channel from QBO sync or calculate from existing sales data
+                // Get revenue by channel from QBO sync
                 const qboChannels = bankingData.revenueByChannel;
                 
-                // Also calculate from allDaysData for more complete picture
-                const channelData = { amazon: {}, shopify: {}, other: {} };
                 const now = new Date();
                 const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
                 const currentYear = now.getFullYear();
                 
-                // Aggregate from daily sales data
+                // Helper to filter QBO channel data by period
+                const getQboChannelByPeriod = (channelData, period) => {
+                  if (!channelData?.byMonth) return 0;
+                  const entries = Object.entries(channelData.byMonth);
+                  
+                  switch (period) {
+                    case 'month':
+                      return channelData.byMonth[currentMonth] || 0;
+                    case 'ytd':
+                      return entries
+                        .filter(([m]) => m.startsWith(String(currentYear)))
+                        .reduce((s, [_, v]) => s + v, 0);
+                    default: // 'all'
+                      return channelData.total || 0;
+                  }
+                };
+                
+                // Calculate from allDaysData as backup/additional source
+                const channelData = { amazon: {}, shopify: {}, other: {} };
                 Object.entries(allDaysData || {}).forEach(([date, day]) => {
                   const month = date.substring(0, 7);
-                  const year = parseInt(date.substring(0, 4));
                   
-                  // Amazon revenue
+                  // Amazon revenue from daily data
                   const amazonRev = (day.amazon?.sales || 0);
                   if (amazonRev > 0) {
                     if (!channelData.amazon[month]) channelData.amazon[month] = 0;
                     channelData.amazon[month] += amazonRev;
                   }
                   
-                  // Shopify revenue (totalSales minus amazon sales if applicable)
+                  // Shopify revenue from daily data
                   const shopifyRev = (day.shopify?.sales || 0) || (day.totalSales && !day.amazon?.sales ? day.totalSales : 0);
                   if (shopifyRev > 0) {
                     if (!channelData.shopify[month]) channelData.shopify[month] = 0;
@@ -37425,28 +37459,79 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   }
                 });
                 
-                // Calculate totals
-                const amazonTotal = Object.values(channelData.amazon).reduce((s, v) => s + v, 0);
-                const shopifyTotal = Object.values(channelData.shopify).reduce((s, v) => s + v, 0);
-                const grandTotal = amazonTotal + shopifyTotal;
+                // Determine data source - prefer QBO if available, else use daily data
+                const hasQboData = qboChannels && (qboChannels.amazon?.total > 0 || qboChannels.shopify?.total > 0);
+                const hasDailyData = Object.keys(channelData.amazon).length > 0 || Object.keys(channelData.shopify).length > 0;
                 
-                // Current month
-                const amazonThisMonth = channelData.amazon[currentMonth] || 0;
-                const shopifyThisMonth = channelData.shopify[currentMonth] || 0;
+                // Calculate totals based on period and data source
+                let amazonAmount, shopifyAmount, otherAmount;
                 
-                // Current year
-                const amazonYTD = Object.entries(channelData.amazon)
-                  .filter(([m]) => m.startsWith(String(currentYear)))
-                  .reduce((s, [_, v]) => s + v, 0);
-                const shopifyYTD = Object.entries(channelData.shopify)
-                  .filter(([m]) => m.startsWith(String(currentYear)))
-                  .reduce((s, [_, v]) => s + v, 0);
+                if (hasQboData) {
+                  // Use QBO bank deposits data filtered by period
+                  amazonAmount = getQboChannelByPeriod(qboChannels.amazon, channelPeriod);
+                  shopifyAmount = getQboChannelByPeriod(qboChannels.shopify, channelPeriod);
+                  otherAmount = getQboChannelByPeriod(qboChannels.other, channelPeriod);
+                } else if (hasDailyData) {
+                  // Fallback to daily sales data
+                  const getDailyByPeriod = (data, period) => {
+                    const entries = Object.entries(data);
+                    switch (period) {
+                      case 'month':
+                        return data[currentMonth] || 0;
+                      case 'ytd':
+                        return entries
+                          .filter(([m]) => m.startsWith(String(currentYear)))
+                          .reduce((s, [_, v]) => s + v, 0);
+                      default:
+                        return entries.reduce((s, [_, v]) => s + v, 0);
+                    }
+                  };
+                  amazonAmount = getDailyByPeriod(channelData.amazon, channelPeriod);
+                  shopifyAmount = getDailyByPeriod(channelData.shopify, channelPeriod);
+                  otherAmount = 0;
+                } else {
+                  amazonAmount = 0;
+                  shopifyAmount = 0;
+                  otherAmount = 0;
+                }
                 
-                // Get all months for chart
-                const allMonths = [...new Set([
-                  ...Object.keys(channelData.amazon),
-                  ...Object.keys(channelData.shopify)
-                ])].sort().slice(-12);
+                const totalAmount = amazonAmount + shopifyAmount;
+                
+                // Get monthly data for chart - combine both sources
+                const getMonthlyData = () => {
+                  const months = {};
+                  
+                  // Add QBO data
+                  if (qboChannels?.amazon?.byMonth) {
+                    Object.entries(qboChannels.amazon.byMonth).forEach(([m, v]) => {
+                      if (!months[m]) months[m] = { amazon: 0, shopify: 0 };
+                      months[m].amazon = v;
+                    });
+                  }
+                  if (qboChannels?.shopify?.byMonth) {
+                    Object.entries(qboChannels.shopify.byMonth).forEach(([m, v]) => {
+                      if (!months[m]) months[m] = { amazon: 0, shopify: 0 };
+                      months[m].shopify = v;
+                    });
+                  }
+                  
+                  // If no QBO data, use daily data
+                  if (Object.keys(months).length === 0) {
+                    Object.entries(channelData.amazon).forEach(([m, v]) => {
+                      if (!months[m]) months[m] = { amazon: 0, shopify: 0 };
+                      months[m].amazon = v;
+                    });
+                    Object.entries(channelData.shopify).forEach(([m, v]) => {
+                      if (!months[m]) months[m] = { amazon: 0, shopify: 0 };
+                      months[m].shopify = v;
+                    });
+                  }
+                  
+                  return months;
+                };
+                
+                const monthlyData = getMonthlyData();
+                const allMonths = Object.keys(monthlyData).sort().slice(-12);
                 
                 return (
                   <div className="space-y-6">
@@ -37467,6 +37552,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       ))}
                     </div>
                     
+                    {/* Data Source Indicator */}
+                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                      {hasQboData ? (
+                        <>
+                          <Landmark className="w-3 h-3" />
+                          <span>Data from QuickBooks bank deposits</span>
+                        </>
+                      ) : hasDailyData ? (
+                        <>
+                          <BarChart3 className="w-3 h-3" />
+                          <span>Data from daily sales uploads</span>
+                        </>
+                      ) : null}
+                    </div>
+                    
                     {/* Summary Cards */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       {/* Amazon */}
@@ -37480,13 +37580,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             <p className="text-slate-400 text-xs">FBA + Seller Central</p>
                           </div>
                         </div>
-                        <p className="text-3xl font-bold text-white">
-                          {formatCurrency(channelPeriod === 'month' ? amazonThisMonth : channelPeriod === 'ytd' ? amazonYTD : amazonTotal)}
-                        </p>
-                        {grandTotal > 0 && (
+                        <p className="text-3xl font-bold text-white">{formatCurrency(amazonAmount)}</p>
+                        {totalAmount > 0 && (
                           <p className="text-orange-400 text-sm mt-1">
-                            {((channelPeriod === 'month' ? amazonThisMonth : channelPeriod === 'ytd' ? amazonYTD : amazonTotal) / 
-                              (channelPeriod === 'month' ? (amazonThisMonth + shopifyThisMonth) : channelPeriod === 'ytd' ? (amazonYTD + shopifyYTD) : grandTotal) * 100).toFixed(1)}% of revenue
+                            {(amazonAmount / totalAmount * 100).toFixed(1)}% of revenue
                           </p>
                         )}
                       </div>
@@ -37502,13 +37599,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             <p className="text-slate-400 text-xs">Direct to Consumer</p>
                           </div>
                         </div>
-                        <p className="text-3xl font-bold text-white">
-                          {formatCurrency(channelPeriod === 'month' ? shopifyThisMonth : channelPeriod === 'ytd' ? shopifyYTD : shopifyTotal)}
-                        </p>
-                        {grandTotal > 0 && (
+                        <p className="text-3xl font-bold text-white">{formatCurrency(shopifyAmount)}</p>
+                        {totalAmount > 0 && (
                           <p className="text-green-400 text-sm mt-1">
-                            {((channelPeriod === 'month' ? shopifyThisMonth : channelPeriod === 'ytd' ? shopifyYTD : shopifyTotal) / 
-                              (channelPeriod === 'month' ? (amazonThisMonth + shopifyThisMonth) : channelPeriod === 'ytd' ? (amazonYTD + shopifyYTD) : grandTotal) * 100).toFixed(1)}% of revenue
+                            {(shopifyAmount / totalAmount * 100).toFixed(1)}% of revenue
                           </p>
                         )}
                       </div>
@@ -37521,12 +37615,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           </div>
                           <div>
                             <p className="text-violet-400 font-medium">Total Revenue</p>
-                            <p className="text-slate-400 text-xs">All Channels</p>
+                            <p className="text-slate-400 text-xs">
+                              {channelPeriod === 'month' ? 'This Month' : channelPeriod === 'ytd' ? 'Year to Date' : 'All Time'}
+                            </p>
                           </div>
                         </div>
-                        <p className="text-3xl font-bold text-white">
-                          {formatCurrency(channelPeriod === 'month' ? (amazonThisMonth + shopifyThisMonth) : channelPeriod === 'ytd' ? (amazonYTD + shopifyYTD) : grandTotal)}
-                        </p>
+                        <p className="text-3xl font-bold text-white">{formatCurrency(totalAmount)}</p>
+                        {otherAmount > 0 && (
+                          <p className="text-slate-400 text-sm mt-1">
+                            + {formatCurrency(otherAmount)} other income
+                          </p>
+                        )}
                       </div>
                     </div>
                     
@@ -37536,10 +37635,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       {allMonths.length > 0 ? (
                         <div className="space-y-3">
                           {allMonths.slice(-6).map(month => {
-                            const amz = channelData.amazon[month] || 0;
-                            const shp = channelData.shopify[month] || 0;
+                            const amz = monthlyData[month]?.amazon || 0;
+                            const shp = monthlyData[month]?.shopify || 0;
                             const total = amz + shp;
-                            const maxTotal = Math.max(...allMonths.slice(-6).map(m => (channelData.amazon[m] || 0) + (channelData.shopify[m] || 0)));
+                            const maxTotal = Math.max(...allMonths.slice(-6).map(m => (monthlyData[m]?.amazon || 0) + (monthlyData[m]?.shopify || 0)));
                             
                             return (
                               <div key={month} className="space-y-1">
@@ -37551,7 +37650,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                   {amz > 0 && (
                                     <div 
                                       className="bg-gradient-to-r from-orange-500 to-amber-500 h-full flex items-center justify-center text-xs font-medium"
-                                      style={{ width: `${(amz / maxTotal) * 100}%` }}
+                                      style={{ width: `${maxTotal > 0 ? (amz / maxTotal) * 100 : 0}%` }}
                                     >
                                       {amz > maxTotal * 0.1 && formatCurrency(amz)}
                                     </div>
@@ -37559,7 +37658,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                   {shp > 0 && (
                                     <div 
                                       className="bg-gradient-to-r from-green-500 to-emerald-500 h-full flex items-center justify-center text-xs font-medium"
-                                      style={{ width: `${(shp / maxTotal) * 100}%` }}
+                                      style={{ width: `${maxTotal > 0 ? (shp / maxTotal) * 100 : 0}%` }}
                                     >
                                       {shp > maxTotal * 0.1 && formatCurrency(shp)}
                                     </div>
@@ -37573,7 +37672,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         <div className="text-center py-8">
                           <ShoppingBag className="w-12 h-12 text-slate-600 mx-auto mb-3" />
                           <p className="text-slate-400">No sales channel data available yet.</p>
-                          <p className="text-slate-500 text-sm mt-1">Upload daily sales data or sync with Shopify/Amazon to see channel breakdown.</p>
+                          <p className="text-slate-500 text-sm mt-1">Sync with QuickBooks or upload daily sales data to see channel breakdown.</p>
                         </div>
                       )}
                       
@@ -37591,31 +37690,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         </div>
                       )}
                     </div>
-                    
-                    {/* QBO Income Deposits if available */}
-                    {qboChannels && (qboChannels.amazon?.total > 0 || qboChannels.shopify?.total > 0) && (
-                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-                        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                          <Landmark className="w-5 h-5 text-cyan-400" />
-                          Bank Deposits by Channel (from QBO)
-                        </h3>
-                        <div className="grid grid-cols-3 gap-4">
-                          <div className="text-center p-3 bg-slate-900/50 rounded-lg">
-                            <p className="text-orange-400 text-sm font-medium">Amazon Deposits</p>
-                            <p className="text-xl font-bold text-white">{formatCurrency(qboChannels.amazon?.total || 0)}</p>
-                          </div>
-                          <div className="text-center p-3 bg-slate-900/50 rounded-lg">
-                            <p className="text-green-400 text-sm font-medium">Shopify Deposits</p>
-                            <p className="text-xl font-bold text-white">{formatCurrency(qboChannels.shopify?.total || 0)}</p>
-                          </div>
-                          <div className="text-center p-3 bg-slate-900/50 rounded-lg">
-                            <p className="text-slate-400 text-sm font-medium">Other Income</p>
-                            <p className="text-xl font-bold text-white">{formatCurrency(qboChannels.other?.total || 0)}</p>
-                          </div>
-                        </div>
-                        <p className="text-slate-500 text-xs mt-3">Note: Bank deposits may differ from gross sales due to fees, timing, and payouts.</p>
-                      </div>
-                    )}
                   </div>
                 );
               })()}
@@ -39359,7 +39433,36 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         // Update banking data with transactions AND real account balances
                         setBankingData(prev => {
                           const existingIds = new Set((prev?.transactions || []).map(t => t.qboId).filter(Boolean));
-                          const newTransactions = data.transactions?.filter(t => !existingIds.has(t.qboId)) || [];
+                          
+                          // Transform QBO transactions to match the expected format
+                          const newTransactions = (data.transactions || [])
+                            .filter(t => !existingIds.has(t.qboId))
+                            .map(t => {
+                              // Determine income/expense based on type and amount
+                              const isIncome = t.type === 'income' || (t.type === 'transfer' && t.amount > 0);
+                              const isExpense = t.type === 'expense' || t.type === 'bill' || (t.type === 'transfer' && t.amount < 0);
+                              
+                              // Calculate display amount (always positive for display)
+                              const displayAmount = Math.abs(t.amount);
+                              
+                              // Determine top category from QBO data
+                              const topCategory = t.category || t.account || 'Uncategorized';
+                              
+                              return {
+                                ...t,
+                                // Add required flags for banking view
+                                isIncome,
+                                isExpense,
+                                // Store positive amount for consistent display
+                                amount: displayAmount,
+                                originalAmount: t.amount,
+                                // Category mapping
+                                topCategory,
+                                subCategory: t.memo || t.description || '',
+                                // Ensure date is properly formatted
+                                date: t.date || new Date().toISOString().split('T')[0],
+                              };
+                            });
                           
                           // Convert QBO accounts array to our accounts object format
                           const updatedAccounts = { ...(prev?.accounts || {}) };
@@ -39393,10 +39496,32 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             });
                           }
                           
+                          // Recalculate categories from all transactions (including new ones)
+                          const allTxns = [...(prev?.transactions || []), ...newTransactions];
+                          const updatedCategories = {};
+                          allTxns.forEach(txn => {
+                            const cat = txn.topCategory || 'Uncategorized';
+                            if (!updatedCategories[cat]) {
+                              updatedCategories[cat] = { totalIn: 0, totalOut: 0, transactions: 0 };
+                            }
+                            if (txn.isIncome) updatedCategories[cat].totalIn += txn.amount;
+                            if (txn.isExpense) updatedCategories[cat].totalOut += txn.amount;
+                            updatedCategories[cat].transactions += 1;
+                          });
+                          
+                          // Recalculate account transaction counts
+                          allTxns.forEach(txn => {
+                            const acctName = txn.account;
+                            if (acctName && updatedAccounts[acctName]) {
+                              updatedAccounts[acctName].transactions = (updatedAccounts[acctName].transactions || 0) + 1;
+                            }
+                          });
+                          
                           return {
                             ...prev,
-                            transactions: [...(prev?.transactions || []), ...newTransactions],
+                            transactions: allTxns,
                             accounts: updatedAccounts,
+                            categories: updatedCategories,
                             lastUpdated: new Date().toISOString(),
                             lastUpload: new Date().toISOString(),
                             // Store summary from QBO
