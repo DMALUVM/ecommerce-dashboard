@@ -196,6 +196,200 @@ export default async function handler(req, res) {
     // Sort all transactions by date (newest first)
     transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
 
+    // ========== FETCH ACCOUNT BALANCES ==========
+    // This gets the ACTUAL current balances from QBO
+    const accountQuery = `SELECT * FROM Account WHERE AccountType IN ('Bank', 'Credit Card', 'Other Current Asset') MAXRESULTS 100`;
+    
+    let accounts = [];
+    try {
+      accounts = await qboQuery('Account', accountQuery);
+      console.log(`Found ${accounts.length} accounts`);
+    } catch (e) {
+      console.warn('Could not fetch accounts:', e);
+    }
+
+    // Transform accounts to useful format
+    const accountBalances = accounts.map(a => ({
+      id: a.Id,
+      name: a.Name,
+      fullName: a.FullyQualifiedName,
+      type: a.AccountType,
+      subType: a.AccountSubType,
+      currentBalance: a.CurrentBalance || 0,
+      displayBalance: a.AccountType === 'Credit Card' 
+        ? Math.abs(a.CurrentBalance || 0) 
+        : (a.CurrentBalance || 0),
+      isActive: a.Active,
+      currency: a.CurrencyRef?.value || 'USD',
+    }));
+
+    // Separate by type for easier use
+    const bankAccounts = accountBalances.filter(a => a.type === 'Bank');
+    const creditCards = accountBalances.filter(a => a.type === 'Credit Card');
+    const otherAssets = accountBalances.filter(a => a.type === 'Other Current Asset');
+
+    // Calculate totals from ACTUAL balances
+    const totalCashAvailable = bankAccounts.reduce((sum, a) => sum + a.currentBalance, 0);
+    const totalCreditCardDebt = creditCards.reduce((sum, a) => sum + Math.abs(a.currentBalance), 0);
+    const netPosition = totalCashAvailable - totalCreditCardDebt;
+
+    // ========== FETCH FULL CHART OF ACCOUNTS ==========
+    const chartOfAccountsQuery = `SELECT * FROM Account MAXRESULTS 500`;
+    let chartOfAccounts = [];
+    try {
+      chartOfAccounts = await qboQuery('Account', chartOfAccountsQuery);
+      console.log(`Found ${chartOfAccounts.length} accounts in chart of accounts`);
+    } catch (e) {
+      console.warn('Could not fetch chart of accounts:', e);
+    }
+
+    // Transform to useful format with hierarchy
+    const formattedChartOfAccounts = chartOfAccounts.map(a => ({
+      id: a.Id,
+      name: a.Name,
+      fullName: a.FullyQualifiedName,
+      type: a.AccountType,
+      subType: a.AccountSubType,
+      classification: a.Classification, // Asset, Liability, Equity, Revenue, Expense
+      currentBalance: a.CurrentBalance || 0,
+      isActive: a.Active,
+      parentId: a.ParentRef?.value || null,
+      description: a.Description || '',
+    }));
+
+    // ========== FETCH VENDORS ==========
+    const vendorQuery = `SELECT * FROM Vendor WHERE Active = true MAXRESULTS 500`;
+    let vendors = [];
+    try {
+      vendors = await qboQuery('Vendor', vendorQuery);
+      console.log(`Found ${vendors.length} vendors`);
+    } catch (e) {
+      console.warn('Could not fetch vendors:', e);
+    }
+
+    // Calculate spending per vendor from transactions
+    const vendorSpending = {};
+    transactions.forEach(t => {
+      if (t.vendor && (t.type === 'expense' || t.type === 'bill')) {
+        if (!vendorSpending[t.vendor]) {
+          vendorSpending[t.vendor] = { 
+            name: t.vendor, 
+            totalSpent: 0, 
+            transactionCount: 0,
+            lastTransaction: null,
+            categories: {}
+          };
+        }
+        vendorSpending[t.vendor].totalSpent += Math.abs(t.amount);
+        vendorSpending[t.vendor].transactionCount += 1;
+        if (!vendorSpending[t.vendor].lastTransaction || t.date > vendorSpending[t.vendor].lastTransaction) {
+          vendorSpending[t.vendor].lastTransaction = t.date;
+        }
+        // Track spending by category for each vendor
+        const cat = t.category || 'Uncategorized';
+        vendorSpending[t.vendor].categories[cat] = (vendorSpending[t.vendor].categories[cat] || 0) + Math.abs(t.amount);
+      }
+    });
+
+    // Sort vendors by spending
+    const topVendors = Object.values(vendorSpending)
+      .sort((a, b) => b.totalSpent - a.totalSpent);
+
+    // ========== FETCH PROFIT & LOSS REPORT ==========
+    // Get current year P&L
+    const currentYear = new Date().getFullYear();
+    const ytdStart = `${currentYear}-01-01`;
+    const ytdEnd = new Date().toISOString().split('T')[0];
+    
+    let profitAndLoss = null;
+    try {
+      const plUrl = `${baseUrl}/v3/company/${realmId}/reports/ProfitAndLoss?start_date=${ytdStart}&end_date=${ytdEnd}&minorversion=65`;
+      console.log('Fetching P&L report...');
+      
+      const plResponse = await fetch(plUrl, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Accept': 'application/json',
+        },
+      });
+
+      if (plResponse.ok) {
+        const plData = await plResponse.json();
+        
+        // Parse the P&L report structure
+        const parseReportSection = (rows, result = {}) => {
+          if (!rows) return result;
+          rows.forEach(row => {
+            if (row.type === 'Data' && row.ColData) {
+              const name = row.ColData[0]?.value;
+              const value = parseFloat(row.ColData[1]?.value) || 0;
+              if (name) result[name] = value;
+            }
+            if (row.Rows?.Row) {
+              parseReportSection(row.Rows.Row, result);
+            }
+            if (row.Summary?.ColData) {
+              const name = row.Summary.ColData[0]?.value;
+              const value = parseFloat(row.Summary.ColData[1]?.value) || 0;
+              if (name && name.startsWith('Total')) {
+                result[name] = value;
+              }
+            }
+          });
+          return result;
+        };
+
+        const reportData = parseReportSection(plData?.Rows?.Row);
+        
+        profitAndLoss = {
+          period: { start: ytdStart, end: ytdEnd },
+          totalIncome: reportData['Total Income'] || 0,
+          totalCOGS: reportData['Total Cost of Goods Sold'] || 0,
+          grossProfit: reportData['Gross Profit'] || 0,
+          totalExpenses: reportData['Total Expenses'] || 0,
+          netOperatingIncome: reportData['Net Operating Income'] || 0,
+          netIncome: reportData['Net Income'] || 0,
+          details: reportData,
+          raw: plData, // Include raw for detailed parsing if needed
+        };
+        console.log('P&L fetched:', { 
+          income: profitAndLoss.totalIncome, 
+          expenses: profitAndLoss.totalExpenses,
+          netIncome: profitAndLoss.netIncome 
+        });
+      }
+    } catch (e) {
+      console.warn('Could not fetch P&L report:', e);
+    }
+
+    // ========== ANALYZE REVENUE BY CHANNEL (Amazon vs Shopify) ==========
+    // Parse deposits to identify income source
+    const revenueByChannel = {
+      amazon: { total: 0, byMonth: {}, transactions: [] },
+      shopify: { total: 0, byMonth: {}, transactions: [] },
+      other: { total: 0, byMonth: {}, transactions: [] },
+    };
+
+    transactions.filter(t => t.type === 'income').forEach(t => {
+      const desc = (t.description + ' ' + t.memo + ' ' + (t.lineItems?.map(l => l.description).join(' ') || '')).toLowerCase();
+      const month = t.date?.substring(0, 7); // YYYY-MM
+      
+      let channel = 'other';
+      if (desc.includes('amazon') || desc.includes('amzn') || desc.includes('seller central')) {
+        channel = 'amazon';
+      } else if (desc.includes('shopify') || desc.includes('shop pay')) {
+        channel = 'shopify';
+      }
+      
+      revenueByChannel[channel].total += t.amount;
+      revenueByChannel[channel].byMonth[month] = (revenueByChannel[channel].byMonth[month] || 0) + t.amount;
+      revenueByChannel[channel].transactions.push({
+        date: t.date,
+        amount: t.amount,
+        description: t.description,
+      });
+    });
+
     // Calculate summary stats
     const summary = {
       totalTransactions: transactions.length,
@@ -204,6 +398,14 @@ export default async function handler(req, res) {
       totalTransfers: transactions.filter(t => t.type === 'transfer').length,
       totalBills: transactions.filter(t => t.type === 'bill').length,
       dateRange: { start: queryStartDate, end: queryEndDate },
+      // Actual account balances from QBO
+      cashAvailable: totalCashAvailable,
+      creditCardDebt: totalCreditCardDebt,
+      netPosition: netPosition,
+      // Vendor summary
+      totalVendors: topVendors.length,
+      topVendor: topVendors[0]?.name || null,
+      topVendorSpend: topVendors[0]?.totalSpent || 0,
     };
 
     console.log('QBO Sync complete:', summary);
@@ -211,6 +413,18 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       transactions,
+      // Account data
+      accounts: accountBalances,
+      bankAccounts,
+      creditCards,
+      // NEW: Chart of Accounts
+      chartOfAccounts: formattedChartOfAccounts,
+      // NEW: Vendors with spending
+      vendors: topVendors,
+      // NEW: P&L Report
+      profitAndLoss,
+      // NEW: Revenue by channel
+      revenueByChannel,
       summary,
       syncedAt: new Date().toISOString(),
       realmId,

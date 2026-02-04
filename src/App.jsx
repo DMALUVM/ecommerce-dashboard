@@ -1586,7 +1586,8 @@ const handleLogout = async () => {
   const [bankingFile, setBankingFile] = useState(null);
   const [bankingProcessing, setBankingProcessing] = useState(false);
   const [bankingDateRange, setBankingDateRange] = useState('month'); // 'week' | 'month' | 'quarter' | 'year' | 'all' | 'ytd'
-  const [bankingTab, setBankingTab] = useState('overview'); // 'overview' | 'income' | 'expenses' | 'accounts' | 'trends' | 'ai' | 'cfo' | 'cards'
+  const [bankingTab, setBankingTab] = useState('overview'); // 'overview' | 'income' | 'expenses' | 'accounts' | 'trends' | 'ai' | 'cfo' | 'cards' | 'channels' | 'vendors'
+  const [channelPeriod, setChannelPeriod] = useState('ytd'); // 'month' | 'ytd' | 'all' - for revenue channel view
   const [bankingCategoryFilter, setBankingCategoryFilter] = useState('all');
   const [showBankingUpload, setShowBankingUpload] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState(null); // Transaction being edited
@@ -35391,6 +35392,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               {Object.keys(bankingData.accounts || {}).length > 0 && (() => {
                 // Filter to only show real bank accounts (more flexible pattern matching)
                 const realAccts = Object.entries(bankingData.accounts).filter(([name, acct]) => {
+                  // ALWAYS include accounts synced from QBO (they're verified real accounts)
+                  if (acct.qboId) return true;
                   // Skip if name looks corrupted (has quotes or is super long)
                   if (name.includes('"')) return false;
                   if (name.length > 100) return false;
@@ -35409,8 +35412,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     (lower.includes('checking') && !name.includes(',')) ||
                     (lower.includes('savings') && !name.includes(',')) ||
                     (lower.includes('operations') && !name.includes(',')) ||
-                    (lower.includes('card') && /\(\d{4}\)/.test(name)) || // Card with account number
-                    (lower.includes('credit') && /\(\d{4}\)/.test(name)) ||
+                    (lower.includes('card') && !name.includes(',')) || // Any card name without comma
+                    (lower.includes('credit') && !name.includes(',')) ||
+                    (lower.includes('platinum') && !name.includes(',')) ||
+                    (lower.includes('prime') && !name.includes(',')) ||
+                    (lower.includes('business') && !name.includes(',')) ||
                     lower.includes('amex') ||
                     lower.includes('chase') ||
                     lower.includes('bank') ||
@@ -35486,6 +35492,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 {[
                   { key: 'overview', label: 'Overview', icon: BarChart3 },
                   { key: 'cfo', label: 'CFO Dashboard', icon: Target },
+                  { key: 'channels', label: 'Channels', icon: ShoppingBag },
+                  { key: 'vendors', label: 'Vendors', icon: Building },
                   { key: 'cards', label: 'Credit Cards', icon: CreditCard },
                   { key: 'recurring', label: 'Recurring', icon: RefreshCw },
                   { key: 'expenses', label: 'Expenses', icon: TrendingDown },
@@ -37385,6 +37393,403 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   </div>
                 );
               })()}
+              
+              {/* Revenue Channels Tab - Amazon vs Shopify */}
+              {bankingTab === 'channels' && (() => {
+                // Get revenue by channel from QBO sync or calculate from existing sales data
+                const qboChannels = bankingData.revenueByChannel;
+                
+                // Also calculate from allDaysData for more complete picture
+                const channelData = { amazon: {}, shopify: {}, other: {} };
+                const now = new Date();
+                const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                const currentYear = now.getFullYear();
+                
+                // Aggregate from daily sales data
+                Object.entries(allDaysData || {}).forEach(([date, day]) => {
+                  const month = date.substring(0, 7);
+                  const year = parseInt(date.substring(0, 4));
+                  
+                  // Amazon revenue
+                  const amazonRev = (day.amazon?.sales || 0);
+                  if (amazonRev > 0) {
+                    if (!channelData.amazon[month]) channelData.amazon[month] = 0;
+                    channelData.amazon[month] += amazonRev;
+                  }
+                  
+                  // Shopify revenue (totalSales minus amazon sales if applicable)
+                  const shopifyRev = (day.shopify?.sales || 0) || (day.totalSales && !day.amazon?.sales ? day.totalSales : 0);
+                  if (shopifyRev > 0) {
+                    if (!channelData.shopify[month]) channelData.shopify[month] = 0;
+                    channelData.shopify[month] += shopifyRev;
+                  }
+                });
+                
+                // Calculate totals
+                const amazonTotal = Object.values(channelData.amazon).reduce((s, v) => s + v, 0);
+                const shopifyTotal = Object.values(channelData.shopify).reduce((s, v) => s + v, 0);
+                const grandTotal = amazonTotal + shopifyTotal;
+                
+                // Current month
+                const amazonThisMonth = channelData.amazon[currentMonth] || 0;
+                const shopifyThisMonth = channelData.shopify[currentMonth] || 0;
+                
+                // Current year
+                const amazonYTD = Object.entries(channelData.amazon)
+                  .filter(([m]) => m.startsWith(String(currentYear)))
+                  .reduce((s, [_, v]) => s + v, 0);
+                const shopifyYTD = Object.entries(channelData.shopify)
+                  .filter(([m]) => m.startsWith(String(currentYear)))
+                  .reduce((s, [_, v]) => s + v, 0);
+                
+                // Get all months for chart
+                const allMonths = [...new Set([
+                  ...Object.keys(channelData.amazon),
+                  ...Object.keys(channelData.shopify)
+                ])].sort().slice(-12);
+                
+                return (
+                  <div className="space-y-6">
+                    {/* Period Selector */}
+                    <div className="flex gap-2">
+                      {['month', 'ytd', 'all'].map(p => (
+                        <button
+                          key={p}
+                          onClick={() => setChannelPeriod(p)}
+                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                            channelPeriod === p 
+                              ? 'bg-emerald-600 text-white' 
+                              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                          }`}
+                        >
+                          {p === 'month' ? 'This Month' : p === 'ytd' ? 'Year to Date' : 'All Time'}
+                        </button>
+                      ))}
+                    </div>
+                    
+                    {/* Summary Cards */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* Amazon */}
+                      <div className="bg-gradient-to-br from-orange-900/30 to-amber-900/20 rounded-xl border border-orange-500/30 p-5">
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className="w-10 h-10 bg-orange-500/20 rounded-lg flex items-center justify-center">
+                            <Package className="w-5 h-5 text-orange-400" />
+                          </div>
+                          <div>
+                            <p className="text-orange-400 font-medium">Amazon</p>
+                            <p className="text-slate-400 text-xs">FBA + Seller Central</p>
+                          </div>
+                        </div>
+                        <p className="text-3xl font-bold text-white">
+                          {formatCurrency(channelPeriod === 'month' ? amazonThisMonth : channelPeriod === 'ytd' ? amazonYTD : amazonTotal)}
+                        </p>
+                        {grandTotal > 0 && (
+                          <p className="text-orange-400 text-sm mt-1">
+                            {((channelPeriod === 'month' ? amazonThisMonth : channelPeriod === 'ytd' ? amazonYTD : amazonTotal) / 
+                              (channelPeriod === 'month' ? (amazonThisMonth + shopifyThisMonth) : channelPeriod === 'ytd' ? (amazonYTD + shopifyYTD) : grandTotal) * 100).toFixed(1)}% of revenue
+                          </p>
+                        )}
+                      </div>
+                      
+                      {/* Shopify */}
+                      <div className="bg-gradient-to-br from-green-900/30 to-emerald-900/20 rounded-xl border border-green-500/30 p-5">
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className="w-10 h-10 bg-green-500/20 rounded-lg flex items-center justify-center">
+                            <ShoppingBag className="w-5 h-5 text-green-400" />
+                          </div>
+                          <div>
+                            <p className="text-green-400 font-medium">Shopify</p>
+                            <p className="text-slate-400 text-xs">Direct to Consumer</p>
+                          </div>
+                        </div>
+                        <p className="text-3xl font-bold text-white">
+                          {formatCurrency(channelPeriod === 'month' ? shopifyThisMonth : channelPeriod === 'ytd' ? shopifyYTD : shopifyTotal)}
+                        </p>
+                        {grandTotal > 0 && (
+                          <p className="text-green-400 text-sm mt-1">
+                            {((channelPeriod === 'month' ? shopifyThisMonth : channelPeriod === 'ytd' ? shopifyYTD : shopifyTotal) / 
+                              (channelPeriod === 'month' ? (amazonThisMonth + shopifyThisMonth) : channelPeriod === 'ytd' ? (amazonYTD + shopifyYTD) : grandTotal) * 100).toFixed(1)}% of revenue
+                          </p>
+                        )}
+                      </div>
+                      
+                      {/* Total */}
+                      <div className="bg-gradient-to-br from-violet-900/30 to-purple-900/20 rounded-xl border border-violet-500/30 p-5">
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className="w-10 h-10 bg-violet-500/20 rounded-lg flex items-center justify-center">
+                            <DollarSign className="w-5 h-5 text-violet-400" />
+                          </div>
+                          <div>
+                            <p className="text-violet-400 font-medium">Total Revenue</p>
+                            <p className="text-slate-400 text-xs">All Channels</p>
+                          </div>
+                        </div>
+                        <p className="text-3xl font-bold text-white">
+                          {formatCurrency(channelPeriod === 'month' ? (amazonThisMonth + shopifyThisMonth) : channelPeriod === 'ytd' ? (amazonYTD + shopifyYTD) : grandTotal)}
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {/* Monthly Breakdown Chart */}
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                      <h3 className="text-lg font-semibold text-white mb-4">Monthly Revenue by Channel</h3>
+                      {allMonths.length > 0 ? (
+                        <div className="space-y-3">
+                          {allMonths.slice(-6).map(month => {
+                            const amz = channelData.amazon[month] || 0;
+                            const shp = channelData.shopify[month] || 0;
+                            const total = amz + shp;
+                            const maxTotal = Math.max(...allMonths.slice(-6).map(m => (channelData.amazon[m] || 0) + (channelData.shopify[m] || 0)));
+                            
+                            return (
+                              <div key={month} className="space-y-1">
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-slate-300">{new Date(month + '-01').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</span>
+                                  <span className="text-white font-medium">{formatCurrency(total)}</span>
+                                </div>
+                                <div className="h-6 bg-slate-700 rounded-full overflow-hidden flex">
+                                  {amz > 0 && (
+                                    <div 
+                                      className="bg-gradient-to-r from-orange-500 to-amber-500 h-full flex items-center justify-center text-xs font-medium"
+                                      style={{ width: `${(amz / maxTotal) * 100}%` }}
+                                    >
+                                      {amz > maxTotal * 0.1 && formatCurrency(amz)}
+                                    </div>
+                                  )}
+                                  {shp > 0 && (
+                                    <div 
+                                      className="bg-gradient-to-r from-green-500 to-emerald-500 h-full flex items-center justify-center text-xs font-medium"
+                                      style={{ width: `${(shp / maxTotal) * 100}%` }}
+                                    >
+                                      {shp > maxTotal * 0.1 && formatCurrency(shp)}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8">
+                          <ShoppingBag className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                          <p className="text-slate-400">No sales channel data available yet.</p>
+                          <p className="text-slate-500 text-sm mt-1">Upload daily sales data or sync with Shopify/Amazon to see channel breakdown.</p>
+                        </div>
+                      )}
+                      
+                      {/* Legend */}
+                      {allMonths.length > 0 && (
+                        <div className="flex gap-6 mt-4 pt-4 border-t border-slate-700">
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-gradient-to-r from-orange-500 to-amber-500"></div>
+                            <span className="text-sm text-slate-400">Amazon</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-gradient-to-r from-green-500 to-emerald-500"></div>
+                            <span className="text-sm text-slate-400">Shopify</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* QBO Income Deposits if available */}
+                    {qboChannels && (qboChannels.amazon?.total > 0 || qboChannels.shopify?.total > 0) && (
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                          <Landmark className="w-5 h-5 text-cyan-400" />
+                          Bank Deposits by Channel (from QBO)
+                        </h3>
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="text-center p-3 bg-slate-900/50 rounded-lg">
+                            <p className="text-orange-400 text-sm font-medium">Amazon Deposits</p>
+                            <p className="text-xl font-bold text-white">{formatCurrency(qboChannels.amazon?.total || 0)}</p>
+                          </div>
+                          <div className="text-center p-3 bg-slate-900/50 rounded-lg">
+                            <p className="text-green-400 text-sm font-medium">Shopify Deposits</p>
+                            <p className="text-xl font-bold text-white">{formatCurrency(qboChannels.shopify?.total || 0)}</p>
+                          </div>
+                          <div className="text-center p-3 bg-slate-900/50 rounded-lg">
+                            <p className="text-slate-400 text-sm font-medium">Other Income</p>
+                            <p className="text-xl font-bold text-white">{formatCurrency(qboChannels.other?.total || 0)}</p>
+                          </div>
+                        </div>
+                        <p className="text-slate-500 text-xs mt-3">Note: Bank deposits may differ from gross sales due to fees, timing, and payouts.</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              
+              {/* Vendors Tab - Top Spending */}
+              {bankingTab === 'vendors' && (() => {
+                const vendors = bankingData.vendors || [];
+                const chartOfAccounts = bankingData.chartOfAccounts || [];
+                const profitAndLoss = bankingData.profitAndLoss;
+                
+                // Calculate vendor spending from transactions if no QBO vendor data
+                const vendorSpendingFromTxns = {};
+                (bankingData.transactions || []).forEach(t => {
+                  if (t.vendor && (t.type === 'expense' || t.type === 'bill' || t.isExpense)) {
+                    if (!vendorSpendingFromTxns[t.vendor]) {
+                      vendorSpendingFromTxns[t.vendor] = { 
+                        name: t.vendor, 
+                        totalSpent: 0, 
+                        transactionCount: 0,
+                        categories: {}
+                      };
+                    }
+                    vendorSpendingFromTxns[t.vendor].totalSpent += Math.abs(t.amount);
+                    vendorSpendingFromTxns[t.vendor].transactionCount += 1;
+                    const cat = t.category || 'Uncategorized';
+                    vendorSpendingFromTxns[t.vendor].categories[cat] = 
+                      (vendorSpendingFromTxns[t.vendor].categories[cat] || 0) + Math.abs(t.amount);
+                  }
+                });
+                
+                const displayVendors = vendors.length > 0 
+                  ? vendors 
+                  : Object.values(vendorSpendingFromTxns).sort((a, b) => b.totalSpent - a.totalSpent);
+                
+                const totalVendorSpend = displayVendors.reduce((s, v) => s + v.totalSpent, 0);
+                
+                return (
+                  <div className="space-y-6">
+                    {/* P&L Summary if available */}
+                    {profitAndLoss && (
+                      <div className="bg-gradient-to-br from-emerald-900/20 to-cyan-900/20 rounded-xl border border-emerald-500/30 p-5">
+                        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                          <LineChart className="w-5 h-5 text-emerald-400" />
+                          Profit & Loss Summary (YTD from QBO)
+                        </h3>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div className="text-center p-3 bg-slate-900/50 rounded-lg">
+                            <p className="text-emerald-400 text-xs font-medium">Total Income</p>
+                            <p className="text-xl font-bold text-white">{formatCurrency(profitAndLoss.totalIncome)}</p>
+                          </div>
+                          <div className="text-center p-3 bg-slate-900/50 rounded-lg">
+                            <p className="text-amber-400 text-xs font-medium">Cost of Goods</p>
+                            <p className="text-xl font-bold text-white">{formatCurrency(profitAndLoss.totalCOGS)}</p>
+                          </div>
+                          <div className="text-center p-3 bg-slate-900/50 rounded-lg">
+                            <p className="text-rose-400 text-xs font-medium">Total Expenses</p>
+                            <p className="text-xl font-bold text-white">{formatCurrency(profitAndLoss.totalExpenses)}</p>
+                          </div>
+                          <div className="text-center p-3 bg-slate-900/50 rounded-lg">
+                            <p className={`text-xs font-medium ${profitAndLoss.netIncome >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>Net Income</p>
+                            <p className={`text-xl font-bold ${profitAndLoss.netIncome >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {formatCurrency(profitAndLoss.netIncome)}
+                            </p>
+                          </div>
+                        </div>
+                        <p className="text-slate-500 text-xs mt-3">
+                          Period: {profitAndLoss.period?.start} to {profitAndLoss.period?.end}
+                        </p>
+                      </div>
+                    )}
+                    
+                    {/* Top Vendors */}
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                          <Building className="w-5 h-5 text-violet-400" />
+                          Top Vendors by Spending
+                        </h3>
+                        <span className="text-slate-400 text-sm">{displayVendors.length} vendors</span>
+                      </div>
+                      
+                      {displayVendors.length > 0 ? (
+                        <div className="space-y-3">
+                          {displayVendors.slice(0, 15).map((vendor, idx) => {
+                            const pct = totalVendorSpend > 0 ? (vendor.totalSpent / totalVendorSpend * 100) : 0;
+                            const topCategory = Object.entries(vendor.categories || {})
+                              .sort((a, b) => b[1] - a[1])[0];
+                            
+                            return (
+                              <div key={vendor.name} className="bg-slate-900/50 rounded-lg p-4">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-3">
+                                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                                      idx === 0 ? 'bg-amber-500 text-black' :
+                                      idx === 1 ? 'bg-slate-300 text-black' :
+                                      idx === 2 ? 'bg-amber-700 text-white' :
+                                      'bg-slate-700 text-slate-300'
+                                    }`}>
+                                      {idx + 1}
+                                    </span>
+                                    <div>
+                                      <p className="text-white font-medium">{vendor.name}</p>
+                                      {topCategory && (
+                                        <p className="text-slate-500 text-xs">
+                                          Top: {topCategory[0]} ({formatCurrency(topCategory[1])})
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-rose-400 font-bold">{formatCurrency(vendor.totalSpent)}</p>
+                                    <p className="text-slate-500 text-xs">{vendor.transactionCount} transactions</p>
+                                  </div>
+                                </div>
+                                <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                                  <div 
+                                    className="h-full bg-gradient-to-r from-violet-500 to-purple-500 rounded-full"
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
+                                <p className="text-slate-500 text-xs mt-1 text-right">{pct.toFixed(1)}% of total spend</p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8">
+                          <Building className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                          <p className="text-slate-400">No vendor data available yet.</p>
+                          <p className="text-slate-500 text-sm mt-1">Sync with QuickBooks to see vendor spending breakdown.</p>
+                        </div>
+                      )}
+                      
+                      {/* Total */}
+                      {displayVendors.length > 0 && (
+                        <div className="mt-4 pt-4 border-t border-slate-700 flex justify-between items-center">
+                          <span className="text-slate-400 font-medium">Total Vendor Spending</span>
+                          <span className="text-white font-bold text-lg">{formatCurrency(totalVendorSpend)}</span>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Chart of Accounts Summary */}
+                    {chartOfAccounts.length > 0 && (
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+                        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                          <FileText className="w-5 h-5 text-cyan-400" />
+                          Chart of Accounts
+                        </h3>
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                          {['Asset', 'Liability', 'Equity', 'Revenue', 'Expense'].map(classification => {
+                            const accounts = chartOfAccounts.filter(a => a.classification === classification);
+                            const total = accounts.reduce((s, a) => s + Math.abs(a.currentBalance || 0), 0);
+                            
+                            return (
+                              <div key={classification} className="bg-slate-900/50 rounded-lg p-3 text-center">
+                                <p className={`text-xs font-medium mb-1 ${
+                                  classification === 'Asset' ? 'text-emerald-400' :
+                                  classification === 'Liability' ? 'text-rose-400' :
+                                  classification === 'Equity' ? 'text-violet-400' :
+                                  classification === 'Revenue' ? 'text-cyan-400' :
+                                  'text-amber-400'
+                                }`}>{classification}</p>
+                                <p className="text-lg font-bold text-white">{accounts.length}</p>
+                                <p className="text-slate-500 text-xs">accounts</p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </>
           )}
         </div>
@@ -38950,23 +39355,73 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       
                       if (res.ok) {
                         const data = await res.json();
-                        if (data.transactions && data.transactions.length > 0) {
-                          // Merge with existing transactions, avoiding duplicates by qboId
-                          setBankingData(prev => {
-                            const existingIds = new Set((prev?.transactions || []).map(t => t.qboId).filter(Boolean));
-                            const newTransactions = data.transactions.filter(t => !existingIds.has(t.qboId));
-                            return {
-                              ...prev,
-                              transactions: [...(prev?.transactions || []), ...newTransactions],
-                              lastUpdated: new Date().toISOString(),
-                              lastUpload: new Date().toISOString(),
-                            };
-                          });
-                          setQboCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-                          setToast({ message: `Synced ${data.transactions.length} transactions from QuickBooks`, type: 'success' });
-                        } else {
-                          setToast({ message: 'No new transactions found', type: 'info' });
-                        }
+                        
+                        // Update banking data with transactions AND real account balances
+                        setBankingData(prev => {
+                          const existingIds = new Set((prev?.transactions || []).map(t => t.qboId).filter(Boolean));
+                          const newTransactions = data.transactions?.filter(t => !existingIds.has(t.qboId)) || [];
+                          
+                          // Convert QBO accounts array to our accounts object format
+                          const updatedAccounts = { ...(prev?.accounts || {}) };
+                          
+                          // Update with ACTUAL balances from QBO
+                          if (data.bankAccounts) {
+                            data.bankAccounts.forEach(acc => {
+                              updatedAccounts[acc.name] = {
+                                ...updatedAccounts[acc.name],
+                                name: acc.name,
+                                type: 'checking',
+                                balance: acc.currentBalance,
+                                qboId: acc.id,
+                                lastSynced: new Date().toISOString(),
+                                transactions: 0,
+                              };
+                            });
+                          }
+                          
+                          if (data.creditCards) {
+                            data.creditCards.forEach(acc => {
+                              updatedAccounts[acc.name] = {
+                                ...updatedAccounts[acc.name],
+                                name: acc.name,
+                                type: 'credit_card',
+                                balance: Math.abs(acc.currentBalance),
+                                qboId: acc.id,
+                                lastSynced: new Date().toISOString(),
+                                transactions: 0,
+                              };
+                            });
+                          }
+                          
+                          return {
+                            ...prev,
+                            transactions: [...(prev?.transactions || []), ...newTransactions],
+                            accounts: updatedAccounts,
+                            lastUpdated: new Date().toISOString(),
+                            lastUpload: new Date().toISOString(),
+                            // Store summary from QBO
+                            qboSummary: data.summary,
+                            // NEW: Store vendors with spending data
+                            vendors: data.vendors || [],
+                            // NEW: Store chart of accounts
+                            chartOfAccounts: data.chartOfAccounts || [],
+                            // NEW: Store P&L report
+                            profitAndLoss: data.profitAndLoss || null,
+                            // NEW: Store revenue by channel (Amazon vs Shopify)
+                            revenueByChannel: data.revenueByChannel || null,
+                          };
+                        });
+                        
+                        setQboCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+                        
+                        const txnCount = data.transactions?.length || 0;
+                        const acctCount = (data.bankAccounts?.length || 0) + (data.creditCards?.length || 0);
+                        const vendorCount = data.vendors?.length || 0;
+                        const hasPL = data.profitAndLoss ? true : false;
+                        setToast({ 
+                          message: `Synced ${txnCount} transactions, ${acctCount} accounts, ${vendorCount} vendors${hasPL ? ', P&L report' : ''} from QuickBooks`, 
+                          type: 'success' 
+                        });
                       } else {
                         const errorData = await res.json();
                         throw new Error(errorData.error || 'Sync failed');
