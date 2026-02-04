@@ -8519,14 +8519,17 @@ const savePeriods = async (d) => {
       bankingData,
     };
     const blob = new Blob([JSON.stringify(fullBackup, null, 2)], { type: 'application/json' }); 
-    const a = document.createElement('a'); 
+    const a = document.createElement('a');
+    // Use local date for filename (not UTC)
+    const backupDate = new Date();
+    const localDate = `${backupDate.getFullYear()}-${String(backupDate.getMonth() + 1).padStart(2, '0')}-${String(backupDate.getDate()).padStart(2, '0')}`;
     a.href = URL.createObjectURL(blob); 
-    a.download = `${storeName || 'dashboard'}_FULL_backup_${new Date().toISOString().split('T')[0]}.json`; 
+    a.download = `${storeName || 'dashboard'}_FULL_backup_${localDate}.json`; 
     a.click();
     // Track last backup date
-    const now = new Date().toISOString();
-    localStorage.setItem('ecommerce_last_backup', now);
-    setLastBackupDate(now);
+    const backupTimestamp = new Date().toISOString();
+    localStorage.setItem('ecommerce_last_backup', backupTimestamp);
+    setLastBackupDate(backupTimestamp);
     setToast({ message: 'Complete backup downloaded (v3.0)', type: 'success' });
   };
   
@@ -15246,9 +15249,52 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   
   // Calculate dashboard metrics based on selected range
   const dashboardMetrics = useMemo(() => {
-    // Filter to only include weeks with actual revenue data
-    const sortedWeeks = Object.keys(allWeeksData)
-      .filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0)
+    // CRITICAL: Derive weekly data from daily data for accuracy
+    const derivedWeeks = deriveWeeksFromDays(allDaysData || {});
+    
+    // Helper to get merged week data - DERIVED TOTALS TAKE PRIORITY
+    const getMergedWeek = (weekKey) => {
+      const stored = allWeeksData[weekKey];
+      const derived = derivedWeeks[weekKey];
+      if (!stored && !derived) return null;
+      if (!stored) return derived;
+      if (!derived) return stored;
+      
+      // CRITICAL: If derived data has revenue, use derived totals
+      const derivedHasData = (derived.total?.revenue || 0) > 0;
+      
+      if (derivedHasData) {
+        return {
+          ...stored,
+          total: derived.total,
+          amazon: {
+            ...stored.amazon,
+            revenue: derived.amazon?.revenue ?? stored.amazon?.revenue,
+            units: derived.amazon?.units ?? stored.amazon?.units,
+          },
+          shopify: {
+            ...stored.shopify,
+            revenue: derived.shopify?.revenue ?? stored.shopify?.revenue,
+            units: derived.shopify?.units ?? stored.shopify?.units,
+          },
+        };
+      }
+      
+      return stored;
+    };
+    
+    // Get all week keys from both sources
+    const allWeekKeys = new Set([
+      ...Object.keys(allWeeksData),
+      ...Object.keys(derivedWeeks)
+    ]);
+    
+    // Filter to only include weeks with actual revenue data (from merged)
+    const sortedWeeks = Array.from(allWeekKeys)
+      .filter(w => {
+        const merged = getMergedWeek(w);
+        return (merged?.total?.revenue || 0) > 0;
+      })
       .sort();
     const sortedPeriods = Object.keys(allPeriodsData).sort();
     const now = new Date();
@@ -15345,9 +15391,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         };
       }
     } else {
-      // Use weekly data
+      // Use weekly data - with merged derived data for accuracy
       const weeklyAggWithAds = rangeWeeks.reduce((acc, w) => {
-        const week = allWeeksData[w];
+        const week = getMergedWeek(w);
+        if (!week) return acc;
         const googleAds = week?.shopify?.googleSpend || week?.shopify?.googleAds || 0;
         const metaAds = week?.shopify?.metaSpend || week?.shopify?.metaAds || 0;
         const amazonAds = week?.amazon?.adSpend || 0;
@@ -15366,7 +15413,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       
       current = weeklyAggWithAds;
       
-      // Previous range for comparison
+      // Previous range for comparison - use merged data
       const previousRangeWeeks = dashboardRange === 'week' 
         ? sortedWeeks.slice(-2, -1)
         : dashboardRange === 'month'
@@ -15376,7 +15423,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         : sortedWeeks.filter(w => w.startsWith(lastYear));
         
       previous = previousRangeWeeks.reduce((acc, w) => {
-        const week = allWeeksData[w];
+        const week = getMergedWeek(w);
+        if (!week) return acc;
         return {
           revenue: acc.revenue + (week.total?.revenue || 0),
           profit: acc.profit + (week.total?.netProfit || 0),
@@ -17809,30 +17857,33 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           
-          {/* Upload Type Tabs - Streamlined */}
+          {/* Upload Type Tabs - Clearer naming */}
           <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
-            <button onClick={() => setUploadTab('amazon-bulk')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'amazon-bulk' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <Package className="w-5 h-5" />Sales Data
+            <button onClick={() => setUploadTab('amazon-bulk')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'amazon-bulk' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Package className="w-5 h-5" />Daily Sales
             </button>
-            <button onClick={() => setUploadTab('bulk-ads')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'bulk-ads' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <TrendingUp className="w-5 h-5" />Ads & Intel
+            <button onClick={() => setUploadTab('bulk-ads')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'bulk-ads' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Brain className="w-5 h-5" />Amazon PPC
             </button>
-            <button onClick={() => setUploadTab('inventory')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setUploadTab('inventory')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Boxes className="w-5 h-5" />Inventory
             </button>
-            <button onClick={() => setUploadTab('cogs')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'cogs' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setUploadTab('cogs')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'cogs' ? 'bg-gradient-to-r from-pink-600 to-rose-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
               <DollarSign className="w-5 h-5" />COGS
             </button>
-            <button onClick={() => setUploadTab('more')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${['forecast', 'period', 'shopify-sync'].includes(uploadTab) || uploadTab === 'more' ? 'bg-slate-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>
+            <button onClick={() => setUploadTab('more')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${['forecast', 'period', 'shopify-sync', 'other-ads'].includes(uploadTab) || uploadTab === 'more' ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
               <MoreHorizontal className="w-5 h-5" />More
             </button>
           </div>
           
           {/* More options sub-tabs */}
-          {['forecast', 'period', 'shopify-sync', 'more'].includes(uploadTab) && (
-            <div className="flex gap-2 mb-4 p-1 bg-slate-700/30 rounded-lg">
+          {['forecast', 'period', 'shopify-sync', 'other-ads', 'more'].includes(uploadTab) && (
+            <div className="flex gap-2 mb-4 p-1 bg-slate-700/30 rounded-lg flex-wrap">
               <button onClick={() => setUploadTab('forecast')} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${uploadTab === 'forecast' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}>
                 <LineChart className="w-4 h-4" />Amazon Forecast
+              </button>
+              <button onClick={() => setUploadTab('other-ads')} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${uploadTab === 'other-ads' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+                <TrendingUp className="w-4 h-4" />Google/Meta Ads
               </button>
               <button onClick={() => setUploadTab('period')} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${uploadTab === 'period' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'}`}>
                 <CalendarRange className="w-4 h-4" />Annual/Period
@@ -18090,10 +18141,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           )}
           
           {/* Bulk Ads Upload */}
-          {uploadTab === 'bulk-ads' && (
+          {uploadTab === 'other-ads' && (
             <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
-              <h2 className="text-lg font-semibold text-white mb-1">📊 Bulk Ad Spend Upload</h2>
-              <p className="text-slate-400 text-sm mb-6">Upload Google Ads or Meta Ads exports - platform is auto-detected</p>
+              <h2 className="text-lg font-semibold text-white mb-1">📊 Google & Meta Ad Spend Upload</h2>
+              <p className="text-slate-400 text-sm mb-6">Upload historical ad spend from Google Ads or Meta Ads - platform is auto-detected</p>
               
               {/* Supported Formats Info */}
               <div className="bg-slate-900/50 rounded-xl p-4 mb-6">
@@ -18461,17 +18512,18 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             </div>
           )}
           
-          {/* Amazon Ads Intel - shown in bulk-ads tab */}
+          {/* Amazon Ads Intel - PRIMARY content of Amazon PPC tab */}
           {uploadTab === 'bulk-ads' && (
-            <div className="bg-gradient-to-br from-violet-900/30 to-indigo-900/30 rounded-2xl border border-violet-500/30 p-6 mt-4">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">🧠 Amazon Ads Intelligence</h2>
-                  <p className="text-slate-400 text-sm">Upload search terms, placements, targeting, business reports & daily performance for AI-powered optimization</p>
-                </div>
-                {adsIntelData?.lastUpdated && (
-                  <span className="text-xs text-emerald-400 bg-emerald-900/30 px-3 py-1 rounded-full">✓ Data loaded {new Date(adsIntelData.lastUpdated).toLocaleDateString()}</span>
-                )}
+            <div className="space-y-4">
+              <div className="bg-gradient-to-br from-violet-900/30 to-indigo-900/30 rounded-2xl border border-violet-500/30 p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">🧠 Amazon PPC Intelligence</h2>
+                    <p className="text-slate-400 text-sm">Upload search terms, placements, targeting, business reports & daily performance for AI-powered optimization</p>
+                  </div>
+                  {adsIntelData?.lastUpdated && (
+                    <span className="text-xs text-emerald-400 bg-emerald-900/30 px-3 py-1 rounded-full">✓ Data loaded {new Date(adsIntelData.lastUpdated).toLocaleDateString()}</span>
+                  )}
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4 text-xs text-slate-400">
                 <span>• SP/SB/SD Search Terms</span>
@@ -18485,8 +18537,44 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                 <span>• SD Campaign Reports</span>
               </div>
               <button onClick={() => setShowAdsIntelUpload(true)} className="w-full px-6 py-3 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 rounded-xl text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-violet-500/20">
-                <Brain className="w-5 h-5" />Upload Amazon Ads Reports
+                <Brain className="w-5 h-5" />Upload Amazon PPC Reports
               </button>
+              </div>
+              
+              {/* What data goes where - helpful guide */}
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                <p className="text-sm text-slate-300 font-medium mb-2">📋 Quick Guide: Amazon Report Types</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                  <div className="flex items-start gap-2">
+                    <span className="text-violet-400">→</span>
+                    <div>
+                      <p className="text-white font-medium">Amazon PPC (upload here)</p>
+                      <p className="text-slate-500">Search terms, placements, targeting, campaign performance</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-orange-400">→</span>
+                    <div>
+                      <p className="text-white font-medium">Daily Sales tab</p>
+                      <p className="text-slate-500">SKU Economics, Payments reports (actual sales & fees)</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-amber-400">→</span>
+                    <div>
+                      <p className="text-white font-medium">More → Amazon Forecast</p>
+                      <p className="text-slate-500">Amazon's projected sales for forecast comparison</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-blue-400">→</span>
+                    <div>
+                      <p className="text-white font-medium">More → Google/Meta Ads</p>
+                      <p className="text-slate-500">Fill in historical ad spend from other platforms</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
           
@@ -27806,8 +27894,55 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     // Period tabs: weekly, monthly, quarterly, ytd
     const profitPeriod = trendsTab === 'daily' ? 'weekly' : trendsTab; // 'weekly' | 'monthly' | 'quarterly' | 'yearly'
     
-    const sortedWeeks = Object.keys(allWeeksData).filter(w => {
-      const data = allWeeksData[w];
+    // CRITICAL: Derive weekly data from daily data for accuracy
+    // This ensures we use actual daily totals instead of potentially incorrect weekly uploads
+    const derivedWeeks = deriveWeeksFromDays(allDaysData || {});
+    
+    // Merge stored weekly data with derived data - DERIVED TOTALS TAKE PRIORITY
+    // This fixes issues where stored weekly data has incorrect totals
+    const getMergedWeekData = (weekKey) => {
+      const stored = allWeeksData[weekKey];
+      const derived = derivedWeeks[weekKey];
+      if (!stored && !derived) return null;
+      if (!stored) return derived;
+      if (!derived) return stored;
+      
+      // CRITICAL: If derived data has revenue, use derived totals
+      // This ensures daily-derived totals override potentially incorrect weekly uploads
+      const derivedHasData = (derived.total?.revenue || 0) > 0;
+      
+      if (derivedHasData) {
+        // Start with derived data (correct totals from daily)
+        // Then merge in SKU-level details from stored if not in derived
+        return {
+          ...stored,
+          total: derived.total, // Use derived totals
+          amazon: {
+            ...stored.amazon,
+            revenue: derived.amazon?.revenue ?? stored.amazon?.revenue,
+            units: derived.amazon?.units ?? stored.amazon?.units,
+            // Keep SKU data and other details from stored
+          },
+          shopify: {
+            ...stored.shopify,
+            revenue: derived.shopify?.revenue ?? stored.shopify?.revenue,
+            units: derived.shopify?.units ?? stored.shopify?.units,
+          },
+        };
+      }
+      
+      // If no derived revenue, use stored
+      return stored;
+    };
+    
+    // Get all week keys from both sources
+    const allWeekKeys = new Set([
+      ...Object.keys(allWeeksData),
+      ...Object.keys(derivedWeeks)
+    ]);
+    
+    const sortedWeeks = Array.from(allWeekKeys).filter(w => {
+      const data = getMergedWeekData(w);
       return (data.total?.revenue || 0) > 0;
     }).sort();
     const sortedPeriods = Object.keys(allPeriodsData).sort();
@@ -27868,9 +28003,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       return ledger3PL?.metrics?.totalCost || 0;
     };
     
-    // Helper to get data from either weekly or period source
+    // Helper to get data from either weekly (merged) or period source
     const getData = (key) => {
-      if (allWeeksData[key]) return allWeeksData[key];
+      // First check if it's a week key - use merged data
+      const mergedWeek = getMergedWeekData(key);
+      if (mergedWeek) return mergedWeek;
+      // Then check period data
       if (allPeriodsData[key]) return allPeriodsData[key];
       return null;
     };
@@ -27946,10 +28084,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const totals = { revenue: 0, cogs: 0, amazonFees: 0, threeplCosts: 0, adSpend: 0, profit: 0, units: 0, returns: 0 };
     
     if (profitPeriod === 'yearly') {
-      // YTD aggregation
+      // YTD aggregation - use merged data for accuracy
       const ytdWeeks = sortedWeeks.filter(w => w.startsWith(String(currentYear)));
       ytdWeeks.forEach(w => {
-        const data = allWeeksData[w];
+        const data = getMergedWeekData(w);
         if (!data) return;
         totals.revenue += data.total?.revenue || 0;
         totals.cogs += data.total?.cogs || 0;
@@ -28014,7 +28152,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     // Get prior period totals for comparison
     const priorTotals = { revenue: 0, cogs: 0, amazonFees: 0, threeplCosts: 0, adSpend: 0, profit: 0, units: 0, returns: 0 };
     if (profitPeriod === 'yearly') {
-      // Prior YTD
+      // Prior YTD - use merged data for accuracy
       const currentDayOfYear = Math.floor((new Date() - new Date(currentYear, 0, 0)) / (1000 * 60 * 60 * 24));
       const priorYtdEnd = new Date(currentYear - 1, 0, currentDayOfYear);
       const priorYtdWeeks = sortedWeeks.filter(w => {
@@ -28022,7 +28160,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         return wDate.getFullYear() === currentYear - 1 && wDate <= priorYtdEnd;
       });
       priorYtdWeeks.forEach(w => {
-        const data = allWeeksData[w];
+        const data = getMergedWeekData(w);
         if (!data) return;
         priorTotals.revenue += data.total?.revenue || 0;
         priorTotals.cogs += data.total?.cogs || 0;
@@ -28117,10 +28255,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         skuProfitability.push({ sku: s.sku, name: s.name || '', revenue, profit, units: s.unitsSold || 0 });
       });
     } else if (profitPeriod === 'yearly') {
-      // For YTD, aggregate all SKUs from current year
+      // For YTD, aggregate all SKUs from current year - use merged data
       const ytdWeeks = sortedWeeks.filter(w => w.startsWith(String(currentYear)));
       ytdWeeks.forEach(w => {
-        const data = allWeeksData[w];
+        const data = getMergedWeekData(w);
         if (!data) return;
         [...(data.amazon?.skuData || []), ...(data.shopify?.skuData || [])].forEach(s => {
           const existing = skuProfitability.find(x => x.sku === s.sku);
@@ -28160,9 +28298,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     const maxVal = Math.max(totals.revenue, Math.abs(totals.profit));
     
-    // Cost trends over time (kept for backward compatibility)
+    // Cost trends over time - use merged data for accuracy
     const costTrends = sortedWeeks.slice(-12).map(w => {
-      const week = allWeeksData[w];
+      const week = getMergedWeekData(w);
+      if (!week) return null;
       const rev = week.total?.revenue || 1;
       return {
         week: w,
@@ -28172,7 +28311,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         feesPct: (((week.amazon?.fees || 0) + (week.shopify?.threeplCosts || 0)) / rev) * 100,
         margin: ((week.total?.netProfit || 0) / rev) * 100,
       };
-    });
+    }).filter(Boolean);
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
