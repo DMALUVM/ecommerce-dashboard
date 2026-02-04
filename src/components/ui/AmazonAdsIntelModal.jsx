@@ -839,9 +839,9 @@ const AmazonAdsIntelModal = ({
         <div className="bg-gradient-to-r from-violet-600 to-indigo-600 p-4 flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
-              <Brain className="w-6 h-6" />Amazon Ads Intelligence
+              <Upload className="w-6 h-6" />Amazon PPC Data Import
             </h2>
-            <p className="text-white/70 text-sm">Drop all your reports — we'll figure out the rest</p>
+            <p className="text-white/70 text-sm">Drop your reports — we'll auto-detect the format</p>
           </div>
           <button onClick={() => { setShow(false); setDetectedFiles([]); setResults(null); }} className="p-2 hover:bg-white/20 rounded-lg text-white">
             <X className="w-5 h-5" />
@@ -944,19 +944,48 @@ const AmazonAdsIntelModal = ({
                 ))}
               </div>
               
-              {/* Generate Action Plan CTA */}
-              {results.some(r => r.status === 'success') && onGoToAnalyst && (
-                <button
-                  onClick={() => {
-                    setShow(false);
-                    setDetectedFiles([]);
-                    setResults(null);
-                    onGoToAnalyst();
-                  }}
-                  className="w-full px-4 py-3.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-semibold flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20 text-base"
-                >
-                  <Zap className="w-5 h-5" />Generate My Action Plan
-                </button>
+              {/* Success message and options */}
+              {results.some(r => r.status === 'success') && (
+                <div className="space-y-3">
+                  <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-lg p-3">
+                    <p className="text-emerald-400 font-medium flex items-center gap-2">
+                      <CheckCircle className="w-4 h-4" />
+                      Data saved successfully!
+                    </p>
+                    <p className="text-slate-400 text-xs mt-1">Your ads data has been imported and is now available in your dashboard.</p>
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    {/* Primary: Done button */}
+                    <button
+                      onClick={() => {
+                        setShow(false);
+                        setDetectedFiles([]);
+                        setResults(null);
+                      }}
+                      className="flex-1 px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-medium flex items-center justify-center gap-2"
+                    >
+                      <CheckCircle className="w-4 h-4" />
+                      Done
+                    </button>
+                    
+                    {/* Secondary: AI Analysis (optional) */}
+                    {onGoToAnalyst && (
+                      <button
+                        onClick={() => {
+                          setShow(false);
+                          setDetectedFiles([]);
+                          setResults(null);
+                          onGoToAnalyst();
+                        }}
+                        className="flex-1 px-4 py-3 bg-gradient-to-r from-orange-600/80 to-amber-600/80 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-medium flex items-center justify-center gap-2"
+                      >
+                        <Zap className="w-4 h-4" />
+                        Get AI Insights
+                      </button>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -978,9 +1007,9 @@ const AmazonAdsIntelModal = ({
             className="px-6 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-lg font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2"
           >
             {processing ? (
-              <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Processing...</>
+              <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Importing...</>
             ) : (
-              <><Brain className="w-4 h-4" /> Process {validFiles.length} Report{validFiles.length !== 1 ? 's' : ''}</>
+              <><Upload className="w-4 h-4" /> Import {validFiles.length} Report{validFiles.length !== 1 ? 's' : ''}</>
             )}
           </button>
         </div>
