@@ -6808,27 +6808,32 @@ const savePeriods = async (d) => {
     console.log('=== PROCESS INVENTORY v3.0 - DIRECT LOCALSTORAGE READ ===');
     
     // DIRECT READ from localStorage to get SKU velocity data
-    // This bypasses any state loading issues
+    // Use lsGet to handle LZ compression properly
     let legacyDailyData = {};
     try {
       // Try the current key first (where Shopify sync saves data)
-      let dailyRaw = localStorage.getItem('ecommerce_daily_sales_v1');
+      // Use lsGet to decompress if needed
+      let dailyRaw = lsGet('ecommerce_daily_sales_v1');
       if (dailyRaw) {
-        legacyDailyData = JSON.parse(dailyRaw);
+        legacyDailyData = typeof dailyRaw === 'string' ? JSON.parse(dailyRaw) : dailyRaw;
         console.log('DIRECT localStorage read - ecommerce_daily_sales_v1:', Object.keys(legacyDailyData).length, 'days');
       }
       
-      // Also check legacy key and merge if it has additional data
+      // Also check legacy key (not compressed) and merge if it has additional data
       const legacyRaw = localStorage.getItem('dailySales');
       if (legacyRaw) {
-        const legacyData = JSON.parse(legacyRaw);
-        console.log('Legacy dailySales found:', Object.keys(legacyData).length, 'days');
-        // Merge legacy data (newer data takes precedence)
-        Object.keys(legacyData).forEach(date => {
-          if (!legacyDailyData[date]) {
-            legacyDailyData[date] = legacyData[date];
-          }
-        });
+        try {
+          const legacyData = JSON.parse(legacyRaw);
+          console.log('Legacy dailySales found:', Object.keys(legacyData).length, 'days');
+          // Merge legacy data (newer data takes precedence)
+          Object.keys(legacyData).forEach(date => {
+            if (!legacyDailyData[date]) {
+              legacyDailyData[date] = legacyData[date];
+            }
+          });
+        } catch (e) {
+          console.log('Legacy dailySales not valid JSON, skipping');
+        }
       }
       
       // Log data availability by channel
@@ -39059,14 +39064,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         
                         // ========== CALCULATE VELOCITY FROM SHOPIFY SALES DATA ==========
                         // Read daily sales from localStorage to calculate velocity
+                        // Use lsGet to handle LZ compression properly
                         const velocityLookup = {};
                         try {
-                          const dailyRaw = localStorage.getItem('ecommerce_daily_sales_v1');
+                          const dailyRaw = lsGet('ecommerce_daily_sales_v1');
                           console.log('=== PACKIYO SYNC: Checking localStorage for sales data ===');
                           console.log('ecommerce_daily_sales_v1 exists:', !!dailyRaw);
                           
                           if (dailyRaw) {
-                            const dailyData = JSON.parse(dailyRaw);
+                            const dailyData = typeof dailyRaw === 'string' ? JSON.parse(dailyRaw) : dailyRaw;
                             const dates = Object.keys(dailyData).sort().reverse().slice(0, 28); // Last 28 days
                             const weeksEquiv = dates.length / 7;
                             
@@ -39092,7 +39098,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                 totalShopifyUnits += units;
                                 const velocity = weeksEquiv > 0 ? units / weeksEquiv : 0;
                                 
-                                // Store under MANY key variants for flexible matching
+                                // Store under MANY key variants for flexible matching (including lowercase!)
                                 const originalSku = item.sku;
                                 const skuLower = item.sku.toLowerCase();
                                 const skuUpper = item.sku.toUpperCase();
@@ -39100,9 +39106,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                 const baseSkuLower = baseSku.toLowerCase();
                                 const withShop = baseSku + 'Shop';
                                 const withShopLower = withShop.toLowerCase();
+                                const withShopUpper = baseSku + 'SHOP';
                                 
                                 // Initialize all variants if not exist
-                                [originalSku, skuLower, skuUpper, baseSku, baseSkuLower, withShop, withShopLower].forEach(key => {
+                                [originalSku, skuLower, skuUpper, baseSku, baseSkuLower, withShop, withShopLower, withShopUpper].forEach(key => {
                                   if (!velocityLookup[key]) velocityLookup[key] = 0;
                                 });
                                 
@@ -39114,6 +39121,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                 velocityLookup[baseSkuLower] += velocity;
                                 velocityLookup[withShop] += velocity;
                                 velocityLookup[withShopLower] += velocity;
+                                velocityLookup[withShopUpper] += velocity;
                               });
                               
                               // Process Amazon SKU data too
@@ -39131,8 +39139,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                 const baseSkuLower = baseSku.toLowerCase();
                                 const withShop = baseSku + 'Shop';
                                 const withShopLower = withShop.toLowerCase();
+                                const withShopUpper = baseSku + 'SHOP';
                                 
-                                [originalSku, skuLower, skuUpper, baseSku, baseSkuLower, withShop, withShopLower].forEach(key => {
+                                [originalSku, skuLower, skuUpper, baseSku, baseSkuLower, withShop, withShopLower, withShopUpper].forEach(key => {
                                   if (!velocityLookup[key]) velocityLookup[key] = 0;
                                 });
                                 
@@ -39143,6 +39152,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                 velocityLookup[baseSkuLower] += velocity;
                                 velocityLookup[withShop] += velocity;
                                 velocityLookup[withShopLower] += velocity;
+                                velocityLookup[withShopUpper] += velocity;
                               });
                             });
                             
@@ -39161,7 +39171,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         const getVelocityForSku = (sku) => {
                           if (!sku) return 0;
                           
-                          // Try many variants
+                          // Try many variants including lowercase
                           const variants = [
                             sku,
                             sku.toLowerCase(),
@@ -39171,6 +39181,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             sku.replace(/shop$/i, '').toLowerCase(),
                             sku.replace(/shop$/i, '') + 'Shop',
                             sku.replace(/shop$/i, '').toLowerCase() + 'shop',
+                            sku.replace(/shop$/i, '') + 'SHOP',
+                            sku.replace(/shop$/i, '').toUpperCase() + 'SHOP',
                           ];
                           
                           for (const variant of variants) {
