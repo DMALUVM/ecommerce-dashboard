@@ -34906,6 +34906,25 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const topExpenseCategories = Object.entries(expensesByCategory).sort((a, b) => b[1] - a[1]);
     const topIncomeCategories = Object.entries(incomeByCategory).sort((a, b) => b[1] - a[1]);
     
+    // Calculate monthly data from transactions (for avg profit display)
+    const monthlyFromTxns = {};
+    sortedTxns.forEach(t => {
+      const month = t.date?.substring(0, 7);
+      if (!month) return;
+      if (!monthlyFromTxns[month]) {
+        monthlyFromTxns[month] = { income: 0, expenses: 0, net: 0 };
+      }
+      if (t.isIncome) {
+        monthlyFromTxns[month].income += t.amount;
+        monthlyFromTxns[month].net += t.amount;
+      }
+      if (t.isExpense) {
+        monthlyFromTxns[month].expenses += t.amount;
+        monthlyFromTxns[month].net -= t.amount;
+      }
+    });
+    const monthKeysFromTxns = Object.keys(monthlyFromTxns).sort().slice(-12);
+    
     // ==================== RECURRING EXPENSE DETECTION ====================
     // Detect recurring expenses by looking for same vendor + similar amount across multiple months
     // AND by looking for exact same dollar amounts appearing in multiple months
@@ -35401,37 +35420,44 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 <div className="bg-gradient-to-br from-violet-900/40 to-violet-800/20 rounded-xl border border-violet-500/30 p-5">
                   <p className="text-violet-400 text-sm font-medium mb-1">Avg Monthly Profit</p>
                   <p className="text-2xl font-bold text-white">
-                    {formatCurrency(monthKeys.length > 0 ? monthKeys.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0) / monthKeys.length : 0)}
+                    {formatCurrency(monthKeysFromTxns.length > 0 ? monthKeysFromTxns.reduce((s, m) => s + (monthlyFromTxns[m]?.net || 0), 0) / monthKeysFromTxns.length : 0)}
                   </p>
-                  <p className="text-slate-400 text-xs mt-1">Last {monthKeys.length} months</p>
+                  <p className="text-slate-400 text-xs mt-1">Last {monthKeysFromTxns.length} months</p>
                 </div>
               </div>
               
               {/* Account Balances - CFO Summary */}
               {Object.keys(bankingData.accounts || {}).length > 0 && (() => {
-                // Filter to only show real bank accounts (more flexible pattern matching)
+                // Filter to only show real bank accounts with actual balances
                 const realAccts = Object.entries(bankingData.accounts).filter(([name, acct]) => {
-                  // ALWAYS include accounts synced from QBO (they're verified real accounts)
-                  if (acct.qboId) return true;
+                  // Skip accounts with zero or near-zero balance
+                  if (acct.balance === undefined || isNaN(acct.balance)) return false;
+                  if (Math.abs(acct.balance) < 1) return false; // Skip balances under $1
+                  
+                  // Skip placeholder/empty accounts by name
+                  const lower = name.toLowerCase();
+                  if (lower === 'cash' || lower === 'amazon credit' || lower === 'petty cash') return false;
+                  
                   // Skip if name looks corrupted (has quotes or is super long)
                   if (name.includes('"')) return false;
                   if (name.length > 100) return false;
-                  // Skip if balance is undefined, NaN, or zero (likely junk)
-                  if (acct.balance === undefined || isNaN(acct.balance)) return false;
-                  if (Math.abs(acct.balance) < 0.01) return false; // Skip $0 balances
+                  
                   // Skip if name looks like a transaction description (has commas before account pattern)
                   if (name.includes(',') && !/\(\d{4}\)/.test(name)) return false;
+                  
                   // Skip if name contains common transaction words
-                  const lower = name.toLowerCase();
                   if (lower.includes('water') || lower.includes('filter') || lower.includes('purchase')) return false;
+                  
+                  // Include QBO synced accounts (verified real accounts with balance)
+                  if (acct.qboId) return true;
+                  
                   // Accept accounts that have a balance and reasonable name
-                  // Look for patterns like: account number in parens, or common bank terms
                   const looksLikeAccount = (
                     /\(\d{4}\)/.test(name) || // Has (1234) pattern
                     (lower.includes('checking') && !name.includes(',')) ||
                     (lower.includes('savings') && !name.includes(',')) ||
                     (lower.includes('operations') && !name.includes(',')) ||
-                    (lower.includes('card') && !name.includes(',')) || // Any card name without comma
+                    (lower.includes('card') && !name.includes(',')) ||
                     (lower.includes('credit') && !name.includes(',')) ||
                     (lower.includes('platinum') && !name.includes(',')) ||
                     (lower.includes('prime') && !name.includes(',')) ||
@@ -35440,7 +35466,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                     lower.includes('chase') ||
                     lower.includes('bank') ||
                     lower.includes('capital') ||
-                    acct.type === 'credit_card' // Explicitly marked as credit card
+                    acct.type === 'credit_card'
                   );
                   return looksLikeAccount;
                 });
@@ -36712,17 +36738,40 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               
               {/* CFO Dashboard Tab */}
               {bankingTab === 'cfo' && (() => {
+                // Calculate monthly aggregations from actual transactions
+                const monthlyData = {};
+                sortedTxns.forEach(t => {
+                  const month = t.date?.substring(0, 7);
+                  if (!month) return;
+                  if (!monthlyData[month]) {
+                    monthlyData[month] = { income: 0, expenses: 0, net: 0, byCategory: {} };
+                  }
+                  if (t.isIncome) {
+                    monthlyData[month].income += t.amount;
+                    monthlyData[month].net += t.amount;
+                  }
+                  if (t.isExpense) {
+                    monthlyData[month].expenses += t.amount;
+                    monthlyData[month].net -= t.amount;
+                    // Track by category
+                    const cat = t.topCategory || 'Uncategorized';
+                    monthlyData[month].byCategory[cat] = (monthlyData[month].byCategory[cat] || 0) + t.amount;
+                  }
+                });
+                
+                const monthKeys = Object.keys(monthlyData).sort();
+                
                 // Calculate CFO metrics
                 const currentMonth = now.toISOString().slice(0, 7);
                 const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
                 const twoMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().slice(0, 7);
                 
-                const currentMonthData = monthlySnapshots[currentMonth] || { income: 0, expenses: 0, net: 0 };
-                const lastMonthData = monthlySnapshots[lastMonth] || { income: 0, expenses: 0, net: 0 };
-                const twoMonthsAgoData = monthlySnapshots[twoMonthsAgo] || { income: 0, expenses: 0, net: 0 };
+                const currentMonthData = monthlyData[currentMonth] || { income: 0, expenses: 0, net: 0, byCategory: {} };
+                const lastMonthData = monthlyData[lastMonth] || { income: 0, expenses: 0, net: 0, byCategory: {} };
+                const twoMonthsAgoData = monthlyData[twoMonthsAgo] || { income: 0, expenses: 0, net: 0, byCategory: {} };
                 
                 // Get COGS for this month
-                const monthCOGS = expensesByCategory['Cost of goods sold'] || 0;
+                const monthCOGS = currentMonthData.byCategory['Cost of goods sold'] || currentMonthData.byCategory['Cost of Goods Sold'] || 0;
                 const monthOpEx = currentMonthData.expenses - monthCOGS;
                 
                 // Operating metrics
@@ -36731,30 +36780,32 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   : 0;
                   
                 // Burn rate (avg monthly expenses over last 3 months)
-                const last3Months = monthKeys.slice(-3);
+                const last3Months = monthKeys.filter(m => m <= currentMonth).slice(-3);
                 const avgMonthlyExpenses = last3Months.length > 0 
-                  ? last3Months.reduce((s, m) => s + (monthlySnapshots[m]?.expenses || 0), 0) / last3Months.length 
+                  ? last3Months.reduce((s, m) => s + (monthlyData[m]?.expenses || 0), 0) / last3Months.length 
                   : 0;
                 
-                // Net cash flow (avg monthly income - expenses over last 3 months)
+                // Net cash flow (avg monthly net over last 3 months)
                 const avgMonthlyNet = last3Months.length > 0
-                  ? last3Months.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0) / last3Months.length
+                  ? last3Months.reduce((s, m) => s + (monthlyData[m]?.net || 0), 0) / last3Months.length
                   : 0;
                 
-                // Runway calculation - for revenue-generating business, use NET cash flow
-                const realAccts = Object.entries(bankingData.accounts || {}).filter(([name, _]) => 
-                  /\(\d{4}\)\s*-\s*\d+$/.test(name) && !name.includes('"') && name.length <= 60
-                );
+                // Runway calculation - get actual cash from accounts
+                const realAccts = Object.entries(bankingData.accounts || {}).filter(([name, acct]) => {
+                  if (Math.abs(acct.balance || 0) < 1) return false;
+                  if (acct.qboId) return true;
+                  return /\(\d{4}\)/.test(name) || name.toLowerCase().includes('operations');
+                });
                 const totalCash = realAccts.filter(([_, a]) => a.type !== 'credit_card').reduce((s, [_, a]) => s + (a.balance || 0), 0);
-                // If net cash flow is positive or zero, business is self-sustaining (infinite runway)
-                // If net is negative, calculate how many months until cash runs out
+                
+                // If net cash flow is positive, business is self-sustaining
                 const runwayMonths = avgMonthlyNet >= 0 ? Infinity : totalCash / Math.abs(avgMonthlyNet);
                 const isCashFlowPositive = avgMonthlyNet >= 0;
                 
                 // MoM growth
                 const revenueMoM = lastMonthData.income > 0 
                   ? ((currentMonthData.income - lastMonthData.income) / lastMonthData.income * 100) 
-                  : 0;
+                  : (currentMonthData.income > 0 ? 100 : 0);
                 const expenseMoM = lastMonthData.expenses > 0 
                   ? ((currentMonthData.expenses - lastMonthData.expenses) / lastMonthData.expenses * 100) 
                   : 0;
@@ -36767,8 +36818,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 // YTD calculations from banking
                 const currentYear = now.getFullYear();
                 const ytdMonths = monthKeys.filter(m => m.startsWith(String(currentYear)));
-                const ytdIncome = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.income || 0), 0);
-                const ytdExpenses = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.expenses || 0), 0);
+                const ytdIncome = ytdMonths.reduce((s, m) => s + (monthlyData[m]?.income || 0), 0);
+                const ytdExpenses = ytdMonths.reduce((s, m) => s + (monthlyData[m]?.expenses || 0), 0);
                 const ytdCashFlow = ytdIncome - ytdExpenses;
                 
                 // Get actual sales profit data if available
@@ -36819,7 +36870,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   // Trend using last 3 months
                   const recentMonths = ytdMonths.slice(-3);
                   const recentAvgNet = recentMonths.length > 0 
-                    ? recentMonths.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0) / recentMonths.length 
+                    ? recentMonths.reduce((s, m) => s + (monthlyData[m]?.net || 0), 0) / recentMonths.length 
                     : avgMonthlyProfit;
                   trendProjection = ytdCashFlow + (recentAvgNet * monthsRemaining) - recurringCostsRemaining;
                 }
@@ -37696,35 +37747,53 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               
               {/* Vendors Tab - Top Spending */}
               {bankingTab === 'vendors' && (() => {
-                const vendors = bankingData.vendors || [];
                 const chartOfAccounts = bankingData.chartOfAccounts || [];
                 const profitAndLoss = bankingData.profitAndLoss;
                 
-                // Calculate vendor spending from transactions if no QBO vendor data
+                // Use the main banking date range filter for consistency
+                const vendorDateFilter = dateFilter;
+                
+                // Calculate vendor spending from filtered transactions
                 const vendorSpendingFromTxns = {};
-                (bankingData.transactions || []).forEach(t => {
+                sortedTxns.filter(t => t.date >= vendorDateFilter).forEach(t => {
                   if (t.vendor && (t.type === 'expense' || t.type === 'bill' || t.isExpense)) {
                     if (!vendorSpendingFromTxns[t.vendor]) {
                       vendorSpendingFromTxns[t.vendor] = { 
                         name: t.vendor, 
                         totalSpent: 0, 
                         transactionCount: 0,
-                        categories: {}
+                        categories: {},
+                        lastTransaction: null,
                       };
                     }
                     vendorSpendingFromTxns[t.vendor].totalSpent += Math.abs(t.amount);
                     vendorSpendingFromTxns[t.vendor].transactionCount += 1;
-                    const cat = t.category || 'Uncategorized';
+                    const cat = t.topCategory || t.category || 'Uncategorized';
                     vendorSpendingFromTxns[t.vendor].categories[cat] = 
                       (vendorSpendingFromTxns[t.vendor].categories[cat] || 0) + Math.abs(t.amount);
+                    if (!vendorSpendingFromTxns[t.vendor].lastTransaction || t.date > vendorSpendingFromTxns[t.vendor].lastTransaction) {
+                      vendorSpendingFromTxns[t.vendor].lastTransaction = t.date;
+                    }
                   }
                 });
                 
-                const displayVendors = vendors.length > 0 
-                  ? vendors 
-                  : Object.values(vendorSpendingFromTxns).sort((a, b) => b.totalSpent - a.totalSpent);
+                // Also include QBO vendor data but filter by date if possible
+                const qboVendors = bankingData.vendors || [];
+                const displayVendors = Object.values(vendorSpendingFromTxns)
+                  .filter(v => v.totalSpent > 0)
+                  .sort((a, b) => b.totalSpent - a.totalSpent);
                 
                 const totalVendorSpend = displayVendors.reduce((s, v) => s + v.totalSpent, 0);
+                
+                // Get date range label
+                const dateRangeLabel = {
+                  'week': 'Last 7 Days',
+                  'month': 'This Month',
+                  'quarter': 'This Quarter',
+                  'ytd': 'Year to Date',
+                  'year': 'Last 12 Months',
+                  'all': 'All Time'
+                }[bankingDateRange] || 'Selected Period';
                 
                 return (
                   <div className="space-y-6">
@@ -37767,8 +37836,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         <h3 className="text-lg font-semibold text-white flex items-center gap-2">
                           <Building className="w-5 h-5 text-violet-400" />
                           Top Vendors by Spending
+                          <span className="text-sm font-normal text-slate-400">({dateRangeLabel})</span>
                         </h3>
-                        <span className="text-slate-400 text-sm">{displayVendors.length} vendors</span>
+                        <span className="text-slate-400 text-sm">{displayVendors.length} vendors • {formatCurrency(totalVendorSpend)} total</span>
                       </div>
                       
                       {displayVendors.length > 0 ? (
