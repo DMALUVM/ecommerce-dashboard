@@ -34861,81 +34861,68 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       if (!cat) return 'Uncategorized';
       const c = cat.toLowerCase();
       // Combine all COGS variants
-      if (c.includes('cost of goods sold') || c.startsWith('cogs')) {
+      if (c.includes('cost of goods sold') || 
+          c.startsWith('cogs') || 
+          c.includes(':cogs') ||
+          c.includes('supplies & materials') ||
+          c.includes('inventory') ||
+          c.includes('product costs')) {
         return 'Cost of Goods Sold';
+      }
+      // Combine Legal/Accounting variants
+      if (c.includes('legal') && c.includes('accounting')) {
+        return 'Legal & Accounting';
+      }
+      if (c.includes('legal') && c.includes('fees')) {
+        return 'Legal & Accounting';
+      }
+      // Combine Advertising variants
+      if (c.includes('advertising') || c.includes('marketing')) {
+        return 'Advertising & Marketing';
+      }
+      // Combine Utilities variants
+      if (c.includes('utilities')) {
+        return 'Utilities';
+      }
+      // For sub-categories, use the parent category
+      if (c.includes(':')) {
+        // Return the parent category (before the colon)
+        return cat.split(':')[0].trim();
       }
       return cat;
     };
     
-    // Helper to detect if a transaction is a credit card payment (not a real expense)
-    const isCreditCardPayment = (t) => {
-      const desc = (t.description || '').toLowerCase();
-      const cat = (t.topCategory || t.category || '').toLowerCase();
-      const account = (t.account || '').toLowerCase();
-      
-      // Check if this is a payment TO a credit card (transfer, not expense)
-      const isPaymentToCard = (
-        desc.includes('payment') && (
-          desc.includes('card') ||
-          desc.includes('amex') ||
-          desc.includes('visa') ||
-          desc.includes('mastercard') ||
-          desc.includes('credit')
-        )
-      ) || (
-        desc.includes('autopay') && desc.includes('card')
-      ) || (
-        // Category is a credit card account
-        cat.includes('card') && (cat.includes('(') || cat.includes('business'))
-      ) || (
-        // Account name looks like credit card payment
-        account.includes('platinum') ||
-        account.includes('prime card') ||
-        (account.includes('card') && account.includes('('))
-      );
-      
-      return isPaymentToCard;
-    };
-    
-    // Transform transactions to ensure they have required flags (handles legacy QBO syncs)
+    // Transform transactions to ensure they have correct flags
+    // ALWAYS re-calculate flags based on QBO type to fix any bad cached data
     const transformedTxns = (bankingData.transactions || []).map(t => {
       // Normalize vendor and category
       const normalizedVendor = normalizeVendor(t.vendor);
       const normalizedCategory = normalizeCategory(t.topCategory || t.category || t.account);
       
-      // If already has flags, use them but check for credit card payment
-      if (t.isIncome !== undefined || t.isExpense !== undefined) {
-        // Check if this "expense" is actually a credit card payment (transfer)
-        if (t.isExpense && isCreditCardPayment(t)) {
-          return {
-            ...t,
-            vendor: normalizedVendor,
-            topCategory: normalizedCategory,
-            isExpense: false,
-            isTransfer: true,
-            originalIsExpense: true, // Keep track for debugging
-          };
+      // Transfers are NOT income or expense - they just move money between accounts
+      const isTransfer = t.type === 'transfer' || t.qboType === 'Transfer';
+      
+      // Determine income/expense based on QBO type (most reliable)
+      let isIncome = false;
+      let isExpense = false;
+      
+      if (!isTransfer) {
+        if (t.qboType === 'Deposit' || t.type === 'income') {
+          isIncome = true;
+        } else if (t.qboType === 'Purchase' || t.qboType === 'Bill' || t.type === 'expense' || t.type === 'bill') {
+          isExpense = true;
+        } else if (t.isIncome !== undefined) {
+          // Fall back to existing flags for non-QBO transactions
+          isIncome = t.isIncome;
+          isExpense = t.isExpense;
         }
-        return {
-          ...t,
-          vendor: normalizedVendor,
-          topCategory: normalizedCategory,
-        };
-      }
-      
-      // Transform based on type field (from QBO API)
-      let isIncome = t.type === 'income' || (t.type === 'transfer' && (t.amount > 0 || t.originalAmount > 0));
-      let isExpense = t.type === 'expense' || t.type === 'bill' || (t.type === 'transfer' && (t.amount < 0 || t.originalAmount < 0));
-      
-      // Check if this "expense" is actually a credit card payment
-      if (isExpense && isCreditCardPayment(t)) {
-        isExpense = false;
       }
       
       return {
         ...t,
         isIncome,
         isExpense,
+        isTransfer,
         amount: Math.abs(t.amount || t.originalAmount || 0),
         topCategory: normalizedCategory,
         vendor: normalizedVendor,
@@ -37832,10 +37819,30 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 // Use the main banking date range filter for consistency
                 const vendorDateFilter = dateFilter;
                 
-                // Calculate vendor spending from filtered transactions (only real expenses, not CC payments)
+                // Calculate vendor spending from filtered transactions (only real expenses)
                 const vendorSpendingFromTxns = {};
                 sortedTxns.filter(t => t.date >= vendorDateFilter && t.isExpense).forEach(t => {
-                  const vendorName = t.vendor || 'Unknown Vendor';
+                  // Use vendor name if available, otherwise try to extract from description
+                  let vendorName = t.vendor;
+                  
+                  if (!vendorName || vendorName === '' || vendorName === 'Unknown Vendor') {
+                    // Try to extract vendor from description
+                    const desc = t.description || '';
+                    if (desc && desc.length > 2) {
+                      // Take first part before common separators
+                      vendorName = desc.split(' - ')[0].split(',')[0].split('#')[0].trim();
+                      // Skip if too long or too short
+                      if (vendorName.length < 2 || vendorName.length > 60) {
+                        vendorName = null;
+                      }
+                    }
+                  }
+                  
+                  if (!vendorName) return; // Skip if no vendor name
+                  
+                  // Normalize vendor name
+                  vendorName = normalizeVendor(vendorName);
+                  
                   if (!vendorSpendingFromTxns[vendorName]) {
                     vendorSpendingFromTxns[vendorName] = { 
                       name: vendorName, 
@@ -37856,9 +37863,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   }
                 });
                 
-                // Filter out "Unknown Vendor" and sort
+                // Sort by spend
                 const displayVendors = Object.values(vendorSpendingFromTxns)
-                  .filter(v => v.totalSpent > 0 && v.name !== 'Unknown Vendor')
+                  .filter(v => v.totalSpent > 0)
                   .sort((a, b) => b.totalSpent - a.totalSpent);
                 
                 const totalVendorSpend = displayVendors.reduce((s, v) => s + v.totalSpent, 0);
