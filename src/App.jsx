@@ -7004,11 +7004,20 @@ const savePeriods = async (d) => {
     console.log('Amazon velocity SKUs:', Object.keys(amazonSkuVelocity).length);
     console.log('Shopify velocity SKUs:', Object.keys(shopifySkuVelocity).length);
     
-    // SKIP weekly/daily state processing if we already have velocity from direct read
-    if (velocityDataSource !== 'direct-localStorage') {
-    // SOURCE 1: Weekly sales data (most accurate)
+    // ALWAYS process weekly data - either as primary source or supplement for slow-moving SKUs
+    // Daily data (from localStorage) covers last 28 days - great for fast sellers
+    // Weekly data covers ALL weeks - catches slow-moving products that may not sell in any 28-day window
+    const useWeeklyAsPrimary = velocityDataSource !== 'direct-localStorage';
+    if (true) { // Always run - supplement slow movers even if daily data exists
+    // SOURCE 1: Weekly sales data
     if (weeksCount > 0) {
-      velocityDataSource = 'weekly';
+      if (useWeeklyAsPrimary) velocityDataSource = 'weekly';
+      else velocityDataSource += '+weekly-supplement';
+      
+      // Build weekly velocity lookup (separate from daily to avoid overwriting)
+      const weeklyShopVel = {};
+      const weeklyAmzVel = {};
+      
       sortedWeeks.forEach(w => {
         const weekData = allWeeksData[w];
         
@@ -7038,29 +7047,29 @@ const savePeriods = async (d) => {
           }
         }
         
-        // Shopify SKU velocity - store only under original SKU
+        // Shopify SKU velocity - store in weekly accumulator
         if (weekData.shopify?.skuData) {
           const skuData = Array.isArray(weekData.shopify.skuData) 
             ? weekData.shopify.skuData 
             : Object.values(weekData.shopify.skuData);
           skuData.forEach(item => {
             if (!item.sku) return;
-            if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
+            if (!weeklyShopVel[item.sku]) weeklyShopVel[item.sku] = 0;
             const units = item.unitsSold || item.units || 0;
-            shopifySkuVelocity[item.sku] += units;
+            weeklyShopVel[item.sku] += units;
           });
         }
         
-        // Amazon SKU velocity from weekly data - store only under original SKU
+        // Amazon SKU velocity from weekly data - store in weekly accumulator
         if (weekData.amazon?.skuData) {
           const skuData = Array.isArray(weekData.amazon.skuData)
             ? weekData.amazon.skuData
             : Object.values(weekData.amazon.skuData);
           skuData.forEach(item => {
             if (!item.sku) return;
-            if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
+            if (!weeklyAmzVel[item.sku]) weeklyAmzVel[item.sku] = 0;
             const units = item.unitsSold || item.units || 0;
-            amazonSkuVelocity[item.sku] += units;
+            weeklyAmzVel[item.sku] += units;
           });
         }
       });
@@ -7075,12 +7084,44 @@ const savePeriods = async (d) => {
       }
       
       // Convert totals to weekly averages
-      Object.keys(shopifySkuVelocity).forEach(sku => {
-        shopifySkuVelocity[sku] = shopifySkuVelocity[sku] / weeksCount;
+      Object.keys(weeklyShopVel).forEach(sku => {
+        weeklyShopVel[sku] = weeklyShopVel[sku] / weeksCount;
       });
-      Object.keys(amazonSkuVelocity).forEach(sku => {
-        amazonSkuVelocity[sku] = amazonSkuVelocity[sku] / weeksCount;
+      Object.keys(weeklyAmzVel).forEach(sku => {
+        weeklyAmzVel[sku] = weeklyAmzVel[sku] / weeksCount;
       });
+      
+      // Merge strategy: weekly data fills in gaps for slow-movers
+      // If daily data already has velocity for a SKU, keep it (more recent/accurate)
+      // If daily data has 0 velocity for a SKU, use weekly average (longer window catches slow sellers)
+      let weeklySupplementCount = 0;
+      Object.keys(weeklyShopVel).forEach(sku => {
+        if (!shopifySkuVelocity[sku] || shopifySkuVelocity[sku] === 0) {
+          shopifySkuVelocity[sku] = weeklyShopVel[sku];
+          // Also store under normalized variants
+          const baseSku = sku.replace(/shop$/i, '').toUpperCase();
+          const skuLower = sku.toLowerCase();
+          const baseSkuLower = baseSku.toLowerCase();
+          if (!shopifySkuVelocity[baseSku]) shopifySkuVelocity[baseSku] = weeklyShopVel[sku];
+          if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = weeklyShopVel[sku];
+          if (!shopifySkuVelocity[baseSkuLower]) shopifySkuVelocity[baseSkuLower] = weeklyShopVel[sku];
+          weeklySupplementCount++;
+        }
+      });
+      Object.keys(weeklyAmzVel).forEach(sku => {
+        if (!amazonSkuVelocity[sku] || amazonSkuVelocity[sku] === 0) {
+          amazonSkuVelocity[sku] = weeklyAmzVel[sku];
+          const baseSku = sku.replace(/shop$/i, '').toUpperCase();
+          const skuLower = sku.toLowerCase();
+          const baseSkuLower = baseSku.toLowerCase();
+          if (!amazonSkuVelocity[baseSku]) amazonSkuVelocity[baseSku] = weeklyAmzVel[sku];
+          if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = weeklyAmzVel[sku];
+          if (!amazonSkuVelocity[baseSkuLower]) amazonSkuVelocity[baseSkuLower] = weeklyAmzVel[sku];
+        }
+      });
+      
+      console.log(`Weekly supplement: ${weeklySupplementCount} slow-moving SKUs got velocity from ${weeksCount} weeks of data`);
+      console.log('Weekly Shopify SKUs found:', Object.keys(weeklyShopVel).length, '| Weekly Amazon SKUs:', Object.keys(weeklyAmzVel).length);
     }
     
     // SOURCE 2: Daily sales data - use if we have it and weekly didn't cover these SKUs
@@ -7260,7 +7301,7 @@ const savePeriods = async (d) => {
       
       console.log(`Added velocity from ${periodsCount} monthly periods (${Object.keys(periodAmazonVel).length} Amazon SKUs, ${Object.keys(periodShopifyVel).length} Shopify SKUs)`);
     }
-    } // End of: if (velocityDataSource !== 'direct-localStorage')
+    } // End of: always process weekly+monthly data as supplement for slow movers
     
     console.log(`Final velocity data: ${Object.keys(amazonSkuVelocity).length} Amazon SKUs, ${Object.keys(shopifySkuVelocity).length} Shopify SKUs (source: ${velocityDataSource})`);
     
@@ -39623,6 +39664,57 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             });
                           } else {
                             console.log('NO SALES DATA FOUND in allDaysData - velocity will be 0 for all items');
+                          }
+                          
+                          // SUPPLEMENT: Use weekly data for slow-moving SKUs with 0 daily velocity
+                          // Daily data covers 28 days - slow sellers (soaps, etc.) may not sell in that window
+                          // Weekly data covers ALL uploaded weeks - much longer window catches slow movers
+                          const sortedWeeks = Object.keys(allWeeksData).sort();
+                          if (sortedWeeks.length > 0) {
+                            let weeklySupplementCount = 0;
+                            const weeklyShopVel = {};
+                            const weeklyAmzVel = {};
+                            
+                            sortedWeeks.forEach(w => {
+                              const weekData = allWeeksData[w];
+                              if (weekData.shopify?.skuData) {
+                                const skuData = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
+                                skuData.forEach(item => {
+                                  if (!item.sku) return;
+                                  const normalized = item.sku.replace(/shop$/i, '').toUpperCase();
+                                  if (!weeklyShopVel[normalized]) weeklyShopVel[normalized] = 0;
+                                  weeklyShopVel[normalized] += (item.unitsSold || item.units || 0);
+                                });
+                              }
+                              if (weekData.amazon?.skuData) {
+                                const skuData = Array.isArray(weekData.amazon.skuData) ? weekData.amazon.skuData : Object.values(weekData.amazon.skuData);
+                                skuData.forEach(item => {
+                                  if (!item.sku) return;
+                                  const normalized = item.sku.replace(/shop$/i, '').toUpperCase();
+                                  if (!weeklyAmzVel[normalized]) weeklyAmzVel[normalized] = 0;
+                                  weeklyAmzVel[normalized] += (item.unitsSold || item.units || 0);
+                                });
+                              }
+                            });
+                            
+                            // Convert to weekly averages and fill gaps
+                            const weekCount = sortedWeeks.length;
+                            Object.entries(weeklyShopVel).forEach(([sku, totalUnits]) => {
+                              const weeklyAvg = totalUnits / weekCount;
+                              // Only supplement if daily data has 0 for this SKU
+                              if (weeklyAvg > 0 && (!shopifyVelocityLookup[sku] || shopifyVelocityLookup[sku] === 0)) {
+                                storeVelocity(shopifyVelocityLookup, sku, weeklyAvg);
+                                weeklySupplementCount++;
+                              }
+                            });
+                            Object.entries(weeklyAmzVel).forEach(([sku, totalUnits]) => {
+                              const weeklyAvg = totalUnits / weekCount;
+                              if (weeklyAvg > 0 && (!amazonVelocityLookup[sku] || amazonVelocityLookup[sku] === 0)) {
+                                storeVelocity(amazonVelocityLookup, sku, weeklyAvg);
+                              }
+                            });
+                            
+                            console.log(`Weekly supplement: ${weeklySupplementCount} slow-moving SKUs got velocity from ${weekCount} weeks`);
                           }
                         } catch (e) {
                           console.error('Error calculating velocity:', e);
