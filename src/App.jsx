@@ -36707,13 +36707,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       const isQboApiTransaction = !!(t.qboId || t.id?.startsWith('qbo-')); // QBO API-synced
       
       // === SOURCE 1: CSV-parsed bank account transactions ===
-      // Trust the parser's original flags - it already correctly handles inter-account transfers, etc.
+      // Trust the parser's original flags - EXCEPT for Credit Card Payments
+      // CC Payments are cash movement (paying down debt), not new expenses
+      // The actual expenses were recorded when charges hit the CC account
       if (isOnBankAccount) {
+        const isCCPayment = typeLower === 'credit card payment';
         return {
           ...t,
           isIncome: t.isIncome || false,
-          isExpense: t.isExpense || false,
-          isTransfer: false,
+          isExpense: isCCPayment ? false : (t.isExpense || false), // CC Payments are NOT expenses
+          isTransfer: isCCPayment, // Treat CC payments as transfers (internal cash movement)
           amount: Math.abs(t.amount || t.originalAmount || 0),
           topCategory: normalizedCategory,
           vendor: normalizedVendor,
@@ -36731,21 +36734,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         let isExpense = false;
         let isTransfer = false;
         
+        // Detect transaction type from qboType field OR from ID prefix
+        // (some older data may not have qboType but ID shows the entity type)
+        const idPrefix = (t.id || '').toLowerCase().split('-')[1] || ''; // 'qbo-deposit-123' → 'deposit'
+        const effectiveQboType = qboTypeLower || idPrefix;
+        
         // Cash-basis: Only count actual cash movements
-        if (qboTypeLower === 'deposit') {
+        if (effectiveQboType === 'deposit') {
           // Deposit = actual cash received in bank account
           isIncome = true;
-        } else if (qboTypeLower === 'purchase') {
+        } else if (effectiveQboType === 'purchase') {
           // Purchase = actual cash spent (includes CC charges, checks, etc.)
           isExpense = true;
-        } else if (qboTypeLower === 'refundreceipt') {
+        } else if (effectiveQboType === 'refundreceipt' || effectiveQboType === 'refund') {
           // Refunds = cash going out to customers
           isExpense = true;
-        } else if (typeLower === 'transfer' || qboTypeLower === 'transfer') {
+        } else if (typeLower === 'transfer' || effectiveQboType === 'transfer') {
           // Transfers = internal cash movement, not income/expense
           isTransfer = true;
         }
-        // Skip: SalesReceipt, Invoice, Payment, Bill, BillPayment
+        // Skip: salesreceipt, invoice, payment, bill, billpayment
         // These are either accrual entries or duplicates of Deposits/Purchases
         
         return {
@@ -36848,12 +36856,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       });
       
       sorted.forEach(t => {
-        // Create a dedup key from date + absolute amount + account prefix + vendor
-        // Including vendor prevents merging different transactions that happen to share date/amount/account
+        // Create a dedup key from date + absolute amount + account prefix
+        // DO NOT include vendor - CSV and API often have different vendor values for the same transaction
+        // (e.g., CSV has "Shopify" but API has empty vendor for the same deposit)
         const amt = Math.round(Math.abs(t.amount || 0) * 100); // cents to avoid float issues
         const acctKey = (t.account || '').substring(0, 20).toLowerCase().replace(/[^a-z0-9]/g, '');
-        const vendorKey = (t.vendor || '').substring(0, 15).toLowerCase().replace(/[^a-z0-9]/g, '');
-        const dedupKey = `${t.date || ''}-${amt}-${acctKey}-${vendorKey}`;
+        const dedupKey = `${t.date || ''}-${amt}-${acctKey}`;
         
         if (!seen.has(dedupKey)) {
           seen.set(dedupKey, { index: result.length, txn: t });
@@ -36865,6 +36873,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           if (!existing.txn.isIncome && !existing.txn.isExpense && (t.isIncome || t.isExpense)) {
             result[existing.index] = t;
             seen.set(dedupKey, { index: existing.index, txn: t });
+          }
           }
         }
       });
