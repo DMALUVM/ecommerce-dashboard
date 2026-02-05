@@ -24151,7 +24151,7 @@ if (shopifySkuWithShipping.length > 0) {
       const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
       const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
       const uiMinOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
-      const uiOverstockThreshold = Math.max(90, (uiMinOrderWeeks * 7) + leadTimeDays);
+      const uiOverstockThreshold = Math.max(90, (uiMinOrderWeeks * 7) + reorderTriggerDays + leadTimeDays);
       const uiLowThreshold = Math.max(30, leadTimeDays + 14);
       const uiCriticalThreshold = Math.max(14, leadTimeDays);
       
@@ -24239,8 +24239,18 @@ if (shopifySkuWithShipping.length > 0) {
         stockoutRisk = Math.min(100, Math.round(stockoutRisk + cvAdjustment));
       }
       
+      // Proportionally adjust Amazon and 3PL quantities based on overall reduction
+      const originalTotal = item.totalQty || 0;
+      const adjustmentRatio = originalTotal > 0 ? adjustedTotalQty / originalTotal : 1;
+      const adjustedAmazonQty = Math.round((item.amazonQty || 0) * adjustmentRatio);
+      const adjustedThreeplQty = Math.round((item.threeplQty || 0) * adjustmentRatio);
+      
       return {
         ...item,
+        // Replace quantities with adjusted values (estimated current stock)
+        totalQty: adjustedTotalQty,
+        amazonQty: adjustedAmazonQty,
+        threeplQty: adjustedThreeplQty,
         daysOfSupply: newDaysOfSupply,
         stockoutDate: newStockoutDate,
         reorderByDate: newReorderByDate,
@@ -24255,9 +24265,12 @@ if (shopifySkuWithShipping.length > 0) {
         stockToSalesRatio,
         stockoutRisk,
         totalValue: itemTotalValue,
-        // Keep original values for reference
+        // Keep original snapshot values for reference
+        _snapshotTotalQty: originalTotal,
+        _snapshotAmazonQty: item.amazonQty || 0,
+        _snapshotThreeplQty: item.threeplQty || 0,
         _originalDaysOfSupply: item.daysOfSupply,
-        _adjustedTotalQty: adjustedTotalQty,
+        _daysElapsed: daysElapsed,
       };
     });
     
