@@ -1621,6 +1621,8 @@ const handleLogout = async () => {
   const [bankingCategoryFilter, setBankingCategoryFilter] = useState('all');
   const [showBankingUpload, setShowBankingUpload] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState(null); // Transaction being edited
+  const [selectedTxnIds, setSelectedTxnIds] = useState(new Set()); // Selected transactions for merging
+  const [showMergeModal, setShowMergeModal] = useState(false); // Merge modal visibility
   const [bankingDrilldown, setBankingDrilldown] = useState(null); // { category: string, type: 'expense'|'income' } for drill-down view
   const [editingAccountBalance, setEditingAccountBalance] = useState(null); // { name: string, balance: number } for manual balance edit
   const [profitTrackerPeriod, setProfitTrackerPeriod] = useState('month'); // Profit tracker period selector
@@ -7794,6 +7796,25 @@ const savePeriods = async (d) => {
       }
     });
     
+    // Filter to only physical SKUs (those with COGS assigned)
+    // Digital products without COGS should not appear in inventory tracking
+    const cogsSkuSet = new Set();
+    Object.keys(cogsLookup).forEach(k => {
+      const cost = typeof cogsLookup[k] === 'number' ? cogsLookup[k] : cogsLookup[k]?.cost || 0;
+      if (cost > 0) {
+        cogsSkuSet.add(k.toLowerCase());
+        // Also add variants (with/without Shop suffix)
+        const base = k.replace(/shop$/i, '').toLowerCase();
+        cogsSkuSet.add(base);
+        cogsSkuSet.add(base + 'shop');
+      }
+    });
+    
+    const physicalSkus = cogsSkuSet.size > 0 
+      ? uniqueSkus.filter(sku => cogsSkuSet.has(sku.toLowerCase()) || cogsSkuSet.has(sku.replace(/shop$/i, '').toLowerCase()))
+      : uniqueSkus; // If no COGS at all, show everything (backwards compatible)
+    
+    console.log('SKU filtering: uniqueSkus =', uniqueSkus.length, ', physicalSkus (with COGS) =', physicalSkus.length, ', cogsSkuSet =', cogsSkuSet.size);
     console.log('SKU deduplication: allSkus =', allSkus.size, ', uniqueSkus =', uniqueSkus.length);
     console.log('Velocity data available:', {
       amazonSkuVelocityCount: Object.keys(amazonSkuVelocity).length,
@@ -7817,7 +7838,7 @@ const savePeriods = async (d) => {
     // DEBUG: Log first 3 items velocity matching attempt
     let debugCount = 0;
 
-    uniqueSkus.forEach(sku => {
+    physicalSkus.forEach(sku => {
       const skuLower = sku.toLowerCase();
       
       // Case-insensitive lookups for all inventory sources
@@ -36668,10 +36689,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       });
       
       sorted.forEach(t => {
-        // Create a dedup key from date + absolute amount + account prefix
+        // Create a dedup key from date + absolute amount + account prefix + vendor
+        // Including vendor prevents merging different transactions that happen to share date/amount/account
         const amt = Math.round(Math.abs(t.amount || 0) * 100); // cents to avoid float issues
         const acctKey = (t.account || '').substring(0, 20).toLowerCase().replace(/[^a-z0-9]/g, '');
-        const dedupKey = `${t.date || ''}-${amt}-${acctKey}`;
+        const vendorKey = (t.vendor || '').substring(0, 15).toLowerCase().replace(/[^a-z0-9]/g, '');
+        const dedupKey = `${t.date || ''}-${amt}-${acctKey}-${vendorKey}`;
         
         if (!seen.has(dedupKey)) {
           seen.set(dedupKey, t);
@@ -37140,6 +37163,70 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
       queueCloudSave({ ...combinedData, bankingData: newBankingData });
       setToast({ message: 'Category updated', type: 'success' });
+    };
+    
+    // Handle merging multiple transactions into one
+    const handleMergeTransactions = (mergedVendor, mergedCategory, mergedIsExpense) => {
+      if (selectedTxnIds.size < 2) return;
+      
+      const selectedTxns = sortedTxns.filter(t => selectedTxnIds.has(t.id));
+      if (selectedTxns.length < 2) return;
+      
+      // Calculate merged amount
+      const mergedAmount = selectedTxns.reduce((sum, t) => sum + (t.amount || 0), 0);
+      const mergedIsIncome = !mergedIsExpense;
+      
+      // Use earliest date
+      const dates = selectedTxns.map(t => t.date).sort();
+      const mergedDate = dates[0];
+      const mergedDateDisplay = selectedTxns.find(t => t.date === mergedDate)?.dateDisplay || mergedDate;
+      
+      // Create a merged transaction ID
+      const mergedId = `merged-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      
+      // Build merged memo from originals
+      const mergedMemo = selectedTxns.map(t => `${t.vendor}: $${t.amount.toFixed(2)}`).join(' + ');
+      
+      const topCategory = mergedCategory.split(':')[0].trim();
+      const subCategory = mergedCategory.includes(':') ? mergedCategory.split(':').slice(1).join(':').trim() : '';
+      
+      const mergedTxn = {
+        id: mergedId,
+        date: mergedDate,
+        dateDisplay: mergedDateDisplay,
+        type: 'Merged',
+        vendor: mergedVendor,
+        memo: mergedMemo,
+        category: mergedCategory,
+        originalCategory: mergedCategory,
+        topCategory,
+        subCategory,
+        amount: mergedAmount,
+        isIncome: mergedIsIncome,
+        isExpense: mergedIsExpense,
+        account: selectedTxns[0].account,
+        accountType: selectedTxns[0].accountType,
+        mergedFrom: selectedTxns.map(t => t.id), // Track originals
+      };
+      
+      // Remove selected transactions and add merged one
+      const removedIds = new Set(selectedTxns.map(t => t.id));
+      const newTransactions = [
+        mergedTxn,
+        ...(bankingData.transactions || []).filter(t => !removedIds.has(t.id)),
+      ];
+      
+      const newBankingData = {
+        ...bankingData,
+        transactions: newTransactions,
+      };
+      setBankingData(newBankingData);
+      localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+      queueCloudSave({ ...combinedData, bankingData: newBankingData });
+      
+      setSelectedTxnIds(new Set());
+      setShowMergeModal(false);
+      setToast({ message: `Merged ${selectedTxns.length} transactions into "${mergedVendor}" (${formatCurrency(mergedAmount)})`, type: 'success' });
     };
     
     return (
@@ -38346,6 +38433,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-semibold text-white">Transactions — {periodLabel}</h3>
                     <div className="flex items-center gap-3">
+                      {selectedTxnIds.size >= 2 && (
+                        <button
+                          onClick={() => setShowMergeModal(true)}
+                          className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white font-medium flex items-center gap-1.5 transition-colors"
+                        >
+                          <GitCompareArrows className="w-3.5 h-3.5" />
+                          Merge {selectedTxnIds.size} Selected
+                        </button>
+                      )}
+                      {selectedTxnIds.size > 0 && selectedTxnIds.size < 2 && (
+                        <span className="text-xs text-amber-400">Select at least 2 to merge</span>
+                      )}
+                      {selectedTxnIds.size > 0 && (
+                        <button
+                          onClick={() => setSelectedTxnIds(new Set())}
+                          className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-300"
+                        >
+                          Clear selection
+                        </button>
+                      )}
                       <span className="text-slate-400 text-sm">{filteredTxns.length} transactions</span>
                       {Object.keys(bankingData.categoryOverrides || {}).length > 0 && (
                         <span className="text-xs bg-violet-500/20 text-violet-300 px-2 py-1 rounded">
@@ -38354,11 +38461,27 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       )}
                     </div>
                   </div>
-                  <p className="text-xs text-slate-500 mb-4">💡 Click any transaction to edit its category</p>
+                  <p className="text-xs text-slate-500 mb-4">💡 Click a row to edit category • Use checkboxes to select & merge transactions from the same vendor</p>
                   <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 bg-slate-800 z-10">
                         <tr className="border-b border-slate-700">
+                          <th className="text-left text-slate-400 font-medium py-2 px-2 w-8">
+                            <input
+                              type="checkbox"
+                              checked={filteredTxns.slice(0, 300).length > 0 && filteredTxns.slice(0, 300).every(t => selectedTxnIds.has(t.id))}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  const newSet = new Set(selectedTxnIds);
+                                  filteredTxns.slice(0, 300).forEach(t => newSet.add(t.id));
+                                  setSelectedTxnIds(newSet);
+                                } else {
+                                  setSelectedTxnIds(new Set());
+                                }
+                              }}
+                              className="rounded bg-slate-700 border-slate-600"
+                            />
+                          </th>
                           <th className="text-left text-slate-400 font-medium py-2 px-3">Date</th>
                           <th className="text-left text-slate-400 font-medium py-2 px-3">Vendor</th>
                           <th className="text-left text-slate-400 font-medium py-2 px-3">Category</th>
@@ -38368,23 +38491,36 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       <tbody>
                         {filteredTxns.slice(0, 300).map((txn, i) => {
                           const hasOverride = bankingData.categoryOverrides?.[txn.id];
+                          const isSelected = selectedTxnIds.has(txn.id);
                           return (
                             <tr 
                               key={txn.id || i} 
-                              onClick={() => setEditingTransaction(txn)}
-                              className="border-b border-slate-700/50 hover:bg-slate-700/50 cursor-pointer transition-colors"
+                              className={`border-b border-slate-700/50 hover:bg-slate-700/50 cursor-pointer transition-colors ${isSelected ? 'bg-violet-900/30 border-violet-500/30' : ''}`}
                             >
-                              <td className="py-3 px-3 text-slate-400 whitespace-nowrap">{txn.dateDisplay}</td>
-                              <td className="py-3 px-3">
+                              <td className="py-3 px-2" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    const newSet = new Set(selectedTxnIds);
+                                    if (e.target.checked) newSet.add(txn.id);
+                                    else newSet.delete(txn.id);
+                                    setSelectedTxnIds(newSet);
+                                  }}
+                                  className="rounded bg-slate-700 border-slate-600"
+                                />
+                              </td>
+                              <td className="py-3 px-3 text-slate-400 whitespace-nowrap" onClick={() => setEditingTransaction(txn)}>{txn.dateDisplay}</td>
+                              <td className="py-3 px-3" onClick={() => setEditingTransaction(txn)}>
                                 <div className="text-white">{txn.vendor}</div>
                                 <div className="text-slate-500 text-xs truncate max-w-[200px]">{txn.memo?.slice(0, 40) || ''}</div>
                               </td>
-                              <td className="py-3 px-3">
+                              <td className="py-3 px-3" onClick={() => setEditingTransaction(txn)}>
                                 <span className={`px-2 py-1 rounded text-xs ${hasOverride ? 'bg-violet-500/20 text-violet-300' : 'bg-slate-700 text-slate-300'}`}>
                                   {txn.topCategory}
                                 </span>
                               </td>
-                              <td className={`py-3 px-3 text-right font-medium whitespace-nowrap ${txn.isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              <td className={`py-3 px-3 text-right font-medium whitespace-nowrap ${txn.isIncome ? 'text-emerald-400' : 'text-rose-400'}`} onClick={() => setEditingTransaction(txn)}>
                                 {txn.isIncome ? '+' : '-'}{formatCurrency(txn.amount)}
                               </td>
                             </tr>
@@ -38494,6 +38630,160 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   </div>
                 </div>
               )}
+              
+              {/* Merge Transactions Modal */}
+              {showMergeModal && selectedTxnIds.size >= 2 && (() => {
+                const selectedTxns = sortedTxns.filter(t => selectedTxnIds.has(t.id));
+                const totalAmount = selectedTxns.reduce((s, t) => s + t.amount, 0);
+                const vendors = [...new Set(selectedTxns.map(t => t.vendor))];
+                const categories = [...new Set(selectedTxns.map(t => t.topCategory || t.category))];
+                const allExpense = selectedTxns.every(t => t.isExpense);
+                const allIncome = selectedTxns.every(t => t.isIncome);
+                return (
+                  <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={() => setShowMergeModal(false)}>
+                    <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-lg" onClick={e => e.stopPropagation()}>
+                      <div className="p-6 border-b border-slate-700">
+                        <div className="flex items-center justify-between">
+                          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                            <GitCompareArrows className="w-5 h-5 text-violet-400" />
+                            Merge {selectedTxns.length} Transactions
+                          </h2>
+                          <button onClick={() => setShowMergeModal(false)} className="text-slate-400 hover:text-white">
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="p-6 space-y-4">
+                        {/* Selected transactions preview */}
+                        <div className="bg-slate-900/50 rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
+                          {selectedTxns.map(t => (
+                            <div key={t.id} className="flex justify-between items-center text-sm">
+                              <div>
+                                <span className="text-slate-400 mr-2">{t.dateDisplay}</span>
+                                <span className="text-white">{t.vendor}</span>
+                                <span className="text-slate-500 ml-2 text-xs">{t.topCategory}</span>
+                              </div>
+                              <span className={t.isIncome ? 'text-emerald-400' : 'text-rose-400'}>
+                                {t.isIncome ? '+' : '-'}{formatCurrency(t.amount)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                        
+                        <div className="bg-violet-900/20 border border-violet-500/30 rounded-lg p-3 text-center">
+                          <span className="text-slate-400 text-sm">Combined total: </span>
+                          <span className="text-white font-bold text-lg">{formatCurrency(totalAmount)}</span>
+                        </div>
+                        
+                        {/* Vendor selection */}
+                        <div>
+                          <label className="block text-sm font-medium text-slate-300 mb-2">Vendor Name</label>
+                          <input
+                            type="text"
+                            id="merge-vendor-input"
+                            defaultValue={vendors[0] || ''}
+                            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            placeholder="Enter vendor name..."
+                          />
+                          {vendors.length > 1 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {vendors.map(v => (
+                                <button
+                                  key={v}
+                                  onClick={() => { document.getElementById('merge-vendor-input').value = v; }}
+                                  className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-300"
+                                >
+                                  {v}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* Category selection */}
+                        <div>
+                          <label className="block text-sm font-medium text-slate-300 mb-2">Category</label>
+                          <input
+                            type="text"
+                            id="merge-category-input"
+                            defaultValue={categories[0] || ''}
+                            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            placeholder="Enter category..."
+                          />
+                          {categories.length > 1 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {categories.map(c => (
+                                <button
+                                  key={c}
+                                  onClick={() => { document.getElementById('merge-category-input').value = c; }}
+                                  className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-300"
+                                >
+                                  {c}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {['Advertising & marketing', 'Cost of goods sold', 'Shipping & delivery', 'Office expenses', 'Software & subscriptions', 'Payroll expenses'].map(cat => (
+                              <button
+                                key={cat}
+                                onClick={() => { document.getElementById('merge-category-input').value = cat; }}
+                                className="px-2 py-1 bg-slate-700/50 hover:bg-slate-600 rounded text-xs text-slate-500"
+                              >
+                                {cat}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        
+                        {/* Type selection (only if mixed) */}
+                        {!allExpense && !allIncome && (
+                          <div>
+                            <label className="block text-sm font-medium text-slate-300 mb-2">Transaction Type</label>
+                            <div className="flex gap-2">
+                              <button
+                                id="merge-type-expense"
+                                onClick={() => { document.getElementById('merge-type-expense').classList.add('ring-2', 'ring-rose-500'); document.getElementById('merge-type-income').classList.remove('ring-2', 'ring-emerald-500'); }}
+                                className="flex-1 px-3 py-2 bg-rose-900/30 hover:bg-rose-800/40 border border-rose-500/30 rounded-lg text-rose-300 text-sm ring-2 ring-rose-500"
+                              >
+                                Expense
+                              </button>
+                              <button
+                                id="merge-type-income"
+                                onClick={() => { document.getElementById('merge-type-income').classList.add('ring-2', 'ring-emerald-500'); document.getElementById('merge-type-expense').classList.remove('ring-2', 'ring-rose-500'); }}
+                                className="flex-1 px-3 py-2 bg-emerald-900/30 hover:bg-emerald-800/40 border border-emerald-500/30 rounded-lg text-emerald-300 text-sm"
+                              >
+                                Income
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="p-6 border-t border-slate-700 flex gap-3">
+                        <button
+                          onClick={() => setShowMergeModal(false)}
+                          className="flex-1 px-4 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => {
+                            const vendor = document.getElementById('merge-vendor-input')?.value || vendors[0];
+                            const category = document.getElementById('merge-category-input')?.value || categories[0];
+                            const isExpenseBtn = document.getElementById('merge-type-expense');
+                            const isExpense = allExpense || (!allIncome && (!isExpenseBtn || isExpenseBtn.classList.contains('ring-rose-500')));
+                            handleMergeTransactions(vendor, category, isExpense);
+                          }}
+                          className="flex-1 px-4 py-2.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium flex items-center justify-center gap-2"
+                        >
+                          <GitCompareArrows className="w-4 h-4" />
+                          Merge Transactions
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
               
               {/* Account Balance Edit Modal */}
               {editingAccountBalance && (
