@@ -13227,18 +13227,35 @@ Respond with ONLY this JSON:
       const aiCriticalThreshold = Math.max(14, aiDefaultLeadTime);
       
       // Pre-calculated stockout dates and reorder points already exist on each item
-      // RECALCULATE for days elapsed since snapshot (same as inventory page does)
+      // Check if data comes from recent API sync (Packiyo/Amazon) - use that date instead of snapshot date
       const today = new Date();
-      const snapshotDate = new Date(latestInvKey + 'T12:00:00');
-      const daysElapsed = Math.max(0, Math.floor((today - snapshotDate) / (1000 * 60 * 60 * 24)));
+      const snapshotData = invHistory[latestInvKey];
+      const lastPackiyoSync = snapshotData?.sources?.lastPackiyoSync ? new Date(snapshotData.sources.lastPackiyoSync) : null;
+      const lastAmazonSync = snapshotData?.sources?.lastAmazonSync ? new Date(snapshotData.sources.lastAmazonSync) : null;
+      
+      // Use most recent sync date, falling back to snapshot date
+      let effectiveDataDate = new Date(latestInvKey + 'T12:00:00');
+      if (lastPackiyoSync && lastPackiyoSync > effectiveDataDate) {
+        effectiveDataDate = lastPackiyoSync;
+      }
+      if (lastAmazonSync && lastAmazonSync > effectiveDataDate) {
+        effectiveDataDate = lastAmazonSync;
+      }
+      
+      // Only apply days-elapsed if data is actually old
+      const daysElapsed = Math.max(0, Math.floor((today - effectiveDataDate) / (1000 * 60 * 60 * 24)));
+      
+      console.log('AI forecast dates:', { latestInvKey, lastPackiyoSync: lastPackiyoSync?.toISOString()?.split('T')[0], effectiveDataDate: effectiveDataDate.toISOString().split('T')[0], daysElapsed });
       
       const currentInventory = (invHistory[latestInvKey]?.items || []).map(item => {
         const weeklyVelocity = item.weeklyVel || 0;
         const dailyVelocity = weeklyVelocity / 7;
         const leadTimeDays = getLeadTime(item.sku);
         
-        // Adjust stock for days elapsed (same as inventory page recalculation)
-        const currentStock = Math.max(0, (item.totalQty || 0) - Math.round(dailyVelocity * daysElapsed));
+        // Only adjust stock if data is old (daysElapsed > 0)
+        const currentStock = daysElapsed > 0 
+          ? Math.max(0, (item.totalQty || 0) - Math.round(dailyVelocity * daysElapsed))
+          : (item.totalQty || 0);
         
         // Recalculate days of supply from TODAY
         const daysOfSupply = weeklyVelocity > 0 ? Math.round((currentStock / weeklyVelocity) * 7) : 999;
@@ -24132,17 +24149,44 @@ if (shopifySkuWithShipping.length > 0) {
     })();
     
     // RECALCULATE health, daysOfSupply, and dates dynamically based on current date
-    // The snapshot was taken on selectedInvDate, so we need to adjust for days elapsed
-    const snapshotDate = new Date(selectedInvDate + 'T12:00:00');
+    // If data comes from a recent API sync (Packiyo), use that date to avoid double-subtracting sales
     const today = new Date();
-    const daysElapsed = Math.floor((today - snapshotDate) / (1000 * 60 * 60 * 24));
+    
+    // Check if we have recent API sync data
+    const lastPackiyoSync = data.sources?.lastPackiyoSync ? new Date(data.sources.lastPackiyoSync) : null;
+    const lastAmazonSync = data.sources?.lastAmazonSync ? new Date(data.sources.lastAmazonSync) : null;
+    
+    // Use the most recent sync date (Packiyo or Amazon), falling back to snapshot date
+    let effectiveDataDate = new Date(selectedInvDate + 'T12:00:00');
+    if (lastPackiyoSync && lastPackiyoSync > effectiveDataDate) {
+      effectiveDataDate = lastPackiyoSync;
+    }
+    if (lastAmazonSync && lastAmazonSync > effectiveDataDate) {
+      effectiveDataDate = lastAmazonSync;
+    }
+    
+    // Only apply days-elapsed adjustment if data is actually old
+    // If synced today, daysElapsed = 0, quantities are already current
+    const daysElapsed = Math.max(0, Math.floor((today - effectiveDataDate) / (1000 * 60 * 60 * 24)));
+    
+    console.log('Inventory display dates:', { 
+      snapshotDate: selectedInvDate, 
+      lastPackiyoSync: lastPackiyoSync?.toISOString()?.split('T')[0],
+      lastAmazonSync: lastAmazonSync?.toISOString()?.split('T')[0],
+      effectiveDataDate: effectiveDataDate.toISOString().split('T')[0],
+      today: today.toISOString().split('T')[0],
+      daysElapsed 
+    });
     
     const recalculatedItems = deduplicatedItems.map(item => {
       const weeklyVel = item.weeklyVel || 0;
       const dailyVel = weeklyVel / 7;
       
-      // Adjust quantities for days elapsed (inventory decreases over time)
-      const adjustedTotalQty = Math.max(0, (item.totalQty || 0) - Math.round(dailyVel * daysElapsed));
+      // Only adjust quantities if data is old (daysElapsed > 0)
+      // If API sync is fresh (today), use quantities as-is
+      const adjustedTotalQty = daysElapsed > 0 
+        ? Math.max(0, (item.totalQty || 0) - Math.round(dailyVel * daysElapsed))
+        : (item.totalQty || 0);
       
       // Recalculate days of supply from TODAY
       const newDaysOfSupply = weeklyVel > 0 ? Math.round((adjustedTotalQty / weeklyVel) * 7) : 999;
@@ -36677,39 +36721,32 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       }
       
       // === SOURCE 2: QBO API-synced transactions ===
-      // The API already classifies type='income'/'expense'/'transfer', trust it
+      // For CASH-BASIS accounting (matching QBO P&L reports):
+      // - Income = only Deposits (actual cash received into bank)
+      // - Expenses = only Purchases (actual cash spent)
+      // Skip: SalesReceipts, Invoices, Payments (duplicates or accrual entries)
+      // Skip: Bills (accrual - the Purchase is the cash expense)
       if (isQboApiTransaction) {
         let isIncome = false;
         let isExpense = false;
         let isTransfer = false;
         
-        if (typeLower === 'income') {
-          // Deposits, Sales Receipts marked as income by API
-          // Only skip if we have CSV bank data AND this is a SalesReceipt/Invoice (accrual duplicate)
-          const isAccrualEntry = (qboTypeLower === 'salesreceipt' || qboTypeLower === 'invoice') && hasBankDeposits;
-          if (!isAccrualEntry) {
-            isIncome = true;
-          }
-        } else if (typeLower === 'expense') {
-          // Individual expenses (including CC charges) - count as expense
+        // Cash-basis: Only count actual cash movements
+        if (qboTypeLower === 'deposit') {
+          // Deposit = actual cash received in bank account
+          isIncome = true;
+        } else if (qboTypeLower === 'purchase') {
+          // Purchase = actual cash spent (includes CC charges, checks, etc.)
           isExpense = true;
-        } else if (typeLower === 'bill') {
-          // Bills = future expense recorded (the expense is on the Bill, not the payment)
+        } else if (qboTypeLower === 'refundreceipt') {
+          // Refunds = cash going out to customers
           isExpense = true;
-        } else if (typeLower === 'bill_payment') {
-          // Bill Payment = paying a previously recorded Bill
-          // The expense was already recorded on the Bill itself, so this is just cash movement
-          // Do NOT count as expense to avoid double-counting
+        } else if (typeLower === 'transfer' || qboTypeLower === 'transfer') {
+          // Transfers = internal cash movement, not income/expense
           isTransfer = true;
-        } else if (typeLower === 'transfer' || typeLower === 'credit card payment') {
-          // Transfers and CC payments = internal cash movement, not income/expense
-          isTransfer = true;
-        } else if (typeLower === 'payment') {
-          // Payments received = income, payments made = expense
-          const amt = t.amount || t.originalAmount || 0;
-          if (amt > 0) isIncome = true;
-          else if (amt < 0) isExpense = true;
         }
+        // Skip: SalesReceipt, Invoice, Payment, Bill, BillPayment
+        // These are either accrual entries or duplicates of Deposits/Purchases
         
         return {
           ...t,
