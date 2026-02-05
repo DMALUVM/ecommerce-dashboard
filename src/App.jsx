@@ -36646,21 +36646,24 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     );
     
     // Transform transactions to ensure they have correct flags
-    // For CSV-parsed bank account transactions: trust the parser's classification
-    // (the parser already filtered inter-account transfers, journal entries, etc.)
-    // For API-synced transactions (no accountType): re-derive to avoid double-counting
+    // Three sources of data:
+    // 1. CSV-parsed bank account transactions (have accountType) → trust parser's isIncome/isExpense
+    // 2. QBO API-synced transactions (have qboId/qboType) → trust API's type='income'/'expense'
+    // 3. Legacy/other transactions → derive from type field
     const transformedTxns = (bankingData.transactions || []).map(t => {
       // Normalize vendor and category
       const normalizedVendor = normalizeVendor(t.vendor);
       const normalizedCategory = normalizeCategory(t.topCategory || t.category || t.account);
       
       const typeLower = (t.type || '').toLowerCase();
+      const qboTypeLower = (t.qboType || '').toLowerCase();
       
-      // Check if this transaction is on an actual bank/CC account (has accountType from CSV parser)
-      const isOnBankAccount = !!t.accountType;
+      // Check data source
+      const isOnBankAccount = !!t.accountType; // CSV-parsed
+      const isQboApiTransaction = !!(t.qboId || t.id?.startsWith('qbo-')); // QBO API-synced
       
-      // For CSV-parsed bank account transactions, trust the parser's original flags
-      // The parser already correctly handles inter-account transfers, journal entries, etc.
+      // === SOURCE 1: CSV-parsed bank account transactions ===
+      // Trust the parser's original flags - it already correctly handles inter-account transfers, etc.
       if (isOnBankAccount) {
         return {
           ...t,
@@ -36673,7 +36676,53 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         };
       }
       
-      // === API-synced transactions only (no accountType) — re-derive to avoid double-counting ===
+      // === SOURCE 2: QBO API-synced transactions ===
+      // The API already classifies type='income'/'expense'/'transfer', trust it
+      if (isQboApiTransaction) {
+        let isIncome = false;
+        let isExpense = false;
+        let isTransfer = false;
+        
+        if (typeLower === 'income') {
+          // Deposits, Sales Receipts marked as income by API
+          // Only skip if we have CSV bank data AND this is a SalesReceipt/Invoice (accrual duplicate)
+          const isAccrualEntry = (qboTypeLower === 'salesreceipt' || qboTypeLower === 'invoice') && hasBankDeposits;
+          if (!isAccrualEntry) {
+            isIncome = true;
+          }
+        } else if (typeLower === 'expense') {
+          // Individual expenses (including CC charges) - count as expense
+          isExpense = true;
+        } else if (typeLower === 'bill') {
+          // Bills = future expense recorded (the expense is on the Bill, not the payment)
+          isExpense = true;
+        } else if (typeLower === 'bill_payment') {
+          // Bill Payment = paying a previously recorded Bill
+          // The expense was already recorded on the Bill itself, so this is just cash movement
+          // Do NOT count as expense to avoid double-counting
+          isTransfer = true;
+        } else if (typeLower === 'transfer' || typeLower === 'credit card payment') {
+          // Transfers and CC payments = internal cash movement, not income/expense
+          isTransfer = true;
+        } else if (typeLower === 'payment') {
+          // Payments received = income, payments made = expense
+          const amt = t.amount || t.originalAmount || 0;
+          if (amt > 0) isIncome = true;
+          else if (amt < 0) isExpense = true;
+        }
+        
+        return {
+          ...t,
+          isIncome,
+          isExpense,
+          isTransfer,
+          amount: Math.abs(t.amount || t.originalAmount || 0),
+          topCategory: normalizedCategory,
+          vendor: normalizedVendor,
+        };
+      }
+      
+      // === SOURCE 3: Legacy/other transactions — derive from type field ===
       const categoryIsAccount = isAccountCategory(t.topCategory || t.category);
       const isInterAccountTransfer = typeLower === 'transfer' && categoryIsAccount;
       const isJournalEntry = typeLower === 'journal entry';
@@ -36686,17 +36735,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       if (isJournalEntry || isInterAccountTransfer) {
         // Skip: journal entries and inter-account transfers are not income/expense
       } else if (typeLower === 'sales receipt' || typeLower === 'invoice') {
-        // API Sales Receipts/Invoices: only count if no bank deposits exist (avoid accrual double-count)
         if (!hasBankDeposits) {
           isIncome = true;
         }
-        // else: skip — this is an accrual entry, the cash shows as a Deposit on the bank account
       } else if (typeLower === 'deposit' || typeLower === 'bank deposit') {
         isIncome = true;
       } else if (typeLower === 'income') {
-        if (!hasBankDeposits) {
-          isIncome = true;
-        }
+        isIncome = true;
       } else if (typeLower === 'payment') {
         if (hasOriginalSign) {
           if (t.originalAmount >= 0) isIncome = true;
@@ -36739,7 +36784,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         ...t,
         isIncome,
         isExpense,
-        isTransfer: isInterAccountTransfer,
+        isTransfer: isInterAccountTransfer || false,
         amount: Math.abs(t.amount || t.originalAmount || 0),
         topCategory: normalizedCategory,
         vendor: normalizedVendor,
