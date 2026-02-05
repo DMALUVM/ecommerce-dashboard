@@ -7963,10 +7963,10 @@ const savePeriods = async (d) => {
         stockout.setDate(stockout.getDate() + dos);
         stockoutDate = stockout.toISOString().split('T')[0];
         
-        // Days until must order now accounts for safety stock
-        // Order when: remaining stock = reorderPoint (leadTime demand + safety stock)
-        const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : reorderTriggerDays;
-        daysUntilMustOrder = dos - reorderPointDays;
+        // Days until must order: accounts for reorder trigger buffer + safety stock
+        // Order when remaining stock covers: reorderTriggerDays (target buffer when shipment arrives) + leadTime demand + safety stock
+        const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : leadTimeDays;
+        daysUntilMustOrder = dos - reorderTriggerDays - reorderPointDays;
         const reorderBy = new Date(today);
         reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
         reorderByDate = reorderBy.toISOString().split('T')[0];
@@ -11549,18 +11549,19 @@ const savePeriods = async (d) => {
                         stockout.setDate(stockout.getDate() + dos);
                         stockoutDate = stockout.toISOString().split('T')[0];
                         
-                        const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : reorderTriggerDays;
-                        daysUntilMustOrder = dos - reorderPointDays;
+                        const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : leadTimeDays;
+                        daysUntilMustOrder = dos - reorderTriggerDays - reorderPointDays;
                         const reorderBy = new Date(today);
                         reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
                         reorderByDate = reorderBy.toISOString().split('T')[0];
                       }
                       
-                      // Determine health status (dynamic thresholds based on reorder cycle)
+                      // Determine health status (dynamic thresholds + reorder urgency)
                       let health = 'unknown';
                       if (rawWeeklyVel > 0) {
-                        if (dos < liveCriticalThreshold) health = 'critical';
-                        else if (dos < liveLowThreshold) health = 'low';
+                        if (daysUntilMustOrder !== null && daysUntilMustOrder < 0) health = 'critical';
+                        else if (dos < liveCriticalThreshold || (daysUntilMustOrder !== null && daysUntilMustOrder < 7)) health = 'critical';
+                        else if (dos < liveLowThreshold || (daysUntilMustOrder !== null && daysUntilMustOrder < 14)) health = 'low';
                         else if (dos <= liveOverstockThreshold) health = 'healthy';
                         else health = 'overstock';
                       }
@@ -36632,7 +36633,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     );
     
     // Transform transactions to ensure they have correct flags
-    // ALWAYS re-calculate flags based on QBO type to fix any bad cached data
+    // For CSV-parsed bank account transactions: trust the parser's classification
+    // (the parser already filtered inter-account transfers, journal entries, etc.)
+    // For API-synced transactions (no accountType): re-derive to avoid double-counting
     const transformedTxns = (bankingData.transactions || []).map(t => {
       // Normalize vendor and category
       const normalizedVendor = normalizeVendor(t.vendor);
@@ -36640,64 +36643,58 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       
       const typeLower = (t.type || '').toLowerCase();
       
-      // Check if the category is actually an account (credit card/bank) - these are payments, not expenses
-      const categoryIsAccount = isAccountCategory(t.topCategory || t.category);
+      // Check if this transaction is on an actual bank/CC account (has accountType from CSV parser)
+      const isOnBankAccount = !!t.accountType;
       
-      // For transfers: only inter-account transfers should be excluded
-      // Amazon/Shopify deposits that show as "Transfer" are real income
+      // For CSV-parsed bank account transactions, trust the parser's original flags
+      // The parser already correctly handles inter-account transfers, journal entries, etc.
+      if (isOnBankAccount) {
+        return {
+          ...t,
+          isIncome: t.isIncome || false,
+          isExpense: t.isExpense || false,
+          isTransfer: false,
+          amount: Math.abs(t.amount || t.originalAmount || 0),
+          topCategory: normalizedCategory,
+          vendor: normalizedVendor,
+        };
+      }
+      
+      // === API-synced transactions only (no accountType) — re-derive to avoid double-counting ===
+      const categoryIsAccount = isAccountCategory(t.topCategory || t.category);
       const isInterAccountTransfer = typeLower === 'transfer' && categoryIsAccount;
       const isJournalEntry = typeLower === 'journal entry';
       
-      // Check if this transaction is on an actual bank/CC account (has accountType from CSV parser)
-      // vs a floating accrual entry (from QBO API with no bank account context)
-      const isOnBankAccount = !!t.accountType;
-      
-      // Determine income/expense
       let isIncome = false;
       let isExpense = false;
       
-      // Helper: check if we have the ORIGINAL signed amount (API-synced data has it, CSV-parsed doesn't)
       const hasOriginalSign = t.originalAmount !== undefined && t.originalAmount !== null;
       
       if (isJournalEntry || isInterAccountTransfer) {
         // Skip: journal entries and inter-account transfers are not income/expense
       } else if (typeLower === 'sales receipt' || typeLower === 'invoice') {
-        // Sales Receipts and Invoices: 
-        // - If ON a bank account (CSV-parsed) = actual cash received → income
-        // - If NOT on a bank account (API-synced) AND we have bank deposits = accrual duplicate → SKIP
-        if (isOnBankAccount) {
-          isIncome = true;
-        } else if (!hasBankDeposits) {
-          // No bank data at all — these are our only income source, count them
+        // API Sales Receipts/Invoices: only count if no bank deposits exist (avoid accrual double-count)
+        if (!hasBankDeposits) {
           isIncome = true;
         }
-        // else: skip — this is an accrual entry, the cash shows as a Deposit
-      } else if (typeLower === 'deposit') {
-        // Bank deposits — always real cash income
+        // else: skip — this is an accrual entry, the cash shows as a Deposit on the bank account
+      } else if (typeLower === 'deposit' || typeLower === 'bank deposit') {
         isIncome = true;
       } else if (typeLower === 'income') {
-        // API "income" type: only count if on a bank account OR no bank deposits exist
-        if (isOnBankAccount || !hasBankDeposits) {
+        if (!hasBankDeposits) {
           isIncome = true;
         }
-        // else: skip to avoid double-counting with Deposits
       } else if (typeLower === 'payment') {
-        // Customer payments: positive = income (received), negative = outgoing payment
         if (hasOriginalSign) {
-          // API data: use the signed original amount to determine direction
           if (t.originalAmount >= 0) isIncome = true;
           else isExpense = !categoryIsAccount;
         } else {
-          // CSV-parsed data: amounts are abs(), so use the PARSER's original flags
           isIncome = t.isIncome || false;
           isExpense = (t.isExpense || false) && !categoryIsAccount;
         }
       } else if (typeLower === 'refund receipt' || typeLower === 'credit memo') {
-        // Refunds and credit memos reduce income
         isExpense = true;
       } else if (typeLower === 'transfer' && !categoryIsAccount) {
-        // External transfer (Amazon/Shopify deposits, vendor payments via transfer)
-        // Amount is stored as abs value, so use the parser's income/expense flags
         isIncome = t.isIncome || false;
         isExpense = t.isExpense || false;
       } else if (typeLower === 'expense' || typeLower === 'check' || typeLower === 'payroll check') {
@@ -36709,39 +36706,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           isExpense = true;
         }
       } else if (typeLower === 'credit card payment') {
-        // CC payments from checking account: check if we have the CC account's individual charges
-        // If we do (credit_card accounts exist), skip to avoid double-counting
-        // If checking account only, this IS the expense record
         if (hasCCAccounts) {
-          // Individual CC charges are tracked on the CC account side
           isExpense = false;
           isIncome = false;
-        } else if (t.accountType === 'checking' || t.accountType === 'savings') {
-          // No CC account data - this payment IS the expense from checking
-          isExpense = true;
-        }
-      } else if (t.accountType === 'credit_card') {
-        // Credit card transactions: charges are expenses, credits are income
-        if (typeLower.includes('credit') || typeLower.includes('refund')) {
-          isIncome = true;
-        } else {
-          const amt = Math.abs(t.amount || t.originalAmount || 0);
-          if (amt > 0) isExpense = !categoryIsAccount;
         }
       } else if (t.isIncome !== undefined) {
-        // Fall back to existing flags from QBO parser for known transaction types
         isIncome = t.isIncome;
         isExpense = t.isExpense && !categoryIsAccount;
       } else {
-        // Catch-all: use original signed amount if available, otherwise parser flags
         if (hasOriginalSign) {
           if (t.originalAmount > 0) isIncome = true;
           else if (t.originalAmount < 0) isExpense = true;
-        } else if (t.isIncome !== undefined || t.isExpense !== undefined) {
-          isIncome = t.isIncome || false;
-          isExpense = (t.isExpense || false) && !categoryIsAccount;
         } else {
-          isIncome = true; // True catch-all: positive amount with no flags
+          isIncome = true; // Catch-all: positive amount
         }
       }
       
@@ -41485,8 +41462,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               stockout.setDate(stockout.getDate() + dos);
                               stockoutDate = stockout.toISOString().split('T')[0];
                               
-                              const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : reorderTriggerDays;
-                              daysUntilMustOrder = dos - reorderPointDays;
+                              const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : leadTimeDays;
+                              daysUntilMustOrder = dos - reorderTriggerDays - reorderPointDays;
                               const reorderBy = new Date(today);
                               reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
                               reorderByDate = reorderBy.toISOString().split('T')[0];
