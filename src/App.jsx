@@ -13221,7 +13221,7 @@ Respond with ONLY this JSON:
       const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60; // Want shipment to arrive when stock = this
       const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22; // Minimum order size (5 months ≈ 22 weeks)
       const aiDefaultLeadTime = leadTimeSettings.defaultLeadTimeDays || 14;
-      const aiOverstockThreshold = Math.max(90, (minOrderWeeks * 7) + aiDefaultLeadTime);
+      const aiOverstockThreshold = Math.max(90, (minOrderWeeks * 7) + reorderTriggerDays + aiDefaultLeadTime);
       const aiLowThreshold = Math.max(30, aiDefaultLeadTime + 14);
       const aiCriticalThreshold = Math.max(14, aiDefaultLeadTime);
       
@@ -13266,9 +13266,9 @@ Respond with ONLY this JSON:
         if (dailyVelocity > 0) {
           if (daysUntilMustOrder < 0) calculatedUrgency = 'critical'; // Past reorder date
           else if (daysOfSupply < aiCriticalThreshold || daysUntilMustOrder < 7) calculatedUrgency = 'critical';
-          else if (daysOfSupply < aiLowThreshold || daysUntilMustOrder < 14) calculatedUrgency = 'reorder';
+          else if (daysOfSupply < aiLowThreshold || daysUntilMustOrder < 14) calculatedUrgency = 'low';
           else if (daysOfSupply <= aiOverstockThreshold) calculatedUrgency = 'healthy';
-          else calculatedUrgency = 'monitor'; // Overstock - just monitor
+          else calculatedUrgency = 'overstock';
         } else if (currentStock === 0) {
           calculatedUrgency = 'critical'; // No stock, no velocity
         }
@@ -13370,7 +13370,7 @@ Respond with ONLY this JSON:
     {
       "sku": "SKU code",
       "name": "Product name",
-      "urgency": "critical" | "reorder" | "monitor" | "healthy",
+      "urgency": "critical" | "low" | "overstock" | "healthy",
       "action": "specific action to take",
       "currentStock": number,
       "daysOfSupply": number,
@@ -25106,7 +25106,7 @@ if (shopifySkuWithShipping.length > 0) {
                         <td className="text-right px-2 py-2 text-slate-400 text-xs">{item.stockoutDate ? (() => { const d = new Date(item.stockoutDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>
                         <td className={`text-right px-2 py-2 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? (() => { const d = new Date(item.reorderByDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>
                         <td className="text-center px-2 py-2" title={`${item.demandClass !== 'unknown' ? `Demand: ${item.demandClass} (CV=${item.cv})` : ''} ${item.safetyStock > 0 ? `| SS: ${item.safetyStock}` : ''} ${item.seasonalFactor && item.seasonalFactor !== 1 ? `| Season: ${item.seasonalFactor}x` : ''}`}>
-                          <HealthBadge health={item.aiUrgency || item.health} />
+                          <HealthBadge health={item.health} />
                           {item.demandClass && item.demandClass !== 'unknown' && (
                             <span className={`block text-[9px] mt-0.5 ${item.demandClass === 'smooth' ? 'text-emerald-500' : item.demandClass === 'lumpy' ? 'text-amber-500' : 'text-rose-500'}`}>
                               {item.demandClass}
@@ -32394,16 +32394,16 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           {aiForecastModule.inventory.recommendations.map((rec, i) => (
                             <div key={i} className={`p-3 rounded-lg ${
                               rec.urgency === 'critical' ? 'bg-rose-900/30 border border-rose-500/30' :
-                              rec.urgency === 'reorder' ? 'bg-amber-900/30 border border-amber-500/30' :
-                              rec.urgency === 'monitor' ? 'bg-cyan-900/20 border border-cyan-500/20' :
+                              rec.urgency === 'low' ? 'bg-amber-900/30 border border-amber-500/30' :
+                              rec.urgency === 'overstock' ? 'bg-cyan-900/20 border border-cyan-500/20' :
                               'bg-emerald-900/20 border border-emerald-500/20'
                             }`}>
                               <div className="flex items-center justify-between mb-1">
                                 <span className="text-white font-medium">{savedProductNames[rec.sku] || rec.name || rec.sku}</span>
                                 <span className={`text-xs px-2 py-1 rounded ${
                                   rec.urgency === 'critical' ? 'bg-rose-500 text-white' :
-                                  rec.urgency === 'reorder' ? 'bg-amber-500 text-white' :
-                                  rec.urgency === 'monitor' ? 'bg-cyan-500/50 text-cyan-100' :
+                                  rec.urgency === 'low' ? 'bg-amber-500 text-white' :
+                                  rec.urgency === 'overstock' ? 'bg-cyan-500/50 text-cyan-100' :
                                   'bg-emerald-500/50 text-emerald-100'
                                 }`}>{rec.urgency}</span>
                               </div>
@@ -37435,7 +37435,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 <div className={`bg-gradient-to-br ${netCashFlow >= 0 ? 'from-blue-900/40 to-blue-800/20 border-blue-500/30' : 'from-amber-900/40 to-amber-800/20 border-amber-500/30'} rounded-xl border p-5 group relative`} title="Income minus Expenses. This is cash flow, NOT profit. Income reflects marketplace payouts (after marketplace fees) but does NOT deduct COGS. Positive = more cash coming in than going out.">
                   <p className={`${netCashFlow >= 0 ? 'text-blue-400' : 'text-amber-400'} text-sm font-medium mb-1 flex items-center gap-1`}>Net Cash Flow <HelpCircle className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" /></p>
                   <p className="text-2xl font-bold text-white">{formatCurrency(netCashFlow)}</p>
-                  <p className="text-slate-400 text-xs mt-1">{((netCashFlow / (totalIncome || 1)) * 100).toFixed(1)}% margin</p>
+                  <p className="text-slate-400 text-xs mt-1">{totalIncome > 0 ? `${((netCashFlow / totalIncome) * 100).toFixed(1)}% margin` : (totalExpenses > 0 ? 'No income yet' : 'No transactions')}</p>
                 </div>
                 <div className="bg-gradient-to-br from-violet-900/40 to-violet-800/20 rounded-xl border border-violet-500/30 p-5 group relative" title="Average monthly net cash flow (income - expenses) across months in the selected period. Represents average monthly cash surplus/deficit based on bank transactions.">
                   <p className="text-violet-400 text-sm font-medium mb-1 flex items-center gap-1">Avg Monthly Profit <HelpCircle className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" /></p>
