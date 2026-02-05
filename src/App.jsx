@@ -7835,6 +7835,18 @@ const savePeriods = async (d) => {
     const items = [];
     let critical = 0, low = 0, healthy = 0, overstock = 0;
     
+    // Dynamic overstock threshold based on reorder cycle
+    // If you order 22 weeks at a time, having 120 days on hand is normal, not overstock
+    const globalLeadTimeDays = leadTimeSettings.defaultLeadTimeDays || 14;
+    const globalMinOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
+    const globalReorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
+    const overstockThreshold = Math.max(90, (globalMinOrderWeeks * 7) + globalLeadTimeDays);
+    // Also make "low" threshold relative: at least lead time + some buffer
+    const lowThreshold = Math.max(30, globalLeadTimeDays + 14);
+    const criticalThreshold = Math.max(14, globalLeadTimeDays);
+    
+    console.log('Inventory thresholds (dynamic):', { criticalThreshold, lowThreshold, overstockThreshold, globalMinOrderWeeks, globalLeadTimeDays });
+    
     // DEBUG: Log first 3 items velocity matching attempt
     let debugCount = 0;
 
@@ -7908,9 +7920,9 @@ const savePeriods = async (d) => {
       const dos = correctedVel > 0 ? Math.round((totalQty / correctedVel) * 7) : 999;
       let health = 'unknown';
       if (totalVel > 0) {
-        if (dos < 14) { health = 'critical'; critical++; }
-        else if (dos < 30) { health = 'low'; low++; }
-        else if (dos <= 90) { health = 'healthy'; healthy++; }
+        if (dos < criticalThreshold) { health = 'critical'; critical++; }
+        else if (dos < lowThreshold) { health = 'low'; low++; }
+        else if (dos <= overstockThreshold) { health = 'healthy'; healthy++; }
         else { health = 'overstock'; overstock++; }
       }
       
@@ -8092,16 +8104,16 @@ const savePeriods = async (d) => {
       }
       item.stockoutRisk = stockoutRisk;
       
-      // Refined health status using industry thresholds aligned with AI forecast
+      // Refined health status using dynamic thresholds aligned with reorder cycle + AI forecast
       // Uses reorder point and safety stock for classification, not just days of supply
       if (item.weeklyVel > 0) {
         if (item.daysUntilMustOrder !== null && item.daysUntilMustOrder < 0) {
           item.health = 'critical'; // Past reorder date
-        } else if (item.daysOfSupply < 14 || (item.daysUntilMustOrder !== null && item.daysUntilMustOrder < 7)) {
+        } else if (item.daysOfSupply < criticalThreshold || (item.daysUntilMustOrder !== null && item.daysUntilMustOrder < 7)) {
           item.health = 'critical';
-        } else if (item.daysOfSupply < 30 || (item.daysUntilMustOrder !== null && item.daysUntilMustOrder < 14)) {
+        } else if (item.daysOfSupply < lowThreshold || (item.daysUntilMustOrder !== null && item.daysUntilMustOrder < 14)) {
           item.health = 'low';
-        } else if (item.daysOfSupply <= 90) {
+        } else if (item.daysOfSupply <= overstockThreshold) {
           item.health = 'healthy';
         } else {
           item.health = 'overstock';
@@ -8183,6 +8195,8 @@ const savePeriods = async (d) => {
         healthy, 
         overstock, 
         skuCount: items.length,
+        // Dynamic thresholds (based on reorder settings)
+        thresholds: { critical: criticalThreshold, low: lowThreshold, overstock: overstockThreshold },
         // Supply Chain KPIs
         avgTurnover: Math.round(avgTurnover * 10) / 10,
         totalCarryingCost: Math.round(totalCarryingCost),
@@ -11474,6 +11488,10 @@ const savePeriods = async (d) => {
                     const today = new Date();
                     const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
                     const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
+                    const liveLeadTimeDays = leadTimeSettings.defaultLeadTimeDays || 14;
+                    const liveOverstockThreshold = Math.max(90, (minOrderWeeks * 7) + liveLeadTimeDays);
+                    const liveLowThreshold = Math.max(30, liveLeadTimeDays + 14);
+                    const liveCriticalThreshold = Math.max(14, liveLeadTimeDays);
                     
                     const normalizeSkuKey = (sku) => (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
                     const packiyoLookup = {};
@@ -11536,12 +11554,12 @@ const savePeriods = async (d) => {
                         reorderByDate = reorderBy.toISOString().split('T')[0];
                       }
                       
-                      // Determine health status
+                      // Determine health status (dynamic thresholds based on reorder cycle)
                       let health = 'unknown';
                       if (rawWeeklyVel > 0) {
-                        if (dos < 14) health = 'critical';
-                        else if (dos < 30) health = 'low';
-                        else if (dos <= 90) health = 'healthy';
+                        if (dos < liveCriticalThreshold) health = 'critical';
+                        else if (dos < liveLowThreshold) health = 'low';
+                        else if (dos <= liveOverstockThreshold) health = 'healthy';
                         else health = 'overstock';
                       }
                       
@@ -13200,6 +13218,10 @@ Respond with ONLY this JSON:
       // Get reorder settings
       const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60; // Want shipment to arrive when stock = this
       const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22; // Minimum order size (5 months ≈ 22 weeks)
+      const aiDefaultLeadTime = leadTimeSettings.defaultLeadTimeDays || 14;
+      const aiOverstockThreshold = Math.max(90, (minOrderWeeks * 7) + aiDefaultLeadTime);
+      const aiLowThreshold = Math.max(30, aiDefaultLeadTime + 14);
+      const aiCriticalThreshold = Math.max(14, aiDefaultLeadTime);
       
       // Pre-calculated stockout dates and reorder points already exist on each item
       // RECALCULATE for days elapsed since snapshot (same as inventory page does)
@@ -13237,13 +13259,13 @@ Respond with ONLY this JSON:
         const suggestedOrderQty = item.suggestedOrderQty || Math.ceil(weeklyVelocity * minOrderWeeks);
         
         // Use pre-calculated urgency or derive consistently with inventory page
-        // Match the inventory page health logic: uses daysOfSupply + daysUntilMustOrder
+        // Match the inventory page health logic: dynamic thresholds based on reorder cycle
         let calculatedUrgency = 'healthy';
         if (dailyVelocity > 0) {
           if (daysUntilMustOrder < 0) calculatedUrgency = 'critical'; // Past reorder date
-          else if (daysOfSupply < 14 || daysUntilMustOrder < 7) calculatedUrgency = 'critical';
-          else if (daysOfSupply < 30 || daysUntilMustOrder < 14) calculatedUrgency = 'reorder';
-          else if (daysOfSupply <= 90) calculatedUrgency = 'healthy';
+          else if (daysOfSupply < aiCriticalThreshold || daysUntilMustOrder < 7) calculatedUrgency = 'critical';
+          else if (daysOfSupply < aiLowThreshold || daysUntilMustOrder < 14) calculatedUrgency = 'reorder';
+          else if (daysOfSupply <= aiOverstockThreshold) calculatedUrgency = 'healthy';
           else calculatedUrgency = 'monitor'; // Overstock - just monitor
         } else if (currentStock === 0) {
           calculatedUrgency = 'critical'; // No stock, no velocity
@@ -13308,11 +13330,11 @@ Respond with ONLY this JSON:
 - cv = coefficient of variation (demand variability: smooth <0.5, lumpy 0.5-1.0, intermittent >1.0)
 - suggestedOrderQty already includes safety stock buffer
 
-## URGENCY LEVELS (aligned with inventory page - based on daysOfSupply AND daysUntilMustOrder):
-- CRITICAL: daysUntilMustOrder < 0 (overdue!) OR daysOfSupply < 14 OR daysUntilMustOrder < 7
-- REORDER: daysOfSupply < 30 OR daysUntilMustOrder < 14 (maps to "Low" on inventory page)
-- MONITOR: daysOfSupply > 90 (overstock - excess capital tied up)
-- HEALTHY: daysOfSupply 30-90 AND daysUntilMustOrder >= 14
+## URGENCY LEVELS (dynamic thresholds based on reorder cycle — minOrderWeeks=${minOrderWeeks}, leadTime=${aiDefaultLeadTime}d):
+- CRITICAL: daysUntilMustOrder < 0 (overdue!) OR daysOfSupply < ${aiCriticalThreshold} OR daysUntilMustOrder < 7
+- REORDER: daysOfSupply < ${aiLowThreshold} OR daysUntilMustOrder < 14 (maps to "Low" on inventory page)
+- HEALTHY: daysOfSupply ${aiLowThreshold}-${aiOverstockThreshold} AND daysUntilMustOrder >= 14
+- MONITOR: daysOfSupply > ${aiOverstockThreshold} (overstock - excess capital tied up)
 
 ## SUPPLY CHAIN METRICS (per SKU):
 - abcClass: A (top 80% revenue), B (next 15%), C (bottom 5%) — prioritize A-class items
@@ -24125,6 +24147,10 @@ if (shopifySkuWithShipping.length > 0) {
       // Recalculate stockout and reorder dates from TODAY
       const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
       const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
+      const uiMinOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
+      const uiOverstockThreshold = Math.max(90, (uiMinOrderWeeks * 7) + leadTimeDays);
+      const uiLowThreshold = Math.max(30, leadTimeDays + 14);
+      const uiCriticalThreshold = Math.max(14, leadTimeDays);
       
       let newStockoutDate = null;
       let newReorderByDate = null;
@@ -24141,21 +24167,16 @@ if (shopifySkuWithShipping.length > 0) {
         newReorderByDate = reorderBy.toISOString().split('T')[0];
       }
       
-      // Recalculate health using BOTH daysOfSupply AND daysUntilMustOrder
-      // Aligned with snapshot build logic and display labels:
-      //   Critical: <14 days supply OR past reorder date
-      //   Low: 14-30 days supply OR need to order within 2 weeks
-      //   Healthy: 30-90 days supply
-      //   Overstock: >90 days supply
+      // Recalculate health using dynamic thresholds based on reorder cycle
       let newHealth = 'unknown';
       if (weeklyVel > 0) {
         if (newDaysUntilMustOrder !== null && newDaysUntilMustOrder < 0) {
           newHealth = 'critical'; // Past reorder date!
-        } else if (newDaysOfSupply < 14 || (newDaysUntilMustOrder !== null && newDaysUntilMustOrder < 7)) {
+        } else if (newDaysOfSupply < uiCriticalThreshold || (newDaysUntilMustOrder !== null && newDaysUntilMustOrder < 7)) {
           newHealth = 'critical';
-        } else if (newDaysOfSupply < 30 || (newDaysUntilMustOrder !== null && newDaysUntilMustOrder < 14)) {
+        } else if (newDaysOfSupply < uiLowThreshold || (newDaysUntilMustOrder !== null && newDaysUntilMustOrder < 14)) {
           newHealth = 'low';
-        } else if (newDaysOfSupply <= 90) {
+        } else if (newDaysOfSupply <= uiOverstockThreshold) {
           newHealth = 'healthy';
         } else {
           newHealth = 'overstock';
@@ -24332,6 +24353,17 @@ if (shopifySkuWithShipping.length > 0) {
       })(),
       abcCounts: items.reduce((acc, i) => { if (i.abcClass) acc[i.abcClass] = (acc[i.abcClass] || 0) + 1; return acc; }, {}) || summary.abcCounts || {},
     };
+    
+    // Dynamic thresholds for display in tooltips and labels
+    const displayThresholds = (() => {
+      const lt = leadTimeSettings.defaultLeadTimeDays || 14;
+      const mow = leadTimeSettings.minOrderWeeks || 22;
+      return {
+        critical: Math.max(14, lt),
+        low: Math.max(30, lt + 14),
+        overstock: Math.max(90, (mow * 7) + lt),
+      };
+    })();
     
     // Get SKU settings helper
     const getSkuSettings = (sku) => leadTimeSettings.skuSettings?.[sku] || {};
@@ -24685,10 +24717,10 @@ if (shopifySkuWithShipping.length > 0) {
             </div>
           )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4 cursor-help" title="SKUs with less than 14 days of supply remaining, or whose reorder date has already passed. These need immediate attention to avoid stockouts."><div className="flex items-center gap-2 mb-2"><AlertCircle className="w-5 h-5 text-rose-400" /><span className="text-rose-400 font-medium">Critical</span><HelpCircle className="w-3 h-3 text-rose-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.critical}</p><p className="text-xs text-slate-400">&lt;14 days supply</p></div>
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 cursor-help" title="SKUs with 14-30 days of supply remaining. You should start planning a reorder now to avoid running low before your shipment arrives."><div className="flex items-center gap-2 mb-2"><AlertTriangle className="w-5 h-5 text-amber-400" /><span className="text-amber-400 font-medium">Low</span><HelpCircle className="w-3 h-3 text-amber-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.low}</p><p className="text-xs text-slate-400">14-30 days supply</p></div>
-            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 cursor-help" title="SKUs with 30-90 days of supply. These are well-stocked and don't need immediate attention. Stock levels are within optimal range for most e-commerce operations."><div className="flex items-center gap-2 mb-2"><CheckCircle className="w-5 h-5 text-emerald-400" /><span className="text-emerald-400 font-medium">Healthy</span><HelpCircle className="w-3 h-3 text-emerald-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.healthy}</p><p className="text-xs text-slate-400">30-90 days supply</p></div>
-            <div className="bg-violet-500/10 border border-violet-500/30 rounded-2xl p-4 cursor-help" title="SKUs with over 90 days of supply. While not urgent, excess inventory ties up capital and incurs carrying costs. Consider slowing reorders or running promotions to reduce."><div className="flex items-center gap-2 mb-2"><Clock className="w-5 h-5 text-violet-400" /><span className="text-violet-400 font-medium">Overstock</span><HelpCircle className="w-3 h-3 text-violet-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.overstock}</p><p className="text-xs text-slate-400">&gt;90 days supply</p></div>
+            <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4 cursor-help" title={`SKUs with less than ${displayThresholds.critical} days of supply remaining, or whose reorder date has already passed. These need immediate attention to avoid stockouts.`}><div className="flex items-center gap-2 mb-2"><AlertCircle className="w-5 h-5 text-rose-400" /><span className="text-rose-400 font-medium">Critical</span><HelpCircle className="w-3 h-3 text-rose-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.critical}</p><p className="text-xs text-slate-400">&lt;{displayThresholds.critical} days supply</p></div>
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 cursor-help" title={`SKUs with ${displayThresholds.critical}-${displayThresholds.low} days of supply remaining. You should start planning a reorder now to avoid running low before your shipment arrives.`}><div className="flex items-center gap-2 mb-2"><AlertTriangle className="w-5 h-5 text-amber-400" /><span className="text-amber-400 font-medium">Low</span><HelpCircle className="w-3 h-3 text-amber-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.low}</p><p className="text-xs text-slate-400">{displayThresholds.critical}-{displayThresholds.low} days supply</p></div>
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 cursor-help" title={`SKUs with ${displayThresholds.low}-${displayThresholds.overstock} days of supply. These are well-stocked and don't need immediate attention. Threshold is based on your ${leadTimeSettings.minOrderWeeks || 22}-week minimum order cycle + ${leadTimeSettings.defaultLeadTimeDays || 14}-day lead time.`}><div className="flex items-center gap-2 mb-2"><CheckCircle className="w-5 h-5 text-emerald-400" /><span className="text-emerald-400 font-medium">Healthy</span><HelpCircle className="w-3 h-3 text-emerald-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.healthy}</p><p className="text-xs text-slate-400">{displayThresholds.low}-{displayThresholds.overstock} days supply</p></div>
+            <div className="bg-violet-500/10 border border-violet-500/30 rounded-2xl p-4 cursor-help" title={`SKUs with over ${displayThresholds.overstock} days of supply. This exceeds your full reorder cycle (${leadTimeSettings.minOrderWeeks || 22} weeks + ${leadTimeSettings.defaultLeadTimeDays || 14}-day lead time). Excess inventory ties up capital. Consider slowing reorders or running promotions.`}><div className="flex items-center gap-2 mb-2"><Clock className="w-5 h-5 text-violet-400" /><span className="text-violet-400 font-medium">Overstock</span><HelpCircle className="w-3 h-3 text-violet-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.overstock}</p><p className="text-xs text-slate-400">&gt;{displayThresholds.overstock} days supply</p></div>
           </div>
           
           {/* Supply Chain KPIs Dashboard */}
