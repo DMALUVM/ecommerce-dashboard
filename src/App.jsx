@@ -8088,7 +8088,7 @@ const savePeriods = async (d) => {
     });
     
     // Recalculate status counts after refined classification
-    let critical = 0, low = 0, healthy = 0, overstock = 0;
+    critical = 0; low = 0; healthy = 0; overstock = 0;
     items.forEach(item => {
       if (item.health === 'critical') critical++;
       else if (item.health === 'low') low++;
