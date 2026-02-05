@@ -313,8 +313,12 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
       if (txnType === 'Deposit' && amount > 0) isIncome = true;
       else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) isExpense = true;
       else if (txnType === 'Credit Card Payment' && amount < 0) isExpense = true; // Cash leaving to pay card
-      else if (txnType === 'Transfer' && amount > 0) isIncome = true;
-      else if (txnType === 'Transfer' && amount < 0) isExpense = true;
+      else if (txnType === 'Transfer') {
+        // Transfers between own accounts are NOT income or expense
+        // They just move money around (checking ↔ savings, etc.)
+        // Skip them entirely to avoid inflating totals
+        continue;
+      }
       else if (txnType === 'Payroll Check') isExpense = true;
       else if (txnType === 'Bill Payment' && amount < 0) isExpense = true;
       else if (amount > 0 && !isIncome) isIncome = true; // Catch-all: positive = income
@@ -1333,6 +1337,7 @@ const [isAuthReady, setIsAuthReady] = useState(false);
 const lastSavedRef = useRef(0);
 const saveTimerRef = useRef(null);
 const isLoadingDataRef = useRef(false);
+const skuDemandStatsRef = useRef({}); // Safety stock, seasonality, CV per SKU
 
 // Conflict detection for multi-device sync
 const [loadedCloudVersion, setLoadedCloudVersion] = useState(null); // Timestamp when we loaded from cloud
@@ -7307,6 +7312,139 @@ const savePeriods = async (d) => {
     
     const hasWeeklyVelocityData = Object.keys(amazonSkuVelocity).length > 0 || Object.keys(shopifySkuVelocity).length > 0;
 
+    // ===== INDUSTRY-STANDARD ENHANCEMENTS: Safety Stock, Seasonality, CV =====
+    // 1. Safety Stock = Z × σ_weekly × √(lead_time_weeks) — protects against demand spikes
+    // 2. Seasonality Index = monthly_avg / overall_avg — adjusts velocity for seasonal patterns
+    // 3. Coefficient of Variation (CV) = σ / μ — classifies demand pattern
+    const skuDemandStats = {}; // { sku: { weeklyDemands: [], monthlyDemands: {}, safetyStock, seasonalIndex, cv, demandClass } }
+    const Z_SERVICE_LEVEL = 1.65; // 95% service level (industry standard for DTC)
+    
+    try {
+      // Build weekly demand series per SKU from all available data
+      const weeklySkuDemand = {}; // { sku: { 'YYYY-WW': units } }
+      const monthlySkuDemand = {}; // { sku: { 'YYYY-MM': units } }
+      
+      // Use daily data to build weekly/monthly aggregates
+      const allDateKeys = Object.keys(allDaysData).sort();
+      allDateKeys.forEach(dateKey => {
+        const day = allDaysData[dateKey];
+        const weekNum = (() => {
+          const d = new Date(dateKey);
+          const oneJan = new Date(d.getFullYear(), 0, 1);
+          return `${d.getFullYear()}-W${String(Math.ceil((((d - oneJan) / 86400000) + oneJan.getDay() + 1) / 7)).padStart(2, '0')}`;
+        })();
+        const monthKey = dateKey.substring(0, 7);
+        
+        // Process both channels
+        ['shopify', 'amazon'].forEach(channel => {
+          const skuData = day?.[channel]?.skuData;
+          const skuList = Array.isArray(skuData) ? skuData : Object.values(skuData || {});
+          skuList.forEach(item => {
+            if (!item.sku) return;
+            const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
+            const units = item.unitsSold || item.units || 0;
+            
+            if (!weeklySkuDemand[normalizedSku]) weeklySkuDemand[normalizedSku] = {};
+            if (!weeklySkuDemand[normalizedSku][weekNum]) weeklySkuDemand[normalizedSku][weekNum] = 0;
+            weeklySkuDemand[normalizedSku][weekNum] += units;
+            
+            if (!monthlySkuDemand[normalizedSku]) monthlySkuDemand[normalizedSku] = {};
+            if (!monthlySkuDemand[normalizedSku][monthKey]) monthlySkuDemand[normalizedSku][monthKey] = 0;
+            monthlySkuDemand[normalizedSku][monthKey] += units;
+          });
+        });
+      });
+      
+      // Calculate stats for each SKU
+      Object.entries(weeklySkuDemand).forEach(([sku, weeklyData]) => {
+        const weeklyValues = Object.values(weeklyData);
+        const n = weeklyValues.length;
+        if (n < 2) return; // Need at least 2 weeks for meaningful stats
+        
+        // Mean weekly demand
+        const mean = weeklyValues.reduce((s, v) => s + v, 0) / n;
+        
+        // Standard deviation of weekly demand
+        const variance = weeklyValues.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / (n - 1);
+        const stdDev = Math.sqrt(variance);
+        
+        // CV = σ / μ (coefficient of variation)
+        const cv = mean > 0 ? stdDev / mean : 0;
+        
+        // Demand classification based on CV
+        // Industry standard: Syntetos-Boylan classification
+        let demandClass = 'smooth'; // CV < 0.5
+        if (cv >= 1.0) demandClass = 'intermittent'; // Very erratic
+        else if (cv >= 0.5) demandClass = 'lumpy'; // Moderate variability
+        
+        // Safety Stock = Z × σ × √(LT_weeks)
+        // Lead time in weeks (default 14 days = 2 weeks, will be overridden per-SKU later)
+        const defaultLeadTimeWeeks = (leadTimeSettings.defaultLeadTimeDays || 14) / 7;
+        const safetyStock = Math.ceil(Z_SERVICE_LEVEL * stdDev * Math.sqrt(defaultLeadTimeWeeks));
+        
+        // Seasonality: Build monthly index
+        // Compare each calendar month's avg demand to overall monthly average
+        const monthlyData = monthlySkuDemand[sku] || {};
+        const monthlyValues = Object.values(monthlyData);
+        const overallMonthlyAvg = monthlyValues.length > 0 
+          ? monthlyValues.reduce((s, v) => s + v, 0) / monthlyValues.length 
+          : 0;
+        
+        // Group by calendar month (1-12) across years
+        const calendarMonthTotals = {};
+        const calendarMonthCounts = {};
+        Object.entries(monthlyData).forEach(([monthKey, units]) => {
+          const calMonth = parseInt(monthKey.split('-')[1]); // 1-12
+          if (!calendarMonthTotals[calMonth]) { calendarMonthTotals[calMonth] = 0; calendarMonthCounts[calMonth] = 0; }
+          calendarMonthTotals[calMonth] += units;
+          calendarMonthCounts[calMonth]++;
+        });
+        
+        // Build seasonal index for each calendar month
+        const seasonalIndex = {};
+        for (let m = 1; m <= 12; m++) {
+          if (calendarMonthCounts[m] && overallMonthlyAvg > 0) {
+            const monthAvg = calendarMonthTotals[m] / calendarMonthCounts[m];
+            seasonalIndex[m] = monthAvg / overallMonthlyAvg;
+          } else {
+            seasonalIndex[m] = 1.0; // Default: no seasonal adjustment
+          }
+        }
+        
+        // Current month's seasonal factor
+        const currentMonth = new Date().getMonth() + 1; // 1-12
+        const currentSeasonalFactor = seasonalIndex[currentMonth] || 1.0;
+        
+        skuDemandStats[sku] = {
+          weeklyMean: mean,
+          weeklyStdDev: stdDev,
+          cv: Math.round(cv * 100) / 100, // Round to 2 decimals
+          demandClass,
+          safetyStock,
+          seasonalIndex,
+          currentSeasonalFactor: Math.round(currentSeasonalFactor * 100) / 100,
+          weeksOfData: n,
+          monthsOfData: monthlyValues.length,
+        };
+      });
+      
+      console.log('=== DEMAND STATS CALCULATED ===');
+      console.log('SKUs with demand stats:', Object.keys(skuDemandStats).length);
+      const demandClasses = Object.values(skuDemandStats).reduce((acc, s) => { acc[s.demandClass] = (acc[s.demandClass] || 0) + 1; return acc; }, {});
+      console.log('Demand classification:', demandClasses);
+      // Show a sample
+      const sampleSku = Object.keys(skuDemandStats)[0];
+      if (sampleSku) {
+        const s = skuDemandStats[sampleSku];
+        console.log(`Sample ${sampleSku}: CV=${s.cv}, Class=${s.demandClass}, SafetyStock=${s.safetyStock}, SeasonalFactor=${s.currentSeasonalFactor}`);
+      }
+    } catch (statsErr) {
+      console.warn('Demand stats calculation error:', statsErr);
+    }
+    
+    // Store to ref so Packiyo sync can access it
+    skuDemandStatsRef.current = skuDemandStats;
+
     // ===== AMAZON FBA/AWD INVENTORY - Use SP-API if connected, otherwise fall back to file upload =====
     const amzInv = {};
     let amzTotal = 0, amzValue = 0, amzInbound = 0;
@@ -7712,6 +7850,24 @@ const savePeriods = async (d) => {
       const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
       const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
       
+      // Get demand stats for this SKU (safety stock, seasonality, CV)
+      const normalizedSkuForStats = sku.replace(/shop$/i, '').toUpperCase();
+      const demandStats = skuDemandStats[normalizedSkuForStats] || null;
+      
+      // Per-SKU safety stock with actual lead time
+      const leadTimeWeeks = leadTimeDays / 7;
+      const safetyStock = demandStats 
+        ? Math.ceil(Z_SERVICE_LEVEL * demandStats.weeklyStdDev * Math.sqrt(leadTimeWeeks))
+        : 0;
+      
+      // Seasonally-adjusted velocity (current month's factor)
+      const seasonalFactor = demandStats?.currentSeasonalFactor || 1.0;
+      const seasonalVel = correctedVel * seasonalFactor;
+      
+      // Reorder point = (daily velocity × lead time) + safety stock
+      const dailyVelForReorder = seasonalVel / 7;
+      const reorderPoint = Math.ceil((dailyVelForReorder * leadTimeDays) + safetyStock);
+      
       let stockoutDate = null;
       let reorderByDate = null;
       let daysUntilMustOrder = null;
@@ -7723,16 +7879,16 @@ const savePeriods = async (d) => {
         stockout.setDate(stockout.getDate() + dos);
         stockoutDate = stockout.toISOString().split('T')[0];
         
-        // Reorder date = when we need to place order so shipment arrives at target buffer
-        // We want shipment to arrive when stock = reorderTriggerDays
-        // So order when: daysOfSupply = reorderTriggerDays + leadTimeDays
-        daysUntilMustOrder = dos - reorderTriggerDays - leadTimeDays;
+        // Days until must order now accounts for safety stock
+        // Order when: remaining stock = reorderPoint (leadTime demand + safety stock)
+        const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : reorderTriggerDays;
+        daysUntilMustOrder = dos - reorderPointDays;
         const reorderBy = new Date(today);
         reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
         reorderByDate = reorderBy.toISOString().split('T')[0];
         
-        // Suggested order = minOrderWeeks of supply (use corrected velocity)
-        suggestedOrderQty = Math.ceil(correctedVel * minOrderWeeks);
+        // Suggested order = minOrderWeeks of supply + safety stock (use corrected velocity)
+        suggestedOrderQty = Math.ceil(correctedVel * minOrderWeeks) + safetyStock;
       }
       
       items.push({ 
@@ -7758,7 +7914,15 @@ const savePeriods = async (d) => {
         suggestedOrderQty,
         leadTimeDays,
         amazonInbound: a.inbound || 0, 
-        threeplInbound: t.inbound || 0 
+        threeplInbound: t.inbound || 0,
+        // Industry-standard demand metrics
+        safetyStock,
+        reorderPoint,
+        seasonalFactor,
+        seasonalVel: Math.round(seasonalVel * 10) / 10,
+        cv: demandStats?.cv || 0,
+        demandClass: demandStats?.demandClass || 'unknown',
+        weeksOfData: demandStats?.weeksOfData || 0,
       });
     });
     
@@ -10922,6 +11086,313 @@ const savePeriods = async (d) => {
               setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               results.push({ service: 'Packiyo', success: true, skus: data.summary?.skuCount || data.products?.length || 0 });
               console.log('Packiyo auto-sync complete:', data.summary?.skuCount || data.products?.length, 'SKUs');
+              
+              // ========== AUTO-SYNC: VELOCITY CALC + INVENTORY UPDATE ==========
+              // This mirrors the manual Packiyo sync's processing so velocities and
+              // DOS/stockout dates are recalculated on auto-sync too
+              try {
+                console.log('=== AUTO-SYNC: Running velocity calc + inventory update ===');
+                
+                // Build velocity lookups from daily data (weighted moving average)
+                const autoAmazonVelLookup = {};
+                const autoShopifyVelLookup = {};
+                const autoVelocityTrends = {};
+                
+                const storeAutoVelocity = (lookup, sku, velocity) => {
+                  const baseSku = sku.replace(/shop$/i, '').toUpperCase();
+                  [sku, sku.toLowerCase(), sku.toUpperCase(), baseSku, baseSku.toLowerCase(),
+                   baseSku + 'Shop', baseSku.toLowerCase() + 'shop', baseSku + 'SHOP'].forEach(key => {
+                    if (!lookup[key]) lookup[key] = 0;
+                    lookup[key] = Math.max(lookup[key], velocity);
+                  });
+                };
+                
+                if (Object.keys(allDaysData).length > 0) {
+                  const allDates = Object.keys(allDaysData).sort().reverse();
+                  const last28Days = allDates.slice(0, 28);
+                  const skuDailyUnits = {};
+                  
+                  last28Days.forEach((date, dayIndex) => {
+                    const day = allDaysData[date];
+                    const isRecent = dayIndex < 14;
+                    
+                    // Shopify SKU data
+                    const shopifySkuData = day?.shopify?.skuData;
+                    const shopifyList = Array.isArray(shopifySkuData) ? shopifySkuData : Object.values(shopifySkuData || {});
+                    shopifyList.forEach(item => {
+                      if (!item.sku) return;
+                      const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
+                      const units = item.unitsSold || item.units || 0;
+                      if (!skuDailyUnits[normalizedSku]) {
+                        skuDailyUnits[normalizedSku] = { recentShopify: 0, priorShopify: 0, recentAmazon: 0, priorAmazon: 0 };
+                      }
+                      if (isRecent) skuDailyUnits[normalizedSku].recentShopify += units;
+                      else skuDailyUnits[normalizedSku].priorShopify += units;
+                    });
+                    
+                    // Amazon SKU data
+                    const amazonSkuData = day?.amazon?.skuData;
+                    const amazonList = Array.isArray(amazonSkuData) ? amazonSkuData : Object.values(amazonSkuData || {});
+                    amazonList.forEach(item => {
+                      if (!item.sku) return;
+                      const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
+                      const units = item.unitsSold || item.units || 0;
+                      if (!skuDailyUnits[normalizedSku]) {
+                        skuDailyUnits[normalizedSku] = { recentShopify: 0, priorShopify: 0, recentAmazon: 0, priorAmazon: 0 };
+                      }
+                      if (isRecent) skuDailyUnits[normalizedSku].recentAmazon += units;
+                      else skuDailyUnits[normalizedSku].priorAmazon += units;
+                    });
+                  });
+                  
+                  // Calculate weighted velocity (recent 2x weight)
+                  const weeksEquiv = 6; // 3 periods × 2 weeks
+                  Object.entries(skuDailyUnits).forEach(([sku, d]) => {
+                    const shopVel = ((d.recentShopify * 2) + d.priorShopify) / weeksEquiv;
+                    const amzVel = ((d.recentAmazon * 2) + d.priorAmazon) / weeksEquiv;
+                    storeAutoVelocity(autoShopifyVelLookup, sku, shopVel);
+                    storeAutoVelocity(autoAmazonVelLookup, sku, amzVel);
+                    
+                    const recentWeeklyShop = d.recentShopify / 2;
+                    const priorWeeklyShop = d.priorShopify / 2;
+                    const recentWeeklyAmz = d.recentAmazon / 2;
+                    const priorWeeklyAmz = d.priorAmazon / 2;
+                    const shopTrend = priorWeeklyShop > 0 ? ((recentWeeklyShop - priorWeeklyShop) / priorWeeklyShop) : 0;
+                    const amzTrend = priorWeeklyAmz > 0 ? ((recentWeeklyAmz - priorWeeklyAmz) / priorWeeklyAmz) : 0;
+                    autoVelocityTrends[sku] = { totalTrend: Math.round(((shopTrend + amzTrend) / 2) * 100) };
+                  });
+                  
+                  console.log('Auto-sync velocity: calculated for', Object.keys(skuDailyUnits).length, 'SKUs from', last28Days.length, 'days');
+                }
+                
+                // Weekly supplement for slow-moving SKUs
+                const sortedWeeks = Object.keys(allWeeksData).sort();
+                if (sortedWeeks.length > 0) {
+                  let supplementCount = 0;
+                  const weeklyShopVel = {};
+                  const weeklyAmzVel = {};
+                  
+                  sortedWeeks.forEach(w => {
+                    const weekData = allWeeksData[w];
+                    if (weekData.shopify?.skuData) {
+                      const skuData = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
+                      skuData.forEach(item => {
+                        if (!item.sku) return;
+                        const normalized = item.sku.replace(/shop$/i, '').toUpperCase();
+                        if (!weeklyShopVel[normalized]) weeklyShopVel[normalized] = 0;
+                        weeklyShopVel[normalized] += (item.unitsSold || item.units || 0);
+                      });
+                    }
+                    if (weekData.amazon?.skuData) {
+                      const skuData = Array.isArray(weekData.amazon.skuData) ? weekData.amazon.skuData : Object.values(weekData.amazon.skuData);
+                      skuData.forEach(item => {
+                        if (!item.sku) return;
+                        const normalized = item.sku.replace(/shop$/i, '').toUpperCase();
+                        if (!weeklyAmzVel[normalized]) weeklyAmzVel[normalized] = 0;
+                        weeklyAmzVel[normalized] += (item.unitsSold || item.units || 0);
+                      });
+                    }
+                  });
+                  
+                  const weekCount = sortedWeeks.length;
+                  Object.entries(weeklyShopVel).forEach(([sku, totalUnits]) => {
+                    const weeklyAvg = totalUnits / weekCount;
+                    if (weeklyAvg > 0 && (!autoShopifyVelLookup[sku] || autoShopifyVelLookup[sku] === 0)) {
+                      storeAutoVelocity(autoShopifyVelLookup, sku, weeklyAvg);
+                      supplementCount++;
+                    }
+                  });
+                  Object.entries(weeklyAmzVel).forEach(([sku, totalUnits]) => {
+                    const weeklyAvg = totalUnits / weekCount;
+                    if (weeklyAvg > 0 && (!autoAmazonVelLookup[sku] || autoAmazonVelLookup[sku] === 0)) {
+                      storeAutoVelocity(autoAmazonVelLookup, sku, weeklyAvg);
+                    }
+                  });
+                  
+                  console.log('Auto-sync weekly supplement:', supplementCount, 'slow-moving SKUs from', weekCount, 'weeks');
+                }
+                
+                // Helper to get velocity with corrections
+                const getAutoVelocity = (sku) => {
+                  if (!sku) return { amazon: 0, shopify: 0, total: 0, corrected: 0, correctionApplied: false, trend: 0 };
+                  const normalizedSku = sku.replace(/shop$/i, '').toUpperCase();
+                  const variants = [sku, sku.toLowerCase(), sku.toUpperCase(), normalizedSku, normalizedSku.toLowerCase(),
+                    normalizedSku + 'Shop', normalizedSku.toLowerCase() + 'shop', normalizedSku + 'SHOP'];
+                  
+                  let amazon = 0, shopify = 0;
+                  for (const v of variants) {
+                    if (autoAmazonVelLookup[v] > 0 && amazon === 0) amazon = autoAmazonVelLookup[v];
+                    if (autoShopifyVelLookup[v] > 0 && shopify === 0) shopify = autoShopifyVelLookup[v];
+                    if (amazon > 0 && shopify > 0) break;
+                  }
+                  
+                  const total = amazon + shopify;
+                  const trend = autoVelocityTrends[normalizedSku]?.totalTrend || 0;
+                  let corrected = total;
+                  let correctionApplied = false;
+                  
+                  if (forecastCorrections?.confidence >= 30 && forecastCorrections?.samplesUsed >= 2) {
+                    if (forecastCorrections.bySku?.[normalizedSku]?.samples >= 2) {
+                      corrected = total * (forecastCorrections.bySku[normalizedSku].units || 1);
+                      correctionApplied = true;
+                    } else if (forecastCorrections.overall?.units) {
+                      corrected = total * forecastCorrections.overall.units;
+                      correctionApplied = true;
+                    }
+                  }
+                  
+                  if (Math.abs(trend) > 20) {
+                    corrected = corrected * (trend > 0 ? 1.1 : 0.9);
+                  }
+                  
+                  return { amazon, shopify, total, corrected, correctionApplied, trend };
+                };
+                
+                // Update inventory snapshot with Packiyo data + recalculated velocities
+                if (data.inventoryBySku) {
+                  const todayStr = new Date().toISOString().split('T')[0];
+                  const targetDate = invHistory[todayStr] ? todayStr :
+                    (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
+                    Object.keys(invHistory).sort().reverse()[0];
+                  
+                  if (targetDate && invHistory[targetDate]) {
+                    const currentSnapshot = invHistory[targetDate];
+                    const packiyoData = data.inventoryBySku;
+                    const today = new Date();
+                    const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
+                    const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
+                    
+                    const normalizeSkuKey = (sku) => (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
+                    const packiyoLookup = {};
+                    Object.entries(packiyoData).forEach(([sku, item]) => {
+                      packiyoLookup[normalizeSkuKey(sku)] = item;
+                    });
+                    
+                    let newTplTotal = 0;
+                    let newTplValue = 0;
+                    let matchedCount = 0;
+                    
+                    const updatedItems = currentSnapshot.items.map(item => {
+                      const normalizedItemSku = normalizeSkuKey(item.sku);
+                      const packiyoItem = packiyoLookup[normalizedItemSku];
+                      const newTplQty = packiyoItem?.quantityOnHand || packiyoItem?.quantity_on_hand || packiyoItem?.totalQty || 0;
+                      const newTplInbound = packiyoItem?.quantityInbound || packiyoItem?.quantity_inbound || 0;
+                      
+                      if (packiyoItem) matchedCount++;
+                      newTplTotal += newTplQty;
+                      newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
+                      
+                      const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
+                      
+                      // Get velocity with corrections
+                      const velocityData = getAutoVelocity(item.sku);
+                      const amzWeeklyVel = velocityData.amazon > 0 ? velocityData.amazon : (item.amzWeeklyVel || 0);
+                      const shopWeeklyVel = velocityData.shopify > 0 ? velocityData.shopify : (item.shopWeeklyVel || 0);
+                      const rawWeeklyVel = amzWeeklyVel + shopWeeklyVel;
+                      const weeklyVel = rawWeeklyVel; // Display raw in UI
+                      const correctedVelForDOS = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
+                      
+                      const dos = correctedVelForDOS > 0 ? Math.round((newTotalQty / correctedVelForDOS) * 7) : 999;
+                      const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
+                      
+                      let stockoutDate = null;
+                      let reorderByDate = null;
+                      let daysUntilMustOrder = null;
+                      
+                      // Get demand stats for safety stock, seasonality, CV
+                      const itemSkuNorm = (item.sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
+                      const demandStats = skuDemandStatsRef.current[itemSkuNorm] || null;
+                      const leadTimeWeeks = leadTimeDays / 7;
+                      const safetyStock = demandStats 
+                        ? Math.ceil(1.65 * demandStats.weeklyStdDev * Math.sqrt(leadTimeWeeks))
+                        : 0;
+                      const seasonalFactor = demandStats?.currentSeasonalFactor || 1.0;
+                      const seasonalVel = correctedVelForDOS * seasonalFactor;
+                      const dailyVelForReorder = seasonalVel / 7;
+                      const reorderPoint = Math.ceil((dailyVelForReorder * leadTimeDays) + safetyStock);
+                      
+                      if (correctedVelForDOS > 0 && dos < 999) {
+                        const stockout = new Date(today);
+                        stockout.setDate(stockout.getDate() + dos);
+                        stockoutDate = stockout.toISOString().split('T')[0];
+                        
+                        const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : reorderTriggerDays;
+                        daysUntilMustOrder = dos - reorderPointDays;
+                        const reorderBy = new Date(today);
+                        reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
+                        reorderByDate = reorderBy.toISOString().split('T')[0];
+                      }
+                      
+                      // Determine health status
+                      let health = 'unknown';
+                      if (rawWeeklyVel > 0) {
+                        if (dos < 14) health = 'critical';
+                        else if (dos < 30) health = 'low';
+                        else if (dos <= 90) health = 'healthy';
+                        else health = 'overstock';
+                      }
+                      
+                      return {
+                        ...item,
+                        threeplQty: newTplQty,
+                        threeplInbound: newTplInbound,
+                        totalQty: newTotalQty,
+                        totalValue: newTotalQty * (item.cost || 0),
+                        weeklyVel,
+                        rawWeeklyVel,
+                        correctedVel: correctedVelForDOS,
+                        amzWeeklyVel,
+                        shopWeeklyVel,
+                        correctionApplied: velocityData.correctionApplied,
+                        velocityTrend: velocityData.trend,
+                        daysOfSupply: dos,
+                        stockoutDate,
+                        reorderByDate,
+                        daysUntilMustOrder,
+                        health,
+                        suggestedOrderQty: correctedVelForDOS > 0 ? Math.ceil(correctedVelForDOS * minOrderWeeks) + safetyStock : 0,
+                        safetyStock,
+                        reorderPoint,
+                        seasonalFactor: Math.round(seasonalFactor * 100) / 100,
+                        seasonalVel: Math.round(seasonalVel * 10) / 10,
+                        cv: demandStats?.cv || 0,
+                        demandClass: demandStats?.demandClass || 'unknown',
+                      };
+                    });
+                    
+                    updatedItems.sort((a, b) => b.totalValue - a.totalValue);
+                    
+                    const updatedSnapshot = {
+                      ...currentSnapshot,
+                      items: updatedItems,
+                      summary: {
+                        ...currentSnapshot.summary,
+                        threeplUnits: newTplTotal,
+                        threeplValue: newTplValue,
+                        totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + newTplTotal + (currentSnapshot.summary?.homeUnits || 0),
+                        totalValue: (currentSnapshot.summary?.amazonValue || 0) + newTplValue + (currentSnapshot.summary?.homeValue || 0),
+                        skuCount: updatedItems.length,
+                      },
+                      sources: {
+                        ...currentSnapshot.sources,
+                        threepl: 'packiyo-auto-sync',
+                        packiyoConnected: true,
+                        lastPackiyoSync: new Date().toISOString(),
+                      },
+                    };
+                    
+                    const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+                    setInvHistory(updatedHistory);
+                    setSelectedInvDate(targetDate);
+                    saveInv(updatedHistory);
+                    
+                    console.log('Auto-sync inventory updated:', matchedCount, 'matched,', newTplTotal, '3PL units');
+                  }
+                }
+              } catch (procErr) {
+                console.warn('Auto-sync inventory processing error:', procErr);
+                // Non-fatal - the API sync still succeeded
+              }
             } else {
               results.push({ service: 'Packiyo', success: false, error: data.error || `HTTP ${res.status}` });
               console.warn('Packiyo auto-sync failed:', data.error || res.status);
@@ -10970,7 +11441,7 @@ const savePeriods = async (d) => {
     } finally {
       setAutoSyncStatus(prev => ({ ...prev, running: false, results }));
     }
-  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, isServiceStale, autoSyncStatus.running]);
+  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs]);
   
   // Run auto-sync on app load (if enabled)
   useEffect(() => {
@@ -13565,21 +14036,24 @@ Analyze the data and respond with ONLY this JSON:
       // Items needing attention
       criticalItems: inventoryItems.filter(i => i.health === 'critical').map(i => ({
         sku: i.sku, name: i.name, totalQty: i.totalQty, daysOfSupply: i.daysOfSupply,
-        weeklyVelocity: i.weeklyVel, stockoutDate: i.stockoutDate, reorderByDate: i.reorderByDate
+        weeklyVelocity: i.weeklyVel, stockoutDate: i.stockoutDate, reorderByDate: i.reorderByDate,
+        safetyStock: i.safetyStock, reorderPoint: i.reorderPoint, demandClass: i.demandClass
       })),
       lowStockItems: inventoryItems.filter(i => i.health === 'low').map(i => ({
         sku: i.sku, name: i.name, totalQty: i.totalQty, daysOfSupply: i.daysOfSupply,
-        weeklyVelocity: i.weeklyVel, stockoutDate: i.stockoutDate, reorderByDate: i.reorderByDate
+        weeklyVelocity: i.weeklyVel, stockoutDate: i.stockoutDate, reorderByDate: i.reorderByDate,
+        safetyStock: i.safetyStock, reorderPoint: i.reorderPoint, demandClass: i.demandClass
       })),
       // Overstock items (opportunity to reduce)
       overstockItems: inventoryItems.filter(i => i.health === 'overstock' && i.daysOfSupply > 180).map(i => ({
         sku: i.sku, name: i.name, totalQty: i.totalQty, daysOfSupply: i.daysOfSupply,
-        weeklyVelocity: i.weeklyVel, totalValue: i.totalValue
+        weeklyVelocity: i.weeklyVel, totalValue: i.totalValue, demandClass: i.demandClass
       })).sort((a, b) => b.totalValue - a.totalValue).slice(0, 10),
       // Top movers by velocity
       topMovers: inventoryItems.filter(i => i.weeklyVel > 0).sort((a, b) => b.weeklyVel - a.weeklyVel).slice(0, 10).map(i => ({
         sku: i.sku, name: i.name, weeklyVelocity: i.weeklyVel, amazonVelocity: i.amzWeeklyVel, shopifyVelocity: i.shopWeeklyVel,
-        daysOfSupply: i.daysOfSupply, totalQty: i.totalQty
+        daysOfSupply: i.daysOfSupply, totalQty: i.totalQty,
+        safetyStock: i.safetyStock, seasonalFactor: i.seasonalFactor, cv: i.cv, demandClass: i.demandClass
       })),
       // Velocity trends (comparing Amazon vs Shopify)
       velocityByChannel: {
@@ -13602,8 +14076,25 @@ Analyze the data and respond with ONLY this JSON:
       }).map(i => ({
         sku: i.sku, name: i.name, daysOverdue: Math.abs(i.daysUntilMustOrder),
         suggestedOrderQty: i.suggestedOrderQty, stockoutDate: i.stockoutDate,
-        weeklyVelocity: i.weeklyVel
+        weeklyVelocity: i.weeklyVel, safetyStock: i.safetyStock
       })),
+      // Industry-standard demand analysis
+      demandAnalysis: {
+        methodology: 'Weighted Moving Average with Safety Stock, Seasonality Index, and CV Classification',
+        serviceLevel: '95% (Z=1.65)',
+        demandClassification: inventoryItems.reduce((acc, i) => {
+          const cls = i.demandClass || 'unknown';
+          acc[cls] = (acc[cls] || 0) + 1;
+          return acc;
+        }, {}),
+        totalSafetyStockUnits: inventoryItems.reduce((sum, i) => sum + (i.safetyStock || 0), 0),
+        highVariabilityProducts: inventoryItems.filter(i => i.cv >= 0.8).sort((a, b) => b.cv - a.cv).slice(0, 5).map(i => ({
+          sku: i.sku, name: i.name, cv: i.cv, demandClass: i.demandClass, safetyStock: i.safetyStock
+        })),
+        seasonalHighlights: inventoryItems.filter(i => i.seasonalFactor && Math.abs(i.seasonalFactor - 1.0) > 0.15).map(i => ({
+          sku: i.sku, seasonalFactor: i.seasonalFactor, direction: i.seasonalFactor > 1 ? 'peak' : 'slow'
+        })).slice(0, 10),
+      },
     } : null;
     
     // Calculate velocity trends (is velocity increasing or decreasing?)
@@ -24059,10 +24550,10 @@ if (shopifySkuWithShipping.length > 0) {
                         <td className="text-right px-2 py-2 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>
                         <td className="text-right px-2 py-2 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
                         <td className="text-right px-2 py-2 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
-                        <td className="text-right px-2 py-2 text-white text-sm">{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</td>
+                        <td className="text-right px-2 py-2 text-white text-sm" title={item.safetyStock > 0 ? `Safety Stock: ${item.safetyStock} units | Reorder Point: ${item.reorderPoint} units | CV: ${item.cv} (${item.demandClass}) | Season: ${item.seasonalFactor}x` : ''}>{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</td>
                         <td className="text-right px-2 py-2 text-slate-400 text-xs">{item.stockoutDate ? (() => { const d = new Date(item.stockoutDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>
                         <td className={`text-right px-2 py-2 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? (() => { const d = new Date(item.reorderByDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>
-                        <td className="text-center px-2 py-2"><HealthBadge health={item.aiUrgency || item.health} /></td>
+                        <td className="text-center px-2 py-2" title={`${item.demandClass !== 'unknown' ? `Demand: ${item.demandClass} (CV=${item.cv})` : ''} ${item.safetyStock > 0 ? `| SS: ${item.safetyStock}` : ''} ${item.seasonalFactor && item.seasonalFactor !== 1 ? `| Season: ${item.seasonalFactor}x` : ''}`}><HealthBadge health={item.aiUrgency || item.health} /></td>
                         <td className="text-center px-2 py-2">
                           <button 
                             onClick={() => { setShowSkuSettings(true); setSkuSettingsSearch(item.sku); setSkuSettingsEditItem(item.sku); setSkuSettingsEditForm(settings); }}
@@ -35558,32 +36049,45 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       const normalizedCategory = normalizeCategory(t.topCategory || t.category || t.account);
       
       // Transfers are NOT income or expense - they just move money between accounts
-      const isTransfer = t.type === 'transfer' || t.qboType === 'Transfer';
+      // QBO parser stores type as raw txnType: 'Transfer', 'Deposit', 'Expense', 'Check', etc.
+      const typeLower = (t.type || '').toLowerCase();
+      const isTransfer = typeLower === 'transfer' || typeLower === 'journal entry';
       
       // Check if the category is actually an account (credit card/bank) - these are payments, not expenses
       const categoryIsAccount = isAccountCategory(t.topCategory || t.category);
       
-      // Determine income/expense based on QBO type (most reliable)
+      // Determine income/expense based on QBO transaction type (most reliable)
       let isIncome = false;
       let isExpense = false;
       
       if (!isTransfer) {
-        if (t.qboType === 'Deposit' || t.type === 'income') {
+        if (typeLower === 'deposit') {
           isIncome = true;
-        } else if (t.qboType === 'Purchase' || t.qboType === 'Bill' || t.type === 'expense' || t.type === 'bill') {
+        } else if (typeLower === 'expense' || typeLower === 'check' || typeLower === 'bill payment' || typeLower === 'payroll check') {
           // Only count as expense if the category is a REAL expense category
           // Not a credit card or bank account (which would be a payment/transfer)
           if (categoryIsAccount) {
             // This is a payment TO a credit card or bank account - it's a transfer, not an expense
-            // The actual expense was already recorded when the purchase was made on the card
             isExpense = false;
           } else {
             isExpense = true;
           }
+        } else if (typeLower === 'credit card payment') {
+          // Credit card payment from checking = cash outflow expense
+          // But the CC purchases were already counted as expenses on the CC side
+          // Skip to avoid double-counting
+          isExpense = false;
+        } else if (t.accountType === 'credit_card') {
+          // Credit card transactions: charges are expenses, credits are income
+          if (typeLower.includes('credit') || typeLower.includes('refund')) {
+            isIncome = true;
+          } else if ((t.amount || t.originalAmount || 0) > 0) {
+            isExpense = !categoryIsAccount;
+          }
         } else if (t.isIncome !== undefined) {
-          // Fall back to existing flags for non-QBO transactions
-          isIncome = t.isIncome;
-          isExpense = t.isExpense && !categoryIsAccount;
+          // Fall back to existing flags but NEVER for transfers
+          isIncome = t.isIncome && !typeLower.includes('transfer');
+          isExpense = t.isExpense && !categoryIsAccount && !typeLower.includes('transfer');
         }
       }
       
@@ -36155,9 +36659,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 <div className="bg-gradient-to-br from-violet-900/40 to-violet-800/20 rounded-xl border border-violet-500/30 p-5">
                   <p className="text-violet-400 text-sm font-medium mb-1">Avg Monthly Profit</p>
                   <p className="text-2xl font-bold text-white">
-                    {formatCurrency(monthKeysFromTxns.length > 0 ? monthKeysFromTxns.reduce((s, m) => s + (monthlyFromTxns[m]?.net || 0), 0) / monthKeysFromTxns.length : 0)}
+                    {formatCurrency((() => {
+                      // Calculate avg monthly profit from FILTERED transactions (respects date range)
+                      const filteredMonthly = {};
+                      filteredTxns.forEach(t => {
+                        const month = t.date?.substring(0, 7);
+                        if (!month) return;
+                        if (!filteredMonthly[month]) filteredMonthly[month] = { income: 0, expenses: 0, net: 0 };
+                        if (t.isIncome) { filteredMonthly[month].income += t.amount; filteredMonthly[month].net += t.amount; }
+                        if (t.isExpense) { filteredMonthly[month].expenses += t.amount; filteredMonthly[month].net -= t.amount; }
+                      });
+                      const filteredMonthKeys = Object.keys(filteredMonthly).sort();
+                      return filteredMonthKeys.length > 0 
+                        ? filteredMonthKeys.reduce((s, m) => s + (filteredMonthly[m]?.net || 0), 0) / filteredMonthKeys.length 
+                        : 0;
+                    })())}
                   </p>
-                  <p className="text-slate-400 text-xs mt-1">Last {monthKeysFromTxns.length} months</p>
+                  <p className="text-slate-400 text-xs mt-1">{periodLabel}</p>
                 </div>
               </div>
               
@@ -39873,12 +40391,24 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             let reorderByDate = null;
                             let daysUntilMustOrder = null;
                             
+                            // Get demand stats for safety stock, seasonality, CV
+                            const demandStats = skuDemandStatsRef.current[normalizeSkuKey(item.sku)] || null;
+                            const leadTimeWeeks = leadTimeDays / 7;
+                            const safetyStock = demandStats 
+                              ? Math.ceil(1.65 * demandStats.weeklyStdDev * Math.sqrt(leadTimeWeeks))
+                              : 0;
+                            const seasonalFactor = demandStats?.currentSeasonalFactor || 1.0;
+                            const seasonalVel = correctedVelForDOS * seasonalFactor;
+                            const dailyVelForReorder = seasonalVel / 7;
+                            const reorderPoint = Math.ceil((dailyVelForReorder * leadTimeDays) + safetyStock);
+                            
                             if (correctedVelForDOS > 0 && dos < 999) {
                               const stockout = new Date(today);
                               stockout.setDate(stockout.getDate() + dos);
                               stockoutDate = stockout.toISOString().split('T')[0];
                               
-                              daysUntilMustOrder = dos - reorderTriggerDays - leadTimeDays;
+                              const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : reorderTriggerDays;
+                              daysUntilMustOrder = dos - reorderPointDays;
                               const reorderBy = new Date(today);
                               reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
                               reorderByDate = reorderBy.toISOString().split('T')[0];
@@ -39901,7 +40431,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               stockoutDate,
                               reorderByDate,
                               daysUntilMustOrder,
-                              suggestedOrderQty: correctedVelForDOS > 0 ? Math.ceil(correctedVelForDOS * minOrderWeeks) : 0,
+                              suggestedOrderQty: correctedVelForDOS > 0 ? Math.ceil(correctedVelForDOS * minOrderWeeks) + safetyStock : 0,
+                              safetyStock,
+                              reorderPoint,
+                              seasonalFactor: Math.round(seasonalFactor * 100) / 100,
+                              seasonalVel: Math.round(seasonalVel * 10) / 10,
+                              cv: demandStats?.cv || 0,
+                              demandClass: demandStats?.demandClass || 'unknown',
                             };
                           });
                           
