@@ -24145,6 +24145,55 @@ if (shopifySkuWithShipping.length > 0) {
         else newHealth = 'healthy'; // Has stock but no sales data
       }
       
+      // ========= SUPPLY CHAIN KPIs (calculate at render time from raw data) =========
+      const CARRYING_COST_RATE = 0.25;
+      const ORDER_FIXED_COST = 150;
+      const itemCost = item.cost || 0;
+      const itemTotalValue = adjustedTotalQty * itemCost;
+      const annualDemandUnits = (weeklyVel || 0) * 52;
+      const annualDemandCost = annualDemandUnits * itemCost;
+      
+      // Inventory Turnover = Annual COGS sold / Current Inventory Value
+      const turnoverRate = item.turnoverRate || (itemTotalValue > 0 
+        ? Math.round((annualDemandCost / itemTotalValue) * 10) / 10 
+        : 0);
+      
+      // Annual Carrying Cost = Inventory Value × 25%
+      const annualCarryingCost = item.annualCarryingCost || Math.round(itemTotalValue * CARRYING_COST_RATE * 100) / 100;
+      
+      // EOQ = √(2 × D × S / H)
+      const holdingCostPerUnit = itemCost * CARRYING_COST_RATE;
+      const eoq = item.eoq || (holdingCostPerUnit > 0 && annualDemandUnits > 0
+        ? Math.ceil(Math.sqrt((2 * annualDemandUnits * ORDER_FIXED_COST) / holdingCostPerUnit))
+        : 0);
+      
+      // Sell-Through Rate = Units Sold / (Units Sold + Ending Inventory) over 30 days
+      const monthlyUnitsSold = (weeklyVel || 0) * 4.3;
+      const sellThroughRate = item.sellThroughRate || ((monthlyUnitsSold + adjustedTotalQty) > 0
+        ? Math.round((monthlyUnitsSold / (monthlyUnitsSold + adjustedTotalQty)) * 1000) / 10
+        : 0);
+      
+      // Weeks of Supply
+      const weeksOfSupply = weeklyVel > 0 ? Math.round((adjustedTotalQty / weeklyVel) * 10) / 10 : 999;
+      
+      // Stock-to-Sales Ratio
+      const stockToSalesRatio = monthlyUnitsSold > 0
+        ? Math.round((adjustedTotalQty / monthlyUnitsSold) * 10) / 10
+        : 999;
+      
+      // Stockout Risk Score (0-100)
+      let stockoutRisk = item.stockoutRisk || 0;
+      if (weeklyVel > 0 && !item.stockoutRisk) {
+        const dosRatio = newDaysOfSupply / Math.max(leadTimeDays, 1);
+        if (dosRatio < 0.5) stockoutRisk = 95;
+        else if (dosRatio < 1.0) stockoutRisk = 80;
+        else if (dosRatio < 1.5) stockoutRisk = 50;
+        else if (dosRatio < 2.5) stockoutRisk = 25;
+        else stockoutRisk = 5;
+        const cvAdjustment = (item.cv || 0) * 15;
+        stockoutRisk = Math.min(100, Math.round(stockoutRisk + cvAdjustment));
+      }
+      
       return {
         ...item,
         daysOfSupply: newDaysOfSupply,
@@ -24152,14 +24201,47 @@ if (shopifySkuWithShipping.length > 0) {
         reorderByDate: newReorderByDate,
         daysUntilMustOrder: newDaysUntilMustOrder,
         health: newHealth,
+        // Supply chain KPIs (calculated from raw data if missing from snapshot)
+        turnoverRate,
+        annualCarryingCost,
+        eoq,
+        sellThroughRate,
+        weeksOfSupply,
+        stockToSalesRatio,
+        stockoutRisk,
+        totalValue: itemTotalValue,
         // Keep original values for reference
         _originalDaysOfSupply: item.daysOfSupply,
         _adjustedTotalQty: adjustedTotalQty,
       };
     });
     
+    // ========= ABC CLASSIFICATION (needs all items sorted by revenue) =========
+    const itemsWithRevenue = recalculatedItems.map(item => ({
+      ...item,
+      _annualRevenue: (item.weeklyVel || 0) * 52 * (item.cost || 0),
+    }));
+    const totalAnnualRevenue = itemsWithRevenue.reduce((s, i) => s + i._annualRevenue, 0);
+    const sortedByRevenue = [...itemsWithRevenue].sort((a, b) => b._annualRevenue - a._annualRevenue);
+    
+    let cumulativeRevenue = 0;
+    const abcLookup = {};
+    sortedByRevenue.forEach(item => {
+      cumulativeRevenue += item._annualRevenue;
+      const pct = totalAnnualRevenue > 0 ? (cumulativeRevenue / totalAnnualRevenue) * 100 : 100;
+      if (pct <= 80) abcLookup[item.sku] = 'A';
+      else if (pct <= 95) abcLookup[item.sku] = 'B';
+      else abcLookup[item.sku] = 'C';
+    });
+    
+    // Apply ABC to recalculated items
+    const recalculatedWithABC = recalculatedItems.map(item => ({
+      ...item,
+      abcClass: item.abcClass || abcLookup[item.sku] || 'C',
+    }));
+    
     // Filter items based on user preference (show only with inventory by default)
-    const filteredItems = invShowZeroStock ? recalculatedItems : recalculatedItems.filter(item => (item.totalQty || 0) > 0);
+    const filteredItems = invShowZeroStock ? recalculatedWithABC : recalculatedWithABC.filter(item => (item.totalQty || 0) > 0);
     
     // Sort items based on selected column
     const items = [...filteredItems].sort((a, b) => {
@@ -36570,7 +36652,38 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       };
     });
     
-    const sortedTxns = [...transformedTxns].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    // ========= DEDUPLICATE transactions (CSV-parsed + API-synced can overlap) =========
+    // QBO CSV uploads create IDs like "2026-01-03-General_Oper-150.00-abc"
+    // QBO API syncs create IDs like "qbo-deposit-4468"
+    // Same transactions get stored twice with different IDs — dedup by (date, amount, account)
+    const dedupedTxns = (() => {
+      const seen = new Map(); // key → transaction (prefer API version with qboId)
+      const result = [];
+      
+      // Sort: API transactions first (they have qboId and richer data)
+      const sorted = [...transformedTxns].sort((a, b) => {
+        const aIsApi = (a.qboId || a.id?.startsWith('qbo-')) ? 0 : 1;
+        const bIsApi = (b.qboId || b.id?.startsWith('qbo-')) ? 0 : 1;
+        return aIsApi - bIsApi;
+      });
+      
+      sorted.forEach(t => {
+        // Create a dedup key from date + absolute amount + account prefix
+        const amt = Math.round(Math.abs(t.amount || 0) * 100); // cents to avoid float issues
+        const acctKey = (t.account || '').substring(0, 20).toLowerCase().replace(/[^a-z0-9]/g, '');
+        const dedupKey = `${t.date || ''}-${amt}-${acctKey}`;
+        
+        if (!seen.has(dedupKey)) {
+          seen.set(dedupKey, t);
+          result.push(t);
+        }
+        // If already seen, skip (API version was added first due to sort)
+      });
+      
+      return result;
+    })();
+    
+    const sortedTxns = [...dedupedTxns].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const categories = bankingData.categories || {};
     const accounts = bankingData.accounts || {};
     const monthlySnapshots = bankingData.monthlySnapshots || {};
