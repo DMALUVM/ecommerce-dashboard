@@ -36761,14 +36761,18 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     // QBO API syncs create IDs like "qbo-deposit-4468"
     // Same transactions get stored twice with different IDs — dedup by (date, amount, account)
     const dedupedTxns = (() => {
-      const seen = new Map(); // key → transaction (prefer API version with qboId)
+      const seen = new Map(); // key → { index, txn }
       const result = [];
       
-      // Sort: API transactions first (they have qboId and richer data)
+      // Sort: bank-account transactions first (they have accountType and correct cash flow flags),
+      // then API transactions (richer metadata but may be accrual-basis duplicates)
       const sorted = [...transformedTxns].sort((a, b) => {
-        const aIsApi = (a.qboId || a.id?.startsWith('qbo-')) ? 0 : 1;
-        const bIsApi = (b.qboId || b.id?.startsWith('qbo-')) ? 0 : 1;
-        return aIsApi - bIsApi;
+        const aHasClass = (a.isIncome || a.isExpense) ? 0 : 1;
+        const bHasClass = (b.isIncome || b.isExpense) ? 0 : 1;
+        if (aHasClass !== bHasClass) return aHasClass - bHasClass; // Prefer classified transactions
+        const aIsBank = a.accountType ? 0 : 1;
+        const bIsBank = b.accountType ? 0 : 1;
+        return aIsBank - bIsBank; // Then prefer bank-account transactions
       });
       
       sorted.forEach(t => {
@@ -36780,10 +36784,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         const dedupKey = `${t.date || ''}-${amt}-${acctKey}-${vendorKey}`;
         
         if (!seen.has(dedupKey)) {
-          seen.set(dedupKey, t);
+          seen.set(dedupKey, { index: result.length, txn: t });
           result.push(t);
+        } else {
+          // If existing entry was skipped (neither income nor expense) but this one is classified,
+          // replace with the classified version (bank-level cash flow beats accrual-basis API entry)
+          const existing = seen.get(dedupKey);
+          if (!existing.txn.isIncome && !existing.txn.isExpense && (t.isIncome || t.isExpense)) {
+            result[existing.index] = t;
+            seen.set(dedupKey, { index: existing.index, txn: t });
+          }
         }
-        // If already seen, skip (API version was added first due to sort)
       });
       
       return result;
