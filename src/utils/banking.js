@@ -201,6 +201,7 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
       if (txnType === 'Deposit' && amount > 0) isIncome = true;
       else if (txnType === 'Sales Receipt' && amount > 0) isIncome = true;
       else if (txnType === 'Payment' && amount > 0) isIncome = true;
+      else if (txnType === 'Payment' && amount < 0) isExpense = true;
       else if (txnType === 'Invoice' && amount > 0) isIncome = true;
       else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) isExpense = true;
       else if (txnType === 'Credit Card Payment' && amount < 0) isExpense = true;

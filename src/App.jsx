@@ -313,6 +313,7 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
       if (txnType === 'Deposit' && amount > 0) isIncome = true;
       else if (txnType === 'Sales Receipt' && amount > 0) isIncome = true;
       else if (txnType === 'Payment' && amount > 0) isIncome = true;
+      else if (txnType === 'Payment' && amount < 0) isExpense = true;
       else if (txnType === 'Invoice' && amount > 0) isIncome = true;
       else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) isExpense = true;
       else if (txnType === 'Credit Card Payment' && amount < 0) isExpense = true; // Cash leaving to pay card
@@ -13180,28 +13181,51 @@ Respond with ONLY this JSON:
       const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22; // Minimum order size (5 months ≈ 22 weeks)
       
       // Pre-calculated stockout dates and reorder points already exist on each item
-      // Use them directly for consistency with the inventory table
+      // RECALCULATE for days elapsed since snapshot (same as inventory page does)
       const today = new Date();
+      const snapshotDate = new Date(latestInvKey + 'T12:00:00');
+      const daysElapsed = Math.max(0, Math.floor((today - snapshotDate) / (1000 * 60 * 60 * 24)));
+      
       const currentInventory = (invHistory[latestInvKey]?.items || []).map(item => {
-        const currentStock = item.totalQty || 0;
         const weeklyVelocity = item.weeklyVel || 0;
         const dailyVelocity = weeklyVelocity / 7;
         const leadTimeDays = getLeadTime(item.sku);
         
-        // Use pre-calculated values from inventory build (includes safety stock + seasonality)
-        const daysOfSupply = item.daysOfSupply || (dailyVelocity > 0 ? Math.round(currentStock / dailyVelocity) : 999);
-        const stockoutDate = item.stockoutDate || null;
-        const reorderByDate = item.reorderByDate || null;
-        const daysUntilMustOrder = item.daysUntilMustOrder ?? (daysOfSupply - reorderTriggerDays - leadTimeDays);
+        // Adjust stock for days elapsed (same as inventory page recalculation)
+        const currentStock = Math.max(0, (item.totalQty || 0) - Math.round(dailyVelocity * daysElapsed));
+        
+        // Recalculate days of supply from TODAY
+        const daysOfSupply = weeklyVelocity > 0 ? Math.round((currentStock / weeklyVelocity) * 7) : 999;
+        
+        // Recalculate dates from TODAY
+        let stockoutDate = null;
+        let reorderByDate = null;
+        let daysUntilMustOrder = null;
+        
+        if (weeklyVelocity > 0 && daysOfSupply < 999) {
+          const stockout = new Date(today);
+          stockout.setDate(stockout.getDate() + daysOfSupply);
+          stockoutDate = stockout.toISOString().split('T')[0];
+          
+          daysUntilMustOrder = daysOfSupply - reorderTriggerDays - leadTimeDays;
+          const reorderBy = new Date(today);
+          reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
+          reorderByDate = reorderBy.toISOString().split('T')[0];
+        }
+        
         const suggestedOrderQty = item.suggestedOrderQty || Math.ceil(weeklyVelocity * minOrderWeeks);
         
-        // Use pre-calculated urgency or derive from daysUntilMustOrder
-        let calculatedUrgency = item.health || 'healthy';
+        // Use pre-calculated urgency or derive consistently with inventory page
+        // Match the inventory page health logic: uses daysOfSupply + daysUntilMustOrder
+        let calculatedUrgency = 'healthy';
         if (dailyVelocity > 0) {
-          if (daysUntilMustOrder < 0) calculatedUrgency = 'critical';
-          else if (daysUntilMustOrder < 7) calculatedUrgency = 'critical';
-          else if (daysUntilMustOrder < 14) calculatedUrgency = 'reorder';
-          else if (daysUntilMustOrder < 30) calculatedUrgency = 'monitor';
+          if (daysUntilMustOrder < 0) calculatedUrgency = 'critical'; // Past reorder date
+          else if (daysOfSupply < 14 || daysUntilMustOrder < 7) calculatedUrgency = 'critical';
+          else if (daysOfSupply < 30 || daysUntilMustOrder < 14) calculatedUrgency = 'reorder';
+          else if (daysOfSupply <= 90) calculatedUrgency = 'healthy';
+          else calculatedUrgency = 'monitor'; // Overstock - just monitor
+        } else if (currentStock === 0) {
+          calculatedUrgency = 'critical'; // No stock, no velocity
         }
         
         return {
@@ -13263,11 +13287,11 @@ Respond with ONLY this JSON:
 - cv = coefficient of variation (demand variability: smooth <0.5, lumpy 0.5-1.0, intermittent >1.0)
 - suggestedOrderQty already includes safety stock buffer
 
-## URGENCY LEVELS (aligned with inventory page - based on daysUntilMustOrder):
+## URGENCY LEVELS (aligned with inventory page - based on daysOfSupply AND daysUntilMustOrder):
 - CRITICAL: daysUntilMustOrder < 0 (overdue!) OR daysOfSupply < 14 OR daysUntilMustOrder < 7
-- REORDER: daysUntilMustOrder < 14 OR daysOfSupply < 30
-- MONITOR: daysUntilMustOrder < 30 OR daysOfSupply < 60
-- HEALTHY: daysUntilMustOrder >= 30 AND daysOfSupply >= 60
+- REORDER: daysOfSupply < 30 OR daysUntilMustOrder < 14 (maps to "Low" on inventory page)
+- MONITOR: daysOfSupply > 90 (overstock - excess capital tied up)
+- HEALTHY: daysOfSupply 30-90 AND daysUntilMustOrder >= 14
 
 ## SUPPLY CHAIN METRICS (per SKU):
 - abcClass: A (top 80% revenue), B (next 15%), C (bottom 5%) — prioritize A-class items
@@ -24096,20 +24120,29 @@ if (shopifySkuWithShipping.length > 0) {
         newReorderByDate = reorderBy.toISOString().split('T')[0];
       }
       
-      // Recalculate health based on WHEN you need to order, not just days of supply
-      // If order by date is in the past, you're late! That's critical.
+      // Recalculate health using BOTH daysOfSupply AND daysUntilMustOrder
+      // Aligned with snapshot build logic and display labels:
+      //   Critical: <14 days supply OR past reorder date
+      //   Low: 14-30 days supply OR need to order within 2 weeks
+      //   Healthy: 30-90 days supply
+      //   Overstock: >90 days supply
       let newHealth = 'unknown';
-      if (newDaysUntilMustOrder !== null) {
-        if (newDaysUntilMustOrder < 0) newHealth = 'critical'; // Order date passed!
-        else if (newDaysUntilMustOrder < 14) newHealth = 'low'; // Need to order within 2 weeks
-        else if (newDaysUntilMustOrder < 30) newHealth = 'healthy'; // Order within a month
-        else newHealth = 'overstock'; // More than 30 days until you need to order
-      } else if (newDaysOfSupply < 999) {
-        // Fallback if no velocity data
-        if (newDaysOfSupply < 14) newHealth = 'critical';
-        else if (newDaysOfSupply < 30) newHealth = 'low';
-        else if (newDaysOfSupply <= 90) newHealth = 'healthy';
-        else newHealth = 'overstock';
+      if (weeklyVel > 0) {
+        if (newDaysUntilMustOrder !== null && newDaysUntilMustOrder < 0) {
+          newHealth = 'critical'; // Past reorder date!
+        } else if (newDaysOfSupply < 14 || (newDaysUntilMustOrder !== null && newDaysUntilMustOrder < 7)) {
+          newHealth = 'critical';
+        } else if (newDaysOfSupply < 30 || (newDaysUntilMustOrder !== null && newDaysUntilMustOrder < 14)) {
+          newHealth = 'low';
+        } else if (newDaysOfSupply <= 90) {
+          newHealth = 'healthy';
+        } else {
+          newHealth = 'overstock';
+        }
+      } else {
+        // No velocity data - classify by stock presence
+        if (adjustedTotalQty === 0) newHealth = 'critical';
+        else newHealth = 'healthy'; // Has stock but no sales data
       }
       
       return {
@@ -24549,42 +24582,42 @@ if (shopifySkuWithShipping.length > 0) {
             </div>
           )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><AlertCircle className="w-5 h-5 text-rose-400" /><span className="text-rose-400 font-medium">Critical</span></div><p className="text-2xl font-bold text-white">{filteredSummary.critical}</p><p className="text-xs text-slate-400">&lt;14 days</p></div>
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><AlertTriangle className="w-5 h-5 text-amber-400" /><span className="text-amber-400 font-medium">Low</span></div><p className="text-2xl font-bold text-white">{filteredSummary.low}</p><p className="text-xs text-slate-400">14-30 days</p></div>
-            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><CheckCircle className="w-5 h-5 text-emerald-400" /><span className="text-emerald-400 font-medium">Healthy</span></div><p className="text-2xl font-bold text-white">{filteredSummary.healthy}</p><p className="text-xs text-slate-400">30-90 days</p></div>
-            <div className="bg-violet-500/10 border border-violet-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><Clock className="w-5 h-5 text-violet-400" /><span className="text-violet-400 font-medium">Overstock</span></div><p className="text-2xl font-bold text-white">{filteredSummary.overstock}</p><p className="text-xs text-slate-400">&gt;90 days</p></div>
+            <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4 cursor-help" title="SKUs with less than 14 days of supply remaining, or whose reorder date has already passed. These need immediate attention to avoid stockouts."><div className="flex items-center gap-2 mb-2"><AlertCircle className="w-5 h-5 text-rose-400" /><span className="text-rose-400 font-medium">Critical</span><HelpCircle className="w-3 h-3 text-rose-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.critical}</p><p className="text-xs text-slate-400">&lt;14 days supply</p></div>
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 cursor-help" title="SKUs with 14-30 days of supply remaining. You should start planning a reorder now to avoid running low before your shipment arrives."><div className="flex items-center gap-2 mb-2"><AlertTriangle className="w-5 h-5 text-amber-400" /><span className="text-amber-400 font-medium">Low</span><HelpCircle className="w-3 h-3 text-amber-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.low}</p><p className="text-xs text-slate-400">14-30 days supply</p></div>
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 cursor-help" title="SKUs with 30-90 days of supply. These are well-stocked and don't need immediate attention. Stock levels are within optimal range for most e-commerce operations."><div className="flex items-center gap-2 mb-2"><CheckCircle className="w-5 h-5 text-emerald-400" /><span className="text-emerald-400 font-medium">Healthy</span><HelpCircle className="w-3 h-3 text-emerald-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.healthy}</p><p className="text-xs text-slate-400">30-90 days supply</p></div>
+            <div className="bg-violet-500/10 border border-violet-500/30 rounded-2xl p-4 cursor-help" title="SKUs with over 90 days of supply. While not urgent, excess inventory ties up capital and incurs carrying costs. Consider slowing reorders or running promotions to reduce."><div className="flex items-center gap-2 mb-2"><Clock className="w-5 h-5 text-violet-400" /><span className="text-violet-400 font-medium">Overstock</span><HelpCircle className="w-3 h-3 text-violet-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.overstock}</p><p className="text-xs text-slate-400">&gt;90 days supply</p></div>
           </div>
           
           {/* Supply Chain KPIs Dashboard */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
-              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">🔄 Inventory Turnover</p>
-              <p className={`text-lg font-bold ${filteredSummary.avgTurnover >= 6 ? 'text-emerald-400' : filteredSummary.avgTurnover >= 3 ? 'text-amber-400' : 'text-rose-400'}`}>
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3 cursor-help" title="How many times inventory is sold and replaced per year. Calculated as (Annual COGS ÷ Current Inventory Value). Higher = faster-selling inventory. Requires COGS and velocity data. Target: 6×+ for DTC, 3-4× acceptable.">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">🔄 Inventory Turnover <HelpCircle className="w-2.5 h-2.5 text-slate-600" /></p>
+              <p className={`text-lg font-bold ${filteredSummary.avgTurnover >= 6 ? 'text-emerald-400' : filteredSummary.avgTurnover >= 3 ? 'text-amber-400' : filteredSummary.avgTurnover > 0 ? 'text-rose-400' : 'text-slate-600'}`}>
                 {filteredSummary.avgTurnover > 0 ? `${filteredSummary.avgTurnover}×` : '—'}
               </p>
-              <p className="text-slate-500 text-[10px]">{filteredSummary.avgTurnover >= 6 ? 'Excellent' : filteredSummary.avgTurnover >= 3 ? 'Average' : 'Below target'} (6×+ ideal)</p>
+              <p className="text-slate-500 text-[10px]">{filteredSummary.avgTurnover > 0 ? (filteredSummary.avgTurnover >= 6 ? 'Excellent' : filteredSummary.avgTurnover >= 3 ? 'Average' : 'Below target') : 'Needs COGS + velocity'} (6×+ ideal)</p>
             </div>
-            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
-              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">💰 Carrying Cost/yr</p>
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3 cursor-help" title="Annual cost of holding your current inventory. Estimated at 25% of total inventory value, covering storage, insurance, depreciation, and opportunity cost. Lower is better — reduce overstock to minimize.">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">💰 Carrying Cost/yr <HelpCircle className="w-2.5 h-2.5 text-slate-600" /></p>
               <p className="text-lg font-bold text-amber-400">{filteredSummary.totalCarryingCost > 0 ? formatCurrency(filteredSummary.totalCarryingCost) : '—'}</p>
-              <p className="text-slate-500 text-[10px]">25% of inventory value</p>
+              <p className="text-slate-500 text-[10px]">{filteredSummary.totalCarryingCost > 0 ? '25% of inventory value' : 'Needs COGS data'}</p>
             </div>
-            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
-              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">📈 Sell-Through Rate</p>
-              <p className={`text-lg font-bold ${filteredSummary.avgSellThrough >= 20 ? 'text-emerald-400' : filteredSummary.avgSellThrough >= 10 ? 'text-amber-400' : 'text-rose-400'}`}>
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3 cursor-help" title="Percentage of inventory sold in a 30-day period. Calculated as (Units Sold in 30d ÷ (Units Sold + Ending Stock)). Higher = inventory moves faster. 20%+ is good for DTC, 10-20% is average.">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">📈 Sell-Through Rate <HelpCircle className="w-2.5 h-2.5 text-slate-600" /></p>
+              <p className={`text-lg font-bold ${filteredSummary.avgSellThrough >= 20 ? 'text-emerald-400' : filteredSummary.avgSellThrough >= 10 ? 'text-amber-400' : filteredSummary.avgSellThrough > 0 ? 'text-rose-400' : 'text-slate-600'}`}>
                 {filteredSummary.avgSellThrough > 0 ? `${filteredSummary.avgSellThrough}%` : '—'}
               </p>
-              <p className="text-slate-500 text-[10px]">30-day avg (20%+ good)</p>
+              <p className="text-slate-500 text-[10px]">{filteredSummary.avgSellThrough > 0 ? '30-day avg (20%+ good)' : 'Needs velocity data'}</p>
             </div>
-            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
-              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">✅ In-Stock Rate</p>
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3 cursor-help" title="Percentage of active SKUs (with sales velocity) that currently have stock available. Target 95%+ to avoid lost sales from stockouts.">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">✅ In-Stock Rate <HelpCircle className="w-2.5 h-2.5 text-slate-600" /></p>
               <p className={`text-lg font-bold ${filteredSummary.inStockRate >= 95 ? 'text-emerald-400' : filteredSummary.inStockRate >= 85 ? 'text-amber-400' : 'text-rose-400'}`}>
                 {filteredSummary.inStockRate}%
               </p>
               <p className="text-slate-500 text-[10px]">Target: 95%+ service level</p>
             </div>
-            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
-              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">🏷️ ABC Classification</p>
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3 cursor-help" title="ABC Classification ranks SKUs by revenue contribution. A items = top 80% of revenue (highest priority), B items = next 15%, C items = bottom 5%. Focus inventory investment on A-class products.">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">🏷️ ABC Classification <HelpCircle className="w-2.5 h-2.5 text-slate-600" /></p>
               <div className="flex items-center gap-1.5 mt-1">
                 <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-400 font-medium">A:{filteredSummary.abcCounts?.A || 0}</span>
                 <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400 font-medium">B:{filteredSummary.abcCounts?.B || 0}</span>
@@ -24592,8 +24625,8 @@ if (shopifySkuWithShipping.length > 0) {
               </div>
               <p className="text-slate-500 text-[10px]">Revenue-based Pareto</p>
             </div>
-            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
-              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">🛡️ Safety Stock Buffer</p>
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3 cursor-help" title="Total safety stock units across all SKUs. Safety stock is extra inventory held to protect against demand variability and supply delays. Calculated at 95% service level (Z=1.65) based on demand coefficient of variation.">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">🛡️ Safety Stock Buffer <HelpCircle className="w-2.5 h-2.5 text-slate-600" /></p>
               <p className="text-lg font-bold text-cyan-400">{items.reduce((s, i) => s + (i.safetyStock || 0), 0).toLocaleString()}</p>
               <p className="text-slate-500 text-[10px]">95% service level (Z=1.65)</p>
             </div>
@@ -36442,6 +36475,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       return isCardAccount || isBankTransferAccount;
     };
     
+    // Pre-calculate whether credit card accounts exist (for CC payment handling)
+    const hasCCAccounts = (bankingData.transactions || []).some(tx => tx.accountType === 'credit_card');
+    
     // Transform transactions to ensure they have correct flags
     // ALWAYS re-calculate flags based on QBO type to fix any bad cached data
     const transformedTxns = (bankingData.transactions || []).map(t => {
@@ -36465,9 +36501,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       
       if (isJournalEntry || isInterAccountTransfer) {
         // Skip: journal entries and inter-account transfers are not income/expense
-      } else if (typeLower === 'deposit' || typeLower === 'income' || typeLower === 'sales receipt' || typeLower === 'payment') {
-        // All forms of income: bank deposits, API income type, sales receipts, customer payments
+      } else if (typeLower === 'deposit' || typeLower === 'income' || typeLower === 'sales receipt') {
+        // Bank deposits, API income type, sales receipts - always income
         isIncome = true;
+      } else if (typeLower === 'payment') {
+        // Customer payments: positive = income (received), negative = outgoing payment
+        const amt = t.originalAmount ?? t.amount ?? 0;
+        if (amt >= 0) isIncome = true;
+        else isExpense = !categoryIsAccount;
       } else if (typeLower === 'invoice') {
         // Invoices represent revenue recognition
         isIncome = true;
@@ -36488,9 +36529,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           isExpense = true;
         }
       } else if (typeLower === 'credit card payment') {
-        // CC payments from checking: the actual expenses were recorded on the CC side
-        // Don't count here to avoid double-counting
-        isExpense = false;
+        // CC payments from checking account: check if we have the CC account's individual charges
+        // If we do (credit_card accounts exist), skip to avoid double-counting
+        // If checking account only, this IS the expense record
+        if (hasCCAccounts) {
+          // Individual CC charges are tracked on the CC account side
+          isExpense = false;
+          isIncome = false;
+        } else if (t.accountType === 'checking' || t.accountType === 'savings') {
+          // No CC account data - this payment IS the expense from checking
+          isExpense = true;
+        }
       } else if (t.accountType === 'credit_card') {
         // Credit card transactions: charges are expenses, credits are income
         if (typeLower.includes('credit') || typeLower.includes('refund')) {
@@ -37060,23 +37109,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             <>
               {/* Key Metrics */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                <div className="bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 rounded-xl border border-emerald-500/30 p-5">
-                  <p className="text-emerald-400 text-sm font-medium mb-1">Total Income</p>
+                <div className="bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 rounded-xl border border-emerald-500/30 p-5 group relative" title="Total deposits and incoming payments for the selected period. Includes Amazon/Shopify payouts, customer payments, and other income.">
+                  <p className="text-emerald-400 text-sm font-medium mb-1 flex items-center gap-1">Total Income <HelpCircle className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" /></p>
                   <p className="text-2xl font-bold text-white">{formatCurrency(totalIncome)}</p>
                   <p className="text-slate-400 text-xs mt-1">{filteredTxns.filter(t => t.isIncome).length} deposits</p>
                 </div>
-                <div className="bg-gradient-to-br from-rose-900/40 to-rose-800/20 rounded-xl border border-rose-500/30 p-5">
-                  <p className="text-rose-400 text-sm font-medium mb-1">Total Expenses</p>
+                <div className="bg-gradient-to-br from-rose-900/40 to-rose-800/20 rounded-xl border border-rose-500/30 p-5 group relative" title="Total outgoing payments for the selected period. Includes checks, bill payments, credit card charges, payroll, and other expenses. Excludes inter-account transfers.">
+                  <p className="text-rose-400 text-sm font-medium mb-1 flex items-center gap-1">Total Expenses <HelpCircle className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" /></p>
                   <p className="text-2xl font-bold text-white">{formatCurrency(totalExpenses)}</p>
                   <p className="text-slate-400 text-xs mt-1">{filteredTxns.filter(t => t.isExpense).length} expenses</p>
                 </div>
-                <div className={`bg-gradient-to-br ${netCashFlow >= 0 ? 'from-blue-900/40 to-blue-800/20 border-blue-500/30' : 'from-amber-900/40 to-amber-800/20 border-amber-500/30'} rounded-xl border p-5`}>
-                  <p className={`${netCashFlow >= 0 ? 'text-blue-400' : 'text-amber-400'} text-sm font-medium mb-1`}>Net Cash Flow</p>
+                <div className={`bg-gradient-to-br ${netCashFlow >= 0 ? 'from-blue-900/40 to-blue-800/20 border-blue-500/30' : 'from-amber-900/40 to-amber-800/20 border-amber-500/30'} rounded-xl border p-5 group relative`} title="Income minus Expenses. This is cash flow, NOT profit. Income reflects marketplace payouts (after marketplace fees) but does NOT deduct COGS. Positive = more cash coming in than going out.">
+                  <p className={`${netCashFlow >= 0 ? 'text-blue-400' : 'text-amber-400'} text-sm font-medium mb-1 flex items-center gap-1`}>Net Cash Flow <HelpCircle className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" /></p>
                   <p className="text-2xl font-bold text-white">{formatCurrency(netCashFlow)}</p>
                   <p className="text-slate-400 text-xs mt-1">{((netCashFlow / (totalIncome || 1)) * 100).toFixed(1)}% margin</p>
                 </div>
-                <div className="bg-gradient-to-br from-violet-900/40 to-violet-800/20 rounded-xl border border-violet-500/30 p-5">
-                  <p className="text-violet-400 text-sm font-medium mb-1">Avg Monthly Profit</p>
+                <div className="bg-gradient-to-br from-violet-900/40 to-violet-800/20 rounded-xl border border-violet-500/30 p-5 group relative" title="Average monthly net cash flow (income - expenses) across months in the selected period. Represents average monthly cash surplus/deficit based on bank transactions.">
+                  <p className="text-violet-400 text-sm font-medium mb-1 flex items-center gap-1">Avg Monthly Profit <HelpCircle className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" /></p>
                   <p className="text-2xl font-bold text-white">
                     {formatCurrency((() => {
                       // Calculate avg monthly profit from FILTERED transactions (respects date range)
