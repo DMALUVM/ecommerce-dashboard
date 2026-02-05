@@ -1367,6 +1367,7 @@ const [loadedCloudVersion, setLoadedCloudVersion] = useState(null); // Timestamp
 const [showConflictModal, setShowConflictModal] = useState(false);
 const [conflictData, setConflictData] = useState(null); // { cloudData, cloudVersion, localData }
 const conflictCheckRef = useRef(false); // Prevent multiple conflict checks
+const saveInProgressRef = useRef(false); // Prevent concurrent saves
 
 // Multi-store support
 const [stores, setStores] = useState([]); // List of { id, name, createdAt }
@@ -4282,6 +4283,8 @@ const writeToLocal = useCallback((key, value) => {
 
 const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   if (!supabase || !session?.user?.id) return;
+  if (saveInProgressRef.current) return; // Prevent concurrent saves
+  saveInProgressRef.current = true;
   setCloudStatus('Saving…');
   
   // CRITICAL SAFETY CHECK: Never overwrite populated data with empty data
@@ -4311,6 +4314,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
       console.error('BLOCKED: Attempted to overwrite', cloudDataSize, 'records with empty data. Use forceOverwrite=true to override.');
       setCloudStatus('Save blocked - would delete data');
       setTimeout(() => setCloudStatus(''), 3000);
+      saveInProgressRef.current = false;
       return;
     }
     
@@ -4321,10 +4325,14 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   }
   
   // First, check if cloud data has been modified since we last loaded (conflict detection)
-  if (!forceOverwrite && loadedCloudVersion && !conflictCheckRef.current) {
+  // Skip conflict check if we saved recently (our own save advancing the timestamp)
+  const timeSinceLastSave = Date.now() - (lastSavedRef.current || 0);
+  const skipConflictCheck = timeSinceLastSave < 10000; // 10s grace period after our own saves
+  
+  if (!forceOverwrite && loadedCloudVersion && !conflictCheckRef.current && !skipConflictCheck) {
     const { data: currentCloud } = await supabase
       .from('app_data')
-      .select('updated_at, data')
+      .select('updated_at')
       .eq('user_id', session.user.id)
       .maybeSingle();
     
@@ -4333,13 +4341,20 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
       console.log('Conflict detected:', { cloudVersion: currentCloud.updated_at, loadedVersion: loadedCloudVersion });
       conflictCheckRef.current = true; // Prevent repeated checks
       
+      // Fetch full data only when conflict is confirmed
+      const { data: fullCloud } = await supabase
+        .from('app_data')
+        .select('data')
+        .eq('user_id', session.user.id)
+        .maybeSingle();
+      
       // Store conflict info for resolution modal
       const targetStoreId = activeStoreId || 'default';
       let cloudStoreData;
-      if (currentCloud.data?.storeData?.[targetStoreId]) {
-        cloudStoreData = currentCloud.data.storeData[targetStoreId];
+      if (fullCloud?.data?.storeData?.[targetStoreId]) {
+        cloudStoreData = fullCloud.data.storeData[targetStoreId];
       } else {
-        cloudStoreData = currentCloud.data;
+        cloudStoreData = fullCloud?.data || {};
       }
       
       setConflictData({
@@ -4351,6 +4366,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
       });
       setShowConflictModal(true);
       setCloudStatus('Conflict detected');
+      saveInProgressRef.current = false;
       return;
     }
   }
@@ -4384,7 +4400,15 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   
   const { error } = await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
   if (error) {
-    setCloudStatus('Save failed (offline?)');
+    console.warn('Cloud save failed:', error.message || error);
+    // Update loadedCloudVersion to current cloud timestamp to prevent conflict loop
+    try {
+      const { data: latest } = await supabase.from('app_data').select('updated_at').eq('user_id', session.user.id).maybeSingle();
+      if (latest?.updated_at) setLoadedCloudVersion(latest.updated_at);
+    } catch {}
+    setCloudStatus('Save failed (retry soon)');
+    setTimeout(() => setCloudStatus(''), 3000);
+    saveInProgressRef.current = false;
     return;
   }
   
@@ -4396,6 +4420,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   setLastSyncDate(new Date().toISOString());
   setCloudStatus('Saved');
   setTimeout(() => setCloudStatus(''), 1500);
+  saveInProgressRef.current = false;
 }, [session, stores, activeStoreId, loadedCloudVersion]);
 
 const queueCloudSave = useCallback((nextDataObj) => {
@@ -11528,6 +11553,27 @@ const savePeriods = async (d) => {
                     
                     updatedItems.sort((a, b) => b.totalValue - a.totalValue);
                     
+                    // Recalculate supply chain KPIs from updated items
+                    let critical = 0, low = 0, healthy = 0, overstock = 0;
+                    updatedItems.forEach(item => {
+                      if (item.health === 'critical') critical++;
+                      else if (item.health === 'low') low++;
+                      else if (item.health === 'healthy') healthy++;
+                      else if (item.health === 'overstock') overstock++;
+                    });
+                    
+                    const itemsWithTurnover = updatedItems.filter(i => i.turnoverRate > 0);
+                    const avgTurnover = itemsWithTurnover.length > 0
+                      ? itemsWithTurnover.reduce((s, i) => s + i.turnoverRate, 0) / itemsWithTurnover.length : 0;
+                    const totalCarryingCost = updatedItems.reduce((s, i) => s + (i.annualCarryingCost || 0), 0);
+                    const itemsWithSellThrough = updatedItems.filter(i => i.sellThroughRate > 0);
+                    const avgSellThrough = itemsWithSellThrough.length > 0
+                      ? itemsWithSellThrough.reduce((s, i) => s + i.sellThroughRate, 0) / itemsWithSellThrough.length : 0;
+                    const itemsWithVel = updatedItems.filter(i => i.weeklyVel > 0);
+                    const inStockRate = itemsWithVel.length > 0
+                      ? Math.round((itemsWithVel.filter(i => i.totalQty > 0).length / itemsWithVel.length) * 1000) / 10 : 100;
+                    const abcCounts = updatedItems.reduce((acc, i) => { acc[i.abcClass] = (acc[i.abcClass] || 0) + 1; return acc; }, {});
+                    
                     const updatedSnapshot = {
                       ...currentSnapshot,
                       items: updatedItems,
@@ -11538,6 +11584,16 @@ const savePeriods = async (d) => {
                         totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + newTplTotal + (currentSnapshot.summary?.homeUnits || 0),
                         totalValue: (currentSnapshot.summary?.amazonValue || 0) + newTplValue + (currentSnapshot.summary?.homeValue || 0),
                         skuCount: updatedItems.length,
+                        // Recalculated supply chain KPIs
+                        critical,
+                        low,
+                        healthy,
+                        overstock,
+                        avgTurnover: Math.round(avgTurnover * 10) / 10,
+                        totalCarryingCost: Math.round(totalCarryingCost),
+                        avgSellThrough: Math.round(avgSellThrough * 10) / 10,
+                        inStockRate,
+                        abcCounts,
                       },
                       sources: {
                         ...currentSnapshot.sources,
@@ -11610,6 +11666,9 @@ const savePeriods = async (d) => {
   }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs]);
   
   // Run auto-sync on app load (if enabled)
+  const runAutoSyncRef = useRef(runAutoSync);
+  runAutoSyncRef.current = runAutoSync; // Always points to latest
+  
   useEffect(() => {
     if (!appSettings.autoSync?.enabled) return;
     if (!appSettings.autoSync?.onAppLoad) return;
@@ -11619,7 +11678,7 @@ const savePeriods = async (d) => {
       const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected;
       if (anyConnected) {
         console.log('=== AUTO-SYNC: Running on app load ===');
-        runAutoSync();
+        runAutoSyncRef.current();
       }
     }, 3000);
     
@@ -11639,12 +11698,12 @@ const savePeriods = async (d) => {
       const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected;
       if (anyConnected) {
         console.log('=== AUTO-SYNC: Running scheduled sync ===');
-        runAutoSync();
+        runAutoSyncRef.current();
       }
     }, intervalMs);
     
     return () => clearInterval(interval);
-  }, [appSettings.autoSync?.enabled, appSettings.autoSync?.intervalHours, runAutoSync]);
+  }, [appSettings.autoSync?.enabled, appSettings.autoSync?.intervalHours]);
   // ============ END AUTO-SYNC EFFECT ============
 
   // ============ UNIFIED AI LEARNING SYSTEM ============
@@ -40982,6 +41041,23 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           // Sort by total value
                           updatedItems.sort((a, b) => b.totalValue - a.totalValue);
                           
+                          // Recalculate supply chain KPIs
+                          let critical2 = 0, low2 = 0, healthy2 = 0, overstock2 = 0;
+                          updatedItems.forEach(item => {
+                            if (item.health === 'critical') critical2++;
+                            else if (item.health === 'low') low2++;
+                            else if (item.health === 'healthy') healthy2++;
+                            else if (item.health === 'overstock') overstock2++;
+                          });
+                          const withTurnover2 = updatedItems.filter(i => i.turnoverRate > 0);
+                          const avgTurnover2 = withTurnover2.length > 0 ? withTurnover2.reduce((s, i) => s + i.turnoverRate, 0) / withTurnover2.length : 0;
+                          const totalCarrying2 = updatedItems.reduce((s, i) => s + (i.annualCarryingCost || 0), 0);
+                          const withSellThru2 = updatedItems.filter(i => i.sellThroughRate > 0);
+                          const avgSellThru2 = withSellThru2.length > 0 ? withSellThru2.reduce((s, i) => s + i.sellThroughRate, 0) / withSellThru2.length : 0;
+                          const withVel2 = updatedItems.filter(i => i.weeklyVel > 0);
+                          const inStock2 = withVel2.length > 0 ? Math.round((withVel2.filter(i => i.totalQty > 0).length / withVel2.length) * 1000) / 10 : 100;
+                          const abc2 = updatedItems.reduce((acc, i) => { acc[i.abcClass] = (acc[i.abcClass] || 0) + 1; return acc; }, {});
+                          
                           // Update the snapshot
                           const updatedSnapshot = {
                             ...currentSnapshot,
@@ -40993,6 +41069,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + newTplTotal + (currentSnapshot.summary?.homeUnits || 0),
                               totalValue: (currentSnapshot.summary?.amazonValue || 0) + newTplValue + (currentSnapshot.summary?.homeValue || 0),
                               skuCount: updatedItems.length,
+                              critical: critical2, low: low2, healthy: healthy2, overstock: overstock2,
+                              avgTurnover: Math.round(avgTurnover2 * 10) / 10,
+                              totalCarryingCost: Math.round(totalCarrying2),
+                              avgSellThrough: Math.round(avgSellThru2 * 10) / 10,
+                              inStockRate: inStock2,
+                              abcCounts: abc2,
                             },
                             sources: {
                               ...currentSnapshot.sources,
