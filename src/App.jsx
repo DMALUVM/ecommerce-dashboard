@@ -1609,6 +1609,7 @@ const handleLogout = async () => {
       categories: {},
       monthlySnapshots: {},
       categoryOverrides: {},
+      vendorOverrides: {},
       settings: { reminderEnabled: true, reminderTime: '09:00' }
     };
     return safeLocalStorageGet('ecommerce_banking_v1', defaultBanking);
@@ -7836,11 +7837,13 @@ const savePeriods = async (d) => {
     let critical = 0, low = 0, healthy = 0, overstock = 0;
     
     // Dynamic overstock threshold based on reorder cycle
-    // If you order 22 weeks at a time, having 120 days on hand is normal, not overstock
+    // If you order 22 weeks at a time with 60-day reorder trigger, having 200 days on hand is NORMAL
+    // Overstock = more than one full order cycle + reorder trigger + lead time
+    // This represents the maximum expected stock right after receiving a new order
     const globalLeadTimeDays = leadTimeSettings.defaultLeadTimeDays || 14;
     const globalMinOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
     const globalReorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
-    const overstockThreshold = Math.max(90, (globalMinOrderWeeks * 7) + globalLeadTimeDays);
+    const overstockThreshold = Math.max(90, (globalMinOrderWeeks * 7) + globalReorderTriggerDays + globalLeadTimeDays);
     // Also make "low" threshold relative: at least lead time + some buffer
     const lowThreshold = Math.max(30, globalLeadTimeDays + 14);
     const criticalThreshold = Math.max(14, globalLeadTimeDays);
@@ -11489,7 +11492,7 @@ const savePeriods = async (d) => {
                     const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
                     const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
                     const liveLeadTimeDays = leadTimeSettings.defaultLeadTimeDays || 14;
-                    const liveOverstockThreshold = Math.max(90, (minOrderWeeks * 7) + liveLeadTimeDays);
+                    const liveOverstockThreshold = Math.max(90, (minOrderWeeks * 7) + reorderTriggerDays + liveLeadTimeDays);
                     const liveLowThreshold = Math.max(30, liveLeadTimeDays + 14);
                     const liveCriticalThreshold = Math.max(14, liveLeadTimeDays);
                     
@@ -36508,9 +36511,19 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const now = new Date();
     
     // Helper to normalize vendor names (combine similar vendors)
+    // User-defined vendor overrides: { 'original vendor lowercase': 'Display Name' }
+    const vendorOverrides = bankingData.vendorOverrides || {};
+    
     const normalizeVendor = (vendor) => {
       if (!vendor) return vendor;
       const v = vendor.toLowerCase().trim();
+      
+      // Check user-defined vendor overrides FIRST
+      if (vendorOverrides[v]) return vendorOverrides[v];
+      // Also check if any override key is a substring match
+      for (const [pattern, replacement] of Object.entries(vendorOverrides)) {
+        if (v.includes(pattern.toLowerCase())) return replacement;
+      }
       
       // Combine Marpac variants
       if (v.includes('marpac')) return 'Marpac';
@@ -36521,8 +36534,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       // Combine Alibaba variants
       if (v.includes('alibaba')) return 'Alibaba';
       
-      // Combine 3PL services under Excel 3PL
-      if (v.includes('3pl') || v.includes('excel 3pl') || v.includes('excel3pl')) return 'Excel 3PL';
+      // Combine 3PL services under Excel 3PL (includes Findley)
+      if (v.includes('3pl') || v.includes('excel 3pl') || v.includes('excel3pl') || v.includes('findley')) return 'Excel 3PL';
       
       // Combine Shulman Rogers variants (law firm)
       if (v.includes('shulman rogers') || v.includes('shulman') || (v.includes('rogers') && v.includes('law'))) return 'Shulman Rogers';
@@ -36634,6 +36647,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       let isIncome = false;
       let isExpense = false;
       
+      // Helper: check if we have the ORIGINAL signed amount (API-synced data has it, CSV-parsed doesn't)
+      const hasOriginalSign = t.originalAmount !== undefined && t.originalAmount !== null;
+      
       if (isJournalEntry || isInterAccountTransfer) {
         // Skip: journal entries and inter-account transfers are not income/expense
       } else if (typeLower === 'deposit' || typeLower === 'income' || typeLower === 'sales receipt') {
@@ -36641,9 +36657,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         isIncome = true;
       } else if (typeLower === 'payment') {
         // Customer payments: positive = income (received), negative = outgoing payment
-        const amt = t.originalAmount ?? t.amount ?? 0;
-        if (amt >= 0) isIncome = true;
-        else isExpense = !categoryIsAccount;
+        if (hasOriginalSign) {
+          // API data: use the signed original amount to determine direction
+          if (t.originalAmount >= 0) isIncome = true;
+          else isExpense = !categoryIsAccount;
+        } else {
+          // CSV-parsed data: amounts are abs(), so use the PARSER's flags which were set correctly
+          isIncome = t.isIncome || false;
+          isExpense = (t.isExpense || false) && !categoryIsAccount;
+        }
       } else if (typeLower === 'invoice') {
         // Invoices represent revenue recognition
         isIncome = true;
@@ -36688,10 +36710,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         isIncome = t.isIncome;
         isExpense = t.isExpense && !categoryIsAccount;
       } else {
-        // Catch-all: use amount sign to determine income vs expense
-        const origAmt = t.originalAmount || t.amount || 0;
-        if (origAmt > 0) isIncome = true;
-        else if (origAmt < 0) isExpense = true;
+        // Catch-all: use original signed amount if available, otherwise use parser flags
+        if (hasOriginalSign) {
+          if (t.originalAmount > 0) isIncome = true;
+          else if (t.originalAmount < 0) isExpense = true;
+        } else if (t.isIncome !== undefined || t.isExpense !== undefined) {
+          isIncome = t.isIncome || false;
+          isExpense = (t.isExpense || false) && !categoryIsAccount;
+        } else {
+          // True catch-all: positive amount with no flags = income
+          isIncome = true;
+        }
       }
       
       return {
@@ -37164,6 +37193,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           transactionCount: mergedTransactions.length,
           lastUpload: new Date().toISOString(),
           categoryOverrides: bankingData.categoryOverrides || {},
+          vendorOverrides: bankingData.vendorOverrides || {},
           settings: bankingData.settings,
         };
         
@@ -37195,6 +37225,38 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
       queueCloudSave({ ...combinedData, bankingData: newBankingData });
       setToast({ message: 'Category updated', type: 'success' });
+    };
+    
+    // Handle vendor rename (maps old vendor name → new display name for all transactions)
+    const handleVendorRename = (oldVendorName, newVendorName) => {
+      if (!oldVendorName || !newVendorName || oldVendorName === newVendorName) return;
+      const existingOverrides = bankingData.vendorOverrides || {};
+      const newOverrides = { ...existingOverrides, [oldVendorName.toLowerCase().trim()]: newVendorName.trim() };
+      const newBankingData = { ...bankingData, vendorOverrides: newOverrides };
+      setBankingData(newBankingData);
+      localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+      queueCloudSave({ ...combinedData, bankingData: newBankingData });
+      setToast({ message: `Vendor renamed: "${oldVendorName}" → "${newVendorName}"`, type: 'success' });
+    };
+    
+    // Handle bulk category update for all transactions from a specific vendor
+    const handleVendorCategoryUpdate = (vendorName, newCategory) => {
+      if (!vendorName || !newCategory) return;
+      // Find all transactions for this vendor in the current filtered view and override their categories
+      const newOverrides = { ...(bankingData.categoryOverrides || {}) };
+      let count = 0;
+      sortedTxns.filter(t => {
+        const normalized = normalizeVendor(t.vendor);
+        return normalized === vendorName && t.isExpense;
+      }).forEach(t => {
+        newOverrides[t.id] = newCategory;
+        count++;
+      });
+      const newBankingData = { ...bankingData, categoryOverrides: newOverrides };
+      setBankingData(newBankingData);
+      localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+      queueCloudSave({ ...combinedData, bankingData: newBankingData });
+      setToast({ message: `Updated ${count} transactions for "${vendorName}" to category "${newCategory}"`, type: 'success' });
     };
     
     // Handle merging multiple transactions into one
@@ -40025,6 +40087,50 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                       </div>
                     )}
                     
+                    {/* Vendor Overrides Summary */}
+                    {Object.keys(vendorOverrides).length > 0 && (
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4 mb-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                            <GitCompareArrows className="w-4 h-4 text-violet-400" />
+                            Vendor Mappings ({Object.keys(vendorOverrides).length})
+                          </h4>
+                          <button
+                            onClick={() => {
+                              if (confirm('Clear all vendor mappings?')) {
+                                const newBankingData = { ...bankingData, vendorOverrides: {} };
+                                setBankingData(newBankingData);
+                                localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+                                queueCloudSave({ ...combinedData, bankingData: newBankingData });
+                                setToast({ message: 'All vendor mappings cleared', type: 'success' });
+                              }
+                            }}
+                            className="text-xs text-slate-500 hover:text-rose-400 transition-colors"
+                          >Clear All</button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {Object.entries(vendorOverrides).map(([from, to]) => (
+                            <span key={from} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-700/50 rounded text-xs">
+                              <span className="text-slate-400">{from}</span>
+                              <span className="text-slate-600">→</span>
+                              <span className="text-violet-400">{to}</span>
+                              <button
+                                onClick={() => {
+                                  const newOverrides = { ...vendorOverrides };
+                                  delete newOverrides[from];
+                                  const newBankingData = { ...bankingData, vendorOverrides: newOverrides };
+                                  setBankingData(newBankingData);
+                                  localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+                                  queueCloudSave({ ...combinedData, bankingData: newBankingData });
+                                }}
+                                className="text-slate-600 hover:text-rose-400 ml-1"
+                              ><X className="w-3 h-3" /></button>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
                     {/* Top Vendors */}
                     <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
                       <div className="flex items-center justify-between mb-4">
@@ -40042,9 +40148,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             const pct = totalVendorSpend > 0 ? (vendor.totalSpent / totalVendorSpend * 100) : 0;
                             const topCategory = Object.entries(vendor.categories || {})
                               .sort((a, b) => b[1] - a[1])[0];
+                            const allCategories = Object.entries(vendor.categories || {}).sort((a, b) => b[1] - a[1]);
                             
                             return (
-                              <div key={vendor.name} className="bg-slate-900/50 rounded-lg p-4">
+                              <div key={vendor.name} className="bg-slate-900/50 rounded-lg p-4 group">
                                 <div className="flex items-center justify-between mb-2">
                                   <div className="flex items-center gap-3">
                                     <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
@@ -40064,11 +40171,55 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                       )}
                                     </div>
                                   </div>
-                                  <div className="text-right">
-                                    <p className="text-rose-400 font-bold">{formatCurrency(vendor.totalSpent)}</p>
-                                    <p className="text-slate-500 text-xs">{vendor.transactionCount} transactions</p>
+                                  <div className="flex items-center gap-3">
+                                    {/* Edit buttons - show on hover */}
+                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button
+                                        onClick={() => {
+                                          const newName = prompt(`Rename vendor "${vendor.name}" to:`, vendor.name);
+                                          if (newName && newName.trim() !== vendor.name) {
+                                            handleVendorRename(vendor.name, newName.trim());
+                                          }
+                                        }}
+                                        className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
+                                        title="Rename this vendor"
+                                      >
+                                        Rename
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          const existingCats = Object.keys(expensesByCategory).sort();
+                                          const catList = existingCats.map((c, i) => `${i + 1}. ${c}`).join('\n');
+                                          const input = prompt(
+                                            `Set category for all "${vendor.name}" transactions.\n\nExisting categories:\n${catList}\n\nEnter category name:`,
+                                            topCategory ? topCategory[0] : ''
+                                          );
+                                          if (input && input.trim()) {
+                                            handleVendorCategoryUpdate(vendor.name, input.trim());
+                                          }
+                                        }}
+                                        className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
+                                        title="Change category for all this vendor's transactions"
+                                      >
+                                        Category
+                                      </button>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-rose-400 font-bold">{formatCurrency(vendor.totalSpent)}</p>
+                                      <p className="text-slate-500 text-xs">{vendor.transactionCount} transactions</p>
+                                    </div>
                                   </div>
                                 </div>
+                                {/* Category breakdown for each vendor */}
+                                {allCategories.length > 1 && (
+                                  <div className="flex flex-wrap gap-1.5 mt-2 mb-2">
+                                    {allCategories.slice(0, 5).map(([cat, amt]) => (
+                                      <span key={cat} className="text-xs px-1.5 py-0.5 bg-slate-800 rounded text-slate-400">
+                                        {cat}: {formatCurrency(amt)}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
                                 <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
                                   <div 
                                     className="h-full bg-gradient-to-r from-violet-500 to-purple-500 rounded-full"
