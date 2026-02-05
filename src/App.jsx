@@ -36874,7 +36874,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             result[existing.index] = t;
             seen.set(dedupKey, { index: existing.index, txn: t });
           }
-          }
         }
       });
       
