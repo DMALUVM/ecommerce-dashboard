@@ -13247,7 +13247,21 @@ Respond with ONLY this JSON:
       
       console.log('AI forecast dates:', { latestInvKey, lastPackiyoSync: lastPackiyoSync?.toISOString()?.split('T')[0], effectiveDataDate: effectiveDataDate.toISOString().split('T')[0], daysElapsed });
       
-      const currentInventory = (invHistory[latestInvKey]?.items || []).map(item => {
+      // DEDUPLICATE inventory items by normalized SKU (case-insensitive)
+      // Keep the item with the highest totalQty (most complete data)
+      const rawItems = invHistory[latestInvKey]?.items || [];
+      const dedupedByNormalizedSku = {};
+      rawItems.forEach(item => {
+        const normalizedSku = (item.sku || '').trim().toUpperCase();
+        const existing = dedupedByNormalizedSku[normalizedSku];
+        if (!existing || (item.totalQty || 0) > (existing.totalQty || 0)) {
+          dedupedByNormalizedSku[normalizedSku] = item;
+        }
+      });
+      const dedupedItems = Object.values(dedupedByNormalizedSku);
+      console.log('AI forecast inventory dedup:', rawItems.length, '→', dedupedItems.length, 'items');
+      
+      const currentInventory = dedupedItems.map(item => {
         const weeklyVelocity = item.weeklyVel || 0;
         const dailyVelocity = weeklyVelocity / 7;
         const leadTimeDays = getLeadTime(item.sku);
@@ -22485,18 +22499,32 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             const existingDates = Object.keys(invHistory).sort().reverse();
                             const existingSnapshot = existingDates.length > 0 ? invHistory[existingDates[0]] : null;
                             const existingItemsBySku = {};
+                            const normalizeSkuForLookup = (sku) => (sku || '').trim().toUpperCase();
                             if (existingSnapshot?.items) {
                               existingSnapshot.items.forEach(item => {
-                                existingItemsBySku[item.sku] = item;
+                                const normSku = normalizeSkuForLookup(item.sku);
+                                // Keep the one with more inventory if duplicates exist
+                                if (!existingItemsBySku[normSku] || (item.totalQty || 0) > (existingItemsBySku[normSku].totalQty || 0)) {
+                                  existingItemsBySku[normSku] = item;
+                                }
                               });
                             }
                             
                             // Create inventory snapshot - MERGE with existing data
                             const snapshotDate = data.date || new Date().toISOString().split('T')[0];
                             
+                            // Track which normalized SKUs we've already processed to avoid duplicates
+                            const processedSkus = new Set();
+                            
                             // Build items with merged data
                             const mergedItems = data.items.map(item => {
-                              const existing = existingItemsBySku[item.sku] || {};
+                              const normSku = normalizeSkuForLookup(item.sku);
+                              
+                              // Skip if we've already processed this normalized SKU
+                              if (processedSkus.has(normSku)) return null;
+                              processedSkus.add(normSku);
+                              
+                              const existing = existingItemsBySku[normSku] || {};
                               // Use COGS if available, then Shopify cost, then existing cost
                               // savedCogs stores cost directly as number: savedCogs[sku] = 3.97
                               const cogsCost = typeof savedCogs[item.sku] === 'number' ? savedCogs[item.sku] : (savedCogs[item.sku]?.cost || 0);
@@ -22509,8 +22537,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               const totalQty = amazonQty + threeplQty + homeQty;
                               
                               return {
-                                sku: item.sku,
-                                name: savedProductNames[item.sku] || item.name || existing.name || item.sku,
+                                sku: item.sku.toUpperCase(), // Normalize SKU case
+                                name: savedProductNames[item.sku] || savedProductNames[normSku] || item.name || existing.name || item.sku,
                                 asin: existing.asin || '',
                                 amazonQty: amazonQty, // PRESERVED from existing
                                 threeplQty: threeplQty, // FROM SHOPIFY
@@ -22526,16 +22554,18 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                 locations: item.locations,
                                 byLocation: item.byLocation,
                               };
-                            });
+                            }).filter(Boolean); // Remove nulls from skipped duplicates
                             
                             // Also include SKUs that exist in previous snapshot but not in Shopify
                             // (These might be Amazon-only products)
-                            Object.entries(existingItemsBySku).forEach(([sku, existing]) => {
-                              if (!mergedItems.find(i => i.sku === sku) && (existing.amazonQty > 0 || existing.amazonInbound > 0)) {
-                                const cogsCost = getCogsCost(sku);
+                            Object.entries(existingItemsBySku).forEach(([normSku, existing]) => {
+                              if (!processedSkus.has(normSku) && (existing.amazonQty > 0 || existing.amazonInbound > 0)) {
+                                processedSkus.add(normSku);
+                                const cogsCost = getCogsCost(existing.sku) || getCogsCost(normSku);
                                 const cost = cogsCost || existing.cost || 0;
                                 mergedItems.push({
                                   ...existing,
+                                  sku: existing.sku.toUpperCase(), // Normalize case
                                   cost: cost,
                                   totalValue: (existing.amazonQty + (existing.threeplQty || 0)) * cost,
                                   threeplQty: 0, // Not in Shopify
