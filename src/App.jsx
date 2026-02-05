@@ -7839,7 +7839,6 @@ const savePeriods = async (d) => {
     // Dynamic overstock threshold based on reorder cycle
     // If you order 22 weeks at a time with 60-day reorder trigger, having 200 days on hand is NORMAL
     // Overstock = more than one full order cycle + reorder trigger + lead time
-    // This represents the maximum expected stock right after receiving a new order
     const globalLeadTimeDays = leadTimeSettings.defaultLeadTimeDays || 14;
     const globalMinOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
     const globalReorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
@@ -36520,7 +36519,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       
       // Check user-defined vendor overrides FIRST
       if (vendorOverrides[v]) return vendorOverrides[v];
-      // Also check if any override key is a substring match
       for (const [pattern, replacement] of Object.entries(vendorOverrides)) {
         if (v.includes(pattern.toLowerCase())) return replacement;
       }
@@ -36626,6 +36624,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     // Pre-calculate whether credit card accounts exist (for CC payment handling)
     const hasCCAccounts = (bankingData.transactions || []).some(tx => tx.accountType === 'credit_card');
     
+    // Pre-calculate whether we have bank-level deposit data (CSV uploads with actual bank transactions)
+    // If we do, then Sales Receipts / Invoices / "income" type entries WITHOUT a bank account are
+    // accrual-basis duplicates — the cash already shows up as a Deposit on the checking account
+    const hasBankDeposits = (bankingData.transactions || []).some(tx => 
+      tx.accountType === 'checking' && (tx.type || '').toLowerCase() === 'deposit'
+    );
+    
     // Transform transactions to ensure they have correct flags
     // ALWAYS re-calculate flags based on QBO type to fix any bad cached data
     const transformedTxns = (bankingData.transactions || []).map(t => {
@@ -36643,6 +36648,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       const isInterAccountTransfer = typeLower === 'transfer' && categoryIsAccount;
       const isJournalEntry = typeLower === 'journal entry';
       
+      // Check if this transaction is on an actual bank/CC account (has accountType from CSV parser)
+      // vs a floating accrual entry (from QBO API with no bank account context)
+      const isOnBankAccount = !!t.accountType;
+      
       // Determine income/expense
       let isIncome = false;
       let isExpense = false;
@@ -36652,9 +36661,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       
       if (isJournalEntry || isInterAccountTransfer) {
         // Skip: journal entries and inter-account transfers are not income/expense
-      } else if (typeLower === 'deposit' || typeLower === 'income' || typeLower === 'sales receipt') {
-        // Bank deposits, API income type, sales receipts - always income
+      } else if (typeLower === 'sales receipt' || typeLower === 'invoice') {
+        // Sales Receipts and Invoices: 
+        // - If ON a bank account (CSV-parsed) = actual cash received → income
+        // - If NOT on a bank account (API-synced) AND we have bank deposits = accrual duplicate → SKIP
+        if (isOnBankAccount) {
+          isIncome = true;
+        } else if (!hasBankDeposits) {
+          // No bank data at all — these are our only income source, count them
+          isIncome = true;
+        }
+        // else: skip — this is an accrual entry, the cash shows as a Deposit
+      } else if (typeLower === 'deposit') {
+        // Bank deposits — always real cash income
         isIncome = true;
+      } else if (typeLower === 'income') {
+        // API "income" type: only count if on a bank account OR no bank deposits exist
+        if (isOnBankAccount || !hasBankDeposits) {
+          isIncome = true;
+        }
+        // else: skip to avoid double-counting with Deposits
       } else if (typeLower === 'payment') {
         // Customer payments: positive = income (received), negative = outgoing payment
         if (hasOriginalSign) {
@@ -36662,13 +36688,10 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           if (t.originalAmount >= 0) isIncome = true;
           else isExpense = !categoryIsAccount;
         } else {
-          // CSV-parsed data: amounts are abs(), so use the PARSER's flags which were set correctly
+          // CSV-parsed data: amounts are abs(), so use the PARSER's original flags
           isIncome = t.isIncome || false;
           isExpense = (t.isExpense || false) && !categoryIsAccount;
         }
-      } else if (typeLower === 'invoice') {
-        // Invoices represent revenue recognition
-        isIncome = true;
       } else if (typeLower === 'refund receipt' || typeLower === 'credit memo') {
         // Refunds and credit memos reduce income
         isExpense = true;
@@ -36710,7 +36733,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         isIncome = t.isIncome;
         isExpense = t.isExpense && !categoryIsAccount;
       } else {
-        // Catch-all: use original signed amount if available, otherwise use parser flags
+        // Catch-all: use original signed amount if available, otherwise parser flags
         if (hasOriginalSign) {
           if (t.originalAmount > 0) isIncome = true;
           else if (t.originalAmount < 0) isExpense = true;
@@ -36718,8 +36741,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           isIncome = t.isIncome || false;
           isExpense = (t.isExpense || false) && !categoryIsAccount;
         } else {
-          // True catch-all: positive amount with no flags = income
-          isIncome = true;
+          isIncome = true; // True catch-all: positive amount with no flags
         }
       }
       
@@ -37219,8 +37241,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         ...bankingData,
         categoryOverrides: newOverrides,
       };
-      // Re-parse to update category stats (ideally we'd just update the transaction, but this ensures consistency)
-      // For now just update the override and let next upload recalculate
       setBankingData(newBankingData);
       localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
       queueCloudSave({ ...combinedData, bankingData: newBankingData });
@@ -37242,7 +37262,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     // Handle bulk category update for all transactions from a specific vendor
     const handleVendorCategoryUpdate = (vendorName, newCategory) => {
       if (!vendorName || !newCategory) return;
-      // Find all transactions for this vendor in the current filtered view and override their categories
       const newOverrides = { ...(bankingData.categoryOverrides || {}) };
       let count = 0;
       sortedTxns.filter(t => {
@@ -40116,12 +40135,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               <span className="text-violet-400">{to}</span>
                               <button
                                 onClick={() => {
-                                  const newOverrides = { ...vendorOverrides };
-                                  delete newOverrides[from];
-                                  const newBankingData = { ...bankingData, vendorOverrides: newOverrides };
-                                  setBankingData(newBankingData);
-                                  localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
-                                  queueCloudSave({ ...combinedData, bankingData: newBankingData });
+                                  const newOvr = { ...vendorOverrides };
+                                  delete newOvr[from];
+                                  const newBD = { ...bankingData, vendorOverrides: newOvr };
+                                  setBankingData(newBD);
+                                  localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBD));
+                                  queueCloudSave({ ...combinedData, bankingData: newBD });
                                 }}
                                 className="text-slate-600 hover:text-rose-400 ml-1"
                               ><X className="w-3 h-3" /></button>
@@ -40172,7 +40191,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-3">
-                                    {/* Edit buttons - show on hover */}
                                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                       <button
                                         onClick={() => {
@@ -40183,9 +40201,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                         }}
                                         className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
                                         title="Rename this vendor"
-                                      >
-                                        Rename
-                                      </button>
+                                      >Rename</button>
                                       <button
                                         onClick={() => {
                                           const existingCats = Object.keys(expensesByCategory).sort();
@@ -40200,9 +40216,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                         }}
                                         className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
                                         title="Change category for all this vendor's transactions"
-                                      >
-                                        Category
-                                      </button>
+                                      >Category</button>
                                     </div>
                                     <div className="text-right">
                                       <p className="text-rose-400 font-bold">{formatCurrency(vendor.totalSpent)}</p>
@@ -40210,7 +40224,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                     </div>
                                   </div>
                                 </div>
-                                {/* Category breakdown for each vendor */}
                                 {allCategories.length > 1 && (
                                   <div className="flex flex-wrap gap-1.5 mt-2 mb-2">
                                     {allCategories.slice(0, 5).map(([cat, amt]) => (
