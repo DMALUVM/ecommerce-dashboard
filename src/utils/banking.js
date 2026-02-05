@@ -187,14 +187,44 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
     let isExpense = false;
     
     if (currentAccountType === 'credit_card') {
-      if (txnType === 'Expense' && amount > 0) isExpense = true;
+      // Credit card transactions: charges are expenses, credits/refunds are income
+      const txnLower = txnType.toLowerCase();
+      if (txnLower.includes('credit') || txnLower.includes('refund') || txnLower.includes('return')) {
+        isIncome = true;
+      } else if (amount > 0) {
+        isExpense = true;
+      } else if (amount < 0 && !txnLower.includes('payment')) {
+        isIncome = true; // Negative non-payment = refund/credit
+      }
     } else {
       // Checking/savings accounts
       if (txnType === 'Deposit' && amount > 0) isIncome = true;
+      else if (txnType === 'Sales Receipt' && amount > 0) isIncome = true;
+      else if (txnType === 'Payment' && amount > 0) isIncome = true;
+      else if (txnType === 'Invoice' && amount > 0) isIncome = true;
       else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) isExpense = true;
-      else if (txnType === 'Credit Card Payment' && amount < 0) isExpense = true; // Cash leaving to pay card
-      else if (txnType === 'Transfer' && amount > 0) isIncome = true;
+      else if (txnType === 'Credit Card Payment' && amount < 0) isExpense = true;
+      else if (txnType === 'Refund Receipt') isExpense = true;
+      else if (txnType === 'Transfer') {
+        // Only skip true inter-account transfers (checking <-> savings with account number)
+        const catLower = category.toLowerCase();
+        const isInterAccount = (
+          (/\(\d{4}\)\s*[-–]/.test(category) && (
+            catLower.includes('checking') || catLower.includes('savings') || catLower.includes('money market') ||
+            catLower.includes('card') || catLower.includes('operations')
+          )) ||
+          (catLower.includes('checking') && /\(\d{4}\)/.test(category)) ||
+          (catLower.includes('savings') && /\(\d{4}\)/.test(category))
+        );
+        if (isInterAccount) {
+          continue;
+        } else if (amount > 0) isIncome = true;
+        else if (amount < 0) isExpense = true;
+      }
       else if (txnType === 'Payroll Check') isExpense = true;
+      else if (txnType === 'Bill Payment' && amount < 0) isExpense = true;
+      else if (amount > 0 && !isIncome) isIncome = true;  // Catch-all: positive = income
+      else if (amount < 0 && !isExpense) isExpense = true; // Catch-all: negative = expense
     }
     
     if (!isIncome && !isExpense) continue;

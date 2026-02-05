@@ -167,6 +167,120 @@ export default async function handler(req, res) {
       });
     });
 
+    // ========== FETCH SALES RECEIPTS (Direct Sales Revenue) ==========
+    const salesReceiptQuery = `SELECT * FROM SalesReceipt WHERE TxnDate >= '${queryStartDate}' AND TxnDate <= '${queryEndDate}' ORDERBY TxnDate DESC MAXRESULTS 1000`;
+    
+    const salesReceipts = await qboQuery('SalesReceipt', salesReceiptQuery);
+    console.log(`Found ${salesReceipts.length} sales receipts`);
+
+    salesReceipts.forEach(sr => {
+      transactions.push({
+        id: `qbo-salesreceipt-${sr.Id}`,
+        qboId: sr.Id,
+        qboType: 'SalesReceipt',
+        date: sr.TxnDate,
+        type: 'income',
+        amount: Math.abs(sr.TotalAmt || 0),
+        description: sr.DocNumber ? `Sales Receipt #${sr.DocNumber}` : `Sale to ${sr.CustomerRef?.name || 'Customer'}`,
+        account: sr.DepositToAccountRef?.name || 'Undeposited Funds',
+        accountId: sr.DepositToAccountRef?.value,
+        vendor: sr.CustomerRef?.name || '',
+        vendorId: sr.CustomerRef?.value,
+        category: 'Sales Revenue',
+        paymentMethod: sr.PaymentMethodRef?.name || sr.PaymentType || '',
+        memo: sr.PrivateNote || '',
+        balance: sr.Balance || 0,
+        lineItems: (sr.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail').map(line => ({
+          description: line.Description || '',
+          amount: line.Amount || 0,
+          account: line.SalesItemLineDetail?.ItemRef?.name || '',
+          quantity: line.SalesItemLineDetail?.Qty || 0,
+          unitPrice: line.SalesItemLineDetail?.UnitPrice || 0,
+        })),
+      });
+    });
+
+    // ========== FETCH INVOICES (Revenue Recognition) ==========
+    const invoiceQuery = `SELECT * FROM Invoice WHERE TxnDate >= '${queryStartDate}' AND TxnDate <= '${queryEndDate}' ORDERBY TxnDate DESC MAXRESULTS 1000`;
+    
+    const invoices = await qboQuery('Invoice', invoiceQuery);
+    console.log(`Found ${invoices.length} invoices`);
+
+    invoices.forEach(inv => {
+      transactions.push({
+        id: `qbo-invoice-${inv.Id}`,
+        qboId: inv.Id,
+        qboType: 'Invoice',
+        date: inv.TxnDate,
+        dueDate: inv.DueDate,
+        type: 'income',
+        amount: Math.abs(inv.TotalAmt || 0),
+        description: inv.DocNumber ? `Invoice #${inv.DocNumber}` : `Invoice to ${inv.CustomerRef?.name || 'Customer'}`,
+        account: 'Accounts Receivable',
+        vendor: inv.CustomerRef?.name || '',
+        vendorId: inv.CustomerRef?.value,
+        category: 'Sales Revenue',
+        memo: inv.PrivateNote || '',
+        balance: inv.Balance || 0,
+        isPaid: (inv.Balance || 0) === 0,
+        lineItems: (inv.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail').map(line => ({
+          description: line.Description || '',
+          amount: line.Amount || 0,
+          account: line.SalesItemLineDetail?.ItemRef?.name || '',
+          quantity: line.SalesItemLineDetail?.Qty || 0,
+          unitPrice: line.SalesItemLineDetail?.UnitPrice || 0,
+        })),
+      });
+    });
+
+    // ========== FETCH PAYMENTS (Cash Received on Invoices) ==========
+    const paymentQuery = `SELECT * FROM Payment WHERE TxnDate >= '${queryStartDate}' AND TxnDate <= '${queryEndDate}' ORDERBY TxnDate DESC MAXRESULTS 1000`;
+    
+    const payments = await qboQuery('Payment', paymentQuery);
+    console.log(`Found ${payments.length} payments`);
+
+    payments.forEach(pmt => {
+      transactions.push({
+        id: `qbo-payment-${pmt.Id}`,
+        qboId: pmt.Id,
+        qboType: 'Payment',
+        date: pmt.TxnDate,
+        type: 'income',
+        amount: Math.abs(pmt.TotalAmt || 0),
+        description: `Payment from ${pmt.CustomerRef?.name || 'Customer'}${pmt.PaymentRefNum ? ` (Ref: ${pmt.PaymentRefNum})` : ''}`,
+        account: pmt.DepositToAccountRef?.name || 'Undeposited Funds',
+        accountId: pmt.DepositToAccountRef?.value,
+        vendor: pmt.CustomerRef?.name || '',
+        vendorId: pmt.CustomerRef?.value,
+        category: 'Customer Payment',
+        paymentMethod: pmt.PaymentMethodRef?.name || '',
+        memo: pmt.PrivateNote || '',
+      });
+    });
+
+    // ========== FETCH REFUND RECEIPTS ==========
+    const refundQuery = `SELECT * FROM RefundReceipt WHERE TxnDate >= '${queryStartDate}' AND TxnDate <= '${queryEndDate}' ORDERBY TxnDate DESC MAXRESULTS 500`;
+    
+    const refunds = await qboQuery('RefundReceipt', refundQuery);
+    console.log(`Found ${refunds.length} refund receipts`);
+
+    refunds.forEach(ref => {
+      transactions.push({
+        id: `qbo-refund-${ref.Id}`,
+        qboId: ref.Id,
+        qboType: 'RefundReceipt',
+        date: ref.TxnDate,
+        type: 'expense',
+        amount: -Math.abs(ref.TotalAmt || 0),
+        description: `Refund to ${ref.CustomerRef?.name || 'Customer'}`,
+        account: ref.DepositToAccountRef?.name || 'Undeposited Funds',
+        accountId: ref.DepositToAccountRef?.value,
+        vendor: ref.CustomerRef?.name || '',
+        category: 'Refund',
+        memo: ref.PrivateNote || '',
+      });
+    });
+
     // ========== FETCH BILLS ==========
     const billQuery = `SELECT * FROM Bill WHERE TxnDate >= '${queryStartDate}' AND TxnDate <= '${queryEndDate}' ORDERBY TxnDate DESC MAXRESULTS 500`;
     

@@ -311,8 +311,12 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
     } else {
       // Checking/savings accounts
       if (txnType === 'Deposit' && amount > 0) isIncome = true;
+      else if (txnType === 'Sales Receipt' && amount > 0) isIncome = true;
+      else if (txnType === 'Payment' && amount > 0) isIncome = true;
+      else if (txnType === 'Invoice' && amount > 0) isIncome = true;
       else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) isExpense = true;
       else if (txnType === 'Credit Card Payment' && amount < 0) isExpense = true; // Cash leaving to pay card
+      else if (txnType === 'Refund Receipt') isExpense = true;
       else if (txnType === 'Transfer') {
         // Transfers need careful handling:
         // - Inter-account (checking ↔ savings): category will be another bank account → SKIP
@@ -320,9 +324,14 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
         // - Vendor payments via transfer: category will be expense category → EXPENSE
         const catLower = category.toLowerCase();
         const isInterAccount = (
-          /\(\d{4}\)/.test(category) || // Category has account number pattern like (1234)
-          (catLower.includes('checking') || catLower.includes('savings') || catLower.includes('money market')) ||
-          (catLower.includes('card') && (catLower.includes('business') || catLower.includes('(') || catLower.includes('platinum') || catLower.includes('prime')))
+          // Must have account number pattern like (1234) followed by a dash AND a bank/card keyword
+          (/\(\d{4}\)\s*[-–]/.test(category) && (
+            catLower.includes('checking') || catLower.includes('savings') || catLower.includes('money market') ||
+            catLower.includes('card') || catLower.includes('operations')
+          )) ||
+          // Or explicit bank account keywords with account numbers
+          (catLower.includes('checking') && /\(\d{4}\)/.test(category)) ||
+          (catLower.includes('savings') && /\(\d{4}\)/.test(category))
         );
         
         if (isInterAccount) {
@@ -7942,6 +7951,142 @@ const savePeriods = async (d) => {
     
     items.sort((a, b) => b.totalValue - a.totalValue);
 
+    // ===== INDUSTRY-STANDARD SUPPLY CHAIN METRICS =====
+    // ABC Classification (Pareto / 80-20 rule based on annual revenue contribution)
+    const CARRYING_COST_RATE = 0.25; // 25% annual holding cost (industry standard: 20-30%)
+    const ORDER_FIXED_COST = 150;    // Fixed cost per purchase order ($100-$200 typical)
+    
+    // Calculate annual revenue per SKU for ABC analysis
+    const totalAnnualRevenue = items.reduce((sum, item) => {
+      const annualUnits = (item.weeklyVel || 0) * 52;
+      // Use selling price estimate: cost * 2.5x average markup (or use actual if available)
+      const sellingPrice = item.cost > 0 ? item.cost * 2.5 : 0;
+      return sum + (annualUnits * sellingPrice);
+    }, 0);
+    
+    let cumulativeRevenue = 0;
+    const totalInventoryValue = items.reduce((sum, item) => sum + (item.totalValue || 0), 0);
+    const totalAnnualCOGS = items.reduce((sum, item) => sum + ((item.weeklyVel || 0) * 52 * (item.cost || 0)), 0);
+    
+    // Sort by annual revenue contribution for ABC classification
+    const itemsByRevenue = [...items].sort((a, b) => {
+      const aRev = (a.weeklyVel || 0) * 52 * (a.cost || 0) * 2.5;
+      const bRev = (b.weeklyVel || 0) * 52 * (b.cost || 0) * 2.5;
+      return bRev - aRev;
+    });
+    
+    const abcLookup = {};
+    itemsByRevenue.forEach(item => {
+      const annualRev = (item.weeklyVel || 0) * 52 * (item.cost || 0) * 2.5;
+      cumulativeRevenue += annualRev;
+      const cumulativePct = totalAnnualRevenue > 0 ? (cumulativeRevenue / totalAnnualRevenue) * 100 : 100;
+      
+      let abcClass = 'C';
+      if (cumulativePct <= 80) abcClass = 'A';      // Top ~20% of SKUs = 80% of revenue
+      else if (cumulativePct <= 95) abcClass = 'B';  // Next ~30% = 15% of revenue
+      // Remaining ~50% = 5% of revenue → C class
+      
+      abcLookup[item.sku] = abcClass;
+    });
+    
+    // Apply ABC and calculate additional metrics per item
+    items.forEach(item => {
+      const annualDemandUnits = (item.weeklyVel || 0) * 52;
+      const annualDemandCost = annualDemandUnits * (item.cost || 0);
+      
+      // ABC Classification
+      item.abcClass = abcLookup[item.sku] || 'C';
+      
+      // Inventory Turnover = Annual COGS sold / Average Inventory Value
+      // Use current stock as proxy for average inventory
+      item.turnoverRate = item.totalValue > 0 
+        ? Math.round((annualDemandCost / item.totalValue) * 10) / 10 
+        : 0;
+      
+      // Annual Carrying Cost = Inventory Value × Carrying Cost Rate
+      item.annualCarryingCost = Math.round(item.totalValue * CARRYING_COST_RATE * 100) / 100;
+      
+      // EOQ (Economic Order Quantity) = √(2 × D × S / H)
+      // D = annual demand units, S = fixed order cost, H = annual holding cost per unit
+      const holdingCostPerUnit = (item.cost || 0) * CARRYING_COST_RATE;
+      item.eoq = holdingCostPerUnit > 0 && annualDemandUnits > 0
+        ? Math.ceil(Math.sqrt((2 * annualDemandUnits * ORDER_FIXED_COST) / holdingCostPerUnit))
+        : 0;
+      
+      // Sell-Through Rate = Units Sold / (Units Sold + Ending Inventory) over trailing period
+      // Using 30-day window: weekly velocity * 4.3 weeks
+      const monthlyUnitsSold = (item.weeklyVel || 0) * 4.3;
+      item.sellThroughRate = (monthlyUnitsSold + item.totalQty) > 0
+        ? Math.round((monthlyUnitsSold / (monthlyUnitsSold + item.totalQty)) * 1000) / 10
+        : 0;
+      
+      // Weeks of Supply (complement to Days of Supply)
+      item.weeksOfSupply = item.weeklyVel > 0 ? Math.round((item.totalQty / item.weeklyVel) * 10) / 10 : 999;
+      
+      // Stock-to-Sales Ratio = Current Inventory / Monthly Sales
+      item.stockToSalesRatio = monthlyUnitsSold > 0
+        ? Math.round((item.totalQty / monthlyUnitsSold) * 10) / 10
+        : 999;
+      
+      // Stockout Risk Score (0-100) based on days of supply, lead time, and demand variability
+      let stockoutRisk = 0;
+      if (item.weeklyVel > 0) {
+        // Base risk from days of supply vs lead time
+        const dosRatio = item.daysOfSupply / Math.max(item.leadTimeDays, 1);
+        if (dosRatio < 0.5) stockoutRisk = 95;      // Critical: less than half lead time
+        else if (dosRatio < 1.0) stockoutRisk = 80;  // High: less than one lead time
+        else if (dosRatio < 1.5) stockoutRisk = 50;  // Medium: less than 1.5× lead time
+        else if (dosRatio < 2.5) stockoutRisk = 25;  // Low: 1.5-2.5× lead time
+        else stockoutRisk = 5;                        // Minimal
+        
+        // Adjust for demand variability (higher CV = higher risk)
+        const cvAdjustment = (item.cv || 0) * 15; // Up to +15 risk for CV=1.0
+        stockoutRisk = Math.min(100, Math.round(stockoutRisk + cvAdjustment));
+      }
+      item.stockoutRisk = stockoutRisk;
+      
+      // Refined health status using industry thresholds aligned with AI forecast
+      // Uses reorder point and safety stock for classification, not just days of supply
+      if (item.weeklyVel > 0) {
+        if (item.daysUntilMustOrder !== null && item.daysUntilMustOrder < 0) {
+          item.health = 'critical'; // Past reorder date
+        } else if (item.daysOfSupply < 14 || (item.daysUntilMustOrder !== null && item.daysUntilMustOrder < 7)) {
+          item.health = 'critical';
+        } else if (item.daysOfSupply < 30 || (item.daysUntilMustOrder !== null && item.daysUntilMustOrder < 14)) {
+          item.health = 'low';
+        } else if (item.daysOfSupply <= 90) {
+          item.health = 'healthy';
+        } else {
+          item.health = 'overstock';
+        }
+      }
+    });
+    
+    // Recalculate status counts after refined classification
+    let critical = 0, low = 0, healthy = 0, overstock = 0;
+    items.forEach(item => {
+      if (item.health === 'critical') critical++;
+      else if (item.health === 'low') low++;
+      else if (item.health === 'healthy') healthy++;
+      else if (item.health === 'overstock') overstock++;
+    });
+    
+    // Aggregate supply chain KPIs
+    const avgTurnover = items.filter(i => i.turnoverRate > 0).length > 0
+      ? items.filter(i => i.turnoverRate > 0).reduce((s, i) => s + i.turnoverRate, 0) / items.filter(i => i.turnoverRate > 0).length
+      : 0;
+    const totalCarryingCost = items.reduce((s, i) => s + (i.annualCarryingCost || 0), 0);
+    const avgSellThrough = items.filter(i => i.sellThroughRate > 0).length > 0
+      ? items.filter(i => i.sellThroughRate > 0).reduce((s, i) => s + i.sellThroughRate, 0) / items.filter(i => i.sellThroughRate > 0).length
+      : 0;
+    const abcCounts = items.reduce((acc, i) => { acc[i.abcClass] = (acc[i.abcClass] || 0) + 1; return acc; }, {});
+    const inStockRate = items.filter(i => i.weeklyVel > 0).length > 0
+      ? Math.round((items.filter(i => i.weeklyVel > 0 && i.totalQty > 0).length / items.filter(i => i.weeklyVel > 0).length) * 1000) / 10
+      : 100;
+
+    // Re-sort by value (default)
+    items.sort((a, b) => b.totalValue - a.totalValue);
+
     const hasAmazonWeeklyData = Object.keys(amazonSkuVelocity).length > 0;
     const hasShopifyWeeklyData = Object.keys(shopifySkuVelocity).length > 0;
     
@@ -7990,7 +8135,14 @@ const savePeriods = async (d) => {
         low, 
         healthy, 
         overstock, 
-        skuCount: items.length 
+        skuCount: items.length,
+        // Supply Chain KPIs
+        avgTurnover: Math.round(avgTurnover * 10) / 10,
+        totalCarryingCost: Math.round(totalCarryingCost),
+        avgSellThrough: Math.round(avgSellThrough * 10) / 10,
+        inStockRate,
+        abcCounts,
+        totalAnnualCOGS: Math.round(totalAnnualCOGS),
       },
       items,
       awdData, // AWD inventory breakdown
@@ -13016,6 +13168,13 @@ Respond with ONLY this JSON:
           seasonalFactor: item.seasonalFactor || 1.0,
           cv: item.cv || 0,
           demandClass: item.demandClass || 'unknown',
+          // Supply chain metrics
+          abcClass: item.abcClass || 'C',
+          turnoverRate: item.turnoverRate || 0,
+          eoq: item.eoq || 0,
+          sellThroughRate: item.sellThroughRate || 0,
+          stockoutRisk: item.stockoutRisk || 0,
+          annualCarryingCost: item.annualCarryingCost || 0,
         };
       });
       
@@ -13045,11 +13204,19 @@ Respond with ONLY this JSON:
 - cv = coefficient of variation (demand variability: smooth <0.5, lumpy 0.5-1.0, intermittent >1.0)
 - suggestedOrderQty already includes safety stock buffer
 
-## URGENCY LEVELS (based on daysUntilMustOrder):
-- CRITICAL: daysUntilMustOrder < 0 (overdue!) or < 7 days
-- REORDER: daysUntilMustOrder < 14 days  
-- MONITOR: daysUntilMustOrder < 30 days
-- HEALTHY: daysUntilMustOrder >= 30 days
+## URGENCY LEVELS (aligned with inventory page - based on daysUntilMustOrder):
+- CRITICAL: daysUntilMustOrder < 0 (overdue!) OR daysOfSupply < 14 OR daysUntilMustOrder < 7
+- REORDER: daysUntilMustOrder < 14 OR daysOfSupply < 30
+- MONITOR: daysUntilMustOrder < 30 OR daysOfSupply < 60
+- HEALTHY: daysUntilMustOrder >= 30 AND daysOfSupply >= 60
+
+## SUPPLY CHAIN METRICS (per SKU):
+- abcClass: A (top 80% revenue), B (next 15%), C (bottom 5%) — prioritize A-class items
+- turnoverRate: annual turns (target 6×+ for DTC, 3-4× acceptable)
+- eoq: Economic Order Quantity (optimal order size to minimize total cost)
+- sellThroughRate: monthly sell-through % (>20% is good)
+- stockoutRisk: 0-100 score combining days of supply, lead time, and demand variability
+- annualCarryingCost: yearly cost of holding this inventory (25% of value)
 
 ## CURRENT INVENTORY (${currentInventory.length} SKUs) - ALL VALUES PRE-CALCULATED
 ${JSON.stringify(currentInventory.slice(0, 30), null, 2)}
@@ -23954,6 +24121,21 @@ if (shopifySkuWithShipping.length > 0) {
       low: items.filter(i => i.health === 'low').length,
       healthy: items.filter(i => i.health === 'healthy').length,
       overstock: items.filter(i => i.health === 'overstock').length,
+      // Recalculated supply chain KPIs from filtered items
+      avgTurnover: (() => {
+        const withTurnover = items.filter(i => i.turnoverRate > 0);
+        return withTurnover.length > 0 ? Math.round(withTurnover.reduce((s, i) => s + i.turnoverRate, 0) / withTurnover.length * 10) / 10 : summary.avgTurnover || 0;
+      })(),
+      totalCarryingCost: Math.round(items.reduce((s, i) => s + (i.annualCarryingCost || 0), 0)) || summary.totalCarryingCost || 0,
+      avgSellThrough: (() => {
+        const withST = items.filter(i => i.sellThroughRate > 0);
+        return withST.length > 0 ? Math.round(withST.reduce((s, i) => s + i.sellThroughRate, 0) / withST.length * 10) / 10 : summary.avgSellThrough || 0;
+      })(),
+      inStockRate: (() => {
+        const withVel = items.filter(i => i.weeklyVel > 0);
+        return withVel.length > 0 ? Math.round(withVel.filter(i => i.totalQty > 0).length / withVel.length * 1000) / 10 : summary.inStockRate || 100;
+      })(),
+      abcCounts: items.reduce((acc, i) => { if (i.abcClass) acc[i.abcClass] = (acc[i.abcClass] || 0) + 1; return acc; }, {}) || summary.abcCounts || {},
     };
     
     // Get SKU settings helper
@@ -24313,6 +24495,51 @@ if (shopifySkuWithShipping.length > 0) {
             <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><CheckCircle className="w-5 h-5 text-emerald-400" /><span className="text-emerald-400 font-medium">Healthy</span></div><p className="text-2xl font-bold text-white">{filteredSummary.healthy}</p><p className="text-xs text-slate-400">30-90 days</p></div>
             <div className="bg-violet-500/10 border border-violet-500/30 rounded-2xl p-4"><div className="flex items-center gap-2 mb-2"><Clock className="w-5 h-5 text-violet-400" /><span className="text-violet-400 font-medium">Overstock</span></div><p className="text-2xl font-bold text-white">{filteredSummary.overstock}</p><p className="text-xs text-slate-400">&gt;90 days</p></div>
           </div>
+          
+          {/* Supply Chain KPIs Dashboard */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">🔄 Inventory Turnover</p>
+              <p className={`text-lg font-bold ${filteredSummary.avgTurnover >= 6 ? 'text-emerald-400' : filteredSummary.avgTurnover >= 3 ? 'text-amber-400' : 'text-rose-400'}`}>
+                {filteredSummary.avgTurnover > 0 ? `${filteredSummary.avgTurnover}×` : '—'}
+              </p>
+              <p className="text-slate-500 text-[10px]">{filteredSummary.avgTurnover >= 6 ? 'Excellent' : filteredSummary.avgTurnover >= 3 ? 'Average' : 'Below target'} (6×+ ideal)</p>
+            </div>
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">💰 Carrying Cost/yr</p>
+              <p className="text-lg font-bold text-amber-400">{filteredSummary.totalCarryingCost > 0 ? formatCurrency(filteredSummary.totalCarryingCost) : '—'}</p>
+              <p className="text-slate-500 text-[10px]">25% of inventory value</p>
+            </div>
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">📈 Sell-Through Rate</p>
+              <p className={`text-lg font-bold ${filteredSummary.avgSellThrough >= 20 ? 'text-emerald-400' : filteredSummary.avgSellThrough >= 10 ? 'text-amber-400' : 'text-rose-400'}`}>
+                {filteredSummary.avgSellThrough > 0 ? `${filteredSummary.avgSellThrough}%` : '—'}
+              </p>
+              <p className="text-slate-500 text-[10px]">30-day avg (20%+ good)</p>
+            </div>
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">✅ In-Stock Rate</p>
+              <p className={`text-lg font-bold ${filteredSummary.inStockRate >= 95 ? 'text-emerald-400' : filteredSummary.inStockRate >= 85 ? 'text-amber-400' : 'text-rose-400'}`}>
+                {filteredSummary.inStockRate}%
+              </p>
+              <p className="text-slate-500 text-[10px]">Target: 95%+ service level</p>
+            </div>
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">🏷️ ABC Classification</p>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-400 font-medium">A:{filteredSummary.abcCounts?.A || 0}</span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400 font-medium">B:{filteredSummary.abcCounts?.B || 0}</span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400 font-medium">C:{filteredSummary.abcCounts?.C || 0}</span>
+              </div>
+              <p className="text-slate-500 text-[10px]">Revenue-based Pareto</p>
+            </div>
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3">
+              <p className="text-slate-400 text-xs mb-1 flex items-center gap-1">🛡️ Safety Stock Buffer</p>
+              <p className="text-lg font-bold text-cyan-400">{items.reduce((s, i) => s + (i.safetyStock || 0), 0).toLocaleString()}</p>
+              <p className="text-slate-500 text-[10px]">95% service level (Z=1.65)</p>
+            </div>
+          </div>
+          
           {/* Reorder Alert - Items with less than 120 days supply */}
           {(() => {
             const lowStock = items.filter(item => item.daysOfSupply !== 999 && item.daysOfSupply < 120 && item.daysOfSupply > 0);
@@ -24498,11 +24725,6 @@ if (shopifySkuWithShipping.length > 0) {
                   </div>
                 </div>
                 <div className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3">
-                  <p className="text-slate-400 text-xs mb-1">🛡️ Total Safety Stock</p>
-                  <p className="text-white font-semibold">{items.reduce((s, i) => s + (i.safetyStock || 0), 0).toLocaleString()} units</p>
-                  <p className="text-slate-500 text-xs">95% service level buffer</p>
-                </div>
-                <div className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3">
                   <p className="text-slate-400 text-xs mb-1">📅 Seasonal Factor</p>
                   {(() => {
                     const factors = items.filter(i => i.seasonalFactor && i.seasonalFactor !== 1);
@@ -24536,29 +24758,46 @@ if (shopifySkuWithShipping.length > 0) {
                     );
                   })()}
                 </div>
+                <div className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3">
+                  <p className="text-slate-400 text-xs mb-1">🔢 EOQ Optimization</p>
+                  {(() => {
+                    const withEOQ = items.filter(i => i.eoq > 0);
+                    const totalEOQ = withEOQ.reduce((s, i) => s + i.eoq, 0);
+                    const aboveEOQ = withEOQ.filter(i => i.totalQty > i.eoq * 1.5);
+                    return (
+                      <>
+                        <p className="text-white font-semibold">{withEOQ.length} SKUs</p>
+                        <p className="text-slate-500 text-xs">{aboveEOQ.length > 0 ? `${aboveEOQ.length} above optimal qty` : 'Orders optimized'}</p>
+                      </>
+                    );
+                  })()}
+                </div>
               </div>
             )}
             
             <div className="overflow-x-auto">
               <table className="w-full" style={{tableLayout: 'fixed', minWidth: '1100px'}}>
                 <colgroup>
-                  <col style={{width: '200px'}} />
-                  <col style={{width: '70px'}} />
-                  <col style={{width: '70px'}} />
-                  <col style={{width: '70px'}} />
-                  <col style={{width: '90px'}} />
+                  <col style={{width: '185px'}} />
+                  <col style={{width: '30px'}} />
                   <col style={{width: '65px'}} />
                   <col style={{width: '65px'}} />
                   <col style={{width: '65px'}} />
-                  <col style={{width: '50px'}} />
-                  <col style={{width: '70px'}} />
-                  <col style={{width: '70px'}} />
                   <col style={{width: '80px'}} />
-                  <col style={{width: '40px'}} />
+                  <col style={{width: '55px'}} />
+                  <col style={{width: '55px'}} />
+                  <col style={{width: '55px'}} />
+                  <col style={{width: '50px'}} />
+                  <col style={{width: '45px'}} />
+                  <col style={{width: '65px'}} />
+                  <col style={{width: '65px'}} />
+                  <col style={{width: '75px'}} />
+                  <col style={{width: '35px'}} />
                 </colgroup>
                 <thead className="bg-slate-900/50"><tr>
                   {[
                     { key: 'name', label: 'Product', align: 'left' },
+                    { key: 'abcClass', label: 'ABC', align: 'center' },
                     { key: 'amazonQty', label: 'Amazon', align: 'right' },
                     { key: 'threeplQty', label: '3PL', align: 'right' },
                     { key: 'totalQty', label: 'Total', align: 'right' },
@@ -24567,6 +24806,7 @@ if (shopifySkuWithShipping.length > 0) {
                     { key: 'shopWeeklyVel', label: 'Shop Vel', align: 'right' },
                     { key: 'weeklyVel', label: 'Tot Vel', align: 'right' },
                     { key: 'daysOfSupply', label: 'Days', align: 'right' },
+                    { key: 'turnoverRate', label: 'Turn', align: 'right' },
                     { key: 'stockoutDate', label: 'Stockout', align: 'right' },
                     { key: 'reorderByDate', label: 'Order By', align: 'right' },
                     { key: 'health', label: 'Status', align: 'center' },
@@ -24610,6 +24850,15 @@ if (shopifySkuWithShipping.length > 0) {
                             </div>
                           </div>
                         </td>
+                        <td className="text-center px-1 py-2">
+                          <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
+                            item.abcClass === 'A' ? 'bg-emerald-900/50 text-emerald-400' :
+                            item.abcClass === 'B' ? 'bg-blue-900/50 text-blue-400' :
+                            'bg-slate-700/50 text-slate-500'
+                          }`} title={`ABC Class: ${item.abcClass} | EOQ: ${item.eoq || 0} units | Carrying Cost: ${formatCurrency(item.annualCarryingCost || 0)}/yr | Sell-Through: ${item.sellThroughRate || 0}% | Risk: ${item.stockoutRisk || 0}/100`}>
+                            {item.abcClass || '—'}
+                          </span>
+                        </td>
                         <td className="text-right px-2 py-2 text-orange-400 text-sm">{formatNumber(item.amazonQty)}</td>
                         <td className={`text-right px-2 py-2 text-sm ${settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty ? 'text-rose-400 font-bold' : 'text-violet-400'}`}>{formatNumber(item.threeplQty)}</td>
                         <td className="text-right px-2 py-2 text-white text-sm font-medium">{formatNumber(item.totalQty)}</td>
@@ -24617,9 +24866,13 @@ if (shopifySkuWithShipping.length > 0) {
                         <td className="text-right px-2 py-2 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>
                         <td className="text-right px-2 py-2 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
                         <td className="text-right px-2 py-2 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
-                        <td className="text-right px-2 py-2" title={item.safetyStock > 0 ? `Safety Stock: ${item.safetyStock} units | Reorder Point: ${item.reorderPoint} units | CV: ${item.cv} (${item.demandClass}) | Season: ${item.seasonalFactor}x` : ''}>
+                        <td className="text-right px-2 py-2" title={item.safetyStock > 0 ? `Safety Stock: ${item.safetyStock} units | Reorder Point: ${item.reorderPoint} units | CV: ${item.cv} (${item.demandClass}) | Season: ${item.seasonalFactor}x | EOQ: ${item.eoq} units | Carrying Cost: ${formatCurrency(item.annualCarryingCost || 0)}/yr` : ''}>
                           <span className="text-white text-sm">{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</span>
                           {item.safetyStock > 0 && <span className="block text-[10px] text-cyan-500">SS:{item.safetyStock}</span>}
+                        </td>
+                        <td className="text-right px-2 py-2" title={`Turnover: ${item.turnoverRate}×/yr | Sell-Through: ${item.sellThroughRate}% | Stock:Sales: ${item.stockToSalesRatio === 999 ? '—' : item.stockToSalesRatio + ':1'} | Stockout Risk: ${item.stockoutRisk}/100`}>
+                          <span className={`text-sm ${item.turnoverRate >= 8 ? 'text-emerald-400' : item.turnoverRate >= 4 ? 'text-white' : item.turnoverRate > 0 ? 'text-amber-400' : 'text-slate-600'}`}>{item.turnoverRate > 0 ? `${item.turnoverRate}×` : '—'}</span>
+                          {item.sellThroughRate > 0 && <span className={`block text-[10px] ${item.sellThroughRate >= 20 ? 'text-emerald-500' : item.sellThroughRate >= 10 ? 'text-slate-400' : 'text-amber-500'}`}>{item.sellThroughRate}%</span>}
                         </td>
                         <td className="text-right px-2 py-2 text-slate-400 text-xs">{item.stockoutDate ? (() => { const d = new Date(item.stockoutDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>
                         <td className={`text-right px-2 py-2 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? (() => { const d = new Date(item.reorderByDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>
@@ -36113,16 +36366,21 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const isAccountCategory = (cat) => {
       if (!cat) return false;
       const c = cat.toLowerCase();
-      return (
-        // Credit card accounts
-        c.includes('card') && (c.includes('(') || c.includes('business') || c.includes('platinum') || c.includes('prime')) ||
-        // Bank accounts
-        c.includes('operations') && c.includes('(') ||
-        c.includes('checking') && c.includes('(') ||
-        c.includes('savings') && c.includes('(') ||
-        // Generic account patterns
-        /\(\d{4}\)/.test(cat) // Has (1234) pattern - account number
+      
+      // Only match if the category looks like an actual financial account
+      // Must have BOTH an account keyword AND an account number pattern like (1234) - XXXX
+      const hasAccountNumber = /\(\d{4}\)\s*[-–]/.test(cat);
+      
+      const isCardAccount = (
+        (c.includes('card') || c.includes('amex') || c.includes('visa') || c.includes('mastercard') || c.includes('discover')) &&
+        hasAccountNumber
       );
+      const isBankTransferAccount = (
+        (c.includes('checking') || c.includes('savings') || c.includes('operations') || c.includes('money market')) &&
+        hasAccountNumber
+      );
+      
+      return isCardAccount || isBankTransferAccount;
     };
     
     // Transform transactions to ensure they have correct flags
@@ -36148,8 +36406,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       
       if (isJournalEntry || isInterAccountTransfer) {
         // Skip: journal entries and inter-account transfers are not income/expense
-      } else if (typeLower === 'deposit') {
+      } else if (typeLower === 'deposit' || typeLower === 'income' || typeLower === 'sales receipt' || typeLower === 'payment') {
+        // All forms of income: bank deposits, API income type, sales receipts, customer payments
         isIncome = true;
+      } else if (typeLower === 'invoice') {
+        // Invoices represent revenue recognition
+        isIncome = true;
+      } else if (typeLower === 'refund receipt' || typeLower === 'credit memo') {
+        // Refunds and credit memos reduce income
+        isExpense = true;
       } else if (typeLower === 'transfer' && !categoryIsAccount) {
         // External transfer (Amazon/Shopify deposits, vendor payments via transfer)
         // Amount is stored as abs value, so use the parser's income/expense flags
@@ -36159,7 +36424,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         if (!categoryIsAccount) {
           isExpense = true;
         }
-      } else if (typeLower === 'bill payment') {
+      } else if (typeLower === 'bill' || typeLower === 'bill payment') {
         if (!categoryIsAccount) {
           isExpense = true;
         }
@@ -36176,9 +36441,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           if (amt > 0) isExpense = !categoryIsAccount;
         }
       } else if (t.isIncome !== undefined) {
-        // Fall back to existing flags from QBO parser
+        // Fall back to existing flags from QBO parser for known transaction types
         isIncome = t.isIncome;
         isExpense = t.isExpense && !categoryIsAccount;
+      } else {
+        // Catch-all: use amount sign to determine income vs expense
+        const origAmt = t.originalAmount || t.amount || 0;
+        if (origAmt > 0) isIncome = true;
+        else if (origAmt < 0) isExpense = true;
       }
       
       return {
@@ -41586,6 +41856,17 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               const isIncome = t.type === 'income' || (t.type === 'transfer' && t.amount > 0);
                               const isExpense = t.type === 'expense' || t.type === 'bill' || (t.type === 'transfer' && t.amount < 0);
                               
+                              // Map QBO entity type to a display-friendly transaction type
+                              const displayType = t.qboType === 'SalesReceipt' ? 'Sales Receipt'
+                                : t.qboType === 'Invoice' ? 'Invoice'
+                                : t.qboType === 'Payment' ? 'Payment'
+                                : t.qboType === 'RefundReceipt' ? 'Refund Receipt'
+                                : t.qboType === 'Deposit' ? 'Deposit'
+                                : t.qboType === 'Purchase' ? 'Expense'
+                                : t.qboType === 'Transfer' ? 'Transfer'
+                                : t.qboType === 'Bill' ? 'Bill'
+                                : t.type;
+                              
                               // Calculate display amount (always positive for display)
                               const displayAmount = Math.abs(t.amount);
                               
@@ -41594,6 +41875,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               
                               return {
                                 ...t,
+                                // Override type with display-friendly QBO type for banking tab classification
+                                type: displayType,
                                 // Add required flags for banking view
                                 isIncome,
                                 isExpense,
