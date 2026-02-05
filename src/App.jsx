@@ -12954,41 +12954,26 @@ Respond with ONLY this JSON:
       const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60; // Want shipment to arrive when stock = this
       const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22; // Minimum order size (5 months ≈ 22 weeks)
       
-      // Pre-calculate stockout dates and reorder points - don't rely on AI for date math
+      // Pre-calculated stockout dates and reorder points already exist on each item
+      // Use them directly for consistency with the inventory table
       const today = new Date();
       const currentInventory = (invHistory[latestInvKey]?.items || []).map(item => {
         const currentStock = item.totalQty || 0;
         const weeklyVelocity = item.weeklyVel || 0;
         const dailyVelocity = weeklyVelocity / 7;
-        const daysOfSupply = dailyVelocity > 0 ? Math.round(currentStock / dailyVelocity) : 999;
         const leadTimeDays = getLeadTime(item.sku);
         
-        // Calculate stockout date: today + days of supply
-        let stockoutDate = null;
-        if (dailyVelocity > 0 && daysOfSupply < 365) {
-          const stockout = new Date(today);
-          stockout.setDate(stockout.getDate() + daysOfSupply);
-          stockoutDate = stockout.toISOString().split('T')[0];
-        }
+        // Use pre-calculated values from inventory build (includes safety stock + seasonality)
+        const daysOfSupply = item.daysOfSupply || (dailyVelocity > 0 ? Math.round(currentStock / dailyVelocity) : 999);
+        const stockoutDate = item.stockoutDate || null;
+        const reorderByDate = item.reorderByDate || null;
+        const daysUntilMustOrder = item.daysUntilMustOrder ?? (daysOfSupply - reorderTriggerDays - leadTimeDays);
+        const suggestedOrderQty = item.suggestedOrderQty || Math.ceil(weeklyVelocity * minOrderWeeks);
         
-        // NEW LOGIC: Calculate when to place order so shipment arrives when stock = reorderTriggerDays
-        // Order when: daysOfSupply = reorderTriggerDays + leadTimeDays
-        // So: reorderByDate = today + (daysOfSupply - reorderTriggerDays - leadTimeDays)
-        const daysUntilMustOrder = daysOfSupply - reorderTriggerDays - leadTimeDays;
-        let reorderByDate = null;
+        // Use pre-calculated urgency or derive from daysUntilMustOrder
+        let calculatedUrgency = item.health || 'healthy';
         if (dailyVelocity > 0) {
-          const reorderBy = new Date(today);
-          reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
-          reorderByDate = reorderBy.toISOString().split('T')[0];
-        }
-        
-        // Calculate suggested order quantity (minimum X weeks of supply)
-        const suggestedOrderQty = Math.ceil(weeklyVelocity * minOrderWeeks);
-        
-        // Determine urgency based on days until order must be placed
-        let calculatedUrgency = 'healthy';
-        if (dailyVelocity > 0) {
-          if (daysUntilMustOrder < 0) calculatedUrgency = 'critical'; // Already past order date!
+          if (daysUntilMustOrder < 0) calculatedUrgency = 'critical';
           else if (daysUntilMustOrder < 7) calculatedUrgency = 'critical';
           else if (daysUntilMustOrder < 14) calculatedUrgency = 'reorder';
           else if (daysUntilMustOrder < 30) calculatedUrgency = 'monitor';
@@ -13011,6 +12996,12 @@ Respond with ONLY this JSON:
           health: item.health,
           leadTimeDays,
           cost: getCogsCost(item.sku) || item.cost || 0,
+          // Include demand metrics for AI context
+          safetyStock: item.safetyStock || 0,
+          reorderPoint: item.reorderPoint || 0,
+          seasonalFactor: item.seasonalFactor || 1.0,
+          cv: item.cv || 0,
+          demandClass: item.demandClass || 'unknown',
         };
       });
       
@@ -13034,8 +13025,11 @@ Respond with ONLY this JSON:
 ## HOW REORDER DATES ARE CALCULATED:
 - stockoutDate = Today + daysOfSupply (when stock hits 0)
 - reorderByDate = Today + daysUntilMustOrder (when to place the order)
-- daysUntilMustOrder = daysOfSupply - ${reorderTriggerDays} (target buffer) - leadTimeDays
-- This ensures the shipment arrives when you still have ${reorderTriggerDays} days of inventory left
+- Reorder point includes safety stock (Z=1.65, 95% service level) and seasonal adjustment
+- safetyStock = units of buffer to protect against demand variability
+- seasonalFactor = current month's demand relative to average (>1 = peak season, <1 = slow)
+- cv = coefficient of variation (demand variability: smooth <0.5, lumpy 0.5-1.0, intermittent >1.0)
+- suggestedOrderQty already includes safety stock buffer
 
 ## URGENCY LEVELS (based on daysUntilMustOrder):
 - CRITICAL: daysUntilMustOrder < 0 (overdue!) or < 7 days
@@ -24472,6 +24466,65 @@ if (shopifySkuWithShipping.length > 0) {
                 </button>
               </div>
             </div>
+            
+            {/* Demand Intelligence Summary */}
+            {items.some(i => i.safetyStock > 0) && (
+              <div className="mb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3">
+                  <p className="text-slate-400 text-xs mb-1">📊 Demand Classification</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {(() => {
+                      const classes = items.reduce((acc, i) => { if (i.demandClass && i.demandClass !== 'unknown') acc[i.demandClass] = (acc[i.demandClass] || 0) + 1; return acc; }, {});
+                      return Object.entries(classes).map(([cls, count]) => (
+                        <span key={cls} className={`text-xs px-2 py-0.5 rounded-full ${cls === 'smooth' ? 'bg-emerald-900/50 text-emerald-400' : cls === 'lumpy' ? 'bg-amber-900/50 text-amber-400' : 'bg-rose-900/50 text-rose-400'}`}>
+                          {cls}: {count}
+                        </span>
+                      ));
+                    })()}
+                  </div>
+                </div>
+                <div className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3">
+                  <p className="text-slate-400 text-xs mb-1">🛡️ Total Safety Stock</p>
+                  <p className="text-white font-semibold">{items.reduce((s, i) => s + (i.safetyStock || 0), 0).toLocaleString()} units</p>
+                  <p className="text-slate-500 text-xs">95% service level buffer</p>
+                </div>
+                <div className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3">
+                  <p className="text-slate-400 text-xs mb-1">📅 Seasonal Factor</p>
+                  {(() => {
+                    const factors = items.filter(i => i.seasonalFactor && i.seasonalFactor !== 1);
+                    const avg = factors.length > 0 ? factors.reduce((s, i) => s + i.seasonalFactor, 0) / factors.length : 1;
+                    return (
+                      <>
+                        <p className={`font-semibold ${avg > 1.1 ? 'text-emerald-400' : avg < 0.9 ? 'text-amber-400' : 'text-white'}`}>
+                          {avg.toFixed(2)}x avg
+                        </p>
+                        <p className="text-slate-500 text-xs">{avg > 1.1 ? '↑ Peak season' : avg < 0.9 ? '↓ Slow season' : '→ Normal season'}</p>
+                      </>
+                    );
+                  })()}
+                </div>
+                <div className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3">
+                  <p className="text-slate-400 text-xs mb-1">⚠️ High Variability</p>
+                  {(() => {
+                    const highCV = items.filter(i => i.cv >= 0.8).sort((a, b) => b.cv - a.cv);
+                    return highCV.length > 0 ? (
+                      <>
+                        <p className="text-rose-400 font-semibold">{highCV.length} SKUs</p>
+                        <p className="text-slate-500 text-xs truncate" title={highCV.map(i => i.sku).join(', ')}>
+                          {highCV.slice(0, 2).map(i => i.sku).join(', ')}{highCV.length > 2 ? '...' : ''}
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-emerald-400 font-semibold">None</p>
+                        <p className="text-slate-500 text-xs">All SKUs have stable demand</p>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
+            
             <div className="overflow-x-auto">
               <table className="w-full" style={{tableLayout: 'fixed', minWidth: '1100px'}}>
                 <colgroup>
@@ -24550,10 +24603,20 @@ if (shopifySkuWithShipping.length > 0) {
                         <td className="text-right px-2 py-2 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>
                         <td className="text-right px-2 py-2 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
                         <td className="text-right px-2 py-2 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
-                        <td className="text-right px-2 py-2 text-white text-sm" title={item.safetyStock > 0 ? `Safety Stock: ${item.safetyStock} units | Reorder Point: ${item.reorderPoint} units | CV: ${item.cv} (${item.demandClass}) | Season: ${item.seasonalFactor}x` : ''}>{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</td>
+                        <td className="text-right px-2 py-2" title={item.safetyStock > 0 ? `Safety Stock: ${item.safetyStock} units | Reorder Point: ${item.reorderPoint} units | CV: ${item.cv} (${item.demandClass}) | Season: ${item.seasonalFactor}x` : ''}>
+                          <span className="text-white text-sm">{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</span>
+                          {item.safetyStock > 0 && <span className="block text-[10px] text-cyan-500">SS:{item.safetyStock}</span>}
+                        </td>
                         <td className="text-right px-2 py-2 text-slate-400 text-xs">{item.stockoutDate ? (() => { const d = new Date(item.stockoutDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>
                         <td className={`text-right px-2 py-2 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? (() => { const d = new Date(item.reorderByDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>
-                        <td className="text-center px-2 py-2" title={`${item.demandClass !== 'unknown' ? `Demand: ${item.demandClass} (CV=${item.cv})` : ''} ${item.safetyStock > 0 ? `| SS: ${item.safetyStock}` : ''} ${item.seasonalFactor && item.seasonalFactor !== 1 ? `| Season: ${item.seasonalFactor}x` : ''}`}><HealthBadge health={item.aiUrgency || item.health} /></td>
+                        <td className="text-center px-2 py-2" title={`${item.demandClass !== 'unknown' ? `Demand: ${item.demandClass} (CV=${item.cv})` : ''} ${item.safetyStock > 0 ? `| SS: ${item.safetyStock}` : ''} ${item.seasonalFactor && item.seasonalFactor !== 1 ? `| Season: ${item.seasonalFactor}x` : ''}`}>
+                          <HealthBadge health={item.aiUrgency || item.health} />
+                          {item.demandClass && item.demandClass !== 'unknown' && (
+                            <span className={`block text-[9px] mt-0.5 ${item.demandClass === 'smooth' ? 'text-emerald-500' : item.demandClass === 'lumpy' ? 'text-amber-500' : 'text-rose-500'}`}>
+                              {item.demandClass}
+                            </span>
+                          )}
+                        </td>
                         <td className="text-center px-2 py-2">
                           <button 
                             onClick={() => { setShowSkuSettings(true); setSkuSettingsSearch(item.sku); setSkuSettingsEditItem(item.sku); setSkuSettingsEditForm(settings); }}
@@ -24615,7 +24678,14 @@ if (shopifySkuWithShipping.length > 0) {
                       totalQty: i.totalQty,
                       weeklyVelocity: i.weeklyVel,
                       daysOfSupply: i.daysOfSupply,
-                      health: i.health
+                      health: i.health,
+                      stockoutDate: i.stockoutDate,
+                      reorderByDate: i.reorderByDate,
+                      suggestedOrderQty: i.suggestedOrderQty,
+                      safetyStock: i.safetyStock || 0,
+                      seasonalFactor: i.seasonalFactor || 1.0,
+                      cv: i.cv || 0,
+                      demandClass: i.demandClass || 'unknown',
                     })),
                     velocityTrends: Object.entries(skuVelocityHistory).slice(0, 20).map(([sku, history]) => ({
                       sku,
