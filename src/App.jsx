@@ -40155,23 +40155,33 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   // Normalize vendor name
                   vendorName = normalizeVendor(vendorName);
                   
-                  if (!vendorSpendingFromTxns[vendorName]) {
-                    vendorSpendingFromTxns[vendorName] = { 
-                      name: vendorName, 
+                  // Generic vendor names should be split by category instead of grouped
+                  // This prevents "Online" from lumping together unrelated expenses
+                  const genericVendors = ['online', 'internet', 'web', 'digital', 'electronic', 'misc', 'miscellaneous', 'other', 'various'];
+                  const isGenericVendor = genericVendors.includes(vendorName.toLowerCase());
+                  const cat = normalizeCategory(t.topCategory || t.category);
+                  
+                  // For generic vendors, use category as the grouping key
+                  const groupKey = isGenericVendor ? cat : vendorName;
+                  const displayName = isGenericVendor ? cat : vendorName;
+                  
+                  if (!vendorSpendingFromTxns[groupKey]) {
+                    vendorSpendingFromTxns[groupKey] = { 
+                      name: displayName, 
                       totalSpent: 0, 
                       transactionCount: 0,
                       categories: {},
                       lastTransaction: null,
+                      isCategory: isGenericVendor, // Flag to indicate this is a category grouping
                     };
                   }
-                  vendorSpendingFromTxns[vendorName].totalSpent += Math.abs(t.amount);
-                  vendorSpendingFromTxns[vendorName].transactionCount += 1;
-                  // Use normalized category
-                  const cat = normalizeCategory(t.topCategory || t.category);
-                  vendorSpendingFromTxns[vendorName].categories[cat] = 
-                    (vendorSpendingFromTxns[vendorName].categories[cat] || 0) + Math.abs(t.amount);
-                  if (!vendorSpendingFromTxns[vendorName].lastTransaction || t.date > vendorSpendingFromTxns[vendorName].lastTransaction) {
-                    vendorSpendingFromTxns[vendorName].lastTransaction = t.date;
+                  vendorSpendingFromTxns[groupKey].totalSpent += Math.abs(t.amount);
+                  vendorSpendingFromTxns[groupKey].transactionCount += 1;
+                  // Track category breakdown
+                  vendorSpendingFromTxns[groupKey].categories[cat] = 
+                    (vendorSpendingFromTxns[groupKey].categories[cat] || 0) + Math.abs(t.amount);
+                  if (!vendorSpendingFromTxns[groupKey].lastTransaction || t.date > vendorSpendingFromTxns[groupKey].lastTransaction) {
+                    vendorSpendingFromTxns[groupKey].lastTransaction = t.date;
                   }
                 });
                 
@@ -40303,49 +40313,65 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                       {idx + 1}
                                     </span>
                                     <div>
-                                      <p className="text-white font-medium">{vendor.name}</p>
-                                      {topCategory && (
+                                      <p className="text-white font-medium flex items-center gap-2">
+                                        {vendor.name}
+                                        {vendor.isCategory && (
+                                          <span className="text-xs px-1.5 py-0.5 bg-violet-500/30 text-violet-300 rounded">category</span>
+                                        )}
+                                      </p>
+                                      {topCategory && !vendor.isCategory && (
                                         <p className="text-slate-500 text-xs">
                                           Top: {topCategory[0]} ({formatCurrency(topCategory[1])})
+                                        </p>
+                                      )}
+                                      {vendor.isCategory && (
+                                        <p className="text-slate-500 text-xs">
+                                          {vendor.transactionCount} transactions
                                         </p>
                                       )}
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-3">
                                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                      <button
-                                        onClick={() => {
-                                          const newName = prompt(`Rename vendor "${vendor.name}" to:`, vendor.name);
-                                          if (newName && newName.trim() !== vendor.name) {
-                                            handleVendorRename(vendor.name, newName.trim());
-                                          }
-                                        }}
-                                        className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
-                                        title="Rename this vendor"
-                                      >Rename</button>
-                                      <button
-                                        onClick={() => {
-                                          const existingCats = Object.keys(expensesByCategory).sort();
-                                          const catList = existingCats.map((c, i) => `${i + 1}. ${c}`).join('\n');
-                                          const input = prompt(
-                                            `Set category for all "${vendor.name}" transactions.\n\nExisting categories:\n${catList}\n\nEnter category name:`,
-                                            topCategory ? topCategory[0] : ''
-                                          );
-                                          if (input && input.trim()) {
-                                            handleVendorCategoryUpdate(vendor.name, input.trim());
-                                          }
-                                        }}
-                                        className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
-                                        title="Change category for all this vendor's transactions"
-                                      >Category</button>
+                                      {!vendor.isCategory && (
+                                        <>
+                                          <button
+                                            onClick={() => {
+                                              const newName = prompt(`Rename vendor "${vendor.name}" to:`, vendor.name);
+                                              if (newName && newName.trim() !== vendor.name) {
+                                                handleVendorRename(vendor.name, newName.trim());
+                                              }
+                                            }}
+                                            className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
+                                            title="Rename this vendor"
+                                          >Rename</button>
+                                          <button
+                                            onClick={() => {
+                                              const existingCats = Object.keys(expensesByCategory).sort();
+                                              const catList = existingCats.map((c, i) => `${i + 1}. ${c}`).join('\n');
+                                              const input = prompt(
+                                                `Set category for all "${vendor.name}" transactions.\n\nExisting categories:\n${catList}\n\nEnter category name:`,
+                                                topCategory ? topCategory[0] : ''
+                                              );
+                                              if (input && input.trim()) {
+                                                handleVendorCategoryUpdate(vendor.name, input.trim());
+                                              }
+                                            }}
+                                            className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
+                                            title="Change category for all this vendor's transactions"
+                                          >Category</button>
+                                        </>
+                                      )}
                                     </div>
                                     <div className="text-right">
                                       <p className="text-rose-400 font-bold">{formatCurrency(vendor.totalSpent)}</p>
-                                      <p className="text-slate-500 text-xs">{vendor.transactionCount} transactions</p>
+                                      {!vendor.isCategory && (
+                                        <p className="text-slate-500 text-xs">{vendor.transactionCount} transactions</p>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
-                                {allCategories.length > 1 && (
+                                {allCategories.length > 1 && !vendor.isCategory && (
                                   <div className="flex flex-wrap gap-1.5 mt-2 mb-2">
                                     {allCategories.slice(0, 5).map(([cat, amt]) => (
                                       <span key={cat} className="text-xs px-1.5 py-0.5 bg-slate-800 rounded text-slate-400">
