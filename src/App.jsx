@@ -314,10 +314,24 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
       else if ((txnType === 'Expense' || txnType === 'Check') && amount < 0) isExpense = true;
       else if (txnType === 'Credit Card Payment' && amount < 0) isExpense = true; // Cash leaving to pay card
       else if (txnType === 'Transfer') {
-        // Transfers between own accounts are NOT income or expense
-        // They just move money around (checking ↔ savings, etc.)
-        // Skip them entirely to avoid inflating totals
-        continue;
+        // Transfers need careful handling:
+        // - Inter-account (checking ↔ savings): category will be another bank account → SKIP
+        // - Amazon/Shopify deposits: category will be "Sales", "Revenue", etc. → INCOME
+        // - Vendor payments via transfer: category will be expense category → EXPENSE
+        const catLower = category.toLowerCase();
+        const isInterAccount = (
+          /\(\d{4}\)/.test(category) || // Category has account number pattern like (1234)
+          (catLower.includes('checking') || catLower.includes('savings') || catLower.includes('money market')) ||
+          (catLower.includes('card') && (catLower.includes('business') || catLower.includes('(') || catLower.includes('platinum') || catLower.includes('prime')))
+        );
+        
+        if (isInterAccount) {
+          continue; // Skip inter-account transfers entirely
+        } else if (amount > 0) {
+          isIncome = true; // External money coming in (Amazon/Shopify deposits, etc.)
+        } else if (amount < 0) {
+          isExpense = true; // Money going out via transfer
+        }
       }
       else if (txnType === 'Payroll Check') isExpense = true;
       else if (txnType === 'Bill Payment' && amount < 0) isExpense = true;
@@ -36118,54 +36132,60 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       const normalizedVendor = normalizeVendor(t.vendor);
       const normalizedCategory = normalizeCategory(t.topCategory || t.category || t.account);
       
-      // Transfers are NOT income or expense - they just move money between accounts
-      // QBO parser stores type as raw txnType: 'Transfer', 'Deposit', 'Expense', 'Check', etc.
       const typeLower = (t.type || '').toLowerCase();
-      const isTransfer = typeLower === 'transfer' || typeLower === 'journal entry';
       
       // Check if the category is actually an account (credit card/bank) - these are payments, not expenses
       const categoryIsAccount = isAccountCategory(t.topCategory || t.category);
       
-      // Determine income/expense based on QBO transaction type (most reliable)
+      // For transfers: only inter-account transfers should be excluded
+      // Amazon/Shopify deposits that show as "Transfer" are real income
+      const isInterAccountTransfer = typeLower === 'transfer' && categoryIsAccount;
+      const isJournalEntry = typeLower === 'journal entry';
+      
+      // Determine income/expense
       let isIncome = false;
       let isExpense = false;
       
-      if (!isTransfer) {
-        if (typeLower === 'deposit') {
-          isIncome = true;
-        } else if (typeLower === 'expense' || typeLower === 'check' || typeLower === 'bill payment' || typeLower === 'payroll check') {
-          // Only count as expense if the category is a REAL expense category
-          // Not a credit card or bank account (which would be a payment/transfer)
-          if (categoryIsAccount) {
-            // This is a payment TO a credit card or bank account - it's a transfer, not an expense
-            isExpense = false;
-          } else {
-            isExpense = true;
-          }
-        } else if (typeLower === 'credit card payment') {
-          // Credit card payment from checking = cash outflow expense
-          // But the CC purchases were already counted as expenses on the CC side
-          // Skip to avoid double-counting
-          isExpense = false;
-        } else if (t.accountType === 'credit_card') {
-          // Credit card transactions: charges are expenses, credits are income
-          if (typeLower.includes('credit') || typeLower.includes('refund')) {
-            isIncome = true;
-          } else if ((t.amount || t.originalAmount || 0) > 0) {
-            isExpense = !categoryIsAccount;
-          }
-        } else if (t.isIncome !== undefined) {
-          // Fall back to existing flags but NEVER for transfers
-          isIncome = t.isIncome && !typeLower.includes('transfer');
-          isExpense = t.isExpense && !categoryIsAccount && !typeLower.includes('transfer');
+      if (isJournalEntry || isInterAccountTransfer) {
+        // Skip: journal entries and inter-account transfers are not income/expense
+      } else if (typeLower === 'deposit') {
+        isIncome = true;
+      } else if (typeLower === 'transfer' && !categoryIsAccount) {
+        // External transfer (Amazon/Shopify deposits, vendor payments via transfer)
+        // Amount is stored as abs value, so use the parser's income/expense flags
+        isIncome = t.isIncome || false;
+        isExpense = t.isExpense || false;
+      } else if (typeLower === 'expense' || typeLower === 'check' || typeLower === 'payroll check') {
+        if (!categoryIsAccount) {
+          isExpense = true;
         }
+      } else if (typeLower === 'bill payment') {
+        if (!categoryIsAccount) {
+          isExpense = true;
+        }
+      } else if (typeLower === 'credit card payment') {
+        // CC payments from checking: the actual expenses were recorded on the CC side
+        // Don't count here to avoid double-counting
+        isExpense = false;
+      } else if (t.accountType === 'credit_card') {
+        // Credit card transactions: charges are expenses, credits are income
+        if (typeLower.includes('credit') || typeLower.includes('refund')) {
+          isIncome = true;
+        } else {
+          const amt = Math.abs(t.amount || t.originalAmount || 0);
+          if (amt > 0) isExpense = !categoryIsAccount;
+        }
+      } else if (t.isIncome !== undefined) {
+        // Fall back to existing flags from QBO parser
+        isIncome = t.isIncome;
+        isExpense = t.isExpense && !categoryIsAccount;
       }
       
       return {
         ...t,
         isIncome,
         isExpense,
-        isTransfer: isTransfer || categoryIsAccount,
+        isTransfer: isInterAccountTransfer,
         amount: Math.abs(t.amount || t.originalAmount || 0),
         topCategory: normalizedCategory,
         vendor: normalizedVendor,
