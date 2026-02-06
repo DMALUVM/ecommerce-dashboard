@@ -839,8 +839,8 @@ export default async function handler(req, res) {
             };
           }
           dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction].tax += isShopPay ? 0 : taxAmount;
-          dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction].sales += orderSubtotal;
-          dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction].orders += 1;
+          dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction].sales += isShopPay ? 0 : orderSubtotal;
+          dailyData[orderDate].shopify.taxByState[stateCode].jurisdictions[jurisdiction].orders += isShopPay ? 0 : 1;
 
           // Add weekly jurisdiction tracking for consistency
           if (!weeklyData[weekEnding].shopify.taxByState[stateCode].jurisdictions) {
@@ -852,8 +852,8 @@ export default async function handler(req, res) {
             };
           }
           weeklyData[weekEnding].shopify.taxByState[stateCode].jurisdictions[jurisdiction].tax += isShopPay ? 0 : taxAmount;
-          weeklyData[weekEnding].shopify.taxByState[stateCode].jurisdictions[jurisdiction].sales += orderSubtotal;
-          weeklyData[weekEnding].shopify.taxByState[stateCode].jurisdictions[jurisdiction].orders += 1;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].jurisdictions[jurisdiction].sales += isShopPay ? 0 : orderSubtotal;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].jurisdictions[jurisdiction].orders += isShopPay ? 0 : 1;
         }
       }
       // Process line items for SKU data

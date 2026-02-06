@@ -310,29 +310,39 @@ const SalesTaxView = ({
                   const stateInfo = US_STATES_TAX_INFO[code];
                   const shippingTaxable = stateInfo?.shippingTaxable || false;
                   
-                  // Calculate taxable sales based on whether state taxes shipping
-                  const itemSales = data.sales + data.shopPaySales;
-                  const totalShipping = data.shipping + data.shopPayShipping;
-                  const taxableSales = shippingTaxable ? (itemSales + totalShipping) : itemSales;
+                  // Calculate sales for what YOU owe (non-Shop Pay only)
+                  // Shop Pay orders have tax remitted by Shopify automatically
+                  const yourItemSales = data.sales;
+                  const yourShipping = data.shipping;
+                  const yourTaxableSales = shippingTaxable ? (yourItemSales + yourShipping) : yourItemSales;
+                  
+                  // All-inclusive totals (for reference/visibility only)
+                  const allItemSales = data.sales + data.shopPaySales;
+                  const allShipping = data.shipping + data.shopPayShipping;
                   
                   return { 
                     stateCode: code, 
                     stateName: stateInfo?.name || code,
                     shippingTaxable,
-                    // Sales breakdown
-                    itemSales: itemSales,
-                    shipping: totalShipping,
-                    // Total taxable sales (includes shipping if state taxes it)
-                    totalSales: taxableSales,
-                    totalOrders: data.orders + data.shopPayOrders,
-                    totalTax: data.tax + data.shopPayTax,
-                    // What YOU owe (non-Shop Pay only)
+                    // PRIMARY: Non-Shop Pay only (what you file/owe)
+                    itemSales: yourItemSales,
+                    shipping: yourShipping,
+                    totalSales: yourTaxableSales,
+                    totalOrders: data.orders,
+                    totalTax: data.tax,
                     taxOwed: data.tax,
-                    salesYouOwe: shippingTaxable ? (data.sales + data.shipping) : data.sales,
+                    salesYouOwe: yourTaxableSales,
                     ordersYouOwe: data.orders,
-                    // Shop Pay (Shopify remits this)
+                    // REFERENCE: All-inclusive (Shop Pay + non-Shop Pay)
+                    allItemSales: allItemSales,
+                    allShipping: allShipping,
+                    allTaxableSales: shippingTaxable ? (allItemSales + allShipping) : allItemSales,
+                    allOrders: data.orders + data.shopPayOrders,
+                    allTax: data.tax + data.shopPayTax,
+                    // Shop Pay breakdown (Shopify remits this)
                     shopPayTax: data.shopPayTax,
                     shopPaySales: data.shopPaySales,
+                    shopPayShipping: data.shopPayShipping,
                     shopPayOrders: data.shopPayOrders,
                     // Jurisdiction breakdown for county/city level reporting
                     jurisdictions: Object.entries(data.jurisdictions || {})
@@ -453,9 +463,9 @@ const SalesTaxView = ({
                       <p className="text-rose-300/70 text-xs mt-1">Tax to remit this period</p>
                     </div>
                     <div className="bg-slate-800/50 rounded-xl p-4 text-center">
-                      <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Total Collected</p>
-                      <p className="text-2xl font-bold text-white">{formatCurrency(taxData.totalTax + taxData.shopPayExcluded)}</p>
-                      <p className="text-slate-500 text-xs mt-1">from all orders</p>
+                      <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Shop Pay (Excluded)</p>
+                      <p className="text-2xl font-bold text-slate-400">{formatCurrency(taxData.shopPayExcluded)}</p>
+                      <p className="text-slate-500 text-xs mt-1">Shopify remits this</p>
                     </div>
                     <div className="bg-slate-800/50 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">States</p>
@@ -561,6 +571,14 @@ const SalesTaxView = ({
                       
                       csv += `\nState Tax Rate,${((stateInfo?.stateRate || 0) * 100).toFixed(2)}%\n`;
                       csv += `Orders,${state.totalOrders || state.orders || 0}\n`;
+                      
+                      // Shop Pay reference (Shopify remits this — NOT included in above numbers)
+                      if (state.shopPayTax > 0 || state.shopPayOrders > 0) {
+                        csv += `\n"Shop Pay (excluded — Shopify remits)"\n`;
+                        csv += `"Shop Pay Tax",${(state.shopPayTax || 0).toFixed(2)},"Shopify remits this automatically"\n`;
+                        csv += `"Shop Pay Sales",${(state.shopPaySales || 0).toFixed(2)}\n`;
+                        csv += `"Shop Pay Orders",${state.shopPayOrders || 0}\n`;
+                      }
                       
                       if (filingFormat.note) csv += `\nNote:,"${filingFormat.note}"\n`;
                       
@@ -735,27 +753,33 @@ const SalesTaxView = ({
                             }
                             
                             // Create CSV with all fields states typically need
-                            let csv = 'State,State Code,Item Sales,Shipping,Taxable Sales,Total Tax,Tax You Owe,Shipping Taxable,Total Orders,Has Nexus,Period,Start Date,End Date\n';
+                            // NOTE: All amounts EXCLUDE Shop Pay orders (Shopify remits that tax automatically)
+                            let csv = 'State,State Code,Item Sales,Shipping,Taxable Sales,Tax You Owe,Orders,Shipping Taxable,Has Nexus,Shop Pay Tax (Shopify Remits),Shop Pay Sales,Shop Pay Orders,Period,Start Date,End Date\n';
                             taxData.byState.forEach(state => {
                               const hasNexus = nexusStates[state.stateCode]?.hasNexus ? 'Yes' : 'No';
                               const itemSales = state.itemSales || state.sales || 0;
                               const shipping = state.shipping || 0;
                               const taxableSales = state.totalSales || state.sales || 0;
-                              const totalTax = state.totalTax || state.tax || 0;
                               const taxOwed = state.taxOwed || state.tax || 0;
                               const shippingTaxable = state.shippingTaxable ? 'Yes' : 'No';
                               const totalOrders = state.totalOrders || state.orders || 0;
-                              csv += `"${state.stateName}",${state.stateCode},${itemSales.toFixed(2)},${shipping.toFixed(2)},${taxableSales.toFixed(2)},${totalTax.toFixed(2)},${taxOwed.toFixed(2)},${shippingTaxable},${totalOrders},${hasNexus},"${periodLabel}",${start},${end}\n`;
+                              const shopPayTax = state.shopPayTax || 0;
+                              const shopPaySales = state.shopPaySales || 0;
+                              const shopPayOrders = state.shopPayOrders || 0;
+                              csv += `"${state.stateName}",${state.stateCode},${itemSales.toFixed(2)},${shipping.toFixed(2)},${taxableSales.toFixed(2)},${taxOwed.toFixed(2)},${totalOrders},${shippingTaxable},${hasNexus},${shopPayTax.toFixed(2)},${shopPaySales.toFixed(2)},${shopPayOrders},"${periodLabel}",${start},${end}\n`;
                             });
                             const grandTotalItemSales = taxData.byState.reduce((s, st) => s + (st.itemSales || st.sales || 0), 0);
                             const grandTotalShipping = taxData.byState.reduce((s, st) => s + (st.shipping || 0), 0);
                             const grandTotalTaxableSales = taxData.byState.reduce((s, st) => s + (st.totalSales || st.sales || 0), 0);
-                            const grandTotalTax = taxData.byState.reduce((s, st) => s + (st.totalTax || st.tax || 0), 0);
+                            const grandTotalTax = taxData.byState.reduce((s, st) => s + (st.taxOwed || st.tax || 0), 0);
                             const grandTotalOrders = taxData.byState.reduce((s, st) => s + (st.totalOrders || st.orders || 0), 0);
-                            csv += `"TOTAL",,${grandTotalItemSales.toFixed(2)},${grandTotalShipping.toFixed(2)},${grandTotalTaxableSales.toFixed(2)},${grandTotalTax.toFixed(2)},${taxData.totalTax.toFixed(2)},,${grandTotalOrders},,"${periodLabel}",${start},${end}\n`;
-                            csv += '\n"Item Sales = Product sales only (excludes shipping)"\n';
+                            const grandShopPayTax = taxData.byState.reduce((s, st) => s + (st.shopPayTax || 0), 0);
+                            const grandShopPaySales = taxData.byState.reduce((s, st) => s + (st.shopPaySales || 0), 0);
+                            const grandShopPayOrders = taxData.byState.reduce((s, st) => s + (st.shopPayOrders || 0), 0);
+                            csv += `"TOTAL",,${grandTotalItemSales.toFixed(2)},${grandTotalShipping.toFixed(2)},${grandTotalTaxableSales.toFixed(2)},${grandTotalTax.toFixed(2)},${grandTotalOrders},,,${grandShopPayTax.toFixed(2)},${grandShopPaySales.toFixed(2)},${grandShopPayOrders},"${periodLabel}",${start},${end}\n`;
+                            csv += '\n"All amounts EXCLUDE Shop Pay orders — Shopify automatically remits tax for those."\n';
+                            csv += '"Shop Pay columns shown for reference only (you do NOT file these)."\n';
                             csv += '"Taxable Sales = Item Sales + Shipping (if shipping is taxable in that state)"\n';
-                            csv += '"Tax You Owe = What you need to file and pay yourself"\n';
                             
                             const blob = new Blob([csv], { type: 'text/csv' });
                             const url = URL.createObjectURL(blob);
