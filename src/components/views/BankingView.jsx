@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  ChevronLeft, ChevronRight, X, Check, Plus, Upload, Edit, Save, RefreshCw, BarChart3, TrendingUp, TrendingDown, DollarSign, Package, AlertTriangle, AlertCircle, HelpCircle, Settings, EyeOff, Filter, FileText, Landmark, Target, Activity, User, Key, Flag, Brain, Wallet, CreditCard, Building
+  Activity, AlertCircle, AlertTriangle, BarChart3, Brain, Building, Check, ChevronLeft, ChevronRight, CreditCard, DollarSign, Edit, EyeOff, FileText, Filter, Flag, GitCompareArrows, HelpCircle, Key, Landmark, LineChart, Package, Plus, RefreshCw, Save, Settings, ShoppingBag, Target, TrendingDown, TrendingUp, Upload, User, Wallet, X
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import { hasDailySalesData } from '../../utils/date';

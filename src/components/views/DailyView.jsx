@@ -3,6 +3,7 @@ import {
   BarChart3, ChevronLeft, ChevronRight, DollarSign, Package, ShoppingCart, Store, Trash2, TrendingUp
 } from 'lucide-react';
 import { formatCurrency, formatNumber, formatPercent } from '../../utils/format';
+import { lsSet } from '../../utils/storage';
 import NavTabs from '../ui/NavTabs';
 import ChannelCard from '../ui/ChannelCard';
 import MetricCard from '../ui/MetricCard';

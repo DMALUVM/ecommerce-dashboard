@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertTriangle, Calculator, Check, Filter, Grid, Table, Target, TrendingDown, TrendingUp, Zap
+  AlertTriangle, Calculator, Check, Filter, Grid, Table, Target, TrendingDown, TrendingUp, Trophy, Zap
 } from 'lucide-react';
 import { formatCurrency } from '../../utils/format';
 import { deriveWeeksFromDays } from '../../utils/weekly';

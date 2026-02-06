@@ -1,10 +1,15 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  X, Check, Plus, Upload, Download, Trash2, Save, Copy, RefreshCw, BarChart3, TrendingUp, Package, ShoppingCart, AlertTriangle, Info, HelpCircle, Settings, Eye, Filter, Sun, Moon, FileText, Database, Boxes, Truck, Landmark, Target, Bell, Send, Globe, User, Sparkles, Home, Store, Receipt, Users, Loader2
+  AlertTriangle, BarChart3, Bell, Boxes, Check, Cloud, Copy, Database, Download, Eye, FileText, Filter, Globe, HelpCircle, Home, Info, Landmark, Loader2, Moon, Package, Plus, Receipt, RefreshCw, Save, Send, Settings, ShoppingBag, ShoppingCart, Sparkles, Store, Sun, Target, Trash2, TrendingUp, Truck, Upload, User, Users, X
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
+import { lsSet } from '../../utils/storage';
 import { hasDailySalesData } from '../../utils/date';
 import NavTabs from '../ui/NavTabs';
+import NumberInput from '../ui/NumberInput';
+import SettingRow from '../ui/SettingRow';
+import SettingSection from '../ui/SettingSection';
+import Toggle from '../ui/Toggle';
 
 const SettingsView = ({
   actionItems,
@@ -175,10 +180,6 @@ const SettingsView = ({
     setShowResetConfirm(false);
   };
   
-
-
-
-
 
     return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">

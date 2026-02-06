@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  ChevronLeft, ChevronRight, X, Check, Upload, Download, RefreshCw, BarChart3, TrendingUp, DollarSign, AlertTriangle, Filter, Search, Sun, Zap, Target, Trophy, Send, Brain, GitCompare, Store
+  AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, Brain, Check, ChevronLeft, ChevronRight, DollarSign, Download, Filter, GitCompare, RefreshCw, Search, Send, ShoppingBag, Store, Sun, Target, TrendingUp, Trophy, Upload, X, Zap
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
+import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from '../../utils/ads';
 import { hasDailySalesData } from '../../utils/date';
 import NavTabs from '../ui/NavTabs';
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertCircle, AlertTriangle, Bell, Boxes, Brain, Calendar, CalendarRange, Check, ChevronDown, Clock, Database, DollarSign, Download, Edit, Eye, FileSpreadsheet, FileText, Globe, HelpCircle, Info, Link, List, Loader2, MoreHorizontal, Package, RefreshCw, Save, Search, Settings, ShoppingBag, ShoppingCart, Store, Trash2, TrendingUp, Truck, Upload, Zap
+  AlertCircle, AlertTriangle, Bell, Boxes, Brain, Calendar, CalendarRange, Check, ChevronDown, Clock, Database, DollarSign, Download, Edit, Eye, FileSpreadsheet, FileText, Globe, HelpCircle, Info, LineChart, Link, List, Loader2, MoreHorizontal, Package, RefreshCw, Save, Search, Settings, ShoppingBag, ShoppingCart, Store, Trash2, TrendingUp, Truck, Upload, Zap
 } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../../utils/format';
 import { parseCSV } from '../../utils/csv';

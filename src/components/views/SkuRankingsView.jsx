@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertTriangle, Award, Database, DollarSign, Eye, List, Package, Search, TrendingDown, TrendingUp, Zap
+  AlertTriangle, Award, Database, DollarSign, Eye, Flame, List, Package, Search, Snowflake, TrendingDown, TrendingUp, Zap
 } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../../utils/format';
 import NavTabs from '../ui/NavTabs';

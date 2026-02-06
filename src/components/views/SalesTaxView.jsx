@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  X, Check, Upload, Download, Edit, Save, DollarSign, Clock, AlertTriangle, AlertCircle, Settings, Eye, Filter, FileText, Grid, List, Code, Home
+  AlertCircle, AlertTriangle, ArrowUpRight, Check, CheckCircle, Clock, Code, DollarSign, Download, Edit, Eye, FileText, Filter, Grid, Home, List, Save, Settings, ShoppingBag, Upload, X
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
+import { parseCSV } from '../../utils/csv';
 import { hasDailySalesData } from '../../utils/date';
 import { lsSet } from '../../utils/storage';
 import NavTabs from '../ui/NavTabs';

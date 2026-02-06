@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  BarChart3, Calendar, Check, ChevronLeft, ChevronRight, DollarSign, Edit, FileSpreadsheet, Package, RefreshCw, Save, ShoppingCart, Store, Trash2, TrendingUp, Truck, Upload
+  BarChart3, Calendar, Check, ChevronLeft, ChevronRight, DollarSign, Edit, FileSpreadsheet, Package, RefreshCw, Save, ShoppingCart, StickyNote, Store, Trash2, TrendingUp, Truck, Upload
 } from 'lucide-react';
 import { deriveWeeksFromDays } from '../../utils/weekly';
 import { formatCurrency, formatNumber, formatPercent } from '../../utils/format';
@@ -8,6 +8,8 @@ import { parseCSV } from '../../utils/csv';
 import NavTabs from '../ui/NavTabs';
 import ChannelCard from '../ui/ChannelCard';
 import MetricCard from '../ui/MetricCard';
+import Toast from '../ui/Toast';
+import WeekNoteEditor from '../ui/WeekNoteEditor';
 
 const WeeklyView = ({
   adSpend,
@@ -371,7 +373,6 @@ const WeeklyView = ({
             <div className="flex justify-between text-sm"><div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-orange-500" /><span className="text-slate-300">Amazon</span><span className="text-white font-semibold">{formatPercent(data.total.amazonShare)}</span></div><div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-blue-500" /><span className="text-slate-300">Shopify</span><span className="text-white font-semibold">{formatPercent(data.total.shopifyShare)}</span></div></div>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz showSkuTable /><ChannelCard title="Shopify" color="blue" data={data.shopify} showSkuTable /></div>
-
 
 {/* Google/Meta Ads Details (Weekly) */}
 {(() => {

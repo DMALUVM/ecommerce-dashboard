@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  ChevronLeft, ChevronRight, X, Check, Plus, Upload, Trash2, Edit, Save, RefreshCw, TrendingUp, DollarSign, Package, ShoppingCart, Clock, AlertTriangle, AlertCircle, Info, HelpCircle, Settings, Filter, Search, Zap, Boxes, Truck, Target, List, Bell, Flag, Brain, Loader2
+  AlertCircle, AlertTriangle, Bell, Boxes, Brain, Check, CheckCircle, ChevronLeft, ChevronRight, Clock, DollarSign, Edit, Filter, Flag, HelpCircle, Info, List, Loader2, Package, Plus, RefreshCw, Save, Search, Settings, ShoppingCart, Target, Trash2, TrendingUp, Truck, Upload, X, Zap
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import { hasDailySalesData } from '../../utils/date';
 import NavTabs from '../ui/NavTabs';
+import HealthBadge from '../ui/HealthBadge';
+import MetricCard from '../ui/MetricCard';
 
 const InventoryView = ({
   aiLoading,
