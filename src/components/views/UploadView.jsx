@@ -2157,8 +2157,10 @@ const UploadView = ({
                               const existingGoogleSpend = existing.googleSpend || existing.shopify?.googleSpend || 0;
                               
                               // Merge ad data into shopify object for consistency
+                              // IMPORTANT: Use API's taxByState directly (not merged) to prevent ghost state entries
                               const mergedShopifyData = {
                                 ...shopifyData,
+                                taxByState: shopifyData.taxByState || {}, // Explicitly replace, don't merge with old
                                 cogs: calculatedCogs,
                                 metaSpend: existingMetaSpend,
                                 metaAds: existingMetaSpend,

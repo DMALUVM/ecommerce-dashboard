@@ -454,11 +454,33 @@ const SalesTaxView = ({
               </div>
               
               {hasShopifyTaxData ? (() => {
-                // Calculate nexus-only tax (what you actually file/pay)
-                const nexusTaxOwed = taxData.byState
-                  .filter(s => nexusStates[s.stateCode]?.hasNexus)
-                  .reduce((sum, s) => sum + (s.taxOwed || s.tax || 0), 0);
-                const nexusStateCount = Object.values(nexusStates || {}).filter(s => s.hasNexus).length;
+                // Build lookup of states that have actual sales data
+                const stateDataLookup = {};
+                taxData.byState.forEach(s => { stateDataLookup[s.stateCode] = s; });
+                
+                // Helper: Check if filing is due for this period based on frequency
+                const isFilingDueForPeriodHeader = (stateCode) => {
+                  const config = nexusStates[stateCode] || {};
+                  const frequency = config.frequency || 'monthly';
+                  const [year, period] = taxPeriodValue.split('-');
+                  const periodMonth = parseInt(period);
+                  if (taxPeriodType === 'month') {
+                    if (frequency === 'monthly') return true;
+                    if (frequency === 'quarterly') return [3, 6, 9, 12].includes(periodMonth);
+                    if (frequency === 'semi-annual') return [6, 12].includes(periodMonth);
+                    if (frequency === 'annual') return periodMonth === 12;
+                  }
+                  return true;
+                };
+                
+                // Calculate: only tax from nexus states where filing is due this period
+                const nexusStatesDue = Object.entries(nexusStates || {})
+                  .filter(([code, config]) => config.hasNexus && isFilingDueForPeriodHeader(code))
+                  .map(([code]) => stateDataLookup[code])
+                  .filter(Boolean);
+                const nexusTaxOwed = nexusStatesDue.reduce((sum, s) => sum + (s.taxOwed || s.tax || 0), 0);
+                const nexusDueCount = nexusStatesDue.length;
+                const nexusTotalCount = Object.values(nexusStates || {}).filter(s => s.hasNexus).length;
                 
                 return (
                 <>
@@ -467,7 +489,7 @@ const SalesTaxView = ({
                     <div className="bg-gradient-to-br from-rose-600/30 to-rose-900/30 border-2 border-rose-500/50 rounded-xl p-4 text-center">
                       <p className="text-xs text-rose-300 font-semibold uppercase tracking-wide mb-1">💰 YOU OWE</p>
                       <p className="text-3xl font-bold text-rose-400">{formatCurrency(nexusTaxOwed)}</p>
-                      <p className="text-rose-300/70 text-xs mt-1">{nexusStateCount} nexus state{nexusStateCount !== 1 ? 's' : ''} this period</p>
+                      <p className="text-rose-300/70 text-xs mt-1">{nexusDueCount} of {nexusTotalCount} nexus states due</p>
                     </div>
                     <div className="bg-slate-800/50 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Total Collected</p>

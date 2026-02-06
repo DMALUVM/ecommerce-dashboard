@@ -18894,6 +18894,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setView={setView}
       view={view}
       save={save}
+      saveInv={saveInv}
       queueCloudSave={queueCloudSave}
       pushToCloudNow={pushToCloudNow}
       supabase={supabase}

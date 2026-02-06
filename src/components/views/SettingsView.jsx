@@ -119,6 +119,7 @@ const SettingsView = ({
   setView,
   view,
   save,
+  saveInv,
   queueCloudSave,
   pushToCloudNow,
   supabase
