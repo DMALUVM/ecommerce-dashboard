@@ -452,9 +452,15 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
 
 // ============ UNIFIED AI CONFIGURATION (Pro Plan) ============
 // All AI features use these consistent settings for best results
+const AI_MODELS = {
+  'claude-sonnet-4-20250514': { label: 'Claude Sonnet 4', cost: '~$0.04/report', tier: 'Balanced', desc: 'Best value — fast, smart, cheap' },
+  'claude-opus-4-20250514': { label: 'Claude Opus 4', cost: '~$0.20/report', tier: 'Premium', desc: 'Deepest analysis, 5x cost' },
+  'claude-haiku-4-5-20251001': { label: 'Claude Haiku 4.5', cost: '~$0.01/report', tier: 'Fast', desc: 'Cheapest, shorter reports' },
+};
+
 const AI_CONFIG = {
   model: 'claude-sonnet-4-20250514',
-  maxTokens: 4000,  // Pro plan allows comprehensive responses
+  maxTokens: 12000,  // Reports need 8K-12K tokens for full output
   maxDuration: 60,  // Pro plan 60-second timeout
   streaming: true,  // Use streaming to avoid 25s first-byte timeout
   
@@ -484,7 +490,9 @@ const AI_CONFIG = {
 // Can be called as:
 //   callAI(prompt, systemPrompt) - for simple prompts
 //   callAI({ messages: [...], system: '...' }) - for chat with history or complex content
-const callAI = async (promptOrOptions, systemPrompt = '') => {
+const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null) => {
+  // Model priority: explicit override > window global (report selector) > AI_CONFIG default
+  const selectedModel = modelOverride || (typeof window !== 'undefined' && window.__aiModelOverride) || AI_CONFIG.model;
   let requestBody;
   
   if (typeof promptOrOptions === 'string') {
@@ -492,7 +500,7 @@ const callAI = async (promptOrOptions, systemPrompt = '') => {
     requestBody = {
       system: systemPrompt || 'You are a helpful e-commerce analytics AI. Respond with JSON when requested.',
       messages: [{ role: 'user', content: promptOrOptions }],
-      model: AI_CONFIG.model,
+      model: selectedModel,
       max_tokens: AI_CONFIG.maxTokens,
     };
   } else {
@@ -500,7 +508,7 @@ const callAI = async (promptOrOptions, systemPrompt = '') => {
     requestBody = {
       system: promptOrOptions.system || 'You are a helpful e-commerce analytics AI.',
       messages: promptOrOptions.messages || [],
-      model: AI_CONFIG.model,
+      model: selectedModel,
       max_tokens: AI_CONFIG.maxTokens,
     };
   }
@@ -3494,7 +3502,15 @@ allWeekKeys.forEach((weekKey) => {
       shopify: true, // Include Shopify in auto-sync
       packiyo: true, // Include Packiyo in auto-sync
     },
+
+    // AI model selection
+    aiModel: 'claude-sonnet-4-20250514',
   });
+  
+  // Sync AI model selection to window global so outer-scope callAI can read it
+  useEffect(() => {
+    if (appSettings.aiModel) window.__aiModelOverride = appSettings.aiModel;
+  }, [appSettings.aiModel]);
   
   const clearPeriod3PLFiles = useCallback(() => {
     setPeriodFiles(p => ({ ...p, threepl: [] }));
@@ -16422,7 +16438,7 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
       const aiResponse = await callAI({
         system: systemPrompt,
         messages: [...aiMessages.slice(-10).map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
-      });
+      }, '', 'claude-haiku-4-5-20251001');
       
       setAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
     } catch (error) {
@@ -16660,7 +16676,7 @@ HARD RULES — VIOLATING THESE MAKES THE PLAN USELESS:
       const aiResponse = await callAI({
         system: systemPrompt,
         messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
-      });
+      }, '', 'claude-haiku-4-5-20251001');
       
       setAdsAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
     } catch (error) {
@@ -40420,6 +40436,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       alertSalesTaxEnabled: true,
       currencySymbol: '$',
       dateFormat: 'US',
+      aiModel: 'claude-sonnet-4-20250514',
     };
     
     // Merge defaults with saved settings
@@ -43004,6 +43021,28 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 <span className="text-slate-500 text-xs">(Auto-detected)</span>
               </div>
             </SettingRow>
+          </SettingSection>
+
+          {/* AI Model Selection */}
+          <SettingSection title="🧠 AI Model">
+            <SettingRow label="Report Generation Model" desc="Controls Amazon PPC & DTC Action Reports only">
+              <select
+                value={currentLocalSettings.aiModel || 'claude-sonnet-4-20250514'}
+                onChange={(e) => updateSetting('aiModel', e.target.value)}
+                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+              >
+                {Object.entries(AI_MODELS).map(([key, m]) => (
+                  <option key={key} value={key}>{m.label} — {m.tier} ({m.cost})</option>
+                ))}
+              </select>
+            </SettingRow>
+            <div className="bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400 space-y-1">
+              <p><strong className="text-white">How models are routed:</strong></p>
+              <p>🟣 <strong className="text-violet-300">Action Reports</strong> (Amazon PPC + DTC) → <strong className="text-white">Your selection above</strong> (default: Sonnet 4)</p>
+              <p>💬 <strong className="text-cyan-300">AI Chat</strong> → Haiku 4.5 (fast, cheap — ~$0.01/message)</p>
+              <p>📈 <strong className="text-emerald-300">Forecasts & Analytics</strong> → Sonnet 4 (always, needs precision)</p>
+              <p className="text-slate-500 mt-2">Sonnet = best value for reports. Switch to Opus for quarterly deep-dives (~5x cost, deepest reasoning).</p>
+            </div>
           </SettingSection>
           
           {/* Notifications (Feature 4) - Enhanced */}

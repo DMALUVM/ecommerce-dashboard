@@ -1036,11 +1036,104 @@ FORMAT YOUR REPORT IN MARKDOWN. Be AGGRESSIVE and SPECIFIC. Every recommendation
 
 You are not an advisor — you are the operator. Write as if you are the person who will log into Seller Central and make these changes TODAY. Use direct, confident language: "Set bid to $1.45" not "Consider adjusting the bid."`;
 
+  // Detect which data types are available for conditional sections
+  const hasSP = !!(intelData.spSearchTerms || intelData.spTargeting?.length || intelData.spPlacement || intelData.spAdvertised?.length);
+  const hasSB = !!(intelData.sbSearchTerms?.length);
+  const hasSD = !!(intelData.sdCampaign?.length);
+  const hasSQP = !!(intelData.searchQueryPerf?.length);
+  const hasBR = !!(intelData.businessReport?.length);
+  const hasSKU = !!(intelData.skuEconomics?.length);
+  const hasPlacement = !!(intelData.spPlacement);
+  const hasTargeting = !!(intelData.spTargeting?.length);
+
+  let sections = `
+## 📊 EXECUTIVE SUMMARY & ACCOUNT HEALTH
+- Account health grade (A-F) with justification
+- Total spend, revenue, ROAS, ACOS, TACOS across SP/SB/SD
+- Blended ACOS vs target (25%). How far off and trending which direction?
+- Top 3 biggest problems costing money right now
+- Top 3 biggest opportunities to capture more revenue
+`;
+
+  if (hasSP) {
+    sections += `
+## 🔴 KILL LIST — Negative Keywords to Add Immediately
+| Keyword | Campaign to Negate In | Match Type | Spend Wasted | Clicks | Why Negate |
+Minimum 10 keywords. Prioritize by spend wasted. Estimate total savings.
+
+## 🟢 SCALE LIST — Increase Bids & Budgets
+| Keyword | Current Bid/CPC | Current ROAS | Suggested Bid @25% ACOS | Action |
+Minimum 8 keywords. Flag budget-capped campaigns.
+`;
+  }
+
+  if (hasSP && hasTargeting) {
+    sections += `
+## 🔵 SEARCH TERM ISOLATION — Harvest → Exact → Negate Workflow
+| Search Term | Source Campaign | Orders | ACOS | Action: Add Exact to [Campaign] + Negate in [Source] |
+Minimum 5 isolation actions.
+`;
+  }
+
+  if (hasPlacement) {
+    sections += `
+## 📍 PLACEMENT OPTIMIZATION
+| Campaign | TOS ROAS | Rest ROAS | Current TOS Modifier | Recommended TOS Modifier |
+Calculate exact modifier percentage.
+`;
+  }
+
+  if (intelData.spAdvertised?.length) {
+    sections += `
+## 💰 PRODUCT-LEVEL AD PROFITABILITY
+| ASIN/SKU | Ad Spend | Ad Revenue | ACOS | Conv Rate | Verdict |
+Flag ACOS exceeding 60% margin. Recommend: increase/maintain/reduce/pause.
+`;
+  }
+
+  if (hasSB || hasSD) {
+    sections += `
+## 📢 SPONSORED BRANDS & DISPLAY ASSESSMENT
+${hasSB ? '- SB: which campaigns justify spend? SB video performance?' : ''}
+${hasSD ? '- SD: remarketing ROI? Audience efficiency? New-to-brand cost?' : ''}
+- Specific pause/restructure recommendations with campaign names
+`;
+  }
+
+  if (hasSQP) {
+    sections += `
+## 🔍 SEARCH QUERY MARKET SHARE
+- Top 10 queries by volume where brand share <20% → size opportunity
+- Queries with high purchase share → defend with increased ad spend
+- Category vs brand queries performance gap
+`;
+  }
+
+  sections += `
+## 🏗️ CAMPAIGN STRUCTURE RECOMMENDATIONS
+- Campaigns to split or consolidate. Match type segregation. Product grouping. Budget allocation.
+
+## 📈 BUDGET REALLOCATION
+| From | To | Amount | Why | Expected Impact |
+Total budget stays same — move from low to high performing.
+
+## ⚡ TOP 5 ACTIONS — DO THIS WEEK
+For each: exact action, current metrics, expected improvement, time to implement, monthly impact.
+
+## 🎯 CAMPAIGN-BY-CAMPAIGN AUDIT (TOP 10 BY SPEND)
+| Campaign | Status | Spend | Sales | ROAS | ACOS | Conv Rate | Verdict |
+For EACH: 2-3 specific changes, exact bid amounts, keywords to negate/harvest, budget verdict.
+
+## 📋 IMPLEMENTATION CHECKLIST
+1. QUICK WINS (<5 min) — negatives, bid adjustments
+2. MEDIUM (5-15 min) — restructuring, new ad groups
+3. STRATEGIC (15+ min) — new campaigns, major budget shifts`;
+
   const userPrompt = `Generate a comprehensive Amazon PPC Action Report for Tallowbourn (tallow-based skincare: lip balms, body balms, deodorant).
 
 DATE RANGE: ${dateRange}
 REPORTS AVAILABLE: ${available.join(', ')}
-${available.length < 5 ? `\nNOTE: Only ${available.length} report types were uploaded this period. Analyze what's available and note which missing reports would enable deeper analysis.` : ''}
+${available.length < 5 ? `\nNOTE: Only ${available.length} report types uploaded. Analyze what's available and note which missing reports would enable deeper analysis.` : ''}
 
 PRODUCT CONTEXT:
 - Lip Balm 3-Pack (Parent ASIN B0CLHTF8YN) — highest volume SKU
@@ -1054,89 +1147,8 @@ ${dataContext}
 
 ${advancedContext}
 
-=== GENERATE THESE SECTIONS ===
-
-## 📊 EXECUTIVE SUMMARY & ACCOUNT HEALTH
-- Account health grade (A-F) with justification
-- Total spend, revenue, ROAS, ACOS, TACOS across SP/SB/SD
-- Blended ACOS vs target (25%). How far off and trending which direction?
-- Top 3 biggest problems costing money right now
-- Top 3 biggest opportunities to capture more revenue
-
-## 🔴 KILL LIST — Negative Keywords to Add Immediately
-Use FRAMEWORK 6. For EACH keyword:
-| Keyword | Campaign to Negate In | Match Type | Spend Wasted | Clicks | Why Negate |
-Minimum 10 keywords. Prioritize by spend wasted.
-Then estimate: "Adding these negatives will save approximately $X/month"
-
-## 🟢 SCALE LIST — Increase Bids & Budgets
-Use FRAMEWORK 2 for bid calculations. For EACH:
-| Keyword | Current Bid/CPC | Current ROAS | Suggested Bid @25% ACOS | Action |
-Minimum 8 keywords.
-Also flag any campaigns that are budget-capped (spending full daily budget by early afternoon = missed impressions).
-
-## 🔵 SEARCH TERM ISOLATION — Harvest → Exact → Negate Workflow
-Use FRAMEWORK 3. For EACH converting search term found in broad/phrase:
-| Search Term | Source Campaign | Orders | ACOS | Action: Add Exact to [Campaign] + Negate in [Source] |
-Minimum 5 isolation actions.
-
-## 📍 PLACEMENT OPTIMIZATION
-Use FRAMEWORK 5. For campaigns with significant spend:
-| Campaign | TOS ROAS | Rest ROAS | Current TOS Modifier | Recommended TOS Modifier |
-Calculate the exact modifier percentage using the formula.
-
-## 💰 PRODUCT-LEVEL AD PROFITABILITY
-For EACH advertised ASIN:
-| ASIN/SKU | Ad Spend | Ad Revenue | ACOS | Conv Rate | Verdict |
-Flag products where ad ACOS exceeds margin (assume ~60% gross margin on Tallowbourn products).
-Recommend: increase spend, maintain, reduce, or pause for each.
-
-## 📢 SPONSORED BRANDS & DISPLAY ASSESSMENT
-- SB: Which campaigns justify the spend? Which SB video campaigns are working?
-- SD: Purchase remarketing ROI? Audience targeting efficiency? New-to-brand acquisition cost?
-- Specific pause/restructure recommendations with campaign names
-
-## 🔍 SEARCH QUERY MARKET SHARE (if Search Query Performance data available)
-- Top 10 queries by volume where brand share is <20% → size the opportunity  
-- Queries with high purchase share → defend with increased ad spend
-- Category queries vs brand queries performance gap
-
-## 🏗️ CAMPAIGN STRUCTURE RECOMMENDATIONS
-Use FRAMEWORK 4. Evaluate current structure and recommend:
-- Any campaigns that should be split or consolidated
-- Match type segregation improvements
-- Product grouping improvements
-- Budget allocation between campaign types
-
-## 📈 BUDGET REALLOCATION — Where to Move Money
-Current split by channel (SP/SB/SD) and recommended reallocation with:
-| From | To | Amount | Why | Expected Impact |
-Total budget stays the same — just move money from low-performing to high-performing.
-
-## ⚡ TOP 5 ACTIONS — DO THIS WEEK (in priority order)
-For each action:
-1. [Specific action with exact keywords/campaigns/bids]
-   - Current state: [metrics]
-   - After change: [expected improvement]
-   - Time to implement: [X minutes]
-   - Estimated monthly impact: [$X saved or $X additional revenue]
-
-## 🎯 CAMPAIGN-BY-CAMPAIGN AUDIT (TOP 10 CAMPAIGNS BY SPEND)
-For the 10 highest-spend campaigns visible in the data:
-| Campaign Name | Status | 30d Spend | 30d Sales | ROAS | ACOS | Conv Rate | Verdict |
-For EACH campaign provide:
-- 2-3 SPECIFIC bid/keyword/targeting changes to make
-- Exact bid amounts to set (use FRAMEWORK 2 formula)
-- Specific keywords to add as negatives or to harvest
-- Whether to increase, maintain, decrease, or pause budget
-- If restructuring is needed (split by match type, product, etc.)
-
-## 📋 IMPLEMENTATION CHECKLIST
-Create a numbered checklist of EVERY specific action from the report above, organized by:
-1. QUICK WINS (under 5 minutes each) — negative keywords, bid adjustments
-2. MEDIUM EFFORT (5-15 minutes) — campaign restructuring, new ad groups
-3. STRATEGIC (15+ minutes) — new campaign creation, major budget shifts
-Each item should be copy-pasteable into a task list with the exact action to take.`;
+=== GENERATE ALL SECTIONS — SKIP NONE ===
+${sections}`;
 
   return { systemPrompt, userPrompt };
 };
@@ -1148,13 +1160,21 @@ const renderMarkdown = (md) => {
   var lt = new RegExp('<', 'g');
   var gt = new RegExp('>', 'g');
   var html = md.replace(lt, '&lt;').replace(gt, '&gt;');
+  // Remove horizontal rules (--- or ___) to avoid empty spacing
+  html = html.replace(/^[\-_]{3,}\s*$/gm, '');
+  // Headers
+  html = html.replace(/^# (.*$)/gm, '&lt;h2&gt;$1&lt;/h2&gt;');
   html = html.replace(/^## (.*$)/gm, '&lt;h2&gt;$1&lt;/h2&gt;');
   html = html.replace(/^### (.*$)/gm, '&lt;h3&gt;$1&lt;/h3&gt;');
+  // Inline formatting
   html = html.replace(/\*\*(.+?)\*\*/g, '&lt;strong&gt;$1&lt;/strong&gt;');
   html = html.replace(/\*(.+?)\*/g, '&lt;em&gt;$1&lt;/em&gt;');
+  html = html.replace(/`([^`]+)`/g, '&lt;code&gt;$1&lt;/code&gt;');
+  // Lists
   html = html.replace(/^- (.+$)/gm, '&lt;li&gt;$1&lt;/li&gt;');
   html = html.replace(/^(\d+)\. (.+$)/gm, '&lt;li&gt;$2&lt;/li&gt;');
   html = html.replace(/(&lt;li&gt;.*&lt;\/li&gt;\n?)+/g, '&lt;ul&gt;$&&lt;/ul&gt;');
+  // Tables
   html = html.replace(/\|(.+)\|/g, function(match) {
     var cells = match.split('|').filter(function(c) { return c.trim(); });
     var isSep = cells.every(function(c) { return c.trim().replace(/[-:]/g, '').trim() === ''; });
@@ -1162,10 +1182,16 @@ const renderMarkdown = (md) => {
     return '&lt;tr&gt;' + cells.map(function(c) { return '&lt;td&gt;' + c.trim() + '&lt;/td&gt;'; }).join('') + '&lt;/tr&gt;';
   });
   html = html.replace(/(&lt;tr&gt;.*&lt;\/tr&gt;\n?)+/g, '&lt;table&gt;$&&lt;/table&gt;');
+  // Collapse 3+ blank lines into 1
+  html = html.replace(/\n{3,}/g, '\n\n');
+  // Paragraphs and line breaks
   html = html.replace(/\n\n/g, '&lt;/p&gt;&lt;p&gt;');
   html = html.replace(/\n/g, '&lt;br/&gt;');
+  // Clean up empty paragraphs
+  html = html.replace(/&lt;p&gt;\s*&lt;\/p&gt;/g, '');
+  html = html.replace(/&lt;p&gt;\s*&lt;br\/&gt;\s*&lt;\/p&gt;/g, '');
   // Now unescape our HTML tags
-  var unescapeRe = new RegExp('&lt;(\\/?(?:h[23]|strong|em|li|ul|ol|table|tr|td|th|p|br\\/?))&gt;', 'g');
+  var unescapeRe = new RegExp('&lt;(\\/?(?:h[23]|strong|em|li|ul|ol|table|tr|td|th|p|br\\/?|code))&gt;', 'g');
   html = html.replace(unescapeRe, function(_, tag) { return '<' + tag + '>'; });
   return html;
 };
