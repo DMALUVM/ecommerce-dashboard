@@ -1036,24 +1036,27 @@ For each action:
 
 const renderMarkdown = (md) => {
   if (!md) return '';
-  let html = md;
-  html = html.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  html = html.replace(/^## (.*$)/gm, '<h2>$1</h2>');
-  html = html.replace(/^### (.*$)/gm, '<h3>$1</h3>');
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  html = html.replace(/^- (.+$)/gm, '<li>$1</li>');
-  html = html.replace(/^(\d+)\. (.+$)/gm, '<li>$2</li>');
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+  var lt = new RegExp('<', 'g');
+  var gt = new RegExp('>', 'g');
+  var html = md.replace(lt, '&lt;').replace(gt, '&gt;');
+  html = html.replace(/^## (.*$)/gm, '&lt;h2&gt;$1&lt;/h2&gt;');
+  html = html.replace(/^### (.*$)/gm, '&lt;h3&gt;$1&lt;/h3&gt;');
+  html = html.replace(/\*\*(.+?)\*\*/g, '&lt;strong&gt;$1&lt;/strong&gt;');
+  html = html.replace(/\*(.+?)\*/g, '&lt;em&gt;$1&lt;/em&gt;');
+  html = html.replace(/^- (.+$)/gm, '&lt;li&gt;$1&lt;/li&gt;');
+  html = html.replace(/^(\d+)\. (.+$)/gm, '&lt;li&gt;$2&lt;/li&gt;');
+  html = html.replace(/(&lt;li&gt;.*&lt;\/li&gt;\n?)+/g, '&lt;ul&gt;$&&lt;/ul&gt;');
   html = html.replace(/\|(.+)\|/g, function(match) {
     var cells = match.split('|').filter(function(c) { return c.trim(); });
-    var isSeparator = cells.every(function(c) { return /^[\s\-:]+$/.test(c); });
-    if (isSeparator) return '';
-    return '<tr>' + cells.map(function(c) { return '<td>' + c.trim() + '</td>'; }).join('') + '</tr>';
+    var isSep = cells.every(function(c) { return c.trim().replace(/[-:]/g, '').trim() === ''; });
+    if (isSep) return '';
+    return '&lt;tr&gt;' + cells.map(function(c) { return '&lt;td&gt;' + c.trim() + '&lt;/td&gt;'; }).join('') + '&lt;/tr&gt;';
   });
-  html = html.replace(/(<tr>.*<\/tr>\n?)+/g, '<table>$&</table>');
-  html = html.replace(/\n\n/g, '</p><p>');
-  html = html.replace(/\n/g, '<br/>');
+  html = html.replace(/(&lt;tr&gt;.*&lt;\/tr&gt;\n?)+/g, '&lt;table&gt;$&&lt;/table&gt;');
+  html = html.replace(/\n\n/g, '&lt;/p&gt;&lt;p&gt;');
+  html = html.replace(/\n/g, '&lt;br/&gt;');
+  // Now unescape our HTML tags
+  html = html.replace(/&lt;(\/?(?:h[23]|strong|em|li|ul|ol|table|tr|td|th|p|br\/?))&gt;/g, function(_, tag) { return '<' + tag + '>'; });
   return html;
 };
 
@@ -1569,17 +1572,10 @@ const AmazonAdsIntelModal = ({
                             return <li key={i} className="list-disc ml-4"><strong>{parts[0]}</strong>{parts.slice(1).join('')}</li>;
                           }
                           if (line.startsWith('- ')) return <li key={i} className="list-disc ml-4">{line.replace('- ', '')}</li>;
-                          if (line.match(/^\d+\.\s/)) return <li key={i} className="list-decimal ml-4">{line.replace(/^\d+\.\s/, '')}</li>;
                           if (line.startsWith('> ')) return <blockquote key={i}><p>{line.replace('> ', '')}</p></blockquote>;
                           if (line.trim() === '') return <br key={i} />;
                           if (line.startsWith('**') && line.endsWith('**')) return <p key={i}><strong>{line.replace(/\*\*/g, '')}</strong></p>;
-                          return <p key={i}>{line.replace(/\*\*(.+?)\*\*/g, (_, t) => `<strong>${t}</strong>`).split('<strong>').map((part, j) => {
-                            if (part.includes('</strong>')) {
-                              const [bold, rest] = part.split('</strong>');
-                              return <span key={j}><strong>{bold}</strong>{rest}</span>;
-                            }
-                            return <span key={j}>{part}</span>;
-                          })}</p>;
+                          return <p key={i}>{line}</p>;
                         })}
                       </div>
                     </div>
