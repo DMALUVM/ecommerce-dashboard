@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { 
   ChevronDown, BarChart3, Upload, Database, TrendingUp, Boxes, 
   Settings, Sun, Calendar, CalendarRange, GitCompare, Trophy, 
-  PieChart, Zap, Brain, Truck, Landmark, DollarSign
+  PieChart, Zap, Brain, Truck, Landmark, DollarSign, CheckSquare, Wallet
 } from 'lucide-react';
 
 const NavTabs = ({
@@ -43,7 +43,7 @@ const NavTabs = ({
   }, [navDropdown, setNavDropdown]);
   
   const dataViews = ['daily', 'weekly', 'period-view'];
-  const analyticsViews = ['trends', 'analytics', 'yoy', 'skus', 'profitability', 'ads'];
+  const analyticsViews = ['trends', 'analytics', 'yoy', 'skus', 'profitability', 'pnl', 'ads'];
   const operationsViews = ['inventory', '3pl', 'banking', 'sales-tax', 'forecast'];
   
   const isDataActive = dataViews.includes(view);
@@ -110,6 +110,12 @@ const NavTabs = ({
   
   // Analytics dropdown items - reorganized and cleaner
   const analyticsItems = [
+    // P&L - CEO's #1 screen
+    {
+      view: 'pnl', label: '💰 Profit & Loss', icon: Wallet,
+      disabled: Object.keys(allWeeksData).length < 1,
+      onClick: () => setView('pnl'),
+    },
     // Time-based analysis
     ...(appSettings.modulesEnabled?.trends !== false ? [{
       view: 'trends', label: 'Trends & Charts', icon: TrendingUp,
@@ -218,6 +224,9 @@ const NavTabs = ({
       )}
       
       <div className="w-px bg-slate-600 mx-1" />
+      
+      {/* Reports & Actions - Top level */}
+      <button onClick={() => setView('reports')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${view === 'reports' ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg shadow-amber-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><CheckSquare className="w-4 h-4" />Actions</button>
       
       {/* Settings - Always visible */}
       <button onClick={() => setView('settings')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${view === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-500 text-white shadow-lg shadow-slate-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Settings className="w-4 h-4" />Settings</button>

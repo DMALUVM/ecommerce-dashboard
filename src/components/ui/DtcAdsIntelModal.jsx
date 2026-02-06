@@ -1032,6 +1032,7 @@ const DtcAdsIntelModal = ({
   queueCloudSave,
   setToast,
   callAI,
+  saveReportToHistory,
 }) => {
   const [detectedFiles, setDetectedFiles] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -1211,6 +1212,28 @@ const DtcAdsIntelModal = ({
       if (!prompts) throw new Error('No data available');
       const response = await callAI(prompts.userPrompt, prompts.systemPrompt);
       setActionReport(response);
+      // Save to report history
+      if (saveReportToHistory) {
+        const d = dtcIntelData || {};
+        const metaSpend = d.metaCampaigns?.reduce?.((s, c) => s + (c.spend || 0), 0) || 0;
+        const googleSpend = d.googleCampaigns?.reduce?.((s, c) => s + (c.cost || 0), 0) || 0;
+        const metaRev = d.metaCampaigns?.reduce?.((s, c) => s + (c.purchaseValue || c.revenue || 0), 0) || 0;
+        const googleRev = d.googleCampaigns?.reduce?.((s, c) => s + (c.conversionValue || c.revenue || 0), 0) || 0;
+        const totalSpend = metaSpend + googleSpend;
+        const totalRev = metaRev + googleRev;
+        saveReportToHistory({
+          type: 'dtc',
+          content: response,
+          model: window.__aiModelOverride || 'claude-sonnet-4-20250514',
+          metrics: {
+            revenue: totalRev,
+            adSpend: totalSpend,
+            roas: totalSpend > 0 ? totalRev / totalSpend : 0,
+            tacos: totalRev > 0 ? (totalSpend / totalRev * 100) : 0,
+            actionCount: (response.match(/^\d+[\.\)]/gm) || []).length,
+          },
+        });
+      }
     } catch (err) {
       setReportError(err.message || 'Failed to generate report');
     } finally {

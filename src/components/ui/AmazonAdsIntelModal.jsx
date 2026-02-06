@@ -1212,6 +1212,7 @@ const AmazonAdsIntelModal = ({
   setToast,
   onGoToAnalyst,
   callAI,
+  saveReportToHistory,
 }) => {
   const [detectedFiles, setDetectedFiles] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -1442,6 +1443,22 @@ const AmazonAdsIntelModal = ({
       
       const response = await callAI(prompts.userPrompt, prompts.systemPrompt);
       setActionReport(response);
+      // Save to report history
+      if (saveReportToHistory) {
+        const t = adsIntelData?.total || {};
+        saveReportToHistory({
+          type: 'amazon',
+          content: response,
+          model: window.__aiModelOverride || 'claude-sonnet-4-20250514',
+          metrics: {
+            revenue: t.totalSales || 0,
+            adSpend: t.totalSpend || 0,
+            roas: t.totalSales && t.totalSpend ? (t.totalSales / t.totalSpend) : 0,
+            acos: t.totalSpend && t.totalSales ? (t.totalSpend / t.totalSales * 100) : 0,
+            actionCount: (response.match(/^\d+[\.\)]/gm) || []).length,
+          },
+        });
+      }
     } catch (err) {
       console.error('Report generation error:', err);
       setReportError(err.message || 'Failed to generate report');
