@@ -48,7 +48,6 @@ const UploadView = ({
   navDropdown,
   packiyoCredentials,
   parseBulkAdFile,
-  PeriodFileBox,
   periodAdSpend,
   periodFileNames,
   periodFiles,
