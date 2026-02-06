@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { 
   ChevronDown, BarChart3, Upload, Database, TrendingUp, Boxes, 
   Settings, Sun, Calendar, CalendarRange, GitCompare, Trophy, 
-  PieChart, Zap, Brain, Truck, Landmark, DollarSign, CheckSquare, Wallet
+  PieChart, Zap, Brain, Truck, Landmark, DollarSign, CheckSquare
 } from 'lucide-react';
 
 const NavTabs = ({
@@ -43,7 +43,7 @@ const NavTabs = ({
   }, [navDropdown, setNavDropdown]);
   
   const dataViews = ['daily', 'weekly', 'period-view'];
-  const analyticsViews = ['trends', 'analytics', 'yoy', 'skus', 'profitability', 'pnl', 'ads'];
+  const analyticsViews = ['trends', 'yoy', 'skus', 'profitability', 'ads'];
   const operationsViews = ['inventory', '3pl', 'banking', 'sales-tax', 'forecast'];
   
   const isDataActive = dataViews.includes(view);
@@ -110,39 +110,28 @@ const NavTabs = ({
   
   // Analytics dropdown items - reorganized and cleaner
   const analyticsItems = [
-    // P&L - CEO's #1 screen
-    {
-      view: 'pnl', label: '💰 Profit & Loss', icon: Wallet,
-      disabled: Object.keys(allWeeksData).length < 1,
-      onClick: () => setView('pnl'),
-    },
     // Time-based analysis
     ...(appSettings.modulesEnabled?.trends !== false ? [{
       view: 'trends', label: 'Trends & Charts', icon: TrendingUp,
       disabled: Object.keys(allWeeksData).length < 2,
       onClick: () => setView('trends'),
     }] : []),
-    {
-      view: 'analytics', label: 'Revenue Analytics', icon: BarChart3,
-      disabled: Object.keys(allWeeksData).length < 1,
-      onClick: () => setView('analytics'),
-    },
     ...(appSettings.modulesEnabled?.yoy !== false ? [{
       view: 'yoy', label: 'Year over Year', icon: GitCompare,
       disabled: Object.keys(allWeeksData).length < 2 && Object.keys(allPeriodsData).length < 2,
       onClick: () => setView('yoy'),
     }] : []),
     // Product & profit analysis (with divider)
+    ...(appSettings.modulesEnabled?.profitability !== false ? [{
+      view: 'profitability', label: '💰 Profitability & P&L', icon: PieChart,
+      disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
+      onClick: () => setView('profitability'),
+      divider: true,
+    }] : []),
     ...(appSettings.modulesEnabled?.skus !== false ? [{
       view: 'skus', label: 'SKU Performance', icon: Trophy,
       disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
       onClick: () => setView('skus'),
-      divider: true,
-    }] : []),
-    ...(appSettings.modulesEnabled?.profitability !== false ? [{
-      view: 'profitability', label: 'Profitability', icon: PieChart,
-      disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
-      onClick: () => setView('profitability'),
     }] : []),
     // Marketing (with divider)
     ...(appSettings.modulesEnabled?.ads !== false ? [{
