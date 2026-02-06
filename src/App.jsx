@@ -9868,6 +9868,7 @@ const savePeriods = async (d) => {
 
   const getMonths = () => { const m = new Set(); Object.keys(allWeeksData).forEach(w => { const d = new Date(w+'T00:00:00'); m.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`); }); return Array.from(m).sort().reverse(); };
   const getYears = () => { const y = new Set(); Object.keys(allWeeksData).forEach(w => { y.add(new Date(w+'T00:00:00').getFullYear()); }); return Array.from(y).sort().reverse(); };
+  const months = getMonths();
 
   const getMonthlyData = (ym) => {
     const [y, m] = ym.split('-').map(Number);
@@ -18136,7 +18137,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   }
 
   if (view === 'monthly') {
-    const months = getMonths(), data = selectedMonth ? getMonthlyData(selectedMonth) : null, idx = months.indexOf(selectedMonth);
+    const data = selectedMonth ? getMonthlyData(selectedMonth) : null, idx = months.indexOf(selectedMonth);
     if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
@@ -18441,7 +18442,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       appSettings={appSettings}
       bankingData={bankingData}
       current={current}
-      data={data}
       dataBar={dataBar}
       globalModals={globalModals}
       hasDailySalesData={hasDailySalesData}
@@ -18592,10 +18592,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       amazonCampaigns={amazonCampaigns}
       appSettings={appSettings}
       bankingData={bankingData}
-      best={best}
-      breakdown={breakdown}
       current={current}
-      data={data}
       dataBar={dataBar}
       files={files}
       globalModals={globalModals}
@@ -18645,7 +18642,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       allWeeksData={allWeeksData}
       appSettings={appSettings}
       bankingData={bankingData}
-      breakdown={breakdown}
       editPortalUrlValue={editPortalUrlValue}
       editingPortalUrl={editingPortalUrl}
       files={files}
@@ -18702,8 +18698,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       bankingDrilldown={bankingDrilldown}
       bankingProcessing={bankingProcessing}
       bankingTab={bankingTab}
-      best={best}
-      breakdown={breakdown}
       byMonth={byMonth}
       channelPeriod={channelPeriod}
       combinedData={combinedData}
@@ -18779,7 +18773,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       appSettings={appSettings}
       autoSyncStatus={autoSyncStatus}
       bankingData={bankingData}
-      best={best}
       bump={bump}
       categories={categories}
       combinedData={combinedData}
