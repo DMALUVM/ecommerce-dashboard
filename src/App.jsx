@@ -4098,13 +4098,11 @@ const loadFromLocal = useCallback(() => {
     
     // Also check legacy 'dailySales' key and merge if it has more data
     const legacyRaw = localStorage.getItem('dailySales'); // Direct access, no lsGet
-    console.log('Loading legacy dailySales:', legacyRaw ? 'found' : 'empty', legacyRaw?.length || 0, 'chars');
     if (legacyRaw) {
       try {
         const legacy = JSON.parse(legacyRaw);
         const legacyDates = Object.keys(legacy);
         const datesWithAmazonSku = legacyDates.filter(d => legacy[d]?.amazon?.skuData?.length > 0);
-        console.log('Legacy dailySales has', legacyDates.length, 'days,', datesWithAmazonSku.length, 'with Amazon skuData');
         
         if (legacyDates.length > 0) {
           // Merge legacy data, preferring legacy if it has skuData
@@ -4122,7 +4120,6 @@ const loadFromLocal = useCallback(() => {
               merged++;
             }
           });
-          console.log('Merged', merged, 'days from legacy dailySales');
         }
       } catch (legacyErr) {
         console.error('Failed to parse legacy dailySales:', legacyErr.message);
@@ -4144,7 +4141,6 @@ const loadFromLocal = useCallback(() => {
       if (daysWithShopifySku.length > 0) {
         const sampleDay = daysWithShopifySku[0];
         const sampleData = dailyData[sampleDay]?.shopify?.skuData;
-        console.log('  - Sample Shopify day:', sampleDay, 'skuData:', Array.isArray(sampleData) ? sampleData.slice(0, 3) : Object.entries(sampleData || {}).slice(0, 3));
       }
       setAllDaysData(dailyData);
     }
@@ -6887,7 +6883,6 @@ const savePeriods = async (d) => {
   };
 
   const processInventory = useCallback(async () => {
-    console.log('=== PROCESS INVENTORY v3.0 - DIRECT LOCALSTORAGE READ ===');
     
     // DIRECT READ from localStorage to get SKU velocity data
     // Use lsGet to handle LZ compression properly
@@ -6898,7 +6893,6 @@ const savePeriods = async (d) => {
       let dailyRaw = lsGet('ecommerce_daily_sales_v1');
       if (dailyRaw) {
         legacyDailyData = typeof dailyRaw === 'string' ? JSON.parse(dailyRaw) : dailyRaw;
-        console.log('DIRECT localStorage read - ecommerce_daily_sales_v1:', Object.keys(legacyDailyData).length, 'days');
       }
       
       // Also check legacy key (not compressed) and merge if it has additional data
@@ -6906,7 +6900,6 @@ const savePeriods = async (d) => {
       if (legacyRaw) {
         try {
           const legacyData = JSON.parse(legacyRaw);
-          console.log('Legacy dailySales found:', Object.keys(legacyData).length, 'days');
           // Merge legacy data (newer data takes precedence)
           Object.keys(legacyData).forEach(date => {
             if (!legacyDailyData[date]) {
@@ -6914,7 +6907,6 @@ const savePeriods = async (d) => {
             }
           });
         } catch (e) {
-          console.log('Legacy dailySales not valid JSON, skipping');
         }
       }
       
@@ -6927,7 +6919,6 @@ const savePeriods = async (d) => {
         const shopSku = legacyDailyData[d]?.shopify?.skuData;
         return (Array.isArray(shopSku) && shopSku.length > 0) || (shopSku && typeof shopSku === 'object' && Object.keys(shopSku).length > 0);
       });
-      console.log('Combined daily data:', Object.keys(legacyDailyData).length, 'days');
       console.log('  - Days with Amazon skuData:', datesWithAmazonSku.length);
       console.log('  - Days with Shopify skuData:', datesWithShopifySku.length);
       
@@ -6936,7 +6927,6 @@ const savePeriods = async (d) => {
         const sampleDate = datesWithShopifySku[0];
         const sampleSkuData = legacyDailyData[sampleDate]?.shopify?.skuData;
         const firstSku = Array.isArray(sampleSkuData) ? sampleSkuData[0] : Object.values(sampleSkuData || {})[0];
-        console.log('Sample Shopify skuData from', sampleDate, ':', firstSku);
       }
     } catch (e) {
       console.error('Failed to read daily data from localStorage:', e);
@@ -7000,11 +6990,9 @@ const savePeriods = async (d) => {
     });
     
     if (datesWithSkuData.length > 0) {
-      console.log('=== CALCULATING VELOCITY FROM DIRECT LOCALSTORAGE ===');
       console.log('Dates with ANY skuData:', datesWithSkuData.length);
       console.log('Dates with Amazon skuData:', datesWithAmazonSku.length);
       console.log('Dates with Shopify skuData:', datesWithShopifySku.length);
-      console.log('Sample dates:', datesWithSkuData.slice(0, 5));
       
       const last28 = datesWithSkuData.slice(0, 28);
       const weeksEquiv = last28.length / 7;
@@ -7062,12 +7050,9 @@ const savePeriods = async (d) => {
       velocityDataSource = 'direct-localStorage';
       console.log('Amazon SKU velocity calculated for', Object.keys(amazonSkuVelocity).length, 'SKUs');
       console.log('Shopify SKU velocity calculated for', Object.keys(shopifySkuVelocity).length, 'SKUs');
-      console.log('Sample Amazon velocities:', Object.entries(amazonSkuVelocity).slice(0, 3).map(([k,v]) => `${k}: ${v.toFixed(1)}/wk`));
-      console.log('Sample Shopify velocities:', Object.entries(shopifySkuVelocity).slice(0, 3).map(([k,v]) => `${k}: ${v.toFixed(1)}/wk`));
     }
     
     // DEBUG: Log data availability
-    console.log('=== VELOCITY CALCULATION DEBUG ===');
     console.log('Weekly data weeks:', weeksCount, sortedWeeks);
     console.log('Daily data days (from state):', Object.keys(allDaysData).length);
     console.log('Period data periods:', Object.keys(allPeriodsData).length);
@@ -7105,7 +7090,6 @@ const savePeriods = async (d) => {
         if (weekData.amazon?.skuData) {
           const skuArr = Array.isArray(weekData.amazon.skuData) ? weekData.amazon.skuData : Object.values(weekData.amazon.skuData);
           if (skuArr.length > 0) {
-            console.log('  Amazon SKU sample:', JSON.stringify(skuArr[0]));
             console.log('  Amazon total SKUs:', skuArr.length);
             console.log('  Amazon SKU keys in first item:', Object.keys(skuArr[0]));
           }
@@ -7113,7 +7097,6 @@ const savePeriods = async (d) => {
         if (weekData.shopify?.skuData) {
           const skuArr = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
           if (skuArr.length > 0) {
-            console.log('  Shopify SKU sample:', JSON.stringify(skuArr[0]));
             console.log('  Shopify total SKUs:', skuArr.length);
           }
         }
@@ -7146,12 +7129,10 @@ const savePeriods = async (d) => {
       });
       
       // DEBUG: Log velocity totals after processing weekly data
-      console.log('After weekly processing:');
       console.log('  amazonSkuVelocity count:', Object.keys(amazonSkuVelocity).length);
       console.log('  shopifySkuVelocity count:', Object.keys(shopifySkuVelocity).length);
       if (Object.keys(amazonSkuVelocity).length > 0) {
         const sampleSku = Object.keys(amazonSkuVelocity)[0];
-        console.log('  Sample Amazon velocity:', sampleSku, '=', amazonSkuVelocity[sampleSku]);
       }
       
       // Convert totals to weekly averages
@@ -7235,7 +7216,6 @@ const savePeriods = async (d) => {
         const amazonSkuData = sampleDay?.amazon?.skuData;
         const shopifySkuDataLen = Array.isArray(shopifySkuData) ? shopifySkuData.length : Object.keys(shopifySkuData || {}).length;
         const amazonSkuDataLen = Array.isArray(amazonSkuData) ? amazonSkuData.length : Object.keys(amazonSkuData || {}).length;
-        console.log('Sample day structure:', recentDays[0], {
           hasAmazon: !!sampleDay?.amazon,
           hasAmazonSkuData: !!amazonSkuData,
           amazonSkuDataLength: amazonSkuDataLen,
@@ -7249,11 +7229,9 @@ const savePeriods = async (d) => {
         });
         if (amazonSkuDataLen > 0) {
           const firstItem = Array.isArray(amazonSkuData) ? amazonSkuData[0] : Object.values(amazonSkuData)[0];
-          console.log('Amazon daily SKU sample:', firstItem);
         }
         if (shopifySkuDataLen > 0) {
           const firstItem = Array.isArray(shopifySkuData) ? shopifySkuData[0] : Object.values(shopifySkuData)[0];
-          console.log('Shopify daily SKU sample:', firstItem);
         }
       }
       
@@ -7494,7 +7472,6 @@ const savePeriods = async (d) => {
         };
       });
       
-      console.log('=== DEMAND STATS CALCULATED ===');
       console.log('SKUs with demand stats:', Object.keys(skuDemandStats).length);
       const demandClasses = Object.values(skuDemandStats).reduce((acc, s) => { acc[s.demandClass] = (acc[s.demandClass] || 0) + 1; return acc; }, {});
       console.log('Demand classification:', demandClasses);
@@ -7502,7 +7479,6 @@ const savePeriods = async (d) => {
       const sampleSku = Object.keys(skuDemandStats)[0];
       if (sampleSku) {
         const s = skuDemandStats[sampleSku];
-        console.log(`Sample ${sampleSku}: CV=${s.cv}, Class=${s.demandClass}, SafetyStock=${s.safetyStock}, SeasonalFactor=${s.currentSeasonalFactor}`);
       }
     } catch (statsErr) {
       console.warn('Demand stats calculation error:', statsErr);
@@ -7793,7 +7769,6 @@ const savePeriods = async (d) => {
     const allSkus = new Set([...Object.keys(amzInv), ...Object.keys(tplInv), ...Object.keys(homeInv)]);
     
     // Log SKU sources for debugging
-    console.log('Inventory SKU sources:', {
       amazon: Object.keys(amzInv).length,
       threepl: Object.keys(tplInv).length,
       home: Object.keys(homeInv).length,
@@ -7829,24 +7804,6 @@ const savePeriods = async (d) => {
       ? uniqueSkus.filter(sku => cogsSkuSet.has(sku.toLowerCase()) || cogsSkuSet.has(sku.replace(/shop$/i, '').toLowerCase()))
       : uniqueSkus; // If no COGS at all, show everything (backwards compatible)
     
-    console.log('SKU filtering: uniqueSkus =', uniqueSkus.length, ', physicalSkus (with COGS) =', physicalSkus.length, ', cogsSkuSet =', cogsSkuSet.size);
-    console.log('SKU deduplication: allSkus =', allSkus.size, ', uniqueSkus =', uniqueSkus.length);
-    console.log('Velocity data available:', {
-      amazonSkuVelocityCount: Object.keys(amazonSkuVelocity).length,
-      shopifySkuVelocityCount: Object.keys(shopifySkuVelocity).length,
-      sampleAmazonSku: Object.keys(amazonSkuVelocity)[0],
-      sampleShopifySku: Object.keys(shopifySkuVelocity)[0],
-    });
-    
-    // Log first few velocity values for debugging
-    if (Object.keys(shopifySkuVelocity).length > 0) {
-      console.log('Sample Shopify velocities:', Object.entries(shopifySkuVelocity).slice(0, 5));
-      console.log('Shopify velocity SKU formats:', Object.keys(shopifySkuVelocity).slice(0, 5));
-    }
-    if (Object.keys(amazonSkuVelocity).length > 0) {
-      console.log('Amazon velocity SKU formats:', Object.keys(amazonSkuVelocity).slice(0, 5));
-    }
-    
     const items = [];
     let critical = 0, low = 0, healthy = 0, overstock = 0;
     
@@ -7861,11 +7818,7 @@ const savePeriods = async (d) => {
     const lowThreshold = Math.max(30, globalLeadTimeDays + 14);
     const criticalThreshold = Math.max(14, globalLeadTimeDays);
     
-    console.log('Inventory thresholds (dynamic):', { criticalThreshold, lowThreshold, overstockThreshold, globalMinOrderWeeks, globalLeadTimeDays });
     
-    // DEBUG: Log first 3 items velocity matching attempt
-    let debugCount = 0;
-
     physicalSkus.forEach(sku => {
       const skuLower = sku.toLowerCase();
       
@@ -7890,23 +7843,6 @@ const savePeriods = async (d) => {
       const skuWithoutShopUpper = skuWithoutShop.toUpperCase();
       const skuWithShop = skuWithoutShop + 'Shop';
       const skuWithShopLower = skuWithShop.toLowerCase();
-      
-      // DEBUG: Log velocity lookup attempts for first 3 items
-      if (debugCount < 3) {
-        console.log(`Velocity lookup for "${sku}":`, {
-          variants: [sku, skuLower, skuWithoutShop, skuWithoutShopLower, skuWithoutShopUpper, skuWithShop, skuWithShopLower],
-          shopifyMatches: {
-            exact: shopifySkuVelocity[sku],
-            lower: shopVelLower[skuLower],
-            withoutShop: shopifySkuVelocity[skuWithoutShop],
-            withoutShopLower: shopVelLower[skuWithoutShopLower],
-            withoutShopUpper: shopifySkuVelocity[skuWithoutShopUpper],
-            withShop: shopifySkuVelocity[skuWithShop],
-            withShopLower: shopVelLower[skuWithShopLower],
-          }
-        });
-        debugCount++;
-      }
       
       const amzVelFromWeekly = amazonSkuVelocity[sku] || amzVelLower[skuLower] || 
                                amazonSkuVelocity[skuWithoutShop] || amzVelLower[skuWithoutShopLower] ||
@@ -9150,7 +9086,6 @@ const savePeriods = async (d) => {
   
   // Process Amazon bulk upload - import into appropriate data structures
   const processAmazonBulkUpload = useCallback(async () => {
-    console.log('=== processAmazonBulkUpload CALLED ===');
     console.log('amazonBulkFiles.length:', amazonBulkFiles.length);
     
     if (amazonBulkFiles.length === 0) {
@@ -9214,7 +9149,6 @@ const savePeriods = async (d) => {
         const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
         
         // DEBUG: Log what was parsed
-        console.log(`=== AMAZON BULK UPLOAD DEBUG (${fileData.name}) ===`);
         console.log('Report type:', reportType);
         console.log('Date range:', dateRange);
         console.log('Date range endDate:', dateRange?.endDate);
@@ -9223,7 +9157,6 @@ const savePeriods = async (d) => {
         console.log('Total units:', amzUnits);
         console.log('Total revenue:', amzRev);
         if (amazonSkus.length > 0) {
-          console.log('Sample SKU:', JSON.stringify(amazonSkus[0]));
           console.log('First few SKU names:', amazonSkus.slice(0, 5).map(s => s.sku));
         }
         
@@ -9233,7 +9166,6 @@ const savePeriods = async (d) => {
           continue;
         }
         
-        console.log('Processing file:', fileData.name, 'reportType:', reportType, 'dateKey:', dateRange.endDate.toISOString().split('T')[0]);
         
         if (reportType === 'daily') {
           // Import as daily data
@@ -9452,7 +9384,6 @@ const savePeriods = async (d) => {
       console.error('Error stack:', err.stack);
       setToast({ message: 'Error processing files: ' + err.message, type: 'error' });
     } finally {
-      console.log('Finally block executing - setting processing to false');
       setAmazonBulkProcessing(false);
     }
   }, [amazonBulkFiles, getCogsLookup, allDaysData, allWeeksData, allPeriodsData, save]);
@@ -11235,7 +11166,6 @@ const savePeriods = async (d) => {
     const threshold = appSettings.autoSync?.staleThresholdHours || 4;
     const results = [];
     
-    console.log('=== AUTO-SYNC: Checking for stale data ===');
     setAutoSyncStatus(prev => ({ ...prev, running: true, lastCheck: new Date().toISOString() }));
     
     try {
@@ -11347,7 +11277,6 @@ const savePeriods = async (d) => {
               // This mirrors the manual Packiyo sync's processing so velocities and
               // DOS/stockout dates are recalculated on auto-sync too
               try {
-                console.log('=== AUTO-SYNC: Running velocity calc + inventory update ===');
                 
                 // Build velocity lookups from daily data (weighted moving average)
                 const autoAmazonVelLookup = {};
@@ -11747,7 +11676,6 @@ const savePeriods = async (d) => {
     const timer = setTimeout(() => {
       const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected;
       if (anyConnected) {
-        console.log('=== AUTO-SYNC: Running on app load ===');
         runAutoSyncRef.current();
       }
     }, 3000);
@@ -11767,7 +11695,6 @@ const savePeriods = async (d) => {
     const interval = setInterval(() => {
       const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected;
       if (anyConnected) {
-        console.log('=== AUTO-SYNC: Running scheduled sync ===');
         runAutoSyncRef.current();
       }
     }, intervalMs);
@@ -12556,8 +12483,7 @@ Keep insights brief and actionable. Format as numbered list.`;
         ? futureAmazonForecasts[0].forecastRevenue * amazonBiasCorrection
         : null;
       
-      // ==================== CALCULATE WEIGHTED PREDICTION ====================
-      // Weight: Daily data (60%), Weekly trend (20%), Amazon forecast (20%)
+      // ==================== PREPARE PREDICTION INPUTS ====================
       const dailyBasedWeekly = avg7Day * 7; // Most recent daily × 7
       // Cap trend multiplier to max ±10% effect
       const trendMultiplier = Math.max(0.90, Math.min(1.10, 1 + weeklyTrend / 100 * 0.3));
@@ -12605,7 +12531,6 @@ Keep insights brief and actionable. Format as numbered list.`;
       let weightedPrediction = dailyBasedWeekly; // Start with core calculation
       
       // Log all inputs for debugging
-      console.log('[Forecast] Input values:', {
         avg7Day,
         dailyBasedWeekly,
         weeklyTrend,
@@ -12625,7 +12550,6 @@ Keep insights brief and actionable. Format as numbered list.`;
           weightedPrediction = (dailyBasedWeekly * 0.75) + (trendAdjustedWeekly * 0.15) + (adjustedAmazonForecast * 0.10);
         } else {
           // Amazon forecast out of range - ignore it
-          console.log('[Forecast] Amazon forecast out of range, ignoring:', adjustedAmazonForecast);
           weightedPrediction = (dailyBasedWeekly * 0.85) + (trendAdjustedWeekly * 0.15);
         }
       } else {
@@ -12638,15 +12562,12 @@ Keep insights brief and actionable. Format as numbered list.`;
       const minPrediction = dailyBasedWeekly * 0.85;
       
       if (weightedPrediction > maxPrediction) {
-        console.log('[Forecast] Capping prediction from', weightedPrediction, 'to', maxPrediction);
         weightedPrediction = maxPrediction;
       }
       if (weightedPrediction < minPrediction) {
-        console.log('[Forecast] Raising prediction from', weightedPrediction, 'to', minPrediction);
         weightedPrediction = minPrediction;
       }
       
-      console.log('[Forecast] Final weightedPrediction:', weightedPrediction, '(daily-based:', dailyBasedWeekly, ')');
       
       // Calculate profit prediction based on historical margin
       // Try daily data first, fall back to weekly data, then use default
@@ -12827,7 +12748,6 @@ Keep insights brief and actionable. Format as numbered list.`;
       };
       
       // Build comprehensive AI prompt
-      console.log('[Forecast] Calculated values:', {
         dailyAvg7: avg7Day.toFixed(2),
         dailyBasedWeekly: (avg7Day * 7).toFixed(2),
         weeklyTrend: weeklyTrend.toFixed(1) + '%',
@@ -13311,7 +13231,6 @@ Respond with ONLY this JSON:
         }
       });
       const dedupedItems = Object.values(dedupedByNormalizedSku);
-      console.log('AI forecast inventory dedup:', rawItems.length, '→', dedupedItems.length, 'items');
       
       const currentInventory = dedupedItems.map(item => {
         const weeklyVelocity = item.weeklyVel || 0;
@@ -14658,7 +14577,8 @@ Analyze the data and respond with ONLY this JSON:
     // 2026: Use weekly data (actual weeks)
     // 2025: Use monthly period data (no weekly breakdown available)
     // 2024: Use quarterly period data
-    const weeks2026 = weeksSummary.filter(w => w.weekKey && w.weekKey.startsWith('2026') && w.totalRevenue > 0);
+    const currentYear = new Date().getFullYear().toString();
+    const weeks2026 = weeksSummary.filter(w => w.weekKey && w.weekKey.startsWith(currentYear) && w.totalRevenue > 0);
     // Note: months2025 and quarters2024 already defined above in YoY section
     
     const allTimeRevenue = 
@@ -16146,20 +16066,8 @@ ${ctx.inventory.velocityTrends.declining.map(v =>
 ` : ''}
 ${!ctx.inventory?.velocityTrends?.accelerating?.length && !ctx.inventory?.velocityTrends?.declining?.length ? 'All SKUs have stable velocity (±15%)' : ''}
 
-=== INVENTORY FORECASTING CAPABILITIES ===
-When user asks about inventory, you can:
-1. **Stockout Risk**: Identify which SKUs will run out and when
-2. **Reorder Recommendations**: When to order and how much based on lead times + velocity
-3. **Capital Efficiency**: Identify overstock items tying up cash
-4. **Velocity Trends**: Which products are speeding up vs slowing down
-5. **Channel Mix**: Compare Amazon vs Shopify sales velocity
-
-For reorder calculations, use:
-- Days of Supply = Current Inventory / (Weekly Velocity / 7)
-- Reorder Point = Lead Time Days + Safety Buffer
-- Suggested Order Qty = Weekly Velocity × (Lead Time + Target Days of Supply)
-
 === INVENTORY FORECASTING ===
+When user asks about inventory, you can analyze: Stockout Risk, Reorder Recommendations, Capital Efficiency, Velocity Trends, and Channel Mix.
 ${(() => {
   // Calculate velocity and days of supply from weekly data
   const sortedWeeks = Object.keys(allWeeksData).sort().slice(-8);
@@ -21056,7 +20964,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   <div className="flex gap-2">
                     <button 
                       onClick={() => {
-                        console.log('=== DEBUG v3.0: CHECKING LOCALSTORAGE ===');
                         // Direct localStorage check
                         const legacyRaw = localStorage.getItem('dailySales');
                         if (legacyRaw) {
@@ -21065,7 +20972,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           const withAmazonSku = dates.filter(d => legacy[d]?.amazon?.skuData?.length > 0);
                           console.log('dailySales:', dates.length, 'days,', withAmazonSku.length, 'with Amazon skuData');
                           if (withAmazonSku.length > 0) {
-                            console.log('Sample:', withAmazonSku[0], legacy[withAmazonSku[0]]?.amazon?.skuData?.[0]);
                           }
                         } else {
                           console.log('dailySales: NOT FOUND');
@@ -22328,7 +22234,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             // This runs after each Shopify sync to improve velocity predictions
                             let learningToastShown = false;
                             try {
-                              console.log('=== AUTO-LEARNING: Comparing predicted vs actual velocity ===');
                               
                               // Get last complete week's data
                               const today = new Date();
@@ -22450,7 +22355,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                   newCorrections.confidence = Math.min(100, (newCorrections.samplesUsed || 0) * 15);
                                   newCorrections.lastUpdated = new Date().toISOString();
                                   
-                                  console.log('Updated forecastCorrections - Confidence:', newCorrections.confidence, '%, Samples:', newCorrections.samplesUsed);
                                   
                                   return newCorrections;
                                 });
@@ -24212,7 +24116,6 @@ if (shopifySkuWithShipping.length > 0) {
     const rawItems = data.items || [];
     
     // Log raw data for debugging
-    console.log('Inventory display - raw items:', rawItems.length, 'source:', data.inventorySources);
     
     // FILTER AND DEDUPLICATE SKUs
     // Priority: SKUs with inventory > 0, prefer "Shop" suffix variants
@@ -29514,8 +29417,9 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     let periodsUsed = [];
     let dataSourceLabel = '';
     
-    // Only use 2026 weekly data (user confirmed no weekly data before 2026)
-    const weeks2026 = allWeeks.filter(w => w.startsWith('2026'));
+    // Only use current year weekly data (user confirmed no weekly data before 2026)
+    const currentYearStr = new Date().getFullYear().toString();
+    const weeks2026 = allWeeks.filter(w => w.startsWith(currentYearStr));
     
     if (skuDateRange === '4weeks') {
       sortedWeeks = weeks2026.slice(-4);
@@ -39266,7 +39170,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 const ytdCashFlow = ytdIncome - ytdExpenses;
                 
                 // Get actual sales profit data if available
-                const sortedWeeks2026 = Object.keys(allWeeksData).filter(w => w.startsWith('2026')).sort();
+                const currentYearForWeeks = new Date().getFullYear().toString();
+                const sortedWeeks2026 = Object.keys(allWeeksData).filter(w => w.startsWith(currentYearForWeeks)).sort();
                 const actualYTDProfit = sortedWeeks2026.reduce((s, w) => s + (allWeeksData[w]?.total?.netProfit || 0), 0);
                 const actualYTDRevenue = sortedWeeks2026.reduce((s, w) => s + (allWeeksData[w]?.total?.revenue || 0), 0);
                 const weeksWithData = sortedWeeks2026.filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0).length;
@@ -41330,9 +41235,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         const rawVelocityLookup = {}; // Store uncorrected velocity
                         
                         try {
-                          console.log('=== PACKIYO SYNC: Industry-Standard Velocity Calculation ===');
                           console.log('allDaysData has', Object.keys(allDaysData).length, 'days');
-                          console.log('forecastCorrections confidence:', forecastCorrections?.confidence || 0, '%, samples:', forecastCorrections?.samplesUsed || 0);
                           
                           if (Object.keys(allDaysData).length > 0) {
                             // Get last 28 days sorted by date
@@ -41474,10 +41377,8 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             
                             // Show sample velocities with trends
                             const shopifyOnlySamples = ['DDPE0032', 'DDPE0005', 'DDPE0027'];
-                            console.log('Sample SKU velocities (weighted):');
                             shopifyOnlySamples.forEach(sku => {
                               const trend = velocityTrends[sku];
-                              console.log(`  ${sku}: Shop=${(shopifyVelocityLookup[sku] || 0).toFixed(2)}/wk, Amz=${(amazonVelocityLookup[sku] || 0).toFixed(2)}/wk, Trend=${trend?.totalTrend || 0}%`);
                             });
                           } else {
                             console.log('NO SALES DATA FOUND in allDaysData - velocity will be 0 for all items');
@@ -41586,7 +41487,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         };
                         
                         // Update current inventory snapshot with fresh Packiyo 3PL data
-                        console.log('=== PACKIYO SYNC - UPDATING INVENTORY ===');
                         const today = new Date().toISOString().split('T')[0];
                         
                         // Find the best snapshot to update: today's, selected, or most recent
@@ -41598,7 +41498,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         console.log('invHistory keys:', Object.keys(invHistory));
                         
                         if (targetDate && invHistory[targetDate] && data.inventoryBySku) {
-                          console.log('=== UPDATING EXISTING SNAPSHOT:', targetDate, '===');
                           const currentSnapshot = invHistory[targetDate];
                           console.log('Current snapshot items:', currentSnapshot.items?.length);
                           const packiyoData = data.inventoryBySku;
@@ -41625,7 +41524,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             packiyoLookup[normalizedKey] = item;
                           });
                           
-                          console.log('PackiyoLookup normalized keys:', Object.keys(packiyoLookup).slice(0, 5));
                           
                           // Update each item's 3PL quantity and recalculate stockout dates
                           let newTplTotal = 0;
@@ -41635,7 +41533,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           // Debug: Log first few SKUs from both sources to diagnose mismatch
                           const packiyoSkuList = Object.keys(packiyoLookup).slice(0, 10);
                           const snapshotSkuList = currentSnapshot.items.slice(0, 10).map(i => i.sku);
-                          console.log('Packiyo lookup SKUs (first 10):', packiyoSkuList);
                           console.log('Snapshot item SKUs (first 10):', snapshotSkuList);
                           
                           const updatedItems = currentSnapshot.items.map(item => {
@@ -41678,7 +41575,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             
                             // Debug: Log velocity lookup for first few items
                             if (matchedCount <= 5) {
-                              console.log(`Velocity for "${item.sku}": AMZ=${amzWeeklyVel.toFixed(2)}, Shop=${shopWeeklyVel.toFixed(2)}, Raw Total=${rawWeeklyVel.toFixed(2)}, Corrected=${correctedVelForDOS.toFixed(2)} ${correctionApplied ? '(correction applied)' : ''}`);
                             }
                             
                             // Use CORRECTED velocity for Days of Supply calculation
@@ -41763,7 +41659,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           
                           // If no matches, add Packiyo items directly
                           if (matchedCount === 0 && physicalPackiyoItems.length > 0) {
-                            console.log('No SKU matches found - creating items from Packiyo directly');
                             
                             // Reset totals since we're creating fresh
                             newTplTotal = 0;
@@ -41983,7 +41878,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           
                           if (existingTodaySnapshot) {
                             // MERGE with existing today snapshot - don't overwrite!
-                            console.log('=== MERGING WITH EXISTING SNAPSHOT FOR TODAY ===');
                             const packiyoData = data.inventoryBySku;
                             
                             // Create Packiyo lookup with normalized keys
