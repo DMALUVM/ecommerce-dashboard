@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { Brain, X, Upload, FileSpreadsheet, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, Eye, ShoppingCart, Zap } from 'lucide-react';
+import { Brain, X, Upload, FileSpreadsheet, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, Eye, ShoppingCart, Zap, Download, FileText, Loader2 } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
 
 const REPORT_TYPES = [
@@ -378,10 +378,10 @@ const aggregateSPPlacement = (rows) => {
     const placement = r['Placement'] || 'Other';
     if (!byPlacement[placement]) byPlacement[placement] = { placement, spend: 0, sales: 0, impressions: 0, clicks: 0, orders: 0 };
     byPlacement[placement].spend += num(r['Spend'] || r['spend']);
-    byPlacement[placement].sales += num(r['7 Day Total Sales '] || r['7 Day Total Sales']);
+    byPlacement[placement].sales += num(r['7 Day Total Sales '] || r['7 Day Total Sales'] || r['14 Day Total Sales'] || r['14 Day Total Sales ']);
     byPlacement[placement].impressions += num(r['Impressions']);
     byPlacement[placement].clicks += num(r['Clicks']);
-    byPlacement[placement].orders += num(r['7 Day Total Orders (#)']);
+    byPlacement[placement].orders += num(r['7 Day Total Orders (#)'] || r['14 Day Total Orders (#)']);
   });
 
   // Also aggregate by campaign + placement for detailed view
@@ -392,9 +392,9 @@ const aggregateSPPlacement = (rows) => {
     const key = `${camp}|||${placement}`;
     if (!byCampaignPlacement[key]) byCampaignPlacement[key] = { campaign: camp, placement, spend: 0, sales: 0, clicks: 0, orders: 0 };
     byCampaignPlacement[key].spend += num(r['Spend'] || r['spend']);
-    byCampaignPlacement[key].sales += num(r['7 Day Total Sales '] || r['7 Day Total Sales']);
+    byCampaignPlacement[key].sales += num(r['7 Day Total Sales '] || r['7 Day Total Sales'] || r['14 Day Total Sales'] || r['14 Day Total Sales ']);
     byCampaignPlacement[key].clicks += num(r['Clicks']);
-    byCampaignPlacement[key].orders += num(r['7 Day Total Orders (#)']);
+    byCampaignPlacement[key].orders += num(r['7 Day Total Orders (#)'] || r['14 Day Total Orders (#)']);
   });
 
   return {
@@ -421,10 +421,10 @@ const aggregateSPTargeting = (rows) => {
     const key = `${target}|${matchType}`;
     if (!byTarget[key]) byTarget[key] = { target, matchType, spend: 0, sales: 0, impressions: 0, clicks: 0, orders: 0, tosShare: [] };
     byTarget[key].spend += num(r['Spend'] || r['spend']);
-    byTarget[key].sales += num(r['7 Day Total Sales '] || r['7 Day Total Sales']);
+    byTarget[key].sales += num(r['7 Day Total Sales '] || r['7 Day Total Sales'] || r['14 Day Total Sales'] || r['14 Day Total Sales ']);
     byTarget[key].impressions += num(r['Impressions']);
     byTarget[key].clicks += num(r['Clicks']);
-    byTarget[key].orders += num(r['7 Day Total Orders (#)']);
+    byTarget[key].orders += num(r['7 Day Total Orders (#)'] || r['14 Day Total Orders (#)']);
     const tos = num(r['Top-of-search Impression Share'] || r['Top-of-Search IS']);
     if (tos > 0) byTarget[key].tosShare.push(tos);
   });
@@ -723,7 +723,10 @@ const detectReportType = (headers, rows, fileName) => {
   // SB Search Terms (14 Day attribution)
   if ((hSet.has('customer search term') || hSet.has('search term')) && (hSet.has('14 day total sales') || hSet.has('14 day total sales ') || hSet.has('14 day total orders (#)'))) return 'sbSearchTerms';
 
-  // SP Placement
+  // SP Placement (7-day attribution, no cost type)
+  // SB Placement has 'cost type' and '14 day' columns - treat as spPlacement for aggregation
+  if (hSet.has('placement') && hSet.has('bidding strategy')) return 'spPlacement';
+  if (hSet.has('placement') && (hSet.has('14 day total sales') || hSet.has('cost type'))) return 'spPlacement'; // SB placement maps here too
   if (hSet.has('placement')) return 'spPlacement';
 
   // SP Targeting
@@ -748,6 +751,103 @@ const detectReportType = (headers, rows, fileName) => {
   return null;
 };
 
+// ============ AI ACTION REPORT BUILDER ============
+
+const buildActionReportPrompt = (intelData) => {
+  if (!intelData) return null;
+  
+  // Detect date range across all reports
+  const allDates = [];
+  if (intelData.dailyOverview?.days) intelData.dailyOverview.days.forEach(d => allDates.push(d.date));
+  if (intelData.historicalDaily?.days) intelData.historicalDaily.days.forEach(d => allDates.push(d.date));
+  allDates.sort();
+  const dateRange = allDates.length > 0 ? `${allDates[0]} to ${allDates[allDates.length - 1]}` : 'Recent period';
+  
+  // Count available reports
+  const available = [];
+  if (intelData.spSearchTerms) available.push(`SP Search Terms (${intelData.spSearchTerms.totalTerms} terms, $${Math.round(intelData.spSearchTerms.totalSpend)} spend)`);
+  if (intelData.spTargeting?.length) available.push(`SP Targeting (${intelData.spTargeting.length} targets)`);
+  if (intelData.spPlacement) available.push(`SP Placements (${intelData.spPlacement.byPlacement?.length || 0} placements)`);
+  if (intelData.spAdvertised?.length) available.push(`SP Advertised Products (${intelData.spAdvertised.length} ASINs)`);
+  if (intelData.sbSearchTerms?.length) available.push(`SB Search Terms (${intelData.sbSearchTerms.length} terms)`);
+  if (intelData.sdCampaign?.length) available.push(`SD Campaigns (${intelData.sdCampaign.length} campaigns)`);
+  if (intelData.businessReport?.length) available.push(`Business Report (${intelData.businessReport.length} ASINs)`);
+  if (intelData.searchQueryPerf?.length) available.push(`Search Query Perf (${intelData.searchQueryPerf.length} queries)`);
+  if (intelData.dailyOverview?.days?.length) available.push(`Daily Overview (${intelData.dailyOverview.days.length} days)`);
+  
+  // Build the full data context
+  const dataContext = buildAdsIntelContext(intelData);
+  
+  const systemPrompt = `You are an elite Amazon PPC strategist working for a tallow-based skincare brand (Tallowbourn). 
+You produce SPECIFIC, ACTIONABLE optimization reports — not generic advice. Every recommendation must reference EXACT keywords, campaigns, ASINs, or targets from the data provided.
+
+FORMAT YOUR REPORT IN MARKDOWN with these EXACT sections. Include every section that has relevant data, skip sections that don't apply.
+
+For each recommendation, be SPECIFIC:
+- Name the exact keyword/target/campaign
+- State the current metrics (spend, ROAS, ACOS, clicks, etc.)
+- Give the SPECIFIC action (exact new bid, budget change, match type change, negative keyword to add)
+- Estimate the impact ($X saved, $Y additional revenue)`;
+
+  const userPrompt = `Generate a comprehensive Amazon PPC Action Report for Tallowbourn.
+
+DATE RANGE: ${dateRange}
+AVAILABLE DATA: ${available.join(', ')}
+
+${dataContext}
+
+=== REPORT SECTIONS TO GENERATE ===
+
+## 📊 EXECUTIVE SUMMARY
+- Total ad spend, revenue, ROAS, ACOS across all channels (SP/SB/SD)
+- Key headline metrics and overall account health grade (A-F)
+- 3 biggest opportunities and 3 biggest problems
+
+## 🔴 KILL LIST — Negative Keywords & Targets to Add
+For EACH: exact keyword/target → which campaign → spend wasted → action (add as negative exact/phrase)
+Focus on: search terms with $5+ spend and 0 conversions, high-click-no-sale terms, irrelevant terms
+MUST include at least 10 specific keywords to negate
+
+## 🟢 SCALE LIST — Keywords & Campaigns to Increase Budget
+For EACH: exact keyword → current ROAS → current spend → recommended action (increase bid by X%, move to exact match campaign, increase budget)
+Focus on: >5x ROAS keywords not getting enough impressions, brand terms that could scale
+MUST include at least 8 specific keywords to scale
+
+## 🔵 NEW KEYWORD OPPORTUNITIES — Search Terms to Add as Keywords
+For EACH: search term converting in broad/phrase → recommended match type → campaign to add it to
+Focus on: customer search terms that converted but aren't targeted directly
+MUST include at least 5 new keyword opportunities
+
+## 📍 PLACEMENT OPTIMIZATION
+For EACH campaign with significant spend: which placement performs best → recommended placement bid adjustments (e.g., "Increase Top of Search modifier to 50% for campaign X")
+
+## 💰 SKU-LEVEL AD PROFITABILITY
+For EACH advertised ASIN: ad spend vs attributed sales → true ad ROAS → recommendation (increase/decrease/pause ads)
+Flag any ASINs with negative ad ROI
+
+## 📢 SPONSORED BRANDS & DISPLAY INSIGHTS
+- SB campaign performance and recommendations
+- SD campaign performance and recommendations  
+- New-to-brand acquisition costs and efficiency
+- Any campaigns to pause or restructure
+
+## 🔍 ORGANIC SEARCH OPPORTUNITIES (if Search Query data available)
+- High-volume queries where brand share is low → opportunity size
+- Queries where brand converts well → defend with more ad spend
+
+## 📈 BUDGET REALLOCATION PLAN
+- Current budget split by campaign type (SP/SB/SD)
+- Recommended reallocation with specific dollar amounts
+- Expected impact of reallocation on overall ROAS
+
+## ⚡ TOP 5 PRIORITY ACTIONS (DO THIS WEEK)
+Numbered list of the 5 highest-impact actions to take immediately, with specific steps
+
+Be aggressive with recommendations. This is a growing DTC brand that needs to optimize every dollar. Use specific numbers from the data — never say "consider" when you can say "do this".`;
+
+  return { systemPrompt, userPrompt };
+};
+
 // ============ COMPONENT ============
 
 const AmazonAdsIntelModal = ({
@@ -763,11 +863,15 @@ const AmazonAdsIntelModal = ({
   setAmazonCampaigns,
   setToast,
   onGoToAnalyst,
+  callAI,
 }) => {
   const [detectedFiles, setDetectedFiles] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState(null);
   const [dragOver, setDragOver] = useState(false);
+  const [actionReport, setActionReport] = useState(null);
+  const [generatingReport, setGeneratingReport] = useState(false);
+  const [reportError, setReportError] = useState(null);
 
   // Move all logic into the render check
   if (!show) return null;
@@ -925,15 +1029,48 @@ const AmazonAdsIntelModal = ({
     }
   };
 
+  const generateActionReport = async () => {
+    if (!callAI || !adsIntelData?.lastUpdated) return;
+    setGeneratingReport(true);
+    setReportError(null);
+    setActionReport(null);
+    
+    try {
+      const prompts = buildActionReportPrompt(adsIntelData);
+      if (!prompts) throw new Error('No data available for report');
+      
+      const response = await callAI(prompts.userPrompt, prompts.systemPrompt);
+      setActionReport(response);
+    } catch (err) {
+      console.error('Report generation error:', err);
+      setReportError(err.message || 'Failed to generate report');
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
+
+  const downloadReport = () => {
+    if (!actionReport) return;
+    const date = new Date().toISOString().split('T')[0];
+    const blob = new Blob([`# Amazon PPC Action Report — ${date}\n\n${actionReport}`], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `PPC-Action-Report-${date}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const validFiles = detectedFiles.filter(d => d.type && !d.error);
   const unknownFiles = detectedFiles.filter(d => !d.type || d.error);
   const hasExistingData = adsIntelData?.lastUpdated;
   const typeLabels = Object.fromEntries(REPORT_TYPES.map(r => [r.key, r.label]));
   const typeColors = Object.fromEntries(REPORT_TYPES.map(r => [r.key, r.color]));
+  const showReportView = actionReport || generatingReport || reportError;
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+      <div className={`bg-slate-900 rounded-2xl border border-slate-700 w-full ${showReportView ? 'max-w-5xl' : 'max-w-2xl'} max-h-[90vh] overflow-hidden flex flex-col transition-all`}>
         {/* Header */}
         <div className="bg-gradient-to-r from-violet-600 to-indigo-600 p-4 flex items-center justify-between">
           <div>
@@ -1055,21 +1192,19 @@ const AmazonAdsIntelModal = ({
                   </div>
                   
                   <div className="flex gap-2">
-                    {/* Primary: Done button */}
-                    <button
-                      onClick={() => {
-                        setShow(false);
-                        setDetectedFiles([]);
-                        setResults(null);
-                      }}
-                      className="flex-1 px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-medium flex items-center justify-center gap-2"
-                    >
-                      <CheckCircle className="w-4 h-4" />
-                      Done
-                    </button>
+                    {/* Generate Action Report */}
+                    {callAI && !actionReport && !generatingReport && (
+                      <button
+                        onClick={generateActionReport}
+                        className="flex-1 px-4 py-3 bg-gradient-to-r from-rose-600 to-orange-600 hover:from-rose-500 hover:to-orange-500 rounded-xl text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-rose-500/20"
+                      >
+                        <FileText className="w-4 h-4" />
+                        🔬 Generate Action Report
+                      </button>
+                    )}
                     
-                    {/* Secondary: AI Analysis (optional) */}
-                    {onGoToAnalyst && (
+                    {/* Secondary: AI Chat (optional) */}
+                    {onGoToAnalyst && !actionReport && !generatingReport && (
                       <button
                         onClick={() => {
                           setShow(false);
@@ -1080,9 +1215,107 @@ const AmazonAdsIntelModal = ({
                         className="flex-1 px-4 py-3 bg-gradient-to-r from-orange-600/80 to-amber-600/80 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-medium flex items-center justify-center gap-2"
                       >
                         <Zap className="w-4 h-4" />
-                        Get AI Insights
+                        AI Chat
                       </button>
                     )}
+
+                    {/* Done button */}
+                    {!generatingReport && (
+                      <button
+                        onClick={() => {
+                          setShow(false);
+                          setDetectedFiles([]);
+                          setResults(null);
+                          setActionReport(null);
+                          setReportError(null);
+                        }}
+                        className={`${actionReport ? 'flex-shrink-0' : 'flex-1'} px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-medium flex items-center justify-center gap-2`}
+                      >
+                        <CheckCircle className="w-4 h-4" />
+                        Done
+                      </button>
+                    )}
+                  </div>
+                  
+                  {/* Report Generation State */}
+                  {generatingReport && (
+                    <div className="bg-gradient-to-br from-rose-900/30 to-orange-900/30 border border-rose-500/30 rounded-xl p-6 text-center">
+                      <div className="w-8 h-8 border-3 border-rose-400/30 border-t-rose-400 rounded-full animate-spin mx-auto mb-3" />
+                      <p className="text-white font-medium">Generating Action Report...</p>
+                      <p className="text-slate-400 text-sm mt-1">Analyzing {Object.keys(adsIntelData || {}).filter(k => k !== 'lastUpdated' && adsIntelData[k]).length} data sources</p>
+                      <p className="text-slate-500 text-xs mt-2">This may take 30-60 seconds</p>
+                    </div>
+                  )}
+                  
+                  {/* Report Error */}
+                  {reportError && (
+                    <div className="bg-red-900/30 border border-red-500/30 rounded-xl p-4">
+                      <p className="text-red-400 font-medium">Report generation failed</p>
+                      <p className="text-red-400/70 text-sm mt-1">{reportError}</p>
+                      <button onClick={generateActionReport} className="mt-2 px-4 py-2 bg-red-600/30 hover:bg-red-600/50 rounded-lg text-red-300 text-sm">
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                  
+                  {/* Action Report Display */}
+                  {actionReport && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-white font-bold flex items-center gap-2">
+                          <FileText className="w-5 h-5 text-rose-400" />
+                          PPC Action Report
+                        </h3>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={downloadReport}
+                            className="px-3 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 rounded-lg text-emerald-300 text-sm flex items-center gap-1.5"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Download .md
+                          </button>
+                          <button
+                            onClick={generateActionReport}
+                            className="px-3 py-1.5 bg-slate-600/50 hover:bg-slate-600 rounded-lg text-slate-300 text-sm flex items-center gap-1.5"
+                          >
+                            Regenerate
+                          </button>
+                        </div>
+                      </div>
+                      <div className="bg-slate-950 border border-slate-700 rounded-xl p-5 max-h-[50vh] overflow-y-auto prose prose-invert prose-sm max-w-none
+                        [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-white [&_h2]:mt-6 [&_h2]:mb-3 [&_h2]:pb-2 [&_h2]:border-b [&_h2]:border-slate-700
+                        [&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-slate-200 [&_h3]:mt-4 [&_h3]:mb-2
+                        [&_strong]:text-white [&_em]:text-amber-300
+                        [&_ul]:space-y-1 [&_ol]:space-y-1
+                        [&_li]:text-slate-300 [&_li]:leading-relaxed
+                        [&_p]:text-slate-300 [&_p]:leading-relaxed
+                        [&_code]:bg-slate-800 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-emerald-400 [&_code]:text-xs
+                        [&_blockquote]:border-l-2 [&_blockquote]:border-amber-500 [&_blockquote]:pl-4 [&_blockquote]:text-amber-200
+                        [&_table]:w-full [&_th]:text-left [&_th]:text-slate-300 [&_th]:pb-2 [&_td]:py-1 [&_td]:text-slate-400
+                      ">
+                        {actionReport.split('\n').map((line, i) => {
+                          if (line.startsWith('## ')) return <h2 key={i}>{line.replace('## ', '')}</h2>;
+                          if (line.startsWith('### ')) return <h3 key={i}>{line.replace('### ', '')}</h3>;
+                          if (line.startsWith('- **')) {
+                            const parts = line.replace('- **', '').split('**');
+                            return <li key={i} className="list-disc ml-4"><strong>{parts[0]}</strong>{parts.slice(1).join('')}</li>;
+                          }
+                          if (line.startsWith('- ')) return <li key={i} className="list-disc ml-4">{line.replace('- ', '')}</li>;
+                          if (line.match(/^\d+\.\s/)) return <li key={i} className="list-decimal ml-4">{line.replace(/^\d+\.\s/, '')}</li>;
+                          if (line.startsWith('> ')) return <blockquote key={i}><p>{line.replace('> ', '')}</p></blockquote>;
+                          if (line.trim() === '') return <br key={i} />;
+                          if (line.startsWith('**') && line.endsWith('**')) return <p key={i}><strong>{line.replace(/\*\*/g, '')}</strong></p>;
+                          return <p key={i}>{line.replace(/\*\*(.+?)\*\*/g, (_, t) => `<strong>${t}</strong>`).split('<strong>').map((part, j) => {
+                            if (part.includes('</strong>')) {
+                              const [bold, rest] = part.split('</strong>');
+                              return <span key={j}><strong>{bold}</strong>{rest}</span>;
+                            }
+                            return <span key={j}>{part}</span>;
+                          })}</p>;
+                        })}
+                      </div>
+                    </div>
+                  )}
                   </div>
                 </div>
               )}
