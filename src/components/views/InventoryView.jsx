@@ -3,6 +3,7 @@ import {
   ChevronLeft, ChevronRight, X, Check, Plus, Upload, Trash2, Edit, Save, RefreshCw, TrendingUp, DollarSign, Package, ShoppingCart, Clock, AlertTriangle, AlertCircle, Info, HelpCircle, Settings, Filter, Search, Zap, Boxes, Truck, Target, List, Bell, Flag, Brain, Loader2
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
+import { hasDailySalesData } from '../../utils/date';
 import NavTabs from '../ui/NavTabs';
 
 const InventoryView = ({
@@ -32,9 +33,6 @@ const InventoryView = ({
   productionFileName,
   productionForm,
   productionPipeline,
-  response,
-  run,
-  saved,
   selectedInvDate,
   setAiInput,
   setAiLoading,
@@ -66,22 +64,15 @@ const InventoryView = ({
   setToast,
   setUploadTab,
   shipmentForm,
-  show,
   showAddProduction,
   showAddShipment,
   showSkuSettings,
   skuSettingsEditForm,
   skuSettingsEditItem,
   skuSettingsSearch,
-  sorted,
-  status,
-  t,
-  topSkus,
   total,
   upcomingAmazonForecasts,
-  updated,
   weekEnding,
-  xlsx,
   setView,
   view,
   callAI

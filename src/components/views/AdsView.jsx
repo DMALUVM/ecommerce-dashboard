@@ -3,6 +3,7 @@ import {
   ChevronLeft, ChevronRight, X, Check, Upload, Download, RefreshCw, BarChart3, TrendingUp, DollarSign, AlertTriangle, Filter, Search, Sun, Zap, Target, Trophy, Send, Brain, GitCompare, Store
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
+import { hasDailySalesData } from '../../utils/date';
 import NavTabs from '../ui/NavTabs';
 
 const AdsView = ({
@@ -26,10 +27,7 @@ const AdsView = ({
   amazonCampaigns,
   appSettings,
   bankingData,
-  best,
-  breakdown,
   current,
-  data,
   dataBar,
   files,
   globalModals,
@@ -61,10 +59,6 @@ const AdsView = ({
   setToast,
   setUploadTab,
   showAdsAIChat,
-  status,
-  t,
-  totalOrders,
-  updated,
   setView,
   view,
   save

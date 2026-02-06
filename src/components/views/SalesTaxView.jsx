@@ -3,6 +3,7 @@ import {
   X, Check, Upload, Download, Edit, Save, DollarSign, Clock, AlertTriangle, AlertCircle, Settings, Eye, Filter, FileText, Grid, List, Code, Home
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
+import { hasDailySalesData } from '../../utils/date';
 import { lsSet } from '../../utils/storage';
 import NavTabs from '../ui/NavTabs';
 
@@ -12,17 +13,14 @@ const SalesTaxView = ({
   allWeeksData,
   appSettings,
   bankingData,
-  breakdown,
   editPortalUrlValue,
   editingPortalUrl,
   files,
   filingDetailState,
   globalModals,
   invHistory,
-  m,
   navDropdown,
   periodLabel,
-  result,
   salesTaxConfig,
   setEditPortalUrlValue,
   setEditingPortalUrl,
@@ -45,12 +43,9 @@ const SalesTaxView = ({
   setUploadTab,
   setViewingStateHistory,
   showHiddenStates,
-  sorted,
-  t,
   taxFilterStatus,
   taxPeriodType,
   taxPeriodValue,
-  transactions,
   viewingStateHistory,
   setView,
   view

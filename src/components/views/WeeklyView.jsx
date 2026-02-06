@@ -35,7 +35,6 @@ const WeeklyView = ({
   reprocessFileNames,
   reprocessFiles,
   reprocessWeek,
-  run,
   selectedWeek,
   setEdit3PLCost,
   setEditAdSpend,

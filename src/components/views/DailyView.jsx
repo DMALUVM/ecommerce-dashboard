@@ -23,7 +23,6 @@ const DailyView = ({
   globalModals,
   hasDailySalesData,
   invHistory,
-  lsSet,
   navDropdown,
   queueCloudSave,
   selectedDay,

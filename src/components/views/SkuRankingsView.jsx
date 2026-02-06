@@ -12,7 +12,6 @@ const SkuRankingsView = ({
   appSettings,
   bankingData,
   current,
-  data,
   dataBar,
   globalModals,
   hasDailySalesData,

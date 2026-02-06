@@ -3,6 +3,7 @@ import {
   ChevronLeft, ChevronRight, X, Check, Plus, Upload, Edit, Save, RefreshCw, BarChart3, TrendingUp, TrendingDown, DollarSign, Package, AlertTriangle, AlertCircle, HelpCircle, Settings, EyeOff, Filter, FileText, Landmark, Target, Activity, User, Key, Flag, Brain, Wallet, CreditCard, Building
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
+import { hasDailySalesData } from '../../utils/date';
 import { lsSet } from '../../utils/storage';
 import NavTabs from '../ui/NavTabs';
 
@@ -16,25 +17,16 @@ const BankingView = ({
   bankingDrilldown,
   bankingProcessing,
   bankingTab,
-  best,
-  breakdown,
-  byMonth,
   channelPeriod,
   combinedData,
-  confirmed,
   confirmedRecurring,
   current,
   editingAccountBalance,
   editingTransaction,
-  entry,
-  events,
   files,
   globalModals,
   invHistory,
-  m,
-  metrics,
   navDropdown,
-  prior,
   productionPipeline,
   profitTrackerCustomRange,
   profitTrackerPeriod,
@@ -62,16 +54,9 @@ const BankingView = ({
   setShowMergeModal,
   setToast,
   setUploadTab,
-  show,
   showAddRecurring,
   showMergeModal,
-  status,
-  store,
-  t,
   theme,
-  transactions,
-  unpaid,
-  uploads,
   setView,
   view,
   queueCloudSave
