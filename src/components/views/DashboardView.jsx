@@ -2418,7 +2418,6 @@ const DashboardView = ({
         </div>
       </div>
     );
-  }
 
 };
 

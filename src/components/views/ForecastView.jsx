@@ -1088,7 +1088,6 @@ const ForecastView = ({
         </div>
       </div>
     );
-  }
 
 };
 

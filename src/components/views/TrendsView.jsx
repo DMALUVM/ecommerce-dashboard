@@ -45,6 +45,8 @@ const TrendsView = ({
   view,
   weekEnding,
 }) => {
+    // Apply date range filter
+    const filterByDateRange = (dateKey) => {
       if (trendsDateRange.preset === 'all' || (!trendsDateRange.start && !trendsDateRange.end)) {
         return true;
       }
@@ -1836,7 +1838,6 @@ const TrendsView = ({
         </div>
       </div>
     );
-  }
 
 };
 

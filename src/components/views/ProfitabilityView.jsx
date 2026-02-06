@@ -1046,7 +1046,6 @@ const ProfitabilityView = ({
         </div>
       </div>
     );
-  }
 
 };
 

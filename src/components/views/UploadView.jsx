@@ -3069,7 +3069,6 @@ const UploadView = ({
         </div>
       </div>
     );
-  }
 
 };
 
