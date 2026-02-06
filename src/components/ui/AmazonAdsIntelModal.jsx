@@ -1032,6 +1032,31 @@ For each action:
   return { systemPrompt, userPrompt };
 };
 
+// ============ MARKDOWN RENDERER ============
+
+const renderMarkdown = (md) => {
+  if (!md) return '';
+  let html = md;
+  html = html.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  html = html.replace(/^## (.*$)/gm, '<h2>$1</h2>');
+  html = html.replace(/^### (.*$)/gm, '<h3>$1</h3>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/^- (.+$)/gm, '<li>$1</li>');
+  html = html.replace(/^(\d+)\. (.+$)/gm, '<li>$2</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+  html = html.replace(/\|(.+)\|/g, function(match) {
+    var cells = match.split('|').filter(function(c) { return c.trim(); });
+    var isSeparator = cells.every(function(c) { return /^[\s\-:]+$/.test(c); });
+    if (isSeparator) return '';
+    return '<tr>' + cells.map(function(c) { return '<td>' + c.trim() + '</td>'; }).join('') + '</tr>';
+  });
+  html = html.replace(/(<tr>.*<\/tr>\n?)+/g, '<table>$&</table>');
+  html = html.replace(/\n\n/g, '</p><p>');
+  html = html.replace(/\n/g, '<br/>');
+  return html;
+};
+
 // ============ COMPONENT ============
 
 const AmazonAdsIntelModal = ({
@@ -1345,24 +1370,7 @@ const AmazonAdsIntelModal = ({
                 [&_code]:bg-slate-800 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-emerald-400 [&_code]:text-xs
                 [&_blockquote]:border-l-2 [&_blockquote]:border-amber-500 [&_blockquote]:pl-4 [&_blockquote]:text-amber-200
               ">
-                <div dangerouslySetInnerHTML={{ __html: (actionReport || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-                  .replace(/^## (.*$)/gm, '<h2>$1</h2>')
-                  .replace(/^### (.*$)/gm, '<h3>$1</h3>')
-                  .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-                  .replace(/\*(.+?)\*/g, '<em>$1</em>')
-                  .replace(/^- (.+$)/gm, '<li>$1</li>')
-                  .replace(/^(\d+)\. (.+$)/gm, '<li>$2</li>')
-                  .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-                  .replace(/\|(.+)\|/g, (match) => {
-                    const cells = match.split('|').filter(c => c.trim());
-                    if (cells.every(c => /^[\s-:]+$/.test(c))) return '';
-                    const tag = match.includes('---') ? 'th' : 'td';
-                    return '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
-                  })
-                  .replace(/(<tr>.*<\/tr>\n?)+/g, '<table>$&</table>')
-                  .replace(/\n\n/g, '</p><p>')
-                  .replace(/\n/g, '<br/>')
-                }} />
+                <div dangerouslySetInnerHTML={{ __html: renderMarkdown(actionReport) }} />
               </div>
             </div>
           )}
