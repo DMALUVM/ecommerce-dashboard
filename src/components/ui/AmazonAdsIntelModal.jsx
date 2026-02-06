@@ -1288,6 +1288,82 @@ const AmazonAdsIntelModal = ({
                   adsIntelData.searchQueryPerf?.length && `${adsIntelData.searchQueryPerf.length} queries`,
                 ].filter(Boolean).join(' · ')}
               </p>
+              {/* Generate report from existing data */}
+              {callAI && !actionReport && !generatingReport && (
+                <button
+                  onClick={generateActionReport}
+                  className="mt-3 w-full px-4 py-2.5 bg-gradient-to-r from-rose-600 to-orange-600 hover:from-rose-500 hover:to-orange-500 rounded-lg text-white font-medium flex items-center justify-center gap-2 text-sm shadow-lg shadow-rose-500/20"
+                >
+                  <FileText className="w-4 h-4" />
+                  🔬 Generate Action Report from This Data
+                </button>
+              )}
+            </div>
+          )}
+          
+          {/* Report generation/display ABOVE the drop zone when triggered from existing data */}
+          {generatingReport && !results && (
+            <div className="bg-gradient-to-br from-rose-900/30 to-orange-900/30 border border-rose-500/30 rounded-xl p-6 text-center">
+              <div className="w-8 h-8 border-3 border-rose-400/30 border-t-rose-400 rounded-full animate-spin mx-auto mb-3" style={{borderWidth: '3px'}} />
+              <p className="text-white font-medium">Generating Action Report...</p>
+              <p className="text-slate-400 text-sm mt-1">Analyzing {Object.keys(adsIntelData || {}).filter(k => k !== 'lastUpdated' && adsIntelData[k]).length} data sources with expert PPC frameworks</p>
+              <p className="text-slate-500 text-xs mt-2">This may take 30-60 seconds</p>
+            </div>
+          )}
+          
+          {reportError && !results && (
+            <div className="bg-red-900/30 border border-red-500/30 rounded-xl p-4">
+              <p className="text-red-400 font-medium">Report generation failed</p>
+              <p className="text-red-400/70 text-sm mt-1">{reportError}</p>
+              <button onClick={generateActionReport} className="mt-2 px-4 py-2 bg-red-600/30 hover:bg-red-600/50 rounded-lg text-red-300 text-sm">Retry</button>
+            </div>
+          )}
+          
+          {actionReport && !results && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-white font-bold flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-rose-400" />
+                  PPC Action Report
+                </h3>
+                <div className="flex gap-2">
+                  <button onClick={downloadReport} className="px-3 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 rounded-lg text-emerald-300 text-sm flex items-center gap-1.5">
+                    <Download className="w-3.5 h-3.5" />Download .md
+                  </button>
+                  <button onClick={generateActionReport} className="px-3 py-1.5 bg-slate-600/50 hover:bg-slate-600 rounded-lg text-slate-300 text-sm">Regenerate</button>
+                  <button onClick={() => setActionReport(null)} className="px-3 py-1.5 bg-slate-600/50 hover:bg-slate-600 rounded-lg text-slate-300 text-sm">Close Report</button>
+                </div>
+              </div>
+              <div className="bg-slate-950 border border-slate-700 rounded-xl p-5 max-h-[60vh] overflow-y-auto prose prose-invert prose-sm max-w-none
+                [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-white [&_h2]:mt-6 [&_h2]:mb-3 [&_h2]:pb-2 [&_h2]:border-b [&_h2]:border-slate-700
+                [&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-slate-200 [&_h3]:mt-4 [&_h3]:mb-2
+                [&_strong]:text-white [&_em]:text-amber-300
+                [&_ul]:space-y-1 [&_ol]:space-y-1
+                [&_li]:text-slate-300 [&_li]:leading-relaxed
+                [&_p]:text-slate-300 [&_p]:leading-relaxed
+                [&_table]:w-full [&_th]:text-left [&_th]:text-slate-300 [&_th]:pb-2 [&_th]:pr-3 [&_td]:py-1 [&_td]:pr-3 [&_td]:text-slate-400
+                [&_code]:bg-slate-800 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-emerald-400 [&_code]:text-xs
+                [&_blockquote]:border-l-2 [&_blockquote]:border-amber-500 [&_blockquote]:pl-4 [&_blockquote]:text-amber-200
+              ">
+                <div dangerouslySetInnerHTML={{ __html: (actionReport || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                  .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+                  .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+                  .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                  .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                  .replace(/^- (.+$)/gm, '<li>$1</li>')
+                  .replace(/^(\d+)\. (.+$)/gm, '<li>$2</li>')
+                  .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+                  .replace(/\|(.+)\|/g, (match) => {
+                    const cells = match.split('|').filter(c => c.trim());
+                    if (cells.every(c => /^[\s-:]+$/.test(c))) return '';
+                    const tag = match.includes('---') ? 'th' : 'td';
+                    return '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
+                  })
+                  .replace(/(<tr>.*<\/tr>\n?)+/g, '<table>$&</table>')
+                  .replace(/\n\n/g, '</p><p>')
+                  .replace(/\n/g, '<br/>')
+                }} />
+              </div>
             </div>
           )}
 

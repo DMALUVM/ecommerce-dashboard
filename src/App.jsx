@@ -20699,6 +20699,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               <button onClick={() => setShowAdsIntelUpload(true)} className="w-full px-6 py-3 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 rounded-xl text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-violet-500/20">
                 <Brain className="w-5 h-5" />Upload Amazon PPC Reports
               </button>
+              {adsIntelData?.lastUpdated && (
+                <button onClick={() => { setShowAdsIntelUpload(true); setTimeout(() => { window.__adsIntelAutoReport = true; }, 100); }} className="w-full px-6 py-3 bg-gradient-to-r from-rose-600 to-orange-600 hover:from-rose-500 hover:to-orange-500 rounded-xl text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-rose-500/20">
+                  🔬 Generate Action Report from Existing Data
+                </button>
+              )}
               </div>
               
               {/* What data goes where - helpful guide */}
