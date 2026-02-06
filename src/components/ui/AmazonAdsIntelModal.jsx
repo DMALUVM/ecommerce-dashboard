@@ -1,18 +1,19 @@
 import React, { useState, useCallback } from 'react';
-import { Brain, X, Upload, FileSpreadsheet, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, Eye, ShoppingCart, Zap, Download, FileText, Loader2 } from 'lucide-react';
+import { Brain, X, Upload, FileSpreadsheet, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, Eye, ShoppingCart, Zap, Download, FileText, Loader2, Archive } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
 
 const REPORT_TYPES = [
-  { key: 'dailyOverview', label: 'Daily Ads Overview', icon: TrendingUp, color: 'yellow', accept: '.csv', desc: 'Seller Central daily ads overview (recent 30d)' },
-  { key: 'historicalDaily', label: 'Historical Daily Data', icon: BarChart3, color: 'indigo', accept: '.csv', desc: 'Historical daily ads data (months/years)' },
-  { key: 'spSearchTerms', label: 'SP Search Terms', icon: Search, color: 'blue', accept: '.xlsx,.csv', desc: 'Sponsored Products Search Term Report' },
+  { key: 'dailyOverview', label: 'Daily Ads Overview', icon: TrendingUp, color: 'yellow', desc: 'Seller Central daily ads overview (recent 30d)' },
+  { key: 'historicalDaily', label: 'Historical Daily Data', icon: BarChart3, color: 'indigo', desc: 'Historical daily ads data (months/years)' },
+  { key: 'spSearchTerms', label: 'SP Search Terms', icon: Search, color: 'blue', desc: 'Sponsored Products Search Term Report' },
   { key: 'spAdvertised', label: 'SP Advertised Products', icon: ShoppingCart, color: 'green', desc: 'Sponsored Products Advertised Product Report' },
-  { key: 'spPlacement', label: 'SP Placements', icon: BarChart3, color: 'purple', desc: 'Sponsored Products Placement Report' },
+  { key: 'spPlacement', label: 'SP Placements', icon: BarChart3, color: 'purple', desc: 'Sponsored Products / Brands Placement Report' },
   { key: 'spTargeting', label: 'SP Targeting', icon: Target, color: 'orange', desc: 'Sponsored Products Targeting Report' },
   { key: 'sbSearchTerms', label: 'SB Search Terms', icon: Search, color: 'cyan', desc: 'Sponsored Brands Search Term Report' },
   { key: 'sdCampaign', label: 'SD Campaigns', icon: Eye, color: 'pink', desc: 'Sponsored Display Campaign Report' },
-  { key: 'businessReport', label: 'Business Report', icon: TrendingUp, color: 'emerald', accept: '.csv', desc: 'Amazon Business Report (by ASIN or child ASIN)' },
-  { key: 'searchQueryPerf', label: 'Search Query Perf', icon: Search, color: 'amber', accept: '.csv', desc: 'Search Query Performance (Brand View)' },
+  { key: 'businessReport', label: 'Business Report', icon: TrendingUp, color: 'emerald', desc: 'Amazon Business Report (by ASIN / child ASIN / Detail Page)' },
+  { key: 'searchQueryPerf', label: 'Search Query Perf', icon: Search, color: 'amber', desc: 'Search Query Performance (Brand View)' },
+  { key: 'skuEconomics', label: 'SKU Economics', icon: ShoppingCart, color: 'slate', desc: 'SKU Economics / Profitability Report' },
 ];
 
 // Parse CSV line handling quotes
@@ -34,7 +35,38 @@ const parseXlsx = async (file) => {
   const data = await file.arrayBuffer();
   const wb = XLSX.read(data);
   const ws = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(ws, { defval: null });
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  if (raw.length < 2) return [];
+  
+  // Find the real header row (first row with 3+ non-empty cells that look like column headers)
+  let headerIdx = 0;
+  for (let i = 0; i < Math.min(5, raw.length); i++) {
+    const row = raw[i] || [];
+    const nonEmpty = row.filter(c => c != null && String(c).trim() !== '');
+    if (nonEmpty.length >= 3) {
+      // Check if this looks like a header row (contains known header keywords or non-numeric values)
+      const hasHeaderWords = nonEmpty.some(c => {
+        const s = String(c).toLowerCase();
+        return s.includes('date') || s.includes('asin') || s.includes('search') || s.includes('campaign') || 
+               s.includes('spend') || s.includes('impressions') || s.includes('clicks') || s.includes('sessions') ||
+               s.includes('query') || s.includes('targeting') || s.includes('placement') || s.includes('portfolio') ||
+               s.includes('currency') || s.includes('country') || s.includes('sku') || s.includes('title') ||
+               s.includes('amazon store') || s.includes('start date') || s.includes('units') || s.includes('sales');
+      });
+      if (hasHeaderWords) { headerIdx = i; break; }
+    }
+  }
+  
+  const headers = (raw[headerIdx] || []).map(h => h != null ? String(h).trim() : '');
+  const rows = [];
+  for (let i = headerIdx + 1; i < raw.length; i++) {
+    const rowData = raw[i] || [];
+    if (rowData.every(c => c == null || String(c).trim() === '')) continue;
+    const obj = {};
+    headers.forEach((h, idx) => { if (h) obj[h] = rowData[idx] != null ? rowData[idx] : null; });
+    rows.push(obj);
+  }
+  return rows;
 };
 
 const parseCSV = (text) => {
@@ -61,11 +93,18 @@ const parseCSV = (text) => {
   return rows;
 };
 
-// Normalize date formats: "2026-01-01", "01/01/2024" (DD/MM/YYYY), etc
+// Normalize date formats: "2026-01-01", "01/01/2024" (DD/MM/YYYY), Date objects from xlsx, etc
 const normalizeDate = (d) => {
   if (!d) return null;
+  // Handle Date objects (from xlsx)
+  if (d instanceof Date || (typeof d === 'object' && d.getFullYear)) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
   const s = String(d).replace(/"/g, '').trim();
-  // YYYY-MM-DD
+  // YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
   // DD/MM/YYYY
   if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
@@ -278,6 +317,7 @@ const aggregateDailyOverview = (rows) => {
 
 const num = (v) => {
   if (v === null || v === undefined || v === '' || v === 'null') return 0;
+  if (typeof v === 'number') return isNaN(v) ? 0 : v;
   const s = String(v).replace(/[$,%"\s]/g, '');
   const n = parseFloat(s);
   return isNaN(n) ? 0 : n;
@@ -507,27 +547,68 @@ const aggregateBusinessReport = (rows) => {
 };
 
 const aggregateSearchQueryPerf = (rows) => {
+  // Helper to find column value with fuzzy matching (handles trailing spaces, slight variations)
+  const getCol = (r, ...names) => {
+    for (const n of names) {
+      if (r[n] !== undefined && r[n] !== null) return r[n];
+    }
+    // Fuzzy: try matching by lowercase includes
+    const keys = Object.keys(r);
+    for (const n of names) {
+      const lower = n.toLowerCase();
+      const match = keys.find(k => k.toLowerCase().trim() === lower || k.toLowerCase().includes(lower));
+      if (match && r[match] !== undefined && r[match] !== null) return r[match];
+    }
+    return null;
+  };
+
   return rows.map(r => {
-    const query = r['Search Query'] || r['"Search Query"'] || '';
+    const query = getCol(r, 'Search Query', '"Search Query"', 'search query') || '';
     return {
-      query: query.replace(/^"|"$/g, ''),
-      score: num(r['Search Query Score']),
-      volume: num(r['Search Query Volume']),
-      totalImpressions: num(r['Impressions: Total Count']),
-      brandImpressions: num(r['Impressions: Brand Count']),
-      brandImprShare: num(r['Impressions: Brand Share %']),
-      totalClicks: num(r['Clicks: Total Count']),
-      clickRate: num(r['Clicks: Click Rate %']),
-      brandClicks: num(r['Clicks: Brand Count']),
-      brandClickShare: num(r['Clicks: Brand Share %']),
-      totalPurchases: num(r['Purchases: Total Count']),
-      purchaseRate: num(r['Purchases: Purchase Rate %']),
-      brandPurchases: num(r['Purchases: Brand Count']),
-      brandPurchaseShare: num(r['Purchases: Brand Share %']),
-      totalCartAdds: num(r['Cart Adds: Total Count']),
-      brandCartAdds: num(r['Cart Adds: Brand Count']),
+      query: String(query).replace(/^"|"$/g, ''),
+      score: num(getCol(r, 'Search Query Score')),
+      volume: num(getCol(r, 'Search Query Volume')),
+      totalImpressions: num(getCol(r, 'Impressions: Total Count')),
+      brandImpressions: num(getCol(r, 'Impressions: Brand Count')),
+      brandImprShare: num(getCol(r, 'Impressions: Brand Share', 'Impressions: Brand Share %')),
+      totalClicks: num(getCol(r, 'Clicks: Total Count')),
+      clickRate: num(getCol(r, 'Clicks: Click Rate', 'Clicks: Click Rate %')),
+      brandClicks: num(getCol(r, 'Clicks: Brand Count')),
+      brandClickShare: num(getCol(r, 'Clicks: Brand Share', 'Clicks: Brand Share %')),
+      totalPurchases: num(getCol(r, 'Purchases: Total Count')),
+      purchaseRate: num(getCol(r, 'Purchases: Purchase Rate', 'Purchases: Purchase Rate %')),
+      brandPurchases: num(getCol(r, 'Purchases: Brand Count')),
+      brandPurchaseShare: num(getCol(r, 'Purchases: Brand Share', 'Purchases: Brand Share %')),
+      totalCartAdds: num(getCol(r, 'Cart Adds: Total Count')),
+      brandCartAdds: num(getCol(r, 'Cart Adds: Brand Count')),
     };
   }).filter(r => r.query && r.totalImpressions > 0).sort((a, b) => b.volume - a.volume);
+};
+
+const aggregateSkuEconomics = (rows) => {
+  return rows.map(r => {
+    const asin = r['ASIN'] || r['Parent ASIN'] || '';
+    const msku = r['MSKU'] || '';
+    const fnsku = r['FNSKU'] || '';
+    return {
+      asin,
+      parentAsin: r['Parent ASIN'] || '',
+      msku,
+      fnsku,
+      avgPrice: num(r['Average sales price']),
+      unitsSold: num(r['Units sold']),
+      unitsReturned: num(r['Units returned']),
+      netUnits: num(r['Net units sold']),
+      sales: num(r['Sales']),
+      netSales: num(r['Net sales']),
+      fbaFees: num(r['FBA fees']),
+      referralFee: num(r['Referral fee']),
+      adSpend: num(r['Advertising spend']),
+      cogsPerUnit: num(r['Cost of goods per unit']),
+      contributionProfit: num(r['Contribution profit']),
+      contributionMargin: num(r['Contribution margin']),
+    };
+  }).filter(r => r.asin && (r.unitsSold > 0 || r.sales > 0)).sort((a, b) => b.sales - a.sales);
 };
 
 // ============ BUILD AI CONTEXT ============
@@ -702,34 +783,45 @@ ${sq.filter(q => q.brandPurchaseShare > 30).sort((a, b) => b.brandPurchaseShare 
 `;
   }
 
+  // SKU Economics
+  if (intelData.skuEconomics?.length > 0) {
+    const sku = intelData.skuEconomics;
+    context += `\n--- SKU ECONOMICS / PROFITABILITY ---
+${sku.slice(0, 15).map(s => `  ${s.asin} (${s.msku || s.fnsku || '?'}) | Sales $${Math.round(s.sales)} | Units ${s.unitsSold} | Avg Price $${s.avgPrice.toFixed(2)} | Returns ${s.unitsReturned} (${s.unitsSold > 0 ? ((s.unitsReturned / s.unitsSold) * 100).toFixed(1) : 0}%) | Contrib Profit $${Math.round(s.contributionProfit)} | Margin ${(s.contributionMargin * 100).toFixed(1)}%`).join('\n')}
+`;
+  }
+
   return context;
 };
 
 // ============ AUTO-DETECT REPORT TYPE ============
 
 const detectReportType = (headers, rows, fileName) => {
-  const hSet = new Set(headers.map(h => h.toLowerCase().trim()));
+  const hSet = new Set(headers.map(h => (h || '').toLowerCase().trim()));
   const fLower = fileName.toLowerCase();
 
-  // Search Query Performance (Brand Analytics)
+  // Search Query Performance (Brand Analytics) — has metadata row, headers like "Search Query Volume"
   if (hSet.has('search query') || hSet.has('"search query"') || hSet.has('search query volume') || hSet.has('search query score')) return 'searchQueryPerf';
 
-  // Business Report (by ASIN)
-  if (hSet.has('sessions - total') || hSet.has('(parent) asin') || hSet.has('unit session percentage') || hSet.has('featured offer (buy box) percentage')) return 'businessReport';
+  // SKU Economics Report
+  if (hSet.has('amazon store') && (hSet.has('msku') || hSet.has('fnsku')) && (hSet.has('average sales price') || hSet.has('units sold'))) return 'skuEconomics';
+
+  // Business Report — Detail Page Sales and Traffic (has Sessions - Total, (Parent) ASIN)
+  if (hSet.has('sessions - total') || (hSet.has('(parent) asin') && (hSet.has('sessions - mobile app') || hSet.has('units ordered') || hSet.has('ordered product sales')))) return 'businessReport';
+  if (hSet.has('unit session percentage') || hSet.has('featured offer (buy box) percentage')) return 'businessReport';
 
   // SD Campaign (14 Day + DPV / New-to-brand)
   if (hSet.has('14 day detail page views (dpv)') || hSet.has('14 day new-to-brand orders (#)')) return 'sdCampaign';
 
-  // SB Search Terms (14 Day attribution)
+  // SB Search Terms (14 Day attribution + Customer Search Term)
   if ((hSet.has('customer search term') || hSet.has('search term')) && (hSet.has('14 day total sales') || hSet.has('14 day total sales ') || hSet.has('14 day total orders (#)'))) return 'sbSearchTerms';
 
-  // SP Placement (7-day attribution, no cost type)
-  // SB Placement has 'cost type' and '14 day' columns - treat as spPlacement for aggregation
+  // SP/SB Placement (has Placement column + sales data)
   if (hSet.has('placement') && hSet.has('bidding strategy')) return 'spPlacement';
-  if (hSet.has('placement') && (hSet.has('14 day total sales') || hSet.has('cost type'))) return 'spPlacement'; // SB placement maps here too
-  if (hSet.has('placement')) return 'spPlacement';
+  if (hSet.has('placement') && (hSet.has('14 day total sales') || hSet.has('14 day total sales ') || hSet.has('cost type') || hSet.has('7 day total sales ') || hSet.has('7 day total sales'))) return 'spPlacement';
+  if (hSet.has('placement') && (hSet.has('spend') || hSet.has('impressions'))) return 'spPlacement';
 
-  // SP Targeting
+  // SP Targeting (has Targeting + Match Type + Top-of-search IS)
   if (hSet.has('targeting') && (hSet.has('top-of-search impression share') || hSet.has('top-of-search is') || hSet.has('match type'))) return 'spTargeting';
 
   // SP Advertised Products
@@ -738,9 +830,8 @@ const detectReportType = (headers, rows, fileName) => {
   // SP Search Terms (7 Day attribution)
   if (hSet.has('customer search term') && (hSet.has('7 day total sales') || hSet.has('7 day total sales ') || hSet.has('7 day total orders (#)'))) return 'spSearchTerms';
 
-  // Daily Overview / Historical (has Date + Spend + ROAS columns)
+  // Daily Overview / Historical (has Date + Spend + ROAS columns — custom/manual overview data)
   if ((hSet.has('date') || hSet.has('Date')) && (hSet.has('spend') || hSet.has('Spend')) && (hSet.has('roas') || hSet.has('ROAS') || hSet.has('acos') || hSet.has('ACOS'))) {
-    // Distinguish by row count: >60 days = historical, else recent overview
     if (rows.length > 60 || fLower.includes('histor') || fLower.includes('year') || fLower.includes('552')) return 'historicalDaily';
     return 'dailyOverview';
   }
@@ -753,7 +844,7 @@ const detectReportType = (headers, rows, fileName) => {
 
 // ============ AI ACTION REPORT BUILDER ============
 
-const buildActionReportPrompt = (intelData) => {
+export const buildActionReportPrompt = (intelData) => {
   if (!intelData) return null;
   
   // Detect date range across all reports
@@ -773,6 +864,7 @@ const buildActionReportPrompt = (intelData) => {
   if (intelData.sdCampaign?.length) available.push(`SD Campaigns (${intelData.sdCampaign.length} campaigns)`);
   if (intelData.businessReport?.length) available.push(`Business Report (${intelData.businessReport.length} ASINs)`);
   if (intelData.searchQueryPerf?.length) available.push(`Search Query Perf (${intelData.searchQueryPerf.length} queries)`);
+  if (intelData.skuEconomics?.length) available.push(`SKU Economics (${intelData.skuEconomics.length} SKUs)`);
   if (intelData.dailyOverview?.days?.length) available.push(`Daily Overview (${intelData.dailyOverview.days.length} days)`);
   
   // ===== COMPUTE ADVANCED METRICS FOR AI =====
@@ -1027,7 +1119,24 @@ For each action:
    - Current state: [metrics]
    - After change: [expected improvement]
    - Time to implement: [X minutes]
-   - Estimated monthly impact: [$X saved or $X additional revenue]`;
+   - Estimated monthly impact: [$X saved or $X additional revenue]
+
+## 🎯 CAMPAIGN-BY-CAMPAIGN AUDIT (TOP 10 CAMPAIGNS BY SPEND)
+For the 10 highest-spend campaigns visible in the data:
+| Campaign Name | Status | 30d Spend | 30d Sales | ROAS | ACOS | Conv Rate | Verdict |
+For EACH campaign provide:
+- 2-3 SPECIFIC bid/keyword/targeting changes to make
+- Exact bid amounts to set (use FRAMEWORK 2 formula)
+- Specific keywords to add as negatives or to harvest
+- Whether to increase, maintain, decrease, or pause budget
+- If restructuring is needed (split by match type, product, etc.)
+
+## 📋 IMPLEMENTATION CHECKLIST
+Create a numbered checklist of EVERY specific action from the report above, organized by:
+1. QUICK WINS (under 5 minutes each) — negative keywords, bid adjustments
+2. MEDIUM EFFORT (5-15 minutes) — campaign restructuring, new ad groups
+3. STRATEGIC (15+ minutes) — new campaign creation, major budget shifts
+Each item should be copy-pasteable into a task list with the exact action to take.`;
 
   return { systemPrompt, userPrompt };
 };
@@ -1125,15 +1234,67 @@ const AmazonAdsIntelModal = ({
     setResults(null);
   };
 
-  const handleDrop = (e) => {
+  // Extract files from a ZIP archive (requires jszip: npm install jszip)
+  const extractZip = async (zipFile) => {
+    let JSZip;
+    try {
+      JSZip = (await import('jszip')).default;
+    } catch (e) {
+      throw new Error('ZIP support requires jszip. Run: npm install jszip');
+    }
+    const zip = await JSZip.loadAsync(zipFile);
+    const extracted = [];
+    for (const [name, entry] of Object.entries(zip.files)) {
+      if (entry.dir) continue;
+      const lower = name.toLowerCase();
+      if (!lower.endsWith('.csv') && !lower.endsWith('.xlsx') && !lower.endsWith('.xls')) continue;
+      // Skip macOS metadata files
+      if (name.includes('__MACOSX') || name.startsWith('.')) continue;
+      const blob = await entry.async('blob');
+      const cleanName = name.split('/').pop();
+      const file = new File([blob], cleanName, { type: lower.endsWith('.csv') ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      extracted.push(file);
+    }
+    return extracted;
+  };
+
+  const handleDrop = async (e) => {
     e.preventDefault();
     setDragOver(false);
-    const fileList = [...e.dataTransfer.files].filter(f => f.name.endsWith('.csv') || f.name.endsWith('.xlsx') || f.name.endsWith('.xls'));
+    const allFiles = [...e.dataTransfer.files];
+    let fileList = [];
+    for (const f of allFiles) {
+      if (f.name.toLowerCase().endsWith('.zip')) {
+        try {
+          const extracted = await extractZip(f);
+          fileList.push(...extracted);
+        } catch (err) {
+          console.error('ZIP extraction error:', err);
+          setDetectedFiles(prev => [...prev, { file: f, type: null, rows: 0, error: 'Failed to extract ZIP: ' + err.message }]);
+        }
+      } else if (f.name.endsWith('.csv') || f.name.endsWith('.xlsx') || f.name.endsWith('.xls')) {
+        fileList.push(f);
+      }
+    }
     if (fileList.length > 0) readAndDetect(fileList);
   };
 
-  const handleFileInput = (e) => {
-    const fileList = [...e.target.files];
+  const handleFileInput = async (e) => {
+    const allFiles = [...e.target.files];
+    let fileList = [];
+    for (const f of allFiles) {
+      if (f.name.toLowerCase().endsWith('.zip')) {
+        try {
+          const extracted = await extractZip(f);
+          fileList.push(...extracted);
+        } catch (err) {
+          console.error('ZIP extraction error:', err);
+          setDetectedFiles(prev => [...prev, { file: f, type: null, rows: 0, error: 'Failed to extract ZIP: ' + err.message }]);
+        }
+      } else {
+        fileList.push(f);
+      }
+    }
     if (fileList.length > 0) readAndDetect(fileList);
     e.target.value = '';
   };
@@ -1176,6 +1337,7 @@ const AmazonAdsIntelModal = ({
             case 'sdCampaign': summary = aggregateSDCampaign(rows); break;
             case 'businessReport': summary = aggregateBusinessReport(rows); break;
             case 'searchQueryPerf': summary = aggregateSearchQueryPerf(rows); break;
+            case 'skuEconomics': summary = aggregateSkuEconomics(rows); break;
           }
 
           newIntel[det.type] = summary;
@@ -1315,6 +1477,7 @@ const AmazonAdsIntelModal = ({
                   adsIntelData.sdCampaign?.length && `${adsIntelData.sdCampaign.length} SD campaigns`,
                   adsIntelData.businessReport?.length && `${adsIntelData.businessReport.length} biz report ASINs`,
                   adsIntelData.searchQueryPerf?.length && `${adsIntelData.searchQueryPerf.length} queries`,
+                  adsIntelData.skuEconomics?.length && `${adsIntelData.skuEconomics.length} SKU econ`,
                 ].filter(Boolean).join(' · ')}
               </p>
               {/* Generate report from existing data */}
@@ -1389,7 +1552,7 @@ const AmazonAdsIntelModal = ({
             <input
               type="file"
               multiple
-              accept=".csv,.xlsx,.xls"
+              accept=".csv,.xlsx,.xls,.zip"
               onChange={handleFileInput}
               className="absolute inset-0 opacity-0 cursor-pointer"
             />
@@ -1399,6 +1562,9 @@ const AmazonAdsIntelModal = ({
             </p>
             <p className="text-slate-500 text-xs">
               CSV & XLSX — search terms, placements, targeting, business reports, daily overviews, and more
+            </p>
+            <p className="text-slate-500 text-xs mt-1">
+              <Archive className="w-3 h-3 inline mr-1" />ZIP archives supported — we'll extract and detect all files inside
             </p>
           </div>
 
