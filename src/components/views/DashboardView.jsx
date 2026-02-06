@@ -92,6 +92,9 @@ const DashboardView = ({
   view,
   widgetConfig,
 }) => {
+    const hasData = Object.keys(allWeeksData).length > 0 || Object.keys(allPeriodsData).length > 0 || Object.keys(allDaysData).length > 0;
+    const sortedWeeks = Object.keys(allWeeksData).filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0).sort();
+
     // Get alerts
     const alerts = [];
     if (!hasCogs) alerts.push({ type: 'warning', text: 'Set up COGS to track profitability accurately' });
