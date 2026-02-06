@@ -608,6 +608,9 @@ const safeLocalStorageSet = (key, value) => {
   }
 };
 
+// Normalize SKU keys for deduplication - strips trailing "Shop" suffix and uppercases
+const normalizeSkuKey = (sku) => (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
+
 // Enhanced 3PL parsing - extracts detailed metrics from 3PL CSV files
 const parse3PLData = (threeplFiles) => {
   const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
@@ -1940,7 +1943,6 @@ const handleLogout = async () => {
   useEffect(() => {
     const handleQBOMessage = (event) => {
       if (event.data?.type === 'QBO_AUTH_SUCCESS') {
-        console.log('QBO OAuth success received');
         setQboCredentials(prev => ({
           ...prev,
           accessToken: event.data.accessToken,
@@ -4086,11 +4088,9 @@ const loadFromLocal = useCallback(() => {
   try {
     let dailyData = null;
     const r = lsGet('ecommerce_daily_sales_v1');
-    console.log('Loading ecommerce_daily_sales_v1:', r ? 'found' : 'empty', r?.length || 0, 'chars');
     if (r) {
       try {
         dailyData = JSON.parse(r);
-        console.log('Parsed ecommerce_daily_sales_v1:', Object.keys(dailyData).length, 'days');
       } catch (parseErr) {
         console.error('Failed to parse ecommerce_daily_sales_v1:', parseErr.message);
       }
@@ -4134,10 +4134,6 @@ const loadFromLocal = useCallback(() => {
                (shopifySkuData && typeof shopifySkuData === 'object' && Object.keys(shopifySkuData).length > 0);
       });
       const daysWithShopifyRevenue = Object.keys(dailyData).filter(d => (dailyData[d]?.shopify?.revenue || 0) > 0);
-      console.log('Final dailyData:', Object.keys(dailyData).length, 'days');
-      console.log('  - Days with Amazon skuData:', daysWithAmazonSku.length);
-      console.log('  - Days with Shopify skuData:', daysWithShopifySku.length);
-      console.log('  - Days with Shopify revenue:', daysWithShopifyRevenue.length);
       if (daysWithShopifySku.length > 0) {
         const sampleDay = daysWithShopifySku[0];
         const sampleData = dailyData[sampleDay]?.shopify?.skuData;
@@ -4352,7 +4348,6 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
     
     if (currentCloud?.updated_at && currentCloud.updated_at > loadedCloudVersion) {
       // Cloud has newer data - potential conflict!
-      console.log('Conflict detected:', { cloudVersion: currentCloud.updated_at, loadedVersion: loadedCloudVersion });
       conflictCheckRef.current = true; // Prevent repeated checks
       
       // Fetch full data only when conflict is confirmed
@@ -4938,7 +4933,6 @@ useEffect(() => {
       const lastUserId = localStorage.getItem('ecommerce_last_user_id');
       if (lastUserId && lastUserId !== initialSession.user.id) {
         // Different user - clear localStorage
-        console.log('Different user detected on init - clearing previous user data');
         const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id'];
         Object.keys(localStorage).filter(k => k.startsWith('ecommerce_')).forEach(k => {
           if (!keysToKeep.includes(k)) localStorage.removeItem(k);
@@ -4956,7 +4950,6 @@ useEffect(() => {
       
       if (newUserId && lastUserId && newUserId !== lastUserId) {
         // Different user logging in - clear previous user's localStorage
-        console.log('Different user detected - clearing previous user data from localStorage');
         const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id'];
         const allKeys = Object.keys(localStorage).filter(k => k.startsWith('ecommerce_'));
         allKeys.forEach(k => {
@@ -5063,7 +5056,6 @@ useEffect(() => {
           // Check the reason - only initialize empty state for truly new users
           if (result.reason === 'no_data') {
             // NEW USER: No cloud data yet - start with clean slate
-            console.log('New user detected - starting with fresh data');
             
             // Clear any existing state to ensure clean start
             setAllWeeksData({});
@@ -6462,7 +6454,6 @@ const savePeriods = async (d) => {
     if (needsUpdate) {
       setAllWeeksData(updatedWeeks);
       save(updatedWeeks);
-      console.log('Auto-synced daily data into weekly summaries');
     }
   }, [allDaysData]); // Only depend on allDaysData to avoid loops
 
@@ -6576,7 +6567,6 @@ const savePeriods = async (d) => {
     if (needsUpdate) {
       setAllPeriodsData(updatedPeriods);
       try { safeLocalStorageSet('ecommerce_periods_v1', JSON.stringify(updatedPeriods)); } catch {}
-      console.log('Auto-synced weekly data into monthly periods');
     }
   }, [allWeeksData]); // Only depend on allWeeksData to avoid loops
 
@@ -6919,8 +6909,6 @@ const savePeriods = async (d) => {
         const shopSku = legacyDailyData[d]?.shopify?.skuData;
         return (Array.isArray(shopSku) && shopSku.length > 0) || (shopSku && typeof shopSku === 'object' && Object.keys(shopSku).length > 0);
       });
-      console.log('  - Days with Amazon skuData:', datesWithAmazonSku.length);
-      console.log('  - Days with Shopify skuData:', datesWithShopifySku.length);
       
       // Log sample Shopify SKU data structure if available
       if (datesWithShopifySku.length > 0) {
@@ -6990,9 +6978,6 @@ const savePeriods = async (d) => {
     });
     
     if (datesWithSkuData.length > 0) {
-      console.log('Dates with ANY skuData:', datesWithSkuData.length);
-      console.log('Dates with Amazon skuData:', datesWithAmazonSku.length);
-      console.log('Dates with Shopify skuData:', datesWithShopifySku.length);
       
       const last28 = datesWithSkuData.slice(0, 28);
       const weeksEquiv = last28.length / 7;
@@ -7048,17 +7033,9 @@ const savePeriods = async (d) => {
       });
       
       velocityDataSource = 'direct-localStorage';
-      console.log('Amazon SKU velocity calculated for', Object.keys(amazonSkuVelocity).length, 'SKUs');
-      console.log('Shopify SKU velocity calculated for', Object.keys(shopifySkuVelocity).length, 'SKUs');
     }
     
     // DEBUG: Log data availability
-    console.log('Weekly data weeks:', weeksCount, sortedWeeks);
-    console.log('Daily data days (from state):', Object.keys(allDaysData).length);
-    console.log('Period data periods:', Object.keys(allPeriodsData).length);
-    console.log('Velocity source:', velocityDataSource);
-    console.log('Amazon velocity SKUs:', Object.keys(amazonSkuVelocity).length);
-    console.log('Shopify velocity SKUs:', Object.keys(shopifySkuVelocity).length);
     
     // ALWAYS process weekly data - either as primary source or supplement for slow-moving SKUs
     // Daily data (from localStorage) covers last 28 days - great for fast sellers
@@ -7078,26 +7055,15 @@ const savePeriods = async (d) => {
         const weekData = allWeeksData[w];
         
         // DEBUG: Log week structure in detail
-        console.log(`Week ${w}:`);
-        console.log('  amazon exists:', !!weekData.amazon);
-        console.log('  amazon.skuData exists:', !!weekData.amazon?.skuData);
-        console.log('  amazon.skuData type:', Array.isArray(weekData.amazon?.skuData) ? 'array' : typeof weekData.amazon?.skuData);
-        console.log('  amazon.skuData length:', weekData.amazon?.skuData?.length || Object.keys(weekData.amazon?.skuData || {}).length);
-        console.log('  shopify exists:', !!weekData.shopify);
-        console.log('  shopify.skuData exists:', !!weekData.shopify?.skuData);
-        console.log('  shopify.skuData length:', weekData.shopify?.skuData?.length || Object.keys(weekData.shopify?.skuData || {}).length);
         
         if (weekData.amazon?.skuData) {
           const skuArr = Array.isArray(weekData.amazon.skuData) ? weekData.amazon.skuData : Object.values(weekData.amazon.skuData);
           if (skuArr.length > 0) {
-            console.log('  Amazon total SKUs:', skuArr.length);
-            console.log('  Amazon SKU keys in first item:', Object.keys(skuArr[0]));
           }
         }
         if (weekData.shopify?.skuData) {
           const skuArr = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
           if (skuArr.length > 0) {
-            console.log('  Shopify total SKUs:', skuArr.length);
           }
         }
         
@@ -7129,8 +7095,6 @@ const savePeriods = async (d) => {
       });
       
       // DEBUG: Log velocity totals after processing weekly data
-      console.log('  amazonSkuVelocity count:', Object.keys(amazonSkuVelocity).length);
-      console.log('  shopifySkuVelocity count:', Object.keys(shopifySkuVelocity).length);
       if (Object.keys(amazonSkuVelocity).length > 0) {
         const sampleSku = Object.keys(amazonSkuVelocity)[0];
       }
@@ -7172,8 +7136,6 @@ const savePeriods = async (d) => {
         }
       });
       
-      console.log(`Weekly supplement: ${weeklySupplementCount} slow-moving SKUs got velocity from ${weeksCount} weeks of data`);
-      console.log('Weekly Shopify SKUs found:', Object.keys(weeklyShopVel).length, '| Weekly Amazon SKUs:', Object.keys(weeklyAmzVel).length);
     }
     
     // SOURCE 2: Daily sales data - use if we have it and weekly didn't cover these SKUs
@@ -7194,8 +7156,6 @@ const savePeriods = async (d) => {
       const weeksEquivalent = daysCount / 7;
       
       // DEBUG: Log daily data structure
-      console.log('Daily dates with data:', daysCount);
-      console.log('Recent days being checked:', recentDays.slice(0, 5));
       
       // Check a few days for skuData
       let amazonSkuDataFound = 0;
@@ -7207,8 +7167,6 @@ const savePeriods = async (d) => {
         if ((Array.isArray(amzSkuData) && amzSkuData.length > 0) || (amzSkuData && typeof amzSkuData === 'object' && Object.keys(amzSkuData).length > 0)) amazonSkuDataFound++;
         if ((Array.isArray(shopSkuData) && shopSkuData.length > 0) || (shopSkuData && typeof shopSkuData === 'object' && Object.keys(shopSkuData).length > 0)) shopifySkuDataFound++;
       });
-      console.log('Days with Amazon skuData (of first 5):', amazonSkuDataFound);
-      console.log('Days with Shopify skuData (of first 5):', shopifySkuDataFound);
       
       if (recentDays.length > 0) {
         const sampleDay = allDaysData[recentDays[0]];
@@ -7216,23 +7174,6 @@ const savePeriods = async (d) => {
         const amazonSkuData = sampleDay?.amazon?.skuData;
         const shopifySkuDataLen = Array.isArray(shopifySkuData) ? shopifySkuData.length : Object.keys(shopifySkuData || {}).length;
         const amazonSkuDataLen = Array.isArray(amazonSkuData) ? amazonSkuData.length : Object.keys(amazonSkuData || {}).length;
-          hasAmazon: !!sampleDay?.amazon,
-          hasAmazonSkuData: !!amazonSkuData,
-          amazonSkuDataLength: amazonSkuDataLen,
-          amazonSkuDataType: Array.isArray(amazonSkuData) ? 'array' : typeof amazonSkuData,
-          hasShopify: !!sampleDay?.shopify,
-          hasShopifySkuData: !!shopifySkuData,
-          shopifySkuDataLength: shopifySkuDataLen,
-          shopifySkuDataType: Array.isArray(shopifySkuData) ? 'array' : typeof shopifySkuData,
-          shopifyRevenue: sampleDay?.shopify?.revenue,
-          shopifyUnits: sampleDay?.shopify?.units,
-        });
-        if (amazonSkuDataLen > 0) {
-          const firstItem = Array.isArray(amazonSkuData) ? amazonSkuData[0] : Object.values(amazonSkuData)[0];
-        }
-        if (shopifySkuDataLen > 0) {
-          const firstItem = Array.isArray(shopifySkuData) ? shopifySkuData[0] : Object.values(shopifySkuData)[0];
-        }
       }
       
       // Temp accumulators for daily data
@@ -7285,7 +7226,6 @@ const savePeriods = async (d) => {
         });
       }
       
-      console.log(`Added velocity from ${daysCount} days of daily data (${Object.keys(dailyAmazonVel).length} Amazon SKUs, ${Object.keys(dailyShopifyVel).length} Shopify SKUs)`);
     }
     
     // SOURCE 3: Monthly/Period data - use for SKUs not covered by weekly or daily
@@ -7348,11 +7288,9 @@ const savePeriods = async (d) => {
         });
       }
       
-      console.log(`Added velocity from ${periodsCount} monthly periods (${Object.keys(periodAmazonVel).length} Amazon SKUs, ${Object.keys(periodShopifyVel).length} Shopify SKUs)`);
     }
     } // End of: always process weekly+monthly data as supplement for slow movers
     
-    console.log(`Final velocity data: ${Object.keys(amazonSkuVelocity).length} Amazon SKUs, ${Object.keys(shopifySkuVelocity).length} Shopify SKUs (source: ${velocityDataSource})`);
     
     const hasWeeklyVelocityData = Object.keys(amazonSkuVelocity).length > 0 || Object.keys(shopifySkuVelocity).length > 0;
 
@@ -7472,9 +7410,7 @@ const savePeriods = async (d) => {
         };
       });
       
-      console.log('SKUs with demand stats:', Object.keys(skuDemandStats).length);
       const demandClasses = Object.values(skuDemandStats).reduce((acc, s) => { acc[s.demandClass] = (acc[s.demandClass] || 0) + 1; return acc; }, {});
-      console.log('Demand classification:', demandClasses);
       // Show a sample
       const sampleSku = Object.keys(skuDemandStats)[0];
       if (sampleSku) {
@@ -7625,7 +7561,6 @@ const savePeriods = async (d) => {
         
         if (data.success && data.items) {
           tplSource = 'packiyo-direct';
-          console.log('Packiyo returned', data.items.length, 'items');
           
           // Track SKUs we've already added (case-insensitive)
           const seenSkusLower = new Set();
@@ -7637,7 +7572,6 @@ const savePeriods = async (d) => {
             // Case-insensitive duplicate check within Packiyo data
             const skuLower = sku.toLowerCase();
             if (seenSkusLower.has(skuLower)) {
-              console.log('Packiyo duplicate SKU skipped:', sku);
               return;
             }
             seenSkusLower.add(skuLower);
@@ -7658,7 +7592,6 @@ const savePeriods = async (d) => {
             // Store under UPPERCASE version for consistency
             tplInv[sku.toUpperCase()] = itemData;
           });
-          console.log('Packiyo unique SKUs added to tplInv:', Object.keys(tplInv).length);
           
           // Update Packiyo last sync time
           setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
@@ -7767,13 +7700,6 @@ const savePeriods = async (d) => {
     });
     
     const allSkus = new Set([...Object.keys(amzInv), ...Object.keys(tplInv), ...Object.keys(homeInv)]);
-    
-    // Log SKU sources for debugging
-      amazon: Object.keys(amzInv).length,
-      threepl: Object.keys(tplInv).length,
-      home: Object.keys(homeInv).length,
-      totalUnique: allSkus.size
-    });
     
     // Deduplicate SKUs - keep only one version of each SKU (prefer original case)
     const seenSkusLower = new Set();
@@ -9086,10 +9012,8 @@ const savePeriods = async (d) => {
   
   // Process Amazon bulk upload - import into appropriate data structures
   const processAmazonBulkUpload = useCallback(async () => {
-    console.log('amazonBulkFiles.length:', amazonBulkFiles.length);
     
     if (amazonBulkFiles.length === 0) {
-      console.log('No files to process, returning early');
       return;
     }
     
@@ -9149,15 +9073,7 @@ const savePeriods = async (d) => {
         const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
         
         // DEBUG: Log what was parsed
-        console.log('Report type:', reportType);
-        console.log('Date range:', dateRange);
-        console.log('Date range endDate:', dateRange?.endDate);
-        console.log('Rows processed:', data.length);
-        console.log('SKUs found:', Object.keys(amazonSkuData).length);
-        console.log('Total units:', amzUnits);
-        console.log('Total revenue:', amzRev);
         if (amazonSkus.length > 0) {
-          console.log('First few SKU names:', amazonSkus.slice(0, 5).map(s => s.sku));
         }
         
         // Validate dateRange before using
@@ -9170,7 +9086,6 @@ const savePeriods = async (d) => {
         if (reportType === 'daily') {
           // Import as daily data
           const dateKey = dateRange.endDate.toISOString().split('T')[0];
-          console.log('Importing daily data for date:', dateKey, 'revenue:', amzRev, 'units:', amzUnits);
           
           const existingShopify = updatedDailyData[dateKey]?.shopify || { revenue: 0, units: 0, cogs: 0, netProfit: 0, adSpend: 0, skuData: [] };
           const totalRev = amzRev + (existingShopify.revenue || 0);
@@ -9202,7 +9117,6 @@ const savePeriods = async (d) => {
             },
           };
           dailyImported++;
-          console.log('Daily import complete. dailyImported now:', dailyImported);
         } else if (reportType === 'weekly') {
           // Import as weekly data
           const weekKey = dateRange.endDate.toISOString().split('T')[0];
@@ -9277,11 +9191,9 @@ const savePeriods = async (d) => {
         }
       }
       
-      console.log('Import loop complete. dailyImported:', dailyImported, 'weeklyImported:', weeklyImported, 'monthlyImported:', monthlyImported);
       
       // Save all updated data
       if (dailyImported > 0) {
-        console.log('Saving daily data...');
         setAllDaysData(updatedDailyData);
         
         // Limit daily data to last 90 days to prevent quota issues
@@ -9292,7 +9204,6 @@ const savePeriods = async (d) => {
         
         try { 
           safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(trimmedDailyData)); 
-          console.log('Daily data saved to localStorage (' + daysToKeep.length + ' days)');
         } catch(e) {
           console.error('Failed to save daily data to localStorage:', e.message);
           // Try with even fewer days
@@ -9301,7 +9212,6 @@ const savePeriods = async (d) => {
             const minimal = {};
             last30.forEach(d => { minimal[d] = updatedDailyData[d]; });
             safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(minimal));
-            console.log('Saved last 30 days only due to quota');
           } catch(e2) {
             console.error('Also failed with 30 days:', e2.message);
             // Last resort - just save without skuData to reduce size
@@ -9317,7 +9227,6 @@ const savePeriods = async (d) => {
                 };
               });
               safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(compact));
-              console.log('Saved compact version (no SKU data) due to quota');
             } catch(e3) {
               console.error('Cannot save daily data - localStorage full');
             }
@@ -9325,19 +9234,16 @@ const savePeriods = async (d) => {
         }
       }
       if (weeklyImported > 0) {
-        console.log('Saving weekly data...');
         setAllWeeksData(updatedWeeklyData);
         save(updatedWeeklyData);
       }
       if (monthlyImported > 0) {
-        console.log('Saving monthly/period data...');
         setAllPeriodsData(updatedPeriodsData);
         try { safeLocalStorageSet('ecommerce_periods_data_v1', JSON.stringify(updatedPeriodsData)); } catch(e) {
           console.error('Failed to save periods data:', e.message);
         }
       }
       
-      console.log('All saves complete, clearing upload state...');
       setAmazonBulkFiles([]);
       setAmazonBulkParsed(null);
       
@@ -9359,7 +9265,6 @@ const savePeriods = async (d) => {
       }
       
       // Navigate to appropriate view
-      console.log('About to navigate. weeklyImported:', weeklyImported, 'dailyImported:', dailyImported);
       if (weeklyImported > 0) {
         const todayDate = new Date();
         const latestWeek = Object.keys(updatedWeeklyData).filter(wk => {
@@ -9378,7 +9283,6 @@ const savePeriods = async (d) => {
       } else if (monthlyImported > 0) {
         setView('periods');
       }
-      console.log('Navigation complete');
     } catch (err) {
       console.error('Bulk upload error:', err);
       console.error('Error stack:', err.stack);
@@ -11172,11 +11076,9 @@ const savePeriods = async (d) => {
       // Check Amazon - use /api/amazon/sync endpoint
       if (appSettings.autoSync?.amazon !== false && amazonCredentials.connected) {
         const amazonStale = isServiceStale(amazonCredentials.lastSync, threshold);
-        console.log('Amazon:', amazonStale ? 'STALE - will sync' : 'fresh - skipping');
         
         if (amazonStale || force) {
           try {
-            console.log('Auto-syncing Amazon...');
             const res = await fetch('/api/amazon/sync', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -11193,7 +11095,6 @@ const savePeriods = async (d) => {
             if (!data.error && res.ok) {
               setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               results.push({ service: 'Amazon', success: true, message: 'Synced successfully' });
-              console.log('Amazon auto-sync complete');
             } else {
               results.push({ service: 'Amazon', success: false, error: data.error || `HTTP ${res.status}` });
               console.warn('Amazon auto-sync failed:', data.error || res.status);
@@ -11208,11 +11109,9 @@ const savePeriods = async (d) => {
       // Check Shopify Sales - use /api/shopify/sync endpoint
       if (appSettings.autoSync?.shopify !== false && shopifyCredentials.connected) {
         const shopifyStale = isServiceStale(shopifyCredentials.lastSync, threshold);
-        console.log('Shopify:', shopifyStale ? 'STALE - will sync' : 'fresh - skipping');
         
         if (shopifyStale || force) {
           try {
-            console.log('Auto-syncing Shopify sales...');
             // Sync last 7 days of orders
             const endDate = new Date().toISOString().split('T')[0];
             const startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
@@ -11234,7 +11133,6 @@ const savePeriods = async (d) => {
             if (!data.error && res.ok) {
               setShopifyCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               results.push({ service: 'Shopify', success: true, orders: data.orderCount || 0 });
-              console.log('Shopify auto-sync complete:', data.orderCount, 'orders');
             } else {
               results.push({ service: 'Shopify', success: false, error: data.error || `HTTP ${res.status}` });
               console.warn('Shopify auto-sync failed:', data.error || res.status);
@@ -11249,11 +11147,9 @@ const savePeriods = async (d) => {
       // Check Packiyo - use /api/packiyo/sync endpoint
       if (appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected) {
         const packiyoStale = isServiceStale(packiyoCredentials.lastSync, threshold);
-        console.log('Packiyo:', packiyoStale ? 'STALE - will sync' : 'fresh - skipping');
         
         if (packiyoStale || force) {
           try {
-            console.log('Auto-syncing Packiyo...');
             const res = await fetch('/api/packiyo/sync', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -11271,7 +11167,6 @@ const savePeriods = async (d) => {
               }
               setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               results.push({ service: 'Packiyo', success: true, skus: data.summary?.skuCount || data.products?.length || 0 });
-              console.log('Packiyo auto-sync complete:', data.summary?.skuCount || data.products?.length, 'SKUs');
               
               // ========== AUTO-SYNC: VELOCITY CALC + INVENTORY UPDATE ==========
               // This mirrors the manual Packiyo sync's processing so velocities and
@@ -11347,7 +11242,6 @@ const savePeriods = async (d) => {
                     autoVelocityTrends[sku] = { totalTrend: Math.round(((shopTrend + amzTrend) / 2) * 100) };
                   });
                   
-                  console.log('Auto-sync velocity: calculated for', Object.keys(skuDailyUnits).length, 'SKUs from', last28Days.length, 'days');
                 }
                 
                 // Weekly supplement for slow-moving SKUs
@@ -11394,7 +11288,6 @@ const savePeriods = async (d) => {
                     }
                   });
                   
-                  console.log('Auto-sync weekly supplement:', supplementCount, 'slow-moving SKUs from', weekCount, 'weeks');
                 }
                 
                 // Helper to get velocity with corrections
@@ -11451,7 +11344,7 @@ const savePeriods = async (d) => {
                     const liveLowThreshold = Math.max(30, liveLeadTimeDays + 14);
                     const liveCriticalThreshold = Math.max(14, liveLeadTimeDays);
                     
-                    const normalizeSkuKey = (sku) => (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
+                    // normalizeSkuKey already defined at module scope
                     const packiyoLookup = {};
                     Object.entries(packiyoData).forEach(([sku, item]) => {
                       packiyoLookup[normalizeSkuKey(sku)] = item;
@@ -11607,7 +11500,6 @@ const savePeriods = async (d) => {
                     setSelectedInvDate(targetDate);
                     saveInv(updatedHistory);
                     
-                    console.log('Auto-sync inventory updated:', matchedCount, 'matched,', newTplTotal, '3PL units');
                   }
                 }
               } catch (procErr) {
@@ -11654,7 +11546,6 @@ const savePeriods = async (d) => {
       }
       
       if (results.length === 0) {
-        console.log('Auto-sync: All data is fresh, nothing to sync');
       }
       
     } catch (err) {
@@ -11690,7 +11581,6 @@ const savePeriods = async (d) => {
     const intervalHours = appSettings.autoSync?.intervalHours || 4;
     const intervalMs = intervalHours * 60 * 60 * 1000;
     
-    console.log(`Auto-sync interval set: every ${intervalHours} hours`);
     
     const interval = setInterval(() => {
       const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected;
@@ -12677,7 +12567,6 @@ Keep insights brief and actionable. Format as numbered list.`;
       
       // Helper to read SSE stream from chat API (utilizes Pro 60s timeout)
       const fetchStreamingAI = async (prompt, systemPrompt) => {
-        console.log('Starting streaming AI request...');
         
         const response = await fetch('/api/chat', {
           method: 'POST',
@@ -12705,7 +12594,6 @@ Keep insights brief and actionable. Format as numbered list.`;
           let fullText = '';
           let buffer = '';
           
-          console.log('Reading streaming response...');
           
           while (true) {
             const { done, value } = await reader.read();
@@ -12738,7 +12626,6 @@ Keep insights brief and actionable. Format as numbered list.`;
             }
           }
           
-          console.log('Streaming complete, response length:', fullText.length);
           return fullText;
         } else {
           // Fallback to JSON response (non-streaming)
@@ -12748,13 +12635,6 @@ Keep insights brief and actionable. Format as numbered list.`;
       };
       
       // Build comprehensive AI prompt
-        dailyAvg7: avg7Day.toFixed(2),
-        dailyBasedWeekly: (avg7Day * 7).toFixed(2),
-        weeklyTrend: weeklyTrend.toFixed(1) + '%',
-        weightedPrediction: weightedPrediction.toFixed(2),
-        amazonForecast: adjustedAmazonForecast?.toFixed(2) || 'none',
-      });
-      
       const prompt = `You are an e-commerce forecasting AI. Analyze patterns and provide insights.
 
 ## CRITICAL: USE THESE EXACT NUMBERS
@@ -12804,11 +12684,9 @@ Respond with ONLY this JSON (no markdown):
 
       const systemPrompt = `You are an e-commerce forecasting AI. Provide analysis and insights only. The revenue predictions have already been calculated - DO NOT generate revenue numbers. Focus on patterns, risks, and actionable recommendations. Respond with valid JSON only.`;
 
-      console.log('Calling streaming AI forecast...');
       
       try {
         const responseText = await fetchStreamingAI(prompt, systemPrompt);
-        console.log('AI response received, parsing...');
         
         // Parse JSON response
         const jsonMatch = responseText.match(/\{[\s\S]*\}/);
@@ -12818,7 +12696,6 @@ Respond with ONLY this JSON (no markdown):
           try {
             aiAnalysis = JSON.parse(jsonMatch[0]);
           } catch (e) {
-            console.log('Could not parse AI JSON, using defaults');
           }
         }
         
@@ -12941,7 +12818,6 @@ Respond with ONLY this JSON (no markdown):
           },
         });
         
-        console.log('AI forecast saved successfully');
         
       } catch (aiError) {
         console.error('AI forecast error:', aiError);
@@ -13217,7 +13093,6 @@ Respond with ONLY this JSON:
       // Only apply days-elapsed if data is actually old
       const daysElapsed = Math.max(0, Math.floor((today - effectiveDataDate) / (1000 * 60 * 60 * 24)));
       
-      console.log('AI forecast dates:', { latestInvKey, lastPackiyoSync: lastPackiyoSync?.toISOString()?.split('T')[0], effectiveDataDate: effectiveDataDate.toISOString().split('T')[0], daysElapsed });
       
       // DEDUPLICATE inventory items by normalized SKU (case-insensitive)
       // Keep the item with the highest totalQty (most complete data)
@@ -18294,7 +18169,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         stacks[targetWidgetId] = [targetWidgetId, draggedId];
       }
       
-      console.log('Stacks after drop:', stacks);
       
       setWidgetConfig({ 
         widgets, 
@@ -20970,11 +20844,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                           const legacy = JSON.parse(legacyRaw);
                           const dates = Object.keys(legacy).sort().reverse();
                           const withAmazonSku = dates.filter(d => legacy[d]?.amazon?.skuData?.length > 0);
-                          console.log('dailySales:', dates.length, 'days,', withAmazonSku.length, 'with Amazon skuData');
                           if (withAmazonSku.length > 0) {
                           }
                         } else {
-                          console.log('dailySales: NOT FOUND');
                         }
                         alert('Check console (F12) for localStorage data');
                       }}
@@ -22247,7 +22119,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                               const weekStart = formatDate(lastSunday);
                               const weekEnd = formatDate(lastSaturday);
                               
-                              console.log('Analyzing complete week:', weekStart, 'to', weekEnd);
                               
                               // Collect actual sales for the week
                               const actualSalesBySku = {};
@@ -22282,7 +22153,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                 });
                               }
                               
-                              console.log('Found', daysFound, 'days of data,', Object.keys(actualSalesBySku).length, 'SKUs with sales');
                               
                               // Only proceed if we have at least 5 days of data
                               if (daysFound >= 5 && Object.keys(actualSalesBySku).length > 0) {
@@ -22321,9 +22191,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                                 const overallCorrection = totalPredicted > 0 ? totalActual / totalPredicted : 1;
                                 const clampedOverall = Math.max(0.7, Math.min(1.5, overallCorrection));
                                 
-                                console.log('Predicted total:', totalPredicted.toFixed(0), '| Actual total:', totalActual.toFixed(0));
-                                console.log('Overall correction factor:', clampedOverall.toFixed(3));
-                                console.log('SKUs with corrections:', Object.keys(skuCorrections).length);
                                 
                                 // Update forecastCorrections state
                                 setForecastCorrections(prev => {
@@ -24187,14 +24054,6 @@ if (shopifySkuWithShipping.length > 0) {
     // If synced today, daysElapsed = 0, quantities are already current
     const daysElapsed = Math.max(0, Math.floor((today - effectiveDataDate) / (1000 * 60 * 60 * 24)));
     
-    console.log('Inventory display dates:', { 
-      snapshotDate: selectedInvDate, 
-      lastPackiyoSync: lastPackiyoSync?.toISOString()?.split('T')[0],
-      lastAmazonSync: lastAmazonSync?.toISOString()?.split('T')[0],
-      effectiveDataDate: effectiveDataDate.toISOString().split('T')[0],
-      today: today.toISOString().split('T')[0],
-      daysElapsed 
-    });
     
     const recalculatedItems = deduplicatedItems.map(item => {
       const weeklyVel = item.weeklyVel || 0;
@@ -41235,7 +41094,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                         const rawVelocityLookup = {}; // Store uncorrected velocity
                         
                         try {
-                          console.log('allDaysData has', Object.keys(allDaysData).length, 'days');
                           
                           if (Object.keys(allDaysData).length > 0) {
                             // Get last 28 days sorted by date
@@ -41244,7 +41102,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             const last14Days = last28Days.slice(0, 14);
                             const prior14Days = last28Days.slice(14, 28);
                             
-                            console.log('Using last 28 days for velocity. Recent 14:', last14Days.slice(0, 3), '... Prior 14:', prior14Days.slice(0, 3));
                             
                             // Stats tracking
                             let daysWithShopifySkuData = 0;
@@ -41370,10 +41227,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               rawVelocityLookup[sku] = shopifyVel + amazonVel;
                             });
                             
-                            console.log('Days with Shopify skuData:', daysWithShopifySkuData, '| Amazon skuData:', daysWithAmazonSkuData);
-                            console.log('Total units - Shopify:', totalShopifyUnits, '| Amazon:', totalAmazonUnits);
-                            console.log('Unique SKUs - Shopify:', uniqueShopifySkus.size, '| Amazon:', uniqueAmazonSkus.size);
-                            console.log('Velocity entries calculated:', Object.keys(skuDailyUnits).length);
                             
                             // Show sample velocities with trends
                             const shopifyOnlySamples = ['DDPE0032', 'DDPE0005', 'DDPE0027'];
@@ -41381,7 +41234,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               const trend = velocityTrends[sku];
                             });
                           } else {
-                            console.log('NO SALES DATA FOUND in allDaysData - velocity will be 0 for all items');
                           }
                           
                           // SUPPLEMENT: Use weekly data for slow-moving SKUs with 0 daily velocity
@@ -41432,7 +41284,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               }
                             });
                             
-                            console.log(`Weekly supplement: ${weeklySupplementCount} slow-moving SKUs got velocity from ${weekCount} weeks`);
                           }
                         } catch (e) {
                           console.error('Error calculating velocity:', e);
@@ -41494,17 +41345,12 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                           (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
                                           Object.keys(invHistory).sort().reverse()[0];
                         
-                        console.log('Target date for update:', targetDate);
-                        console.log('invHistory keys:', Object.keys(invHistory));
                         
                         if (targetDate && invHistory[targetDate] && data.inventoryBySku) {
                           const currentSnapshot = invHistory[targetDate];
-                          console.log('Current snapshot items:', currentSnapshot.items?.length);
                           const packiyoData = data.inventoryBySku;
                           
                           // Debug: log the keys/SKUs from both sources
-                          console.log('Packiyo SKUs:', Object.keys(packiyoData).slice(0, 5), '... total:', Object.keys(packiyoData).length);
-                          console.log('Snapshot SKUs:', currentSnapshot.items?.slice(0, 5).map(i => i.sku), '... total:', currentSnapshot.items?.length);
                           
                           const today = new Date();
                           const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
@@ -41514,9 +41360,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           // e.g., DDPE0022Shop should match DDPE0022, ddpe0022, etc.
                           // Base SKU is always uppercase without "Shop" suffix
                           const packiyoLookup = {};
-                          const normalizeSkuKey = (sku) => {
-                            return (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
-                          };
                           
                           Object.entries(packiyoData).forEach(([sku, item]) => {
                             const normalizedKey = normalizeSkuKey(sku);
@@ -41533,7 +41376,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           // Debug: Log first few SKUs from both sources to diagnose mismatch
                           const packiyoSkuList = Object.keys(packiyoLookup).slice(0, 10);
                           const snapshotSkuList = currentSnapshot.items.slice(0, 10).map(i => i.sku);
-                          console.log('Snapshot item SKUs (first 10):', snapshotSkuList);
                           
                           const updatedItems = currentSnapshot.items.map(item => {
                             // Normalize the item SKU the same way
@@ -41549,7 +41391,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             if (packiyoItem) {
                               matchedCount++;
                               if (matchedCount <= 3) {
-                                console.log(`Matched SKU "${item.sku}" -> normalized "${normalizedItemSku}" -> qty=${newTplQty}`);
                               }
                             }
                             
@@ -41636,9 +41477,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             };
                           });
                           
-                          console.log('Matched existing items:', matchedCount);
-                          console.log('FINAL newTplTotal:', newTplTotal);
-                          console.log('FINAL newTplValue:', newTplValue);
                           
                           // If no matches were found, we need to add Packiyo items as new items
                           // Filter out 0-qty items (digital products) from Packiyo
@@ -41655,7 +41493,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             // Deduplicate by normalized SKU (in case both DDPE0022 and DDPE0022Shop exist)
                             .filter((entry, idx, arr) => arr.findIndex(e => e[0] === entry[0]) === idx);
                           
-                          console.log('Physical Packiyo items (qty > 0):', physicalPackiyoItems.length);
                           
                           // If no matches, add Packiyo items directly
                           if (matchedCount === 0 && physicalPackiyoItems.length > 0) {
@@ -41733,8 +41570,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             const combinedItems = [...existingWithData, ...packiyoOnlyItems];
                             combinedItems.sort((a, b) => b.totalValue - a.totalValue);
                             
-                            console.log('Created', packiyoOnlyItems.length, 'items from Packiyo');
-                            console.log('Combined total items:', combinedItems.length);
                             
                             updatedItems.length = 0;
                             updatedItems.push(...combinedItems);
@@ -41808,7 +41643,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               });
                             
                             if (unmatchedPackiyoItems.length > 0) {
-                              console.log('Adding', unmatchedPackiyoItems.length, 'unmatched Packiyo items');
                               updatedItems.push(...unmatchedPackiyoItems);
                             }
                           }
@@ -41859,12 +41693,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             },
                           };
                           
-                          console.log('UPDATED SNAPSHOT:', {
-                            date: targetDate,
-                            threeplUnits: newTplTotal,
-                            threeplValue: newTplValue,
-                            totalItems: updatedItems.length
-                          });
                           
                           const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
                           setInvHistory(updatedHistory);
@@ -41881,10 +41709,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                             const packiyoData = data.inventoryBySku;
                             
                             // Create Packiyo lookup with normalized keys
-                            const normalizeSkuKey = (sku) => {
-                              return (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
-                            };
-                            
                             const packiyoLookup = {};
                             Object.entries(packiyoData).forEach(([sku, item]) => {
                               const normalizedKey = normalizeSkuKey(sku);
@@ -41944,7 +41768,6 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           } else {
                             // No snapshot exists for today - don't create 3PL-only snapshot that would lose Amazon data
                             // Instead, tell user to create inventory snapshot first
-                            console.log('No snapshot exists for today - user should create one with Amazon data first');
                             setToast({ 
                               message: 'Packiyo synced but no inventory snapshot exists for today. Go to Inventory tab and create a new snapshot to include Amazon + 3PL data.', 
                               type: 'warning' 
