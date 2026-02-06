@@ -1,6 +1,6 @@
 import React from 'react';
 
-const MetricCard = ({ label, value, sub, icon: Icon, color = 'slate', trend, onClick }) => {
+const MetricCard = ({ label, value, sub, icon: Icon, color = 'slate', trend, onClick, loading }) => {
   const colors = { 
     emerald: 'from-emerald-500/20 to-emerald-600/5 border-emerald-500/30 hover:border-emerald-400/50', 
     blue: 'from-blue-500/20 to-blue-600/5 border-blue-500/30 hover:border-blue-400/50', 
@@ -33,6 +33,20 @@ const MetricCard = ({ label, value, sub, icon: Icon, color = 'slate', trend, onC
     down: '↓',
     flat: '→',
   };
+
+  // Skeleton loading state
+  if (loading) {
+    return (
+      <div className={`bg-gradient-to-br ${colors[color] || colors.slate} border rounded-2xl p-5 animate-pulse`}>
+        <div className="flex items-start justify-between mb-3">
+          <div className="h-4 bg-slate-600/50 rounded w-24" />
+          <div className="w-8 h-8 bg-slate-600/30 rounded-lg" />
+        </div>
+        <div className="h-7 bg-slate-600/50 rounded w-32 mb-2" />
+        <div className="h-3 bg-slate-600/30 rounded w-20" />
+      </div>
+    );
+  }
 
   return (
     <div 

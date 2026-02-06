@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { 
   ChevronDown, BarChart3, Upload, Database, TrendingUp, Boxes, 
   Settings, Sun, Calendar, CalendarRange, GitCompare, Trophy, 
@@ -23,6 +23,25 @@ const NavTabs = ({
   setUploadTab,
   bankingData
 }) => {
+  const navRef = useRef(null);
+  
+  // Close dropdown on outside click (works on mobile too)
+  useEffect(() => {
+    if (!navDropdown) return;
+    const handleClickOutside = (e) => {
+      if (navRef.current && !navRef.current.contains(e.target)) {
+        setNavDropdown(null);
+      }
+    };
+    // Use mousedown for desktop, touchstart for mobile
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [navDropdown, setNavDropdown]);
+  
   const dataViews = ['daily', 'weekly', 'period-view'];
   const analyticsViews = ['trends', 'analytics', 'yoy', 'skus', 'profitability', 'ads'];
   const operationsViews = ['inventory', '3pl', 'banking', 'sales-tax', 'forecast'];
@@ -158,7 +177,7 @@ const NavTabs = ({
   ];
   
   return (
-    <div className="flex flex-wrap gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl relative" onClick={(e) => { if (e.target === e.currentTarget) setNavDropdown(null); }}>
+    <div ref={navRef} className="flex flex-wrap gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl relative">
       {/* Core Navigation - Always visible */}
       <button onClick={() => setView('dashboard')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${view === 'dashboard' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><BarChart3 className="w-4 h-4" />Dashboard</button>
       <button onClick={() => setView('upload')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Upload className="w-4 h-4" />Upload</button>

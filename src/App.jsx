@@ -594,6 +594,20 @@ const safeLocalStorageGetString = (key, defaultValue = '') => {
   }
 };
 
+// Safe localStorage setter - only writes if we're in anonymous mode OR for whitelisted keys
+// CRITICAL: Prevents data leakage between Supabase users on shared browsers
+const safeLocalStorageSet = (key, value) => {
+  // Always allow theme preferences (non-sensitive, per-browser)
+  const alwaysAllowedKeys = ['ecommerce_theme', 'ecommerce_settings_tab', 'ecomm_last_activity_v1'];
+  if (!shouldUseLocalStorage && !alwaysAllowedKeys.includes(key)) return;
+  try {
+    const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
+    lsSet(key, stringValue);
+  } catch (e) {
+    console.warn(`Failed to save to localStorage: ${key}`, e);
+  }
+};
+
 // Enhanced 3PL parsing - extracts detailed metrics from 3PL CSV files
 const parse3PLData = (threeplFiles) => {
   const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
@@ -943,16 +957,16 @@ const get3PLForWeek = (ledger, weekKey) => {
   const targetEnd = new Date(targetDate);
   targetEnd.setDate(targetDate.getDate() + 1); // Include day after for timezone tolerance
   
-  // Find orders that match this week (fuzzy match within 2 days of week boundary)
-  const weekOrders = ledger.orders ? Object.values(ledger.orders).filter(o => {
-    // Try exact match first
-    if (o.weekKey === weekKey) return true;
-    
-    // Try fuzzy match - check if order's weekKey is within 2 days of target
+  // Step 1: Try EXACT week key match first (prevents double-counting)
+  const exactMatches = ledger.orders ? Object.values(ledger.orders).filter(o => o.weekKey === weekKey) : [];
+  
+  // Step 2: Only fall back to fuzzy matching if exact match returns nothing
+  const weekOrders = exactMatches.length > 0 ? exactMatches : (ledger.orders ? Object.values(ledger.orders).filter(o => {
+    // Try fuzzy match - check if order's weekKey is within 1 day of target (tighter than before)
     if (o.weekKey) {
       const orderWeekDate = new Date(o.weekKey + 'T00:00:00');
       const diffDays = Math.abs((orderWeekDate - targetDate) / (1000 * 60 * 60 * 24));
-      if (diffDays <= 2) return true;
+      if (diffDays <= 1) return true;
     }
     
     // Also try matching by shipDate
@@ -1005,12 +1019,12 @@ const get3PLForWeek = (ledger, weekKey) => {
     }
   });
   
-  // Add non-order charges allocated to this week (fuzzy match)
+  // Add non-order charges allocated to this week (exact match preferred, tight fuzzy fallback)
   Object.values(ledger.summaryCharges || {}).forEach(charge => {
     const chargeWeekDate = new Date((charge.weekKey || '') + 'T00:00:00');
     const diffDays = Math.abs((chargeWeekDate - targetDate) / (1000 * 60 * 60 * 24));
     
-    if (charge.weekKey === weekKey || diffDays <= 2) {
+    if (charge.weekKey === weekKey || (exactMatches.length === 0 && diffDays <= 1)) {
       const chargeLower = (charge.chargeType || '').toLowerCase();
       if (chargeLower.includes('storage')) breakdown.storage += charge.amount || 0;
       else if (chargeLower.includes('shipping')) {
@@ -1210,7 +1224,7 @@ export default function Dashboard() {
   
   // Persist settings tab selection
   useEffect(() => {
-    try { localStorage.setItem('ecommerce_settings_tab', settingsTab); } catch {}
+    try { safeLocalStorageSet('ecommerce_settings_tab', settingsTab); } catch {}
   }, [settingsTab]);
   
   // Undo deletion state - stores recently deleted items for 10-second undo window
@@ -1543,7 +1557,7 @@ const handleLogout = async () => {
   // Persist return rates
   useEffect(() => {
     if (returnRates.lastUpdated) {
-      localStorage.setItem('ecommerce_return_rates_v1', JSON.stringify(returnRates));
+      safeLocalStorageSet('ecommerce_return_rates_v1', JSON.stringify(returnRates));
     }
   }, [returnRates]);
   
@@ -1637,7 +1651,7 @@ const handleLogout = async () => {
   
   // Save confirmed recurring to localStorage
   useEffect(() => {
-    localStorage.setItem('ecommerce_recurring_v1', JSON.stringify(confirmedRecurring));
+    safeLocalStorageSet('ecommerce_recurring_v1', JSON.stringify(confirmedRecurring));
   }, [confirmedRecurring]);
   
   // Sales Tax Management
@@ -1875,7 +1889,7 @@ const handleLogout = async () => {
   
   // Save lead time settings
   useEffect(() => {
-    localStorage.setItem('ecommerce_lead_times_v1', JSON.stringify(leadTimeSettings));
+    safeLocalStorageSet('ecommerce_lead_times_v1', JSON.stringify(leadTimeSettings));
   }, [leadTimeSettings]);
   
   // Modular AI Forecasts State
@@ -1905,12 +1919,12 @@ const handleLogout = async () => {
   // Persist unified AI model
   useEffect(() => {
     if (unifiedAIModel.lastUpdated) {
-      localStorage.setItem('ecommerce_unified_ai_v1', JSON.stringify(unifiedAIModel));
+      safeLocalStorageSet('ecommerce_unified_ai_v1', JSON.stringify(unifiedAIModel));
     }
   }, [unifiedAIModel]);
   
   useEffect(() => {
-    localStorage.setItem('ecommerce_ai_learning_v1', JSON.stringify(aiLearningHistory));
+    safeLocalStorageSet('ecommerce_ai_learning_v1', JSON.stringify(aiLearningHistory));
   }, [aiLearningHistory]);
   
   // Save AI chat history to localStorage
@@ -1918,7 +1932,7 @@ const handleLogout = async () => {
     if (aiMessages.length > 0) {
       // Keep last 100 messages to avoid localStorage bloat
       const messagesToSave = aiMessages.slice(-100);
-      localStorage.setItem('ecommerce_ai_chat_history_v1', JSON.stringify(messagesToSave));
+      safeLocalStorageSet('ecommerce_ai_chat_history_v1', JSON.stringify(messagesToSave));
     }
   }, [aiMessages]);
   
@@ -1946,13 +1960,13 @@ const handleLogout = async () => {
   // Persist onboarding completion
   useEffect(() => {
     if (onboardingComplete) {
-      localStorage.setItem('ecommerce_onboarding_complete_v1', JSON.stringify(true));
+      safeLocalStorageSet('ecommerce_onboarding_complete_v1', JSON.stringify(true));
     }
   }, [onboardingComplete]);
   
   // Persist notification settings
   useEffect(() => {
-    localStorage.setItem('ecommerce_notifications_v1', JSON.stringify(notificationSettings));
+    safeLocalStorageSet('ecommerce_notifications_v1', JSON.stringify(notificationSettings));
   }, [notificationSettings]);
   
   // Check if new user needs onboarding (no data and not completed)
@@ -2835,7 +2849,7 @@ const handleLogout = async () => {
   
   // Save forecast meta to localStorage
   useEffect(() => {
-    localStorage.setItem('ecommerce_forecast_meta', JSON.stringify(forecastMeta));
+    safeLocalStorageSet('ecommerce_forecast_meta', JSON.stringify(forecastMeta));
   }, [forecastMeta]);
   
   // ============ SELF-LEARNING FORECAST SYSTEM ============
@@ -2873,18 +2887,18 @@ const handleLogout = async () => {
   // Save AI forecasts to localStorage
   useEffect(() => {
     if (aiForecasts) {
-      localStorage.setItem('ecommerce_ai_forecasts_v1', JSON.stringify(aiForecasts));
+      safeLocalStorageSet('ecommerce_ai_forecasts_v1', JSON.stringify(aiForecasts));
     }
   }, [aiForecasts]);
 
   // Save forecast accuracy history to localStorage
   useEffect(() => {
-    localStorage.setItem(FORECAST_ACCURACY_KEY, JSON.stringify(forecastAccuracyHistory));
+    safeLocalStorageSet(FORECAST_ACCURACY_KEY, JSON.stringify(forecastAccuracyHistory));
   }, [forecastAccuracyHistory]);
 
   // Save forecast corrections to localStorage
   useEffect(() => {
-    localStorage.setItem(FORECAST_CORRECTIONS_KEY, JSON.stringify(forecastCorrections));
+    safeLocalStorageSet(FORECAST_CORRECTIONS_KEY, JSON.stringify(forecastCorrections));
   }, [forecastCorrections]);
   // ============ END SELF-LEARNING FORECAST SYSTEM STATE ============
   
@@ -3332,12 +3346,12 @@ allWeekKeys.forEach((weekKey) => {
   
   // Save Amazon forecasts to localStorage and cloud
   useEffect(() => {
-    localStorage.setItem(AMAZON_FORECAST_KEY, JSON.stringify(amazonForecasts));
+    safeLocalStorageSet(AMAZON_FORECAST_KEY, JSON.stringify(amazonForecasts));
   }, [amazonForecasts]);
   
   // Save invoices to localStorage and cloud
   useEffect(() => {
-    localStorage.setItem(INVOICES_KEY, JSON.stringify(invoices));
+    safeLocalStorageSet(INVOICES_KEY, JSON.stringify(invoices));
     // Sync to cloud when invoices change
     if (invoices.length > 0 || localStorage.getItem(INVOICES_KEY)) {
       queueCloudSave({ ...combinedData, invoices });
@@ -3346,40 +3360,40 @@ allWeekKeys.forEach((weekKey) => {
   
   // Save notes to localStorage and cloud
   useEffect(() => {
-    localStorage.setItem(NOTES_KEY, JSON.stringify(weekNotes));
+    safeLocalStorageSet(NOTES_KEY, JSON.stringify(weekNotes));
   }, [weekNotes]);
   
   // Save goals to localStorage
   useEffect(() => {
-    localStorage.setItem(GOALS_KEY, JSON.stringify(goals));
+    safeLocalStorageSet(GOALS_KEY, JSON.stringify(goals));
   }, [goals]);
   
   // Save product names to localStorage
   useEffect(() => {
-    localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(savedProductNames));
+    safeLocalStorageSet(PRODUCT_NAMES_KEY, JSON.stringify(savedProductNames));
   }, [savedProductNames]);
   
   // Save production pipeline to localStorage
   useEffect(() => {
-    localStorage.setItem('ecommerce_production_v1', JSON.stringify(productionPipeline));
+    safeLocalStorageSet('ecommerce_production_v1', JSON.stringify(productionPipeline));
   }, [productionPipeline]);
   
   // Save widget config to localStorage (only if valid)
   useEffect(() => {
     if (widgetConfig && Array.isArray(widgetConfig.widgets) && widgetConfig.widgets.length > 0) {
-      localStorage.setItem(WIDGET_KEY, JSON.stringify(widgetConfig));
+      safeLocalStorageSet(WIDGET_KEY, JSON.stringify(widgetConfig));
     }
   }, [widgetConfig]);
   
   // Save theme to localStorage
   useEffect(() => {
-    localStorage.setItem(THEME_KEY, JSON.stringify(theme));
+    safeLocalStorageSet(THEME_KEY, JSON.stringify(theme));
   }, [theme]);
   
   // Save logo to localStorage
   useEffect(() => {
     if (storeLogo) {
-      localStorage.setItem('ecommerce_store_logo', storeLogo);
+      safeLocalStorageSet('ecommerce_store_logo', storeLogo);
     } else {
       localStorage.removeItem('ecommerce_store_logo');
     }
@@ -4619,7 +4633,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     writeToLocal(COGS_KEY, JSON.stringify({ lookup: cloud.cogs?.lookup || {}, updatedAt: cloud.cogs?.updatedAt || null }));
     writeToLocal(PERIODS_KEY, JSON.stringify(cloud.periods || {}));
     writeToLocal(STORE_KEY, cloud.storeName || '');
-    if (cloud.storeLogo) localStorage.setItem('ecommerce_store_logo', cloud.storeLogo);
+    if (cloud.storeLogo) safeLocalStorageSet('ecommerce_store_logo', cloud.storeLogo);
     writeToLocal(SALES_TAX_KEY, JSON.stringify(cloud.salesTax || { nexusStates: {}, filingHistory: {}, hiddenStates: [] }));
     if (cloud.settings) writeToLocal(SETTINGS_KEY, JSON.stringify(cloud.settings));
     if (cloud.invoices) writeToLocal(INVOICES_KEY, JSON.stringify(cloud.invoices));
@@ -4630,7 +4644,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.productNames) writeToLocal(PRODUCT_NAMES_KEY, JSON.stringify(cloud.productNames));
     if (cloud.theme) writeToLocal(THEME_KEY, JSON.stringify(cloud.theme));
     if (cloud.widgetConfig) writeToLocal('ecommerce_widget_config_v1', JSON.stringify(cloud.widgetConfig));
-    if (cloud.productionPipeline) localStorage.setItem('ecommerce_production_v1', JSON.stringify(cloud.productionPipeline));
+    if (cloud.productionPipeline) safeLocalStorageSet('ecommerce_production_v1', JSON.stringify(cloud.productionPipeline));
     if (cloud.threeplLedger) writeToLocal(THREEPL_LEDGER_KEY, JSON.stringify(cloud.threeplLedger));
     if (cloud.amazonCampaigns) writeToLocal('ecommerce_amazon_campaigns_v1', JSON.stringify(cloud.amazonCampaigns));
     
@@ -5580,7 +5594,7 @@ const savePeriods = async (d) => {
 
     saveCogs(lookup);
     setSavedProductNames(names);
-    try { localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(names)); } catch(e) {}
+    try { safeLocalStorageSet(PRODUCT_NAMES_KEY, JSON.stringify(names)); } catch(e) {}
     setFiles(p => ({ ...p, cogs: null }));
     setFileNames(p => ({ ...p, cogs: '' }));
     setShowCogsManager(false);
@@ -6565,7 +6579,7 @@ const savePeriods = async (d) => {
     
     if (needsUpdate) {
       setAllPeriodsData(updatedPeriods);
-      try { localStorage.setItem('ecommerce_periods_v1', JSON.stringify(updatedPeriods)); } catch {}
+      try { safeLocalStorageSet('ecommerce_periods_v1', JSON.stringify(updatedPeriods)); } catch {}
       console.log('Auto-synced weekly data into monthly periods');
     }
   }, [allWeeksData]); // Only depend on allWeeksData to avoid loops
@@ -8532,7 +8546,7 @@ const savePeriods = async (d) => {
     };
     
     setAmazonCampaigns(newData);
-    localStorage.setItem('ecommerce_amazon_campaigns_v1', JSON.stringify(newData));
+    safeLocalStorageSet('ecommerce_amazon_campaigns_v1', JSON.stringify(newData));
     
     // Sync to cloud
     queueCloudSave({ ...combinedData, amazonCampaigns: newData });
@@ -9345,7 +9359,7 @@ const savePeriods = async (d) => {
         daysToKeep.forEach(d => { trimmedDailyData[d] = updatedDailyData[d]; });
         
         try { 
-          localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(trimmedDailyData)); 
+          safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(trimmedDailyData)); 
           console.log('Daily data saved to localStorage (' + daysToKeep.length + ' days)');
         } catch(e) {
           console.error('Failed to save daily data to localStorage:', e.message);
@@ -9354,7 +9368,7 @@ const savePeriods = async (d) => {
             const last30 = sortedDays.slice(-30);
             const minimal = {};
             last30.forEach(d => { minimal[d] = updatedDailyData[d]; });
-            localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(minimal));
+            safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(minimal));
             console.log('Saved last 30 days only due to quota');
           } catch(e2) {
             console.error('Also failed with 30 days:', e2.message);
@@ -9370,7 +9384,7 @@ const savePeriods = async (d) => {
                   shopify: day.shopify ? { ...day.shopify, skuData: [] } : day.shopify,
                 };
               });
-              localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(compact));
+              safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(compact));
               console.log('Saved compact version (no SKU data) due to quota');
             } catch(e3) {
               console.error('Cannot save daily data - localStorage full');
@@ -9386,7 +9400,7 @@ const savePeriods = async (d) => {
       if (monthlyImported > 0) {
         console.log('Saving monthly/period data...');
         setAllPeriodsData(updatedPeriodsData);
-        try { localStorage.setItem('ecommerce_periods_data_v1', JSON.stringify(updatedPeriodsData)); } catch(e) {
+        try { safeLocalStorageSet('ecommerce_periods_data_v1', JSON.stringify(updatedPeriodsData)); } catch(e) {
           console.error('Failed to save periods data:', e.message);
         }
       }
@@ -9894,7 +9908,7 @@ const savePeriods = async (d) => {
               dailyData: parsed.dailyData || [],
             },
           };
-          localStorage.setItem('ecommerce_ad_analytics_v1', JSON.stringify(updatedAdAnalytics));
+          safeLocalStorageSet('ecommerce_ad_analytics_v1', JSON.stringify(updatedAdAnalytics));
         });
       }
       
@@ -10081,7 +10095,7 @@ const savePeriods = async (d) => {
     a.click();
     // Track last backup date
     const backupTimestamp = new Date().toISOString();
-    localStorage.setItem('ecommerce_last_backup', backupTimestamp);
+    safeLocalStorageSet('ecommerce_last_backup', backupTimestamp);
     setLastBackupDate(backupTimestamp);
     setToast({ message: 'Complete backup downloaded (v3.0)', type: 'success' });
   };
@@ -10242,7 +10256,7 @@ const savePeriods = async (d) => {
         }
         if (d.forecastMeta) {
           setForecastMeta(d.forecastMeta);
-          localStorage.setItem('ecommerce_forecast_meta', JSON.stringify(d.forecastMeta));
+          safeLocalStorageSet('ecommerce_forecast_meta', JSON.stringify(d.forecastMeta));
           mergedData.forecastMeta = d.forecastMeta;
           restored.push('forecast tracking');
         }
@@ -10277,13 +10291,13 @@ const savePeriods = async (d) => {
         // Restore self-learning forecast data
         if (d.forecastAccuracyHistory && d.forecastAccuracyHistory.records && d.forecastAccuracyHistory.records.length > 0) {
           setForecastAccuracyHistory(d.forecastAccuracyHistory);
-          localStorage.setItem(FORECAST_ACCURACY_KEY, JSON.stringify(d.forecastAccuracyHistory));
+          safeLocalStorageSet(FORECAST_ACCURACY_KEY, JSON.stringify(d.forecastAccuracyHistory));
           mergedData.forecastAccuracyHistory = d.forecastAccuracyHistory;
           restored.push(`${d.forecastAccuracyHistory.records.length} learning samples`);
         }
         if (d.forecastCorrections && d.forecastCorrections.samplesUsed > 0) {
           setForecastCorrections(d.forecastCorrections);
-          localStorage.setItem(FORECAST_CORRECTIONS_KEY, JSON.stringify(d.forecastCorrections));
+          safeLocalStorageSet(FORECAST_CORRECTIONS_KEY, JSON.stringify(d.forecastCorrections));
           mergedData.forecastCorrections = d.forecastCorrections;
           restored.push('forecast corrections');
         }
@@ -10431,8 +10445,11 @@ const savePeriods = async (d) => {
             amazonRaw: { sales: amzSales, proceeds: amzProceeds, units: amzUnits },
           });
         } else {
-          // Use pure trend with slight weekly variance
-          const weekVariance = 1 + (Math.random() - 0.5) * 0.08 * (i + 1); // ±4-16% variance
+          // Use pure trend with deterministic weekly variance (stable across re-renders)
+          // Seeded by week index + data length to produce consistent but varied values
+          const seed = (i + 1) * 9301 + recentWeeks.length * 49297;
+          const pseudoRandom = (Math.sin(seed) * 49297) % 1;
+          const weekVariance = 1 + (Math.abs(pseudoRandom) - 0.5) * 0.08 * (i + 1); // ±4-16% variance
           forecast.push({
             week: `Week +${i + 1}`,
             revenue: Math.round(trendRevenue * weekVariance),
@@ -15465,10 +15482,10 @@ Analyze the data and respond with ONLY this JSON:
   };
   
   // Send AI Message - defined at component level, not nested
-  const sendAIMessage = async () => {
-    if (!aiInput.trim() || aiLoading) return;
-    const userMessage = aiInput.trim();
-    setAiInput('');
+  const sendAIMessage = async (directMessage) => {
+    const userMessage = directMessage || aiInput.trim();
+    if (!userMessage || aiLoading) return;
+    if (!directMessage) setAiInput('');
     setAiMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setAiLoading(true);
     
@@ -15611,29 +15628,30 @@ DO NOT use skuAnalysis - that's ALL-TIME data and will give WRONG answers for ti
 | "between X and Y" / specific dates | CUSTOM DATE RANGE DATA (below) |
 | "all time" / "total" | allTimeByCategory (below) |
 
-🎯 FOR DATE-SPECIFIC QUESTIONS LIKE "Jan 1-25" or "between Jan 1 and Jan 25":
-→ USE the "CUSTOM DATE RANGE DATA" section below - it has PRE-COMPUTED Jan 2026 aggregates
+🎯 FOR DATE-SPECIFIC QUESTIONS LIKE "this month so far" or "between X and Y":
+→ USE the "CUSTOM DATE RANGE DATA" section below - it has PRE-COMPUTED current month aggregates
 → The data shows EXACT Amazon vs Shopify breakdown by SKU
 
-For category questions (e.g., "how much lip balm this month?"):
-→ Look up: currentMonthByCategory.byCategory["Lip Balm"]
-→ OR use CUSTOM DATE RANGE DATA for LIP BALM 3-PACKS breakdown
+For category questions (e.g., "how much [product] this month?"):
+→ Look up: currentMonthByCategory.byCategory["Category Name"]
+→ OR use CUSTOM DATE RANGE DATA for per-SKU breakdown
 
 ⚠️ IMPORTANT: currentMonthByCategory has SEPARATE Amazon vs Shopify counts!
-→ If user asks "Amazon lip balm units", use amazonUnits from the category
-→ If user asks "total lip balm units", add Amazon + Shopify
+→ If user asks "Amazon [product] units", use amazonUnits from the category
+→ If user asks "total [product] units", add Amazon + Shopify
 
 ⛔ NEVER use skuAnalysis for timeframe questions - it contains ALL-TIME totals
 ⛔ NEVER sum from skuByWeek array - those are historical weeks
-⛔ NEVER use weekly skuData for Jan 2026 - it's MISSING Amazon SKU breakdown
-✅ ALWAYS use DAILY data aggregates (currentMonthByCategory or CUSTOM DATE RANGE DATA) for Jan 2026
-✅ ALWAYS use unifiedMetrics for all-time totals (includes Amazon 2025 period data)
-✅ For "Jan 1-25" questions → USE CUSTOM DATE RANGE DATA section
+⛔ NEVER use weekly skuData for current month - it may be MISSING Amazon SKU breakdown
+✅ ALWAYS use DAILY data aggregates (currentMonthByCategory or CUSTOM DATE RANGE DATA) for current month
+✅ ALWAYS use unifiedMetrics for all-time totals (includes period data)
+✅ For date range questions → USE CUSTOM DATE RANGE DATA section
 
 IMPORTANT PROFIT CALCULATION NOTES:
 - Amazon "Net Proceeds" IS the profit - it already has COGS, fees, and ad spend deducted
-- Shopify profit = Net Sales - COGS (discounts already deducted from Net Sales)
+- Shopify profit = Revenue - COGS - 3PL Fulfillment Costs - Ad Spend (Meta + Google)
 - Do NOT double-count COGS or ad spend when calculating Amazon profit
+- When reporting "total profit" always add Amazon Net Proceeds + Shopify calculated profit
 
 STORE: ${ctx.storeName}
 DATA RANGE: ${ctx.dataRange.weeksTracked} weeks tracked (${ctx.dataRange.oldestWeek || 'N/A'} to ${ctx.dataRange.newestWeek || 'N/A'})
@@ -15792,7 +15810,7 @@ ${(() => {
 })()}
 
 🔑 SKU-CENTRIC ANALYSIS RULES:
-- ALWAYS use SKU codes (e.g., DDPE0004Shop) as primary identifiers
+- ALWAYS use SKU codes as primary identifiers
 - Look up product names from productCatalog when needed for display
 - For category questions, find SKUs in that category and sum their data
 - For period questions, use skuMasterData[x].byPeriod[period]
@@ -15842,18 +15860,20 @@ Daily data days: ${Object.keys(allDaysData || {}).length}
 Days with Amazon skuData: ${Object.keys(allDaysData || {}).filter(d => (allDaysData[d]?.amazon?.skuData || []).length > 0).length}
 Days with Shopify skuData: ${Object.keys(allDaysData || {}).filter(d => (allDaysData[d]?.shopify?.skuData || []).length > 0).length}
 Latest daily data: ${sortedDays[sortedDays.length - 1] || 'none'}
-Jan 2026 daily days: ${sortedDays.filter(d => d.startsWith('2026-01')).length}
+Current month daily days: ${(() => { const now = new Date(); const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`; return sortedDays.filter(d => d.startsWith(prefix)).length; })()}
 
-**📅 CUSTOM DATE RANGE DATA (For "Jan 1-25", "between X and Y" type questions):**
+**📅 CUSTOM DATE RANGE DATA (For recent date range questions):**
 ${(() => {
-  // Pre-compute Jan 2026 aggregates since it's the most likely question
-  const jan2026Days = sortedDays.filter(d => d >= '2026-01-01' && d <= '2026-01-25');
-  if (jan2026Days.length === 0) return 'No Jan 2026 daily data available';
+  // Pre-compute current month aggregates dynamically
+  const now = new Date();
+  const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const currentMonthDays = sortedDays.filter(d => d.startsWith(currentMonthPrefix));
+  if (currentMonthDays.length === 0) return 'No daily data available for current month';
   
   const skuTotals = {};
   let amzTotal = 0, shopTotal = 0;
   
-  jan2026Days.forEach(dayKey => {
+  currentMonthDays.forEach(dayKey => {
     const dayData = allDaysData[dayKey];
     if (!dayData) return;
     
@@ -15874,18 +15894,21 @@ ${(() => {
     });
   });
   
-  // Get lip balm SKUs (DDPE*)
-  const lipBalmSkus = Object.entries(skuTotals)
-    .filter(([sku]) => sku.startsWith('DDPE') && (sku.includes('0001') || sku.includes('0002') || sku.includes('0003') || sku.includes('0004')))
-    .sort((a, b) => (b[1].amazon + b[1].shopify) - (a[1].amazon + a[1].shopify));
+  // Get top SKUs by total units (dynamic, not hardcoded to any specific product)
+  const topSkus = Object.entries(skuTotals)
+    .sort((a, b) => (b[1].amazon + b[1].shopify) - (a[1].amazon + a[1].shopify))
+    .slice(0, 15);
+  
+  const monthName = now.toLocaleString('en-US', { month: 'long' });
+  const lastDay = currentMonthDays[currentMonthDays.length - 1]?.split('-')[2] || '';
   
   return `
-JAN 1-25, 2026 (${jan2026Days.length} days of daily data):
+${monthName.toUpperCase()} 1-${lastDay}, ${now.getFullYear()} (${currentMonthDays.length} days of daily data):
 - Total Amazon units: ${amzTotal}
 - Total Shopify units: ${shopTotal}
 
-LIP BALM 3-PACKS (DDPE0001-0004) for Jan 1-25:
-${lipBalmSkus.map(([sku, d]) => `  ${sku} (${d.name?.substring(0, 40) || sku}): Amazon ${d.amazon}, Shopify ${d.shopify}, TOTAL ${d.amazon + d.shopify}`).join('\n')}
+TOP SKUs BY UNITS (this month):
+${topSkus.map(([sku, d]) => `  ${sku} (${d.name?.substring(0, 40) || sku}): Amazon ${d.amazon}, Shopify ${d.shopify}, TOTAL ${d.amazon + d.shopify}`).join('\n')}
 `;
 })()}
 
@@ -15898,8 +15921,8 @@ BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
 ` : 'No data'}
 
 ⚠️ REMINDER: For "how much X sold last week" → use lastWeekByCategory.byCategory["X"]
-⚠️ FOR JANUARY 2026 / DATE RANGE QUESTIONS → use CUSTOM DATE RANGE DATA above (has pre-computed Jan 1-25 totals)
-⚠️ DO NOT use skuAnalysis or weekly skuData for Jan 2026 - they're missing Amazon data!
+⚠️ FOR CURRENT MONTH / DATE RANGE QUESTIONS → use CUSTOM DATE RANGE DATA above (has pre-computed current month totals)
+⚠️ DO NOT use skuAnalysis or weekly skuData for current month - they may be missing Amazon data!
 
 🗓️ FOR HISTORICAL QUESTIONS (2025 monthly, 2024 quarterly):
 - "How did we do in January 2025?" → Use PERIOD DATA section above
@@ -15907,17 +15930,17 @@ BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
 - "Compare 2024 vs 2025" → Use YoY INSIGHTS + PERIOD DATA
 - The period data contains monthly 2025 totals and quarterly 2024 totals
 
-🏷️ FOR CATEGORY QUESTIONS (e.g., "how much lip balm sold?"):
-- User says category name → Find SKUs: skusByCategory["Lip Balm"] = ["DDPE0001Shop", "DDPE0002Shop", ...]
+🏷️ FOR CATEGORY QUESTIONS (e.g., "how much [category] sold?"):
+- User says category name → Find SKUs: skusByCategory["Category Name"] = [SKU1, SKU2, ...]
 - Sum data from skuMasterData for each of those SKUs
-- Show breakdown by SKU in response: "DDPE0001Shop (Unscented): $X, DDPE0002Shop (Peppermint): $Y..."
+- Show breakdown by SKU in response: "SKU1 (Product Name): $X, SKU2 (Product Name): $Y..."
 
-📦 FOR SPECIFIC PRODUCT QUESTIONS (e.g., "how did assorted pack do?" or "DDPE0004Shop sales"):
+📦 FOR SPECIFIC PRODUCT QUESTIONS (e.g., "how did [product] do?" or "[SKU] sales"):
 - If SKU given → Look up directly in skuMasterData
 - If product name given → Search productCatalog for match → Get SKU → Look up in skuMasterData
-- Show: "DDPE0004Shop (Grass-Fed Tallow Lip Balm 3-Pack – Assorted): $285,000 total, 21,000 units"
+- Show: "SKU (Full Product Name): $X total, Y units"
 
-🗓️ FOR PERIOD QUESTIONS (e.g., "lip balm in January 2025"):
+🗓️ FOR PERIOD QUESTIONS (e.g., "[product] in January 2025"):
 - Resolve product/category to SKUs first
 - Then look up each SKU's byPeriod["january-2025"] data
 - Sum and display with SKU breakdown
@@ -16514,12 +16537,12 @@ Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific nu
 You have access to the MULTI-SIGNAL AI FORECAST which is the most accurate forecast available. Use it as your PRIMARY source for predictions.
 
 **PRODUCT IDENTIFICATION (CRITICAL):**
-- Users may ask using EITHER product name ("lip balm", "assorted 3-pack") OR SKU ("DDPE0004Shop")
+- Users may ask using EITHER product name OR SKU code
 - ALWAYS resolve to SKU internally for data lookup
-- When user says "lip balm" → find SKUs in skusByCategory["Lip Balm"] → aggregate skuMasterData for those SKUs
-- When user says "DDPE0004Shop" → look up directly in skuMasterData
-- When user says "assorted pack" → search productCatalog for matching name → get SKU → look up in skuMasterData
-- In responses, show BOTH: "DDPE0004Shop (Assorted 3-Pack Lip Balm): $X revenue"
+- When user says a category name → find SKUs in skusByCategory → aggregate skuMasterData for those SKUs
+- When user says a specific SKU → look up directly in skuMasterData
+- When user says a product description → search productCatalog for matching name → get SKU → look up in skuMasterData
+- In responses, show BOTH SKU code and product name: "SKU (Product Name): $X revenue"
 
 **FOR SKU-LEVEL ANALYSIS:**
 1. Use skuMasterData as the authoritative source for all SKU data
@@ -16548,7 +16571,7 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
 
       const aiResponse = await callAI({
         system: systemPrompt,
-        messages: [...aiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
+        messages: [...aiMessages.slice(-10).map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
       });
       
       setAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
@@ -16807,7 +16830,7 @@ HARD RULES — VIOLATING THESE MAKES THE PLAN USELESS:
 
   // Save weekly reports to localStorage
   useEffect(() => {
-    localStorage.setItem(WEEKLY_REPORTS_KEY, JSON.stringify(weeklyReports));
+    safeLocalStorageSet(WEEKLY_REPORTS_KEY, JSON.stringify(weeklyReports));
   }, [weeklyReports]);
 
   // Generate Intelligence Report (weekly, monthly, quarterly, annual)
@@ -17880,14 +17903,15 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       }
     }
     
-    // Check for weeks with missing 3PL or Ads data - only PAST 2026 weeks
+    // Check for weeks with missing 3PL or Ads data - only PAST weeks in current year
     const today = new Date();
     const todayKey = formatDateKey(today);
+    const currentYear = today.getFullYear();
     
     const recentWeeks = Object.entries(allWeeksData)
-      .filter(([key]) => key.startsWith('2026-') && key <= todayKey) // Only PAST 2026 weeks
+      .filter(([key]) => key.startsWith(`${currentYear}-`) && key <= todayKey) // Only PAST weeks in current year
       .sort((a, b) => b[0].localeCompare(a[0]))
-      .slice(0, 4); // Last 4 past weeks of 2026
+      .slice(0, 4); // Last 4 past weeks of current year
     
     const weeksMissing3PL = recentWeeks.filter(([key, data]) => {
       // Check weekly shopify.threeplCosts
@@ -22149,7 +22173,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             });
                             setAllDaysData(updatedDays);
                             // Save daily data to localStorage
-                            try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
+                            try { safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
                             
                             // Merge weekly data - PRESERVE existing ad data
                             const updatedWeeks = { ...allWeeksData };
@@ -22774,7 +22798,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                             });
                             
                             setSavedProductNames(mergedNames);
-                            localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(mergedNames));
+                            safeLocalStorageSet(PRODUCT_NAMES_KEY, JSON.stringify(mergedNames));
                             
                             setShopifySyncStatus(p => ({ ...p, loading: false, progress: '' }));
                             setToast({ 
@@ -36128,7 +36152,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                                   }
                                                 };
                                                 setNexusStates(updated);
-                                                localStorage.setItem('nexusStates', JSON.stringify(updated));
+                                                safeLocalStorageSet('nexusStates', JSON.stringify(updated));
                                                 setEditingPortalUrl(null);
                                               }}
                                               className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm"
@@ -37341,7 +37365,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         };
         
         setBankingData(newBankingData);
-        localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+        safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
         queueCloudSave({ ...combinedData, bankingData: newBankingData });
         
         const message = duplicateCount > 0 
@@ -37363,7 +37387,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         categoryOverrides: newOverrides,
       };
       setBankingData(newBankingData);
-      localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+      safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
       queueCloudSave({ ...combinedData, bankingData: newBankingData });
       setToast({ message: 'Category updated', type: 'success' });
     };
@@ -37375,7 +37399,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       const newOverrides = { ...existingOverrides, [oldVendorName.toLowerCase().trim()]: newVendorName.trim() };
       const newBankingData = { ...bankingData, vendorOverrides: newOverrides };
       setBankingData(newBankingData);
-      localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+      safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
       queueCloudSave({ ...combinedData, bankingData: newBankingData });
       setToast({ message: `Vendor renamed: "${oldVendorName}" → "${newVendorName}"`, type: 'success' });
     };
@@ -37394,7 +37418,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       });
       const newBankingData = { ...bankingData, categoryOverrides: newOverrides };
       setBankingData(newBankingData);
-      localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+      safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
       queueCloudSave({ ...combinedData, bankingData: newBankingData });
       setToast({ message: `Updated ${count} transactions for "${vendorName}" to category "${newCategory}"`, type: 'success' });
     };
@@ -37455,7 +37479,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         transactions: newTransactions,
       };
       setBankingData(newBankingData);
-      localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+      safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
       queueCloudSave({ ...combinedData, bankingData: newBankingData });
       
       setSelectedTxnIds(new Set());
@@ -39079,7 +39103,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                           };
                           
                           setBankingData(newBankingData);
-                          localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+                          safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
                           queueCloudSave({ ...combinedData, bankingData: newBankingData });
                           
                           setToast({ message: `Balance updated for ${editingAccountBalance.name.split('(')[0].trim()}`, type: 'success' });
@@ -40250,7 +40274,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                               if (confirm('Clear all vendor mappings?')) {
                                 const newBankingData = { ...bankingData, vendorOverrides: {} };
                                 setBankingData(newBankingData);
-                                localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBankingData));
+                                safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
                                 queueCloudSave({ ...combinedData, bankingData: newBankingData });
                                 setToast({ message: 'All vendor mappings cleared', type: 'success' });
                               }
@@ -40270,7 +40294,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                                   delete newOvr[from];
                                   const newBD = { ...bankingData, vendorOverrides: newOvr };
                                   setBankingData(newBD);
-                                  localStorage.setItem('ecommerce_banking_v1', JSON.stringify(newBD));
+                                  safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBD));
                                   queueCloudSave({ ...combinedData, bankingData: newBD });
                                 }}
                                 className="text-slate-600 hover:text-rose-400 ml-1"
