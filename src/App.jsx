@@ -43288,6 +43288,118 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               <NumberInput value={currentLocalSettings.alertSalesTaxDays || 7} onChange={(v) => updateSetting('alertSalesTaxDays', v)} min={1} max={30} suffix="days" />
             </SettingRow>
           </SettingSection>
+
+          {/* Slack Alerts */}
+          <SettingSection title="💬 Slack Alerts">
+            <SettingRow label="Slack Webhook URL" desc="Get weekly summaries and threshold alerts in Slack">
+              <div className="flex gap-2 items-center">
+                <input
+                  type="text"
+                  value={currentLocalSettings.slackWebhookUrl || ''}
+                  onChange={(e) => updateSetting('slackWebhookUrl', e.target.value)}
+                  placeholder="https://hooks.slack.com/services/..."
+                  className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 w-80 font-mono text-xs"
+                />
+                {currentLocalSettings.slackWebhookUrl && (
+                  <button onClick={async () => {
+                    try {
+                      const r = await fetch('/api/alerts/test-slack', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ webhookUrl: currentLocalSettings.slackWebhookUrl, storeName }),
+                      });
+                      const d = await r.json();
+                      setToast({ message: d.success ? '✅ Test message sent to Slack!' : d.error, type: d.success ? 'success' : 'error' });
+                    } catch (e) { setToast({ message: e.message, type: 'error' }); }
+                  }} className="px-3 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-sm text-emerald-300">
+                    Test
+                  </button>
+                )}
+              </div>
+            </SettingRow>
+            <SettingRow label="Weekly Summary" desc="Send Monday 8am ET performance summary (even when all metrics are healthy)">
+              <Toggle checked={currentLocalSettings.sendWeeklySummary !== false} onChange={(val) => updateSetting('sendWeeklySummary', val)} />
+            </SettingRow>
+            <div className="bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400 space-y-1">
+              <p><strong className="text-white">How to get a Slack webhook URL:</strong></p>
+              <p>1. Go to <strong className="text-cyan-300">api.slack.com/apps</strong> → Create New App → From Scratch</p>
+              <p>2. Pick a name (e.g. "Store Alerts") and your workspace</p>
+              <p>3. Click <strong className="text-cyan-300">Incoming Webhooks</strong> → Activate → Add New Webhook to Workspace</p>
+              <p>4. Pick the channel → Copy the webhook URL → Paste above</p>
+            </div>
+          </SettingSection>
+
+          {/* Scheduled Reports */}
+          <SettingSection title="📅 Scheduled Reports">
+            <SettingRow label="Auto-Generate Reports" desc="Automatically generate reports every Monday at 8:15am ET">
+              <Toggle checked={currentLocalSettings.scheduledReportsEnabled || false} onChange={(val) => updateSetting('scheduledReportsEnabled', val)} />
+            </SettingRow>
+            {currentLocalSettings.scheduledReportsEnabled && (
+              <>
+                <SettingRow label="Amazon PPC Report" desc="Generate weekly if data exists">
+                  <Toggle checked={currentLocalSettings.scheduleAmazon !== false} onChange={(val) => updateSetting('scheduleAmazon', val)} />
+                </SettingRow>
+                <SettingRow label="DTC Ads Report" desc="Generate weekly if data exists">
+                  <Toggle checked={currentLocalSettings.scheduleDtc !== false} onChange={(val) => updateSetting('scheduleDtc', val)} />
+                </SettingRow>
+                <SettingRow label="Notify Slack" desc="Post a summary when reports are generated">
+                  <Toggle checked={currentLocalSettings.scheduleNotifySlack !== false} onChange={(val) => updateSetting('scheduleNotifySlack', val)} />
+                </SettingRow>
+              </>
+            )}
+            <div className="bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400">
+              <p>Reports are generated server-side using your selected AI model. They appear in the <strong className="text-violet-300">Actions</strong> tab → Report History. Requires Slack webhook for notifications.</p>
+              <p className="mt-1 text-slate-500">Estimated cost: ~$0.04-0.06 per report (Sonnet) · ~$0.15-0.25 (Opus)</p>
+            </div>
+          </SettingSection>
+
+          {/* Google Sheets Export */}
+          <SettingSection title="📊 Google Sheets Export">
+            <SettingRow label="Spreadsheet ID" desc="The ID from your Google Sheet URL">
+              <input
+                type="text"
+                value={currentLocalSettings.googleSheetId || ''}
+                onChange={(e) => updateSetting('googleSheetId', e.target.value)}
+                placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 w-80 font-mono text-xs"
+              />
+            </SettingRow>
+            {currentLocalSettings.googleSheetId && (
+              <SettingRow label="Push Data Now" desc="Write P&L, channels, and action items to your sheet">
+                <button onClick={async () => {
+                  try {
+                    setToast({ message: 'Pushing to Google Sheets...', type: 'info' });
+                    const r = await fetch('/api/sheets/push', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        spreadsheetId: currentLocalSettings.googleSheetId,
+                        weeklyData: allWeeksData,
+                        actionItems,
+                      }),
+                    });
+                    const d = await r.json();
+                    if (d.success) {
+                      setToast({ message: `✅ Pushed ${d.results.length} sheets! Opening...`, type: 'success' });
+                      window.open(d.spreadsheetUrl, '_blank');
+                    } else {
+                      setToast({ message: d.error, type: 'error' });
+                    }
+                  } catch (e) { setToast({ message: e.message, type: 'error' }); }
+                }} className="px-4 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-sm text-emerald-300 flex items-center gap-2">
+                  <Globe className="w-4 h-4" /> Push to Sheets
+                </button>
+              </SettingRow>
+            )}
+            <div className="bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400 space-y-1">
+              <p><strong className="text-white">Setup:</strong></p>
+              <p>1. Create a Google Sheet (or use an existing one)</p>
+              <p>2. Share it with: <strong className="text-cyan-300">{process.env?.GOOGLE_SERVICE_ACCOUNT_EMAIL || 'your-service-account@project.iam.gserviceaccount.com'}</strong> (Editor access)</p>
+              <p>3. Copy the spreadsheet ID from the URL: docs.google.com/spreadsheets/d/<strong className="text-white">THIS_PART</strong>/edit</p>
+              <p>4. Paste it above and click Push</p>
+              <p className="mt-1 text-slate-500">Creates 3 tabs: P&L, Channels, Actions. Each push overwrites previous data.</p>
+            </div>
+          </SettingSection>
             </>
           )}
           

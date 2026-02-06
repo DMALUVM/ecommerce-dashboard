@@ -3,6 +3,14 @@
     {
       "path": "/api/cron/sync",
       "schedule": "0 */4 * * *"
+    },
+    {
+      "path": "/api/cron/alerts",
+      "schedule": "0 13 * * 1"
+    },
+    {
+      "path": "/api/cron/reports",
+      "schedule": "15 13 * * 1"
     }
   ]
 }
