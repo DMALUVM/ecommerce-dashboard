@@ -976,7 +976,7 @@ const get3PLForWeek = (ledger, weekKey) => {
     }
     
     return false;
-  }) : [];
+  }) : []);
   
   const breakdown = { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 };
   const metrics = {
