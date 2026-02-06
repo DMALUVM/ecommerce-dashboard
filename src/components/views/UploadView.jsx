@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../../utils/format';
 import { parseCSV } from '../../utils/csv';
-import { safeLocalStorageSet, PRODUCT_NAMES_KEY } from '../../utils/storage';
+import { lsSet, PRODUCT_NAMES_KEY } from '../../utils/storage';
 import NavTabs from '../ui/NavTabs';
 
 const UploadView = ({
@@ -2213,7 +2213,7 @@ const UploadView = ({
                             });
                             setAllDaysData(updatedDays);
                             // Save daily data to localStorage
-                            try { safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
+                            try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
                             
                             // Merge weekly data - PRESERVE existing ad data
                             const updatedWeeks = { ...allWeeksData };
@@ -2831,7 +2831,7 @@ const UploadView = ({
                             });
                             
                             setSavedProductNames(mergedNames);
-                            safeLocalStorageSet(PRODUCT_NAMES_KEY, JSON.stringify(mergedNames));
+                            lsSet(PRODUCT_NAMES_KEY, JSON.stringify(mergedNames));
                             
                             setShopifySyncStatus(p => ({ ...p, loading: false, progress: '' }));
                             setToast({ 
