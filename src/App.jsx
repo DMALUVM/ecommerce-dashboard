@@ -960,6 +960,13 @@ const parse3PLExcel = async (file) => {
   });
 };
 
+// Helper to get profit from data that may use 'netProfit' or 'profit' field
+// Period uploads sometimes use .profit, weekly data uses .netProfit
+const getProfit = (obj) => {
+  if (!obj) return 0;
+  return obj.netProfit ?? obj.profit ?? 0;
+};
+
 // Helper to get 3PL data for a specific week from the ledger
 const get3PLForWeek = (ledger, weekKey) => {
   if (!ledger) return null;
@@ -6567,13 +6574,13 @@ const savePeriods = async (d) => {
       // Aggregate Amazon
       monthlyAgg[monthKey].amazon.revenue += weekData.amazon?.revenue || 0;
       monthlyAgg[monthKey].amazon.units += weekData.amazon?.units || 0;
-      monthlyAgg[monthKey].amazon.profit += weekData.amazon?.netProfit || 0;
+      monthlyAgg[monthKey].amazon.profit += getProfit(weekData.amazon);
       monthlyAgg[monthKey].amazon.adSpend += weekData.amazon?.adSpend || 0;
       
       // Aggregate Shopify
       monthlyAgg[monthKey].shopify.revenue += weekData.shopify?.revenue || 0;
       monthlyAgg[monthKey].shopify.units += weekData.shopify?.units || 0;
-      monthlyAgg[monthKey].shopify.profit += weekData.shopify?.netProfit || 0;
+      monthlyAgg[monthKey].shopify.profit += getProfit(weekData.shopify);
       monthlyAgg[monthKey].shopify.adSpend += weekData.shopify?.adSpend || 0;
       monthlyAgg[monthKey].shopify.metaSpend += weekData.shopify?.metaSpend || 0;
       monthlyAgg[monthKey].shopify.googleSpend += weekData.shopify?.googleSpend || 0;
@@ -6581,7 +6588,7 @@ const savePeriods = async (d) => {
       // Aggregate totals
       monthlyAgg[monthKey].total.revenue += weekData.total?.revenue || 0;
       monthlyAgg[monthKey].total.units += weekData.total?.units || 0;
-      monthlyAgg[monthKey].total.profit += weekData.total?.netProfit || 0;
+      monthlyAgg[monthKey].total.profit += getProfit(weekData.total);
       monthlyAgg[monthKey].total.adSpend += weekData.total?.adSpend || 0;
     });
     
@@ -6761,10 +6768,10 @@ const savePeriods = async (d) => {
       total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 }, weeklyBreakdown: [] };
 
     weeksInRange.forEach(([w, d]) => {
-      agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += d.amazon?.netProfit || 0;
-      agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0; agg.shopify.adSpend += d.shopify?.adSpend || 0; agg.shopify.netProfit += d.shopify?.netProfit || 0;
-      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0; agg.total.netProfit += d.total?.netProfit || 0;
-      agg.weeklyBreakdown.push({ week: w, revenue: d.total?.revenue || 0, profit: d.total?.netProfit || 0 });
+      agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += getProfit(d.amazon);
+      agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0; agg.shopify.adSpend += d.shopify?.adSpend || 0; agg.shopify.netProfit += getProfit(d.shopify);
+      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0; agg.total.netProfit += getProfit(d.total);
+      agg.weeklyBreakdown.push({ week: w, revenue: d.total?.revenue || 0, profit: getProfit(d.total) });
     });
 
     agg.amazon.margin = agg.amazon.revenue > 0 ? (agg.amazon.netProfit / agg.amazon.revenue) * 100 : 0;
@@ -9429,7 +9436,7 @@ const savePeriods = async (d) => {
             
             const totalShopAds = newMetaSpend + newGoogleSpend;
             const oldShopAds = period.shopify?.adSpend || 0;
-            const shopProfit = (period.shopify?.netProfit || 0) + oldShopAds - totalShopAds;
+            const shopProfit = (getProfit(periodData.shopify)) + oldShopAds - totalShopAds;
             
             updatedPeriods[periodKey] = {
               ...period,
@@ -9445,7 +9452,7 @@ const savePeriods = async (d) => {
               total: {
                 ...period.total,
                 adSpend: (period.amazon?.adSpend || 0) + totalShopAds,
-                netProfit: (period.amazon?.netProfit || 0) + shopProfit,
+                netProfit: (getProfit(periodData.amazon)) + shopProfit,
               },
               // Store ad KPIs
               adKPIs: {
@@ -9861,7 +9868,7 @@ const savePeriods = async (d) => {
       const weekThreeplMetrics = ledger3PL?.metrics || d.shopify?.threeplMetrics || {};
       
       agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.returns += d.amazon?.returns || 0;
-      agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += d.amazon?.netProfit || 0;
+      agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += getProfit(d.amazon);
       agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0;
       agg.shopify.threeplCosts += weekThreeplCost; agg.shopify.adSpend += d.shopify?.adSpend || 0; 
       agg.shopify.metaSpend += d.shopify?.metaSpend || 0; agg.shopify.googleSpend += d.shopify?.googleSpend || 0;
@@ -9879,7 +9886,7 @@ const savePeriods = async (d) => {
       agg.shopify.threeplMetrics.orderCount += weekThreeplMetrics.orderCount || 0;
       agg.shopify.threeplMetrics.totalUnits += weekThreeplMetrics.totalUnits || 0;
       agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0; 
-      agg.total.netProfit += (d.amazon?.netProfit || 0) + shopProfit;
+      agg.total.netProfit += (getProfit(d.amazon)) + shopProfit;
     });
     // Calculate metrics
     agg.shopify.threeplMetrics.avgCostPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? (agg.shopify.threeplCosts - agg.shopify.threeplBreakdown.storage) / agg.shopify.threeplMetrics.orderCount : 0;
@@ -9915,7 +9922,7 @@ const savePeriods = async (d) => {
       const weekThreeplMetrics = ledger3PL?.metrics || d.shopify?.threeplMetrics || {};
       
       agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.returns += d.amazon?.returns || 0;
-      agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += d.amazon?.netProfit || 0;
+      agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += getProfit(d.amazon);
       agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0;
       agg.shopify.threeplCosts += weekThreeplCost; agg.shopify.adSpend += d.shopify?.adSpend || 0;
       agg.shopify.metaSpend += d.shopify?.metaSpend || 0; agg.shopify.googleSpend += d.shopify?.googleSpend || 0;
@@ -9933,8 +9940,8 @@ const savePeriods = async (d) => {
       agg.shopify.threeplMetrics.orderCount += weekThreeplMetrics.orderCount || 0;
       agg.shopify.threeplMetrics.totalUnits += weekThreeplMetrics.totalUnits || 0;
       agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0;
-      agg.total.netProfit += (d.amazon?.netProfit || 0) + shopProfit;
-      agg.monthlyBreakdown[mk].revenue += d.total?.revenue || 0; agg.monthlyBreakdown[mk].netProfit += (d.amazon?.netProfit || 0) + shopProfit;
+      agg.total.netProfit += (getProfit(d.amazon)) + shopProfit;
+      agg.monthlyBreakdown[mk].revenue += d.total?.revenue || 0; agg.monthlyBreakdown[mk].netProfit += (getProfit(d.amazon)) + shopProfit;
     });
     // Calculate metrics
     agg.shopify.threeplMetrics.avgCostPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? (agg.shopify.threeplCosts - agg.shopify.threeplBreakdown.storage) / agg.shopify.threeplMetrics.orderCount : 0;
@@ -10293,7 +10300,7 @@ const savePeriods = async (d) => {
     const calcWeeklyTrend = (weeks) => {
       if (weeks.length < 2) return { slope: 0, avgRev: 0, avgProfit: 0, avgUnits: 0 };
       const revenues = weeks.map(w => allWeeksData[w]?.total?.revenue || 0);
-      const profits = weeks.map(w => allWeeksData[w]?.total?.netProfit || 0);
+      const profits = weeks.map(w => getProfit(allWeeksData[w]?.total));
       const units = weeks.map(w => allWeeksData[w]?.total?.units || 0);
       
       const n = revenues.length;
@@ -10321,7 +10328,7 @@ const savePeriods = async (d) => {
       const trend = calcWeeklyTrend(recentWeeks);
       
       const revenues = recentWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
-      const profits = recentWeeks.map(w => allWeeksData[w]?.total?.netProfit || 0);
+      const profits = recentWeeks.map(w => getProfit(allWeeksData[w]?.total));
       const units = recentWeeks.map(w => allWeeksData[w]?.total?.units || 0);
       
       // Calculate standard deviation for realistic variance
@@ -10459,7 +10466,7 @@ const savePeriods = async (d) => {
       sortedPeriods.forEach(p => {
         const period = allPeriodsData[p];
         const rev = (period.amazon?.revenue || 0) + (period.shopify?.revenue || 0);
-        const profit = (period.amazon?.netProfit || 0) + (period.shopify?.netProfit || 0);
+        const profit = (getProfit(periodData.amazon)) + (getProfit(periodData.shopify));
         const units = (period.amazon?.units || 0) + (period.shopify?.units || 0);
         const startDate = new Date(period.startDate || p);
         const endDate = new Date(period.endDate || p);
@@ -11734,7 +11741,7 @@ const savePeriods = async (d) => {
         return {
           estimatedRevenue: periodData[channel].revenue / daysInPeriod,
           estimatedUnits: periodData[channel].units / daysInPeriod,
-          estimatedProfit: periodData[channel].netProfit / daysInPeriod,
+          estimatedProfit: getProfit(periodData[channel]) / daysInPeriod,
           source: periodKey,
           daysInPeriod,
           isEstimate: true,
@@ -12249,7 +12256,7 @@ const savePeriods = async (d) => {
       const weekData = recentWeeks.map(w => ({
         week: w,
         revenue: allWeeksData[w]?.total?.revenue || 0,
-        profit: allWeeksData[w]?.total?.netProfit || 0,
+        profit: getProfit(allWeeksData[w]?.total),
         units: allWeeksData[w]?.total?.units || 0,
       }));
       
@@ -12337,7 +12344,7 @@ Keep insights brief and actionable. Format as numbered list.`;
           dayOfWeek: date.toLocaleDateString('en-US', { weekday: 'long' }),
           dayNum: date.getDay(),
           revenue: data?.total?.revenue || 0,
-          profit: data?.total?.netProfit || 0,
+          profit: getProfit(data?.total),
           units: data?.total?.units || 0,
           amazonRevenue,
           shopifyRevenue,
@@ -12383,7 +12390,7 @@ Keep insights brief and actionable. Format as numbered list.`;
         return {
           weekEnding: w,
           revenue: data?.total?.revenue || 0,
-          profit: data?.total?.netProfit || 0,
+          profit: getProfit(data?.total),
           units: data?.total?.units || 0,
           margin: data?.total?.revenue > 0 ? (data?.total?.netProfit / data?.total?.revenue * 100) : 0,
           amazonRevenue: data?.amazon?.revenue || 0,
@@ -12466,9 +12473,9 @@ Keep insights brief and actionable. Format as numbered list.`;
           return 'monthly';
         })(),
         totalRevenue: data.total?.revenue || 0,
-        totalProfit: data.total?.netProfit || 0,
+        totalProfit: getProfit(data.total),
         totalUnits: data.total?.units || 0,
-        margin: data.total?.revenue > 0 ? ((data.total?.netProfit || 0) / data.total.revenue * 100) : 0,
+        margin: data.total?.revenue > 0 ? ((getProfit(data.total)) / data.total.revenue * 100) : 0,
       })).sort((a, b) => a.period.localeCompare(b.period));
       
       const months2025 = periodsSummary.filter(p => (p.period.includes('2025') || p.period.includes('-2025')) && p.type === 'monthly');
@@ -12538,7 +12545,7 @@ Keep insights brief and actionable. Format as numbered list.`;
         // Fall back to weekly data
         const recentWeeks = sortedWeeks.slice(-8);
         const weeklyTotalRevenue = recentWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.revenue || 0), 0);
-        const weeklyTotalProfit = recentWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.netProfit || 0), 0);
+        const weeklyTotalProfit = recentWeeks.reduce((s, w) => s + (getProfit(allWeeksData[w]?.total)), 0);
         
         if (weeklyTotalRevenue > 0 && weeklyTotalProfit !== 0) {
           avgProfitMargin = weeklyTotalProfit / weeklyTotalRevenue;
@@ -12919,7 +12926,7 @@ Respond with ONLY this JSON (no markdown):
       const weeklyHistory = sortedWeeks.slice(-12).map(w => ({
         weekEnding: w,
         revenue: allWeeksData[w]?.total?.revenue || 0,
-        profit: allWeeksData[w]?.total?.netProfit || 0,
+        profit: getProfit(allWeeksData[w]?.total),
         units: allWeeksData[w]?.total?.units || 0,
         amazonRevenue: allWeeksData[w]?.amazon?.revenue || 0,
         shopifyRevenue: allWeeksData[w]?.shopify?.revenue || 0,
@@ -12931,7 +12938,7 @@ Respond with ONLY this JSON (no markdown):
           date: d,
           dayOfWeek: date.toLocaleDateString('en-US', { weekday: 'short' }),
           revenue: allDaysData[d]?.total?.revenue || 0,
-          profit: allDaysData[d]?.total?.netProfit || 0,
+          profit: getProfit(allDaysData[d]?.total),
           units: allDaysData[d]?.total?.units || 0,
         };
       });
@@ -13652,7 +13659,7 @@ Analyze the data and respond with ONLY this JSON:
           if (allDaysData[dateKey] && hasDailySalesData(allDaysData[dateKey])) {
             actualData = {
               revenue: allDaysData[dateKey].total?.revenue || 0,
-              profit: allDaysData[dateKey].total?.netProfit || 0,
+              profit: getProfit(allDaysData[dateKey].total),
               units: allDaysData[dateKey].total?.units || 0,
             };
           }
@@ -13663,7 +13670,7 @@ Analyze the data and respond with ONLY this JSON:
           if (targetWeek && allWeeksData[targetWeek]) {
             actualData = {
               revenue: allWeeksData[targetWeek].total?.revenue || 0,
-              profit: allWeeksData[targetWeek].total?.netProfit || 0,
+              profit: getProfit(allWeeksData[targetWeek].total),
               units: allWeeksData[targetWeek].total?.units || 0,
             };
           }
@@ -14027,7 +14034,7 @@ Analyze the data and respond with ONLY this JSON:
       return {
         date: day,
         totalRevenue: data.total?.revenue || 0,
-        totalProfit: data.total?.netProfit || 0,
+        totalProfit: getProfit(data.total),
         totalUnits: data.total?.units || 0,
         amazonRevenue,
         amazonProfit: data.amazon?.netProfit || 0,
@@ -14158,11 +14165,11 @@ Analyze the data and respond with ONLY this JSON:
           return 'monthly';
         })(),
         totalRevenue: data.total?.revenue || 0,
-        totalProfit: data.total?.netProfit || 0,
+        totalProfit: getProfit(data.total),
         totalUnits: data.total?.units || 0,
         totalCogs: data.total?.cogs || 0,
         totalAdSpend: data.total?.adSpend || 0,
-        margin: data.total?.revenue > 0 ? ((data.total?.netProfit || 0) / data.total.revenue * 100) : 0,
+        margin: data.total?.revenue > 0 ? ((getProfit(data.total)) / data.total.revenue * 100) : 0,
         amazonRevenue: amz.revenue || 0,
         amazonProfit: amz.netProfit || 0,
         amazonUnits: amz.units || 0,
@@ -14570,7 +14577,7 @@ Analyze the data and respond with ONLY this JSON:
       }
       dayOfWeekPatterns[dayName].count++;
       dayOfWeekPatterns[dayName].totalRevenue += data.total?.revenue || 0;
-      dayOfWeekPatterns[dayName].totalProfit += data.total?.netProfit || 0;
+      dayOfWeekPatterns[dayName].totalProfit += getProfit(data.total);
     });
     Object.keys(dayOfWeekPatterns).forEach(day => {
       const p = dayOfWeekPatterns[day];
@@ -14688,7 +14695,7 @@ Analyze the data and respond with ONLY this JSON:
         const data = allWeeksData[w];
         if (data) {
           acc.revenue += data.total?.revenue || 0;
-          acc.profit += data.total?.netProfit || 0;
+          acc.profit += getProfit(data.total);
           acc.units += data.total?.units || 0;
         }
         return acc;
@@ -14776,7 +14783,7 @@ Analyze the data and respond with ONLY this JSON:
             weekKey: week, // Original key for reference
             weekLabel: `Week ending ${weekEndDate.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })}`,
             totalRevenue: data.total?.revenue || 0,
-            totalProfit: data.total?.netProfit || 0,
+            totalProfit: getProfit(data.total),
             totalUnits: data.total?.units || 0,
             skus: skuList.sort((a, b) => b.revenue - a.revenue),
           };
@@ -14787,7 +14794,7 @@ Analyze the data and respond with ONLY this JSON:
         weekEnding: lastWeekKey,
         weekLabel: `Week of ${new Date(new Date(lastWeekKey + 'T00:00:00').getTime() - 6*24*60*60*1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(lastWeekKey + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
         totalRevenue: lastWeekData?.total?.revenue || 0,
-        totalProfit: lastWeekData?.total?.netProfit || 0,
+        totalProfit: getProfit(lastWeekData?.total),
         totalUnits: lastWeekData?.total?.units || 0,
         byCategory: computeCategoryBreakdown([lastWeekKey]),
       } : null,
@@ -14904,7 +14911,7 @@ Analyze the data and respond with ONLY this JSON:
             
             totalRevenue += (dayData.total?.revenue || 0);
             totalUnits += (dayData.total?.units || 0);
-            totalProfit += (dayData.total?.netProfit || 0);
+            totalProfit += (getProfit(dayData.total));
           });
         }
         
@@ -14967,7 +14974,7 @@ Analyze the data and respond with ONLY this JSON:
             if (daysInMonth.length === 0) {
               totalRevenue += (weekData.total?.revenue || 0);
               totalUnits += (weekData.total?.units || 0);
-              totalProfit += (weekData.total?.netProfit || 0);
+              totalProfit += (getProfit(weekData.total));
             }
           });
         }
@@ -15113,7 +15120,7 @@ Analyze the data and respond with ONLY this JSON:
           const key = `${year}-${String(month).padStart(2, '0')}`;
           if (!monthlyByYear[key]) monthlyByYear[key] = { year, month, revenue: 0, profit: 0, units: 0, weeks: 0 };
           monthlyByYear[key].revenue += data.total?.revenue || 0;
-          monthlyByYear[key].profit += data.total?.netProfit || 0;
+          monthlyByYear[key].profit += getProfit(data.total);
           monthlyByYear[key].units += data.total?.units || 0;
           monthlyByYear[key].weeks++;
         });
@@ -15159,7 +15166,7 @@ Analyze the data and respond with ONLY this JSON:
             // Find matching sales data
             const salesWeeks = sortedWeeks.filter(w => w.startsWith(month));
             const salesRevenue = salesWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.revenue || 0), 0);
-            const salesProfit = salesWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.netProfit || 0), 0);
+            const salesProfit = salesWeeks.reduce((s, w) => s + (getProfit(allWeeksData[w]?.total)), 0);
             
             if (salesRevenue > 0 || banking.income > 0) {
               salesVsBanking[month] = {
@@ -16919,14 +16926,14 @@ HARD RULES — VIOLATING THESE MAKES THE PLAN USELESS:
       
       if (dataSource === 'period' && periodData) {
         reportData.total.revenue = periodData.total?.revenue || 0;
-        reportData.total.netProfit = periodData.total?.netProfit || 0;
+        reportData.total.netProfit = getProfit(periodData.total);
         reportData.total.units = periodData.total?.units || 0;
         reportData.total.adSpend = periodData.total?.adSpend || 0;
         reportData.amazon.revenue = periodData.amazon?.revenue || 0;
-        reportData.amazon.netProfit = periodData.amazon?.netProfit || 0;
+        reportData.amazon.netProfit = getProfit(periodData.amazon);
         reportData.amazon.adSpend = periodData.amazon?.adSpend || 0;
         reportData.shopify.revenue = periodData.shopify?.revenue || 0;
-        reportData.shopify.netProfit = periodData.shopify?.netProfit || 0;
+        reportData.shopify.netProfit = getProfit(periodData.shopify);
         reportData.shopify.adSpend = periodData.shopify?.adSpend || 0;
         reportData.shopify.threeplCosts = periodData.shopify?.threeplCosts || 0;
       } else if (dataSource === 'daily') {
@@ -16936,7 +16943,7 @@ HARD RULES — VIOLATING THESE MAKES THE PLAN USELESS:
           const dayData = allDaysData[d];
           if (!dayData) return;
           reportData.total.revenue += dayData.total?.revenue || 0;
-          reportData.total.netProfit += dayData.total?.netProfit || 0;
+          reportData.total.netProfit += getProfit(dayData.total);
           reportData.total.units += dayData.total?.units || 0;
           reportData.total.adSpend += dayData.total?.adSpend || 0;
           reportData.amazon.revenue += dayData.amazon?.revenue || 0;
@@ -16954,14 +16961,14 @@ HARD RULES — VIOLATING THESE MAKES THE PLAN USELESS:
           const d = allWeeksData[w];
           if (!d) return;
           reportData.total.revenue += d.total?.revenue || 0;
-          reportData.total.netProfit += d.total?.netProfit || 0;
+          reportData.total.netProfit += getProfit(d.total);
           reportData.total.units += d.total?.units || 0;
           reportData.total.adSpend += d.total?.adSpend || 0;
           reportData.amazon.revenue += d.amazon?.revenue || 0;
-          reportData.amazon.netProfit += d.amazon?.netProfit || 0;
+          reportData.amazon.netProfit += getProfit(d.amazon);
           reportData.amazon.adSpend += d.amazon?.adSpend || 0;
           reportData.shopify.revenue += d.shopify?.revenue || 0;
-          reportData.shopify.netProfit += d.shopify?.netProfit || 0;
+          reportData.shopify.netProfit += getProfit(d.shopify);
           reportData.shopify.adSpend += d.shopify?.adSpend || 0;
           reportData.shopify.threeplCosts += d.shopify?.threeplCosts || 0;
         });
@@ -17477,7 +17484,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         const amazonAds = dayData.amazon?.adSpend || 0;
         current = {
           revenue: dayData.total?.revenue || 0,
-          profit: dayData.total?.netProfit || 0,
+          profit: getProfit(dayData.total),
           units: dayData.total?.units || 0,
           adSpend: dayData.total?.adSpend || 0,
           cogs: dayData.total?.cogs || 0,
@@ -17509,7 +17516,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       const amazonAds = period?.amazon?.adSpend || 0;
       current = {
         revenue: period.total?.revenue || 0,
-        profit: period.total?.netProfit || 0,
+        profit: getProfit(periodData.total),
         units: period.total?.units || 0,
         adSpend: period.total?.adSpend || 0,
         cogs: period.total?.cogs || 0,
@@ -17525,7 +17532,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         const lastPeriod = allPeriodsData[lastYear];
         previous = {
           revenue: lastPeriod.total?.revenue || 0,
-          profit: lastPeriod.total?.netProfit || 0,
+          profit: lastPeriogetProfit(d.total),
         };
       }
     } else {
@@ -19696,7 +19703,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                       return date.getMonth() === viewMonth && date.getFullYear() === viewYear;
                     });
                     const monthRevenue = monthDays.reduce((sum, d) => sum + (allDaysData[d]?.total?.revenue || 0), 0);
-                    const monthProfit = monthDays.reduce((sum, d) => sum + (allDaysData[d]?.total?.netProfit || 0), 0);
+                    const monthProfit = monthDays.reduce((sum, d) => sum + (getProfit(allDaysData[d]?.total)), 0);
                     
                     // Count days missing ads data and track which days
                     const daysMissingMetaList = monthDays.filter(d => {
@@ -26714,7 +26721,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           label: data.label || p,
           source: 'period',
           revenue: data.total?.revenue || 0,
-          profit: data.total?.netProfit || 0,
+          profit: getProfit(data.total),
           units: data.total?.units || 0,
           margin: data.total?.netMargin || 0,
           amazonRev: data.amazon?.revenue || 0,
@@ -26747,7 +26754,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         }
         const data = allPeriodsData[p];
         yearData[year].revenue += data.total?.revenue || 0;
-        yearData[year].profit += data.total?.netProfit || 0;
+        yearData[year].profit += getProfit(data.total);
         yearData[year].units += data.total?.units || 0;
         yearData[year].amazonRev += data.amazon?.revenue || 0;
         yearData[year].amazonProfit += data.amazon?.netProfit || 0;
@@ -28329,7 +28336,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           label: p.label,
           weeks: 0,
           revenue: p.total?.revenue || 0,
-          profit: p.total?.netProfit || 0,
+          profit: getProfit(p.total),
           units: p.total?.units || 0,
           amazonRev: p.amazon?.revenue || 0,
           shopifyRev: p.shopify?.revenue || 0,
@@ -28344,7 +28351,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         label: `${year} (${yearWeeks.length} weeks)`,
         weeks: yearWeeks.length,
         revenue: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].total?.revenue || 0), 0),
-        profit: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].total?.netProfit || 0), 0),
+        profit: yearWeeks.reduce((sum, w) => sum + (getProfit(allWeeksData[w].total)), 0),
         units: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].total?.units || 0), 0),
         amazonRev: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].amazon?.revenue || 0), 0),
         shopifyRev: yearWeeks.reduce((sum, w) => sum + (allWeeksData[w].shopify?.revenue || 0), 0),
@@ -28384,7 +28391,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           key: p,
           source: 'period',
           revenue: data.total?.revenue || 0,
-          profit: data.total?.netProfit || 0,
+          profit: getProfit(data.total),
           units: data.total?.units || 0,
         };
       });
@@ -30127,7 +30134,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       return {
         week: w,
         revenue: data.total?.revenue || 0,
-        profit: data.total?.netProfit || 0,
+        profit: getProfit(data.total),
         units: data.total?.units || 0,
         adSpend: data.total?.adSpend || 0,
         cogs: data.total?.cogs || 0,
@@ -31078,7 +31085,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         const ledgerThreepl = getWeek3PLCosts(w);
         totals.threeplCosts += Math.max(weeklyThreepl, ledgerThreepl);
         totals.adSpend += data.total?.adSpend || 0;
-        totals.profit += data.total?.netProfit || 0;
+        totals.profit += getProfit(data.total);
         totals.units += data.total?.units || 0;
         totals.returns += data.amazon?.returns || 0;
       });
@@ -31092,7 +31099,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         // Get 3PL from data OR ledger
         totals.threeplCosts = data.shopify?.threeplCosts || 0;
         totals.adSpend = data.total?.adSpend || 0;
-        totals.profit = data.total?.netProfit || 0;
+        totals.profit = getProfit(data.total);
         totals.units = data.total?.units || 0;
         totals.returns = data.amazon?.returns || 0;
         
@@ -31151,7 +31158,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         const ledgerThreepl = getWeek3PLCosts(w);
         priorTotals.threeplCosts += Math.max(weeklyThreepl, ledgerThreepl);
         priorTotals.adSpend += data.total?.adSpend || 0;
-        priorTotals.profit += data.total?.netProfit || 0;
+        priorTotals.profit += getProfit(data.total);
       });
     } else if (priorPeriodKey) {
       const priorData = getData(priorPeriodKey);
@@ -31230,7 +31237,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       const data = getData(p);
       if (!data) return null;
       const rev = data.total?.revenue || 1;
-      const profit = data.total?.netProfit || 0;
+      const profit = getProfit(data.total);
       return {
         period: p,
         label: trendPeriodType === 'week' 
@@ -39217,7 +39224,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 // Get actual sales profit data if available
                 const currentYearForWeeks = new Date().getFullYear().toString();
                 const sortedWeeks2026 = Object.keys(allWeeksData).filter(w => w.startsWith(currentYearForWeeks)).sort();
-                const actualYTDProfit = sortedWeeks2026.reduce((s, w) => s + (allWeeksData[w]?.total?.netProfit || 0), 0);
+                const actualYTDProfit = sortedWeeks2026.reduce((s, w) => s + (getProfit(allWeeksData[w]?.total)), 0);
                 const actualYTDRevenue = sortedWeeks2026.reduce((s, w) => s + (allWeeksData[w]?.total?.revenue || 0), 0);
                 const weeksWithData = sortedWeeks2026.filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0).length;
                 
@@ -39249,7 +39256,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                   
                   // For trend, use last 4 weeks if available
                   const recentWeeks = sortedWeeks2026.slice(-4);
-                  const recentProfit = recentWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.netProfit || 0), 0);
+                  const recentProfit = recentWeeks.reduce((s, w) => s + (getProfit(allWeeksData[w]?.total)), 0);
                   const recentAvgWeekly = recentProfit / Math.max(recentWeeks.length, 1);
                   const recentAvgMonthly = recentAvgWeekly * 4.33;
                   trendProjection = actualYTDProfit + (recentAvgMonthly * monthsRemaining) - recurringCostsRemaining;
