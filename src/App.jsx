@@ -26637,14 +26637,15 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         };
       });
       
-      // Then aggregate DAILY data for months not in periods (more accurate than weekly due to exact calendar boundaries)
+      // Then aggregate DAILY data — build separately first, then compare with period data
+      const dailyAgg = {};
       const sortedDaysForTrends = Object.keys(allDaysData).sort();
       if (sortedDaysForTrends.length > 0) {
         sortedDaysForTrends.forEach(day => {
           const monthKey = day.substring(0, 7);
-          if (!monthData[monthKey]) {
+          if (!dailyAgg[monthKey]) {
             const dateForLabel = new Date(monthKey + '-15T12:00:00');
-            monthData[monthKey] = {
+            dailyAgg[monthKey] = {
               key: monthKey,
               label: dateForLabel.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
               source: 'daily',
@@ -26655,26 +26656,34 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
               skuData: [], dayCount: 0,
             };
           }
-          if (monthData[monthKey].source === 'daily') {
-            const dd = allDaysData[day];
-            const azRev = dd.amazon?.sales || dd.amazon?.revenue || 0;
-            const azProfit = getProfit(dd.amazon);
-            const azUnits = dd.amazon?.units || 0;
-            const shRev = dd.shopify?.revenue || 0;
-            const shProfit = getProfit(dd.shopify);
-            const shUnits = dd.shopify?.units || 0;
-            
-            monthData[monthKey].revenue += dd.total?.revenue || (azRev + shRev);
-            monthData[monthKey].profit += getProfit(dd.total) || (azProfit + shProfit);
-            monthData[monthKey].units += dd.total?.units || (azUnits + shUnits);
-            monthData[monthKey].amazonRev += azRev;
-            monthData[monthKey].amazonProfit += azProfit;
-            monthData[monthKey].amazonUnits += azUnits;
-            monthData[monthKey].shopifyRev += shRev;
-            monthData[monthKey].shopifyProfit += shProfit;
-            monthData[monthKey].shopifyUnits += shUnits;
-            monthData[monthKey].adSpend += dd.total?.adSpend || (dd.adKPIs?.amazon?.spend || 0) + (dd.adKPIs?.google?.spend || 0) + (dd.adKPIs?.meta?.spend || 0);
-            monthData[monthKey].dayCount = (monthData[monthKey].dayCount || 0) + 1;
+          const dd = allDaysData[day];
+          const azRev = dd.amazon?.sales || dd.amazon?.revenue || 0;
+          const azProfit = getProfit(dd.amazon);
+          const azUnits = dd.amazon?.units || 0;
+          const shRev = dd.shopify?.revenue || 0;
+          const shProfit = getProfit(dd.shopify);
+          const shUnits = dd.shopify?.units || 0;
+          
+          dailyAgg[monthKey].revenue += dd.total?.revenue || (azRev + shRev);
+          dailyAgg[monthKey].profit += getProfit(dd.total) || (azProfit + shProfit);
+          dailyAgg[monthKey].units += dd.total?.units || (azUnits + shUnits);
+          dailyAgg[monthKey].amazonRev += azRev;
+          dailyAgg[monthKey].amazonProfit += azProfit;
+          dailyAgg[monthKey].amazonUnits += azUnits;
+          dailyAgg[monthKey].shopifyRev += shRev;
+          dailyAgg[monthKey].shopifyProfit += shProfit;
+          dailyAgg[monthKey].shopifyUnits += shUnits;
+          dailyAgg[monthKey].adSpend += dd.total?.adSpend || (dd.adKPIs?.amazon?.spend || 0) + (dd.adKPIs?.google?.spend || 0) + (dd.adKPIs?.meta?.spend || 0);
+          dailyAgg[monthKey].dayCount += 1;
+        });
+        
+        // For each month: use daily data if it has higher revenue than period, or if no period exists
+        Object.entries(dailyAgg).forEach(([mk, daily]) => {
+          if (!monthData[mk]) {
+            monthData[mk] = daily;
+          } else if (daily.revenue > monthData[mk].revenue) {
+            // Daily has more complete data (e.g., period upload was stale)
+            monthData[mk] = daily;
           }
         });
       }
@@ -28431,30 +28440,14 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const buildAllMonthlyData = () => {
       const monthData = {};
       
-      // PRIORITY 1: Use DAILY data when available (exact calendar month boundaries)
-      const sortedDays = Object.keys(allDaysData).sort();
-      if (sortedDays.length > 0) {
-        sortedDays.forEach(day => {
-          const monthKey = day.substring(0, 7); // "2026-01"
-          if (!monthData[monthKey]) {
-            monthData[monthKey] = { key: monthKey, source: 'daily', revenue: 0, profit: 0, units: 0 };
-          }
-          if (monthData[monthKey].source === 'daily') {
-            const dd = allDaysData[day];
-            monthData[monthKey].revenue += dd.total?.revenue || 0;
-            monthData[monthKey].profit += getProfit(dd.total);
-            monthData[monthKey].units += dd.total?.units || (dd.amazon?.units || 0) + (dd.shopify?.units || 0);
-          }
-        });
-      }
-      
-      // PRIORITY 2: Use period uploads for months not covered by daily data
+      // Step 1: Gather period data
       const monthlyPeriods = Object.keys(allPeriodsData).filter(p => {
         return /^(january|february|march|april|may|june|july|august|september|october|november|december)-?\d{4}$/i.test(p) ||
                /^\d{4}-\d{2}$/.test(p) ||
                /^[a-z]+-\d{4}$/i.test(p);
       });
       
+      const periodByMonth = {};
       monthlyPeriods.forEach(p => {
         const data = allPeriodsData[p];
         let monthKey = p;
@@ -28465,25 +28458,42 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             if (yearMatch) monthKey = `${yearMatch[0]}-${String(idx + 1).padStart(2, '0')}`;
           }
         });
+        periodByMonth[monthKey] = { key: p, revenue: data.total?.revenue || 0, profit: getProfit(data.total), units: data.total?.units || 0 };
+      });
+      
+      // Step 2: Gather daily data (exact calendar boundaries)
+      const dailyByMonth = {};
+      const sortedDays = Object.keys(allDaysData).sort();
+      sortedDays.forEach(day => {
+        const monthKey = day.substring(0, 7);
+        if (!dailyByMonth[monthKey]) dailyByMonth[monthKey] = { revenue: 0, profit: 0, units: 0 };
+        const dd = allDaysData[day];
+        dailyByMonth[monthKey].revenue += dd.total?.revenue || 0;
+        dailyByMonth[monthKey].profit += getProfit(dd.total);
+        dailyByMonth[monthKey].units += dd.total?.units || (dd.amazon?.units || 0) + (dd.shopify?.units || 0);
+      });
+      
+      // Step 3: For each month, use whichever source has higher revenue
+      const allMonthKeys = [...new Set([...Object.keys(periodByMonth), ...Object.keys(dailyByMonth)])];
+      allMonthKeys.forEach(mk => {
+        const period = periodByMonth[mk];
+        const daily = dailyByMonth[mk];
         
-        // Only use period data if we don't already have daily data for this month
-        // OR if the period data has higher revenue (daily data might be incomplete)
-        const existing = monthData[monthKey];
-        if (!existing || (existing.source !== 'daily') || 
-            (existing.revenue < (data.total?.revenue || 0) * 0.5 && existing.revenue === 0)) {
-          if (!existing || existing.source !== 'daily') {
-            monthData[monthKey] = {
-              key: p,
-              source: 'period',
-              revenue: data.total?.revenue || 0,
-              profit: getProfit(data.total),
-              units: data.total?.units || 0,
-            };
+        if (period && daily) {
+          // Both exist — use whichever has higher revenue (more complete data)
+          if (daily.revenue >= period.revenue) {
+            monthData[mk] = { key: mk, source: 'daily', ...daily };
+          } else {
+            monthData[mk] = { key: period.key, source: 'period', ...period };
           }
+        } else if (period) {
+          monthData[mk] = { key: period.key, source: 'period', ...period };
+        } else if (daily) {
+          monthData[mk] = { key: mk, source: 'daily', ...daily };
         }
       });
       
-      // PRIORITY 3: Fall back to weekly data for months with no daily or period data
+      // Step 4: Fall back to weekly data for months with no period or daily data
       sortedWeeks.forEach(w => {
         const monthKey = w.substring(0, 7);
         if (!monthData[monthKey]) {
@@ -28522,6 +28532,13 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const previousMonths = previousYear ? getMonthlyByYear(previousYear) : {};
     const allMonths = ['01','02','03','04','05','06','07','08','09','10','11','12'];
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    
+    // Compute year totals from monthly data (ensures Total row matches month sum)
+    const sumMonths = (months) => Object.values(months).reduce((acc, m) => ({
+      revenue: acc.revenue + (m.revenue || 0), profit: acc.profit + (m.profit || 0), units: acc.units + (m.units || 0),
+    }), { revenue: 0, profit: 0, units: 0 });
+    const currentMonthlyTotal = sumMonths(currentMonths);
+    const previousMonthlyTotal = sumMonths(previousMonths);
     
     const hasMonthlyData = Object.keys(currentMonths).length > 0 || Object.keys(previousMonths).length > 0;
     
@@ -28735,11 +28752,11 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
                 <tfoot className="border-t-2 border-slate-600">
                   <tr className="font-semibold">
                     <td className="py-2 text-white">Total</td>
-                    <td className="py-2 text-right text-white">{formatCurrency(currentYearData.revenue)}</td>
-                    {previousYear && <td className="py-2 text-right text-slate-400">{formatCurrency(previousYearData.revenue)}</td>}
-                    {previousYear && <td className="py-2 text-right"><YoYBadge change={calcYoYChange(currentYearData.revenue, previousYearData.revenue)} /></td>}
-                    <td className={`py-2 text-right ${currentYearData.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(currentYearData.profit)}</td>
-                    {previousYear && <td className={`py-2 text-right ${previousYearData.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(previousYearData.profit)}</td>}
+                    <td className="py-2 text-right text-white">{formatCurrency(currentMonthlyTotal.revenue)}</td>
+                    {previousYear && <td className="py-2 text-right text-slate-400">{formatCurrency(previousMonthlyTotal.revenue)}</td>}
+                    {previousYear && <td className="py-2 text-right"><YoYBadge change={calcYoYChange(currentMonthlyTotal.revenue, previousMonthlyTotal.revenue)} /></td>}
+                    <td className={`py-2 text-right ${currentMonthlyTotal.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(currentMonthlyTotal.profit)}</td>
+                    {previousYear && <td className={`py-2 text-right ${previousMonthlyTotal.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(previousMonthlyTotal.profit)}</td>}
                   </tr>
                 </tfoot>
               </table>
