@@ -9870,6 +9870,37 @@ const savePeriods = async (d) => {
   const getYears = () => { const y = new Set(); Object.keys(allWeeksData).forEach(w => { y.add(new Date(w+'T00:00:00').getFullYear()); }); return Array.from(y).sort().reverse(); };
   const months = getMonths();
   const now = new Date();
+  // Safe defaults for vars that original view components expect as props
+  const response = null;
+  const run = null;
+  const saved = null;
+  const show = null;
+  const sorted = null;
+  const status = null;
+  const t = null;
+  const topSkus = [];
+  const updated = null;
+  const xlsx = null;
+  const accounts = null;
+  const best = null;
+  const breakdown = null;
+  const bump = null;
+  const byMonth = null;
+  const categories = null;
+  const confirmed = null;
+  const data = null;
+  const entry = null;
+  const events = null;
+  const m = null;
+  const metrics = null;
+  const prior = null;
+  const result = null;
+  const shown = null;
+  const store = null;
+  const totalOrders = null;
+  const transactions = null;
+  const unpaid = null;
+  const uploads = null;
 
   const getMonthlyData = (ym) => {
     const [y, m] = ym.split('-').map(Number);
@@ -18050,7 +18081,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       globalModals={globalModals}
       hasDailySalesData={hasDailySalesData}
       invHistory={invHistory}
-      lsSet={lsSet}
       navDropdown={navDropdown}
       queueCloudSave={queueCloudSave}
       selectedDay={selectedDay}
@@ -18100,7 +18130,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       reprocessFileNames={reprocessFileNames}
       reprocessFiles={reprocessFiles}
       reprocessWeek={reprocessWeek}
-      run={run}
       selectedWeek={selectedWeek}
       setEdit3PLCost={setEdit3PLCost}
       setEditAdSpend={setEditAdSpend}
@@ -18625,12 +18654,15 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setToast={setToast}
       setUploadTab={setUploadTab}
       showAdsAIChat={showAdsAIChat}
+      setView={setView}
+      view={view}
+      best={best}
+      breakdown={breakdown}
+      data={data}
       status={status}
       t={t}
       totalOrders={totalOrders}
       updated={updated}
-      setView={setView}
-      view={view}
       save={save}
     />;
   }
@@ -18649,10 +18681,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       filingDetailState={filingDetailState}
       globalModals={globalModals}
       invHistory={invHistory}
-      m={m}
       navDropdown={navDropdown}
       periodLabel={periodLabel}
-      result={result}
       salesTaxConfig={salesTaxConfig}
       setEditPortalUrlValue={setEditPortalUrlValue}
       setEditingPortalUrl={setEditingPortalUrl}
@@ -18675,13 +18705,16 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setUploadTab={setUploadTab}
       setViewingStateHistory={setViewingStateHistory}
       showHiddenStates={showHiddenStates}
-      sorted={sorted}
-      t={t}
       taxFilterStatus={taxFilterStatus}
       taxPeriodType={taxPeriodType}
       taxPeriodValue={taxPeriodValue}
-      transactions={transactions}
       viewingStateHistory={viewingStateHistory}
+      breakdown={breakdown}
+      m={m}
+      result={result}
+      sorted={sorted}
+      t={t}
+      transactions={transactions}
       setView={setView}
       view={view}
     />;
@@ -18699,23 +18732,16 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       bankingDrilldown={bankingDrilldown}
       bankingProcessing={bankingProcessing}
       bankingTab={bankingTab}
-      byMonth={byMonth}
       channelPeriod={channelPeriod}
       combinedData={combinedData}
-      confirmed={confirmed}
       confirmedRecurring={confirmedRecurring}
       current={current}
       editingAccountBalance={editingAccountBalance}
       editingTransaction={editingTransaction}
-      entry={entry}
-      events={events}
       files={files}
       globalModals={globalModals}
       invHistory={invHistory}
-      m={m}
-      metrics={metrics}
       navDropdown={navDropdown}
-      prior={prior}
       productionPipeline={productionPipeline}
       profitTrackerCustomRange={profitTrackerCustomRange}
       profitTrackerPeriod={profitTrackerPeriod}
@@ -18743,13 +18769,22 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setShowMergeModal={setShowMergeModal}
       setToast={setToast}
       setUploadTab={setUploadTab}
-      show={show}
       showAddRecurring={showAddRecurring}
       showMergeModal={showMergeModal}
+      theme={theme}
+      best={best}
+      breakdown={breakdown}
+      byMonth={byMonth}
+      confirmed={confirmed}
+      entry={entry}
+      events={events}
+      m={m}
+      metrics={metrics}
+      prior={prior}
+      show={show}
       status={status}
       store={store}
       t={t}
-      theme={theme}
       transactions={transactions}
       unpaid={unpaid}
       uploads={uploads}
@@ -18762,7 +18797,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   // ==================== SETTINGS VIEW ====================
   if (view === 'settings') {
     return <SettingsView
-      accounts={accounts}
       actionItems={actionItems}
       activeStoreId={activeStoreId}
       allDaysData={allDaysData}
@@ -18774,11 +18808,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       appSettings={appSettings}
       autoSyncStatus={autoSyncStatus}
       bankingData={bankingData}
-      bump={bump}
-      categories={categories}
       combinedData={combinedData}
       current={current}
-      entry={entry}
       exportAll={exportAll}
       files={files}
       forecastCorrections={forecastCorrections}
@@ -18791,8 +18822,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       isMobile={isMobile}
       leadTimeSettings={leadTimeSettings}
       localSettings={localSettings}
-      m={m}
-      metrics={metrics}
       months={months}
       navDropdown={navDropdown}
       notificationSettings={notificationSettings}
@@ -18800,11 +18829,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       packiyoCredentials={packiyoCredentials}
       packiyoInventoryData={packiyoInventoryData}
       packiyoInventoryStatus={packiyoInventoryStatus}
-      prior={prior}
       qboCredentials={qboCredentials}
-      result={result}
       runAutoSync={runAutoSync}
-      saved={saved}
       savedCogs={savedCogs}
       savedProductNames={savedProductNames}
       selectedInvDate={selectedInvDate}
@@ -18854,27 +18880,37 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setWeekNotes={setWeekNotes}
       settingsTab={settingsTab}
       shopifyCredentials={shopifyCredentials}
-      show={show}
       showResetConfirm={showResetConfirm}
-      shown={shown}
       skuDemandStatsRef={skuDemandStatsRef}
-      sorted={sorted}
-      status={status}
-      store={store}
       storeLogo={storeLogo}
       storeName={storeName}
       stores={stores}
-      t={t}
       theme={theme}
       toast={toast}
-      transactions={transactions}
-      uploads={uploads}
       setView={setView}
       view={view}
       save={save}
       queueCloudSave={queueCloudSave}
       pushToCloudNow={pushToCloudNow}
       supabase={supabase}
+      accounts={accounts}
+      best={best}
+      bump={bump}
+      categories={categories}
+      entry={entry}
+      m={m}
+      metrics={metrics}
+      prior={prior}
+      result={result}
+      saved={saved}
+      show={show}
+      shown={shown}
+      sorted={sorted}
+      status={status}
+      store={store}
+      t={t}
+      transactions={transactions}
+      uploads={uploads}
     />;
   }
 
