@@ -1056,7 +1056,8 @@ const renderMarkdown = (md) => {
   html = html.replace(/\n\n/g, '&lt;/p&gt;&lt;p&gt;');
   html = html.replace(/\n/g, '&lt;br/&gt;');
   // Now unescape our HTML tags
-  html = html.replace(/&lt;(\/?(?:h[23]|strong|em|li|ul|ol|table|tr|td|th|p|br\/?))&gt;/g, function(_, tag) { return '<' + tag + '>'; });
+  var unescapeRe = new RegExp('&lt;(\\/?(?:h[23]|strong|em|li|ul|ol|table|tr|td|th|p|br\\/?))&gt;', 'g');
+  html = html.replace(unescapeRe, function(_, tag) { return '<' + tag + '>'; });
   return html;
 };
 
