@@ -625,7 +625,26 @@ export default async function handler(req, res) {
         const weekEnding = getWeekEnding(orderDate);
         const isShopPay = isShopPayOrder(order);
         const stateCode = getStateCode(order);
-     
+      
+      // DEBUG: Log any RI orders to identify phantom
+      if (stateCode === 'RI') {
+        console.log('🔍 RI ORDER FOUND:', {
+          orderId: order.id,
+          orderName: order.name,
+          orderDate,
+          total: order.total_price,
+          tax: order.total_tax,
+          subtotal: order.subtotal_price,
+          shippingState: order.shipping_address?.province_code,
+          shippingCity: order.shipping_address?.city,
+          billingState: order.billing_address?.province_code,
+          billingCity: order.billing_address?.city,
+          gateway: order.payment_gateway_names,
+          financialStatus: order.financial_status,
+          cancelledAt: order.cancelled_at,
+        });
+      }
+
       if (isShopPay) shopPayOrderCount++;
      
       // Initialize daily data
