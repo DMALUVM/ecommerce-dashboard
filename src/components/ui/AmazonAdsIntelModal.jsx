@@ -1553,30 +1553,8 @@ const AmazonAdsIntelModal = ({
                           </button>
                         </div>
                       </div>
-                      <div className="bg-slate-950 border border-slate-700 rounded-xl p-5 max-h-[50vh] overflow-y-auto prose prose-invert prose-sm max-w-none
-                        [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-white [&_h2]:mt-6 [&_h2]:mb-3 [&_h2]:pb-2 [&_h2]:border-b [&_h2]:border-slate-700
-                        [&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-slate-200 [&_h3]:mt-4 [&_h3]:mb-2
-                        [&_strong]:text-white [&_em]:text-amber-300
-                        [&_ul]:space-y-1 [&_ol]:space-y-1
-                        [&_li]:text-slate-300 [&_li]:leading-relaxed
-                        [&_p]:text-slate-300 [&_p]:leading-relaxed
-                        [&_code]:bg-slate-800 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-emerald-400 [&_code]:text-xs
-                        [&_blockquote]:border-l-2 [&_blockquote]:border-amber-500 [&_blockquote]:pl-4 [&_blockquote]:text-amber-200
-                        [&_table]:w-full [&_th]:text-left [&_th]:text-slate-300 [&_th]:pb-2 [&_td]:py-1 [&_td]:text-slate-400
-                      ">
-                        {actionReport.split('\n').map((line, i) => {
-                          if (line.startsWith('## ')) return <h2 key={i}>{line.replace('## ', '')}</h2>;
-                          if (line.startsWith('### ')) return <h3 key={i}>{line.replace('### ', '')}</h3>;
-                          if (line.startsWith('- **')) {
-                            const parts = line.replace('- **', '').split('**');
-                            return <li key={i} className="list-disc ml-4"><strong>{parts[0]}</strong>{parts.slice(1).join('')}</li>;
-                          }
-                          if (line.startsWith('- ')) return <li key={i} className="list-disc ml-4">{line.replace('- ', '')}</li>;
-                          if (line.startsWith('> ')) return <blockquote key={i}><p>{line.replace('> ', '')}</p></blockquote>;
-                          if (line.trim() === '') return <br key={i} />;
-                          if (line.startsWith('**') && line.endsWith('**')) return <p key={i}><strong>{line.replace(/\*\*/g, '')}</strong></p>;
-                          return <p key={i}>{line}</p>;
-                        })}
+                      <div className="bg-slate-950 border border-slate-700 rounded-xl p-5 max-h-[50vh] overflow-y-auto prose prose-invert prose-sm max-w-none">
+                        <div dangerouslySetInnerHTML={{ __html: renderMarkdown(actionReport) }} />
                       </div>
                     </div>
                   )}
