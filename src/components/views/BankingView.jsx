@@ -3,6 +3,7 @@ import {
   ChevronLeft, ChevronRight, X, Check, Plus, Upload, Edit, Save, RefreshCw, BarChart3, TrendingUp, TrendingDown, DollarSign, Package, AlertTriangle, AlertCircle, HelpCircle, Settings, EyeOff, Filter, FileText, Landmark, Target, Activity, User, Key, Flag, Brain, Wallet, CreditCard, Building
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
+import { lsSet } from '../../utils/storage';
 import NavTabs from '../ui/NavTabs';
 
 const BankingView = ({
@@ -821,7 +822,7 @@ const BankingView = ({
       };
       
       setBankingData(newBankingData);
-      safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
+      lsSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
       queueCloudSave({ ...combinedData, bankingData: newBankingData });
       
       const message = duplicateCount > 0 
@@ -843,7 +844,7 @@ const BankingView = ({
       categoryOverrides: newOverrides,
     };
     setBankingData(newBankingData);
-    safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
+    lsSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
     queueCloudSave({ ...combinedData, bankingData: newBankingData });
     setToast({ message: 'Category updated', type: 'success' });
   };
@@ -855,7 +856,7 @@ const BankingView = ({
     const newOverrides = { ...existingOverrides, [oldVendorName.toLowerCase().trim()]: newVendorName.trim() };
     const newBankingData = { ...bankingData, vendorOverrides: newOverrides };
     setBankingData(newBankingData);
-    safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
+    lsSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
     queueCloudSave({ ...combinedData, bankingData: newBankingData });
     setToast({ message: `Vendor renamed: "${oldVendorName}" → "${newVendorName}"`, type: 'success' });
   };
@@ -874,7 +875,7 @@ const BankingView = ({
     });
     const newBankingData = { ...bankingData, categoryOverrides: newOverrides };
     setBankingData(newBankingData);
-    safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
+    lsSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
     queueCloudSave({ ...combinedData, bankingData: newBankingData });
     setToast({ message: `Updated ${count} transactions for "${vendorName}" to category "${newCategory}"`, type: 'success' });
   };
@@ -935,7 +936,7 @@ const BankingView = ({
       transactions: newTransactions,
     };
     setBankingData(newBankingData);
-    safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
+    lsSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
     queueCloudSave({ ...combinedData, bankingData: newBankingData });
     
     setSelectedTxnIds(new Set());
@@ -2560,7 +2561,7 @@ const BankingView = ({
                         };
                         
                         setBankingData(newBankingData);
-                        safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
+                        lsSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
                         queueCloudSave({ ...combinedData, bankingData: newBankingData });
                         
                         setToast({ message: `Balance updated for ${editingAccountBalance.name.split('(')[0].trim()}`, type: 'success' });
@@ -3732,7 +3733,7 @@ const BankingView = ({
                             if (confirm('Clear all vendor mappings?')) {
                               const newBankingData = { ...bankingData, vendorOverrides: {} };
                               setBankingData(newBankingData);
-                              safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
+                              lsSet('ecommerce_banking_v1', JSON.stringify(newBankingData));
                               queueCloudSave({ ...combinedData, bankingData: newBankingData });
                               setToast({ message: 'All vendor mappings cleared', type: 'success' });
                             }
@@ -3752,7 +3753,7 @@ const BankingView = ({
                                 delete newOvr[from];
                                 const newBD = { ...bankingData, vendorOverrides: newOvr };
                                 setBankingData(newBD);
-                                safeLocalStorageSet('ecommerce_banking_v1', JSON.stringify(newBD));
+                                lsSet('ecommerce_banking_v1', JSON.stringify(newBD));
                                 queueCloudSave({ ...combinedData, bankingData: newBD });
                               }}
                               className="text-slate-600 hover:text-rose-400 ml-1"

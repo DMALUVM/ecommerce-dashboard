@@ -3,6 +3,7 @@ import {
   X, Check, Upload, Download, Edit, Save, DollarSign, Clock, AlertTriangle, AlertCircle, Settings, Eye, Filter, FileText, Grid, List, Code, Home
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
+import { lsSet } from '../../utils/storage';
 import NavTabs from '../ui/NavTabs';
 
 const SalesTaxView = ({
@@ -952,7 +953,7 @@ const SalesTaxView = ({
                                                 }
                                               };
                                               setNexusStates(updated);
-                                              safeLocalStorageSet('nexusStates', JSON.stringify(updated));
+                                              lsSet('nexusStates', JSON.stringify(updated));
                                               setEditingPortalUrl(null);
                                             }}
                                             className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm"
