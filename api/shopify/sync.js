@@ -597,13 +597,16 @@ export default async function handler(req, res) {
     };
    
     // Helper to get state code from order
+    // IMPORTANT: Sales tax is based on SHIPPING DESTINATION (where goods are delivered),
+    // NOT billing address (where the credit card is from).
+    // Shopify calculates tax the same way - by shipping destination.
     const getStateCode = (order) => {
-      // Try billing address first, then shipping
-      const billing = order.billing_address;
       const shipping = order.shipping_address;
+      const billing = order.billing_address;
      
       // Province code is the state abbreviation (e.g., "WV", "CA")
-      return billing?.province_code || shipping?.province_code || null;
+      // Prefer shipping (tax nexus destination), fall back to billing for digital goods
+      return shipping?.province_code || billing?.province_code || null;
     };
     // Process each order
     for (const order of orders) {
@@ -706,16 +709,16 @@ export default async function handler(req, res) {
       // (Shopify remits tax automatically for Shop Pay orders)
       // BUT still track ALL orders in taxByState for visibility
      
-      // First, track this order in daily/weekly taxByState regardless of Shop Pay status
-      // This ensures we have complete sales data by state
+      // First, initialize taxByState for this state if needed
+      // Sales/shipping/orders are tracked separately in the Shop Pay vs non-Shop Pay branches below
       if (stateCode) {
-        // Daily state tracking (ALL orders)
+        // Daily state tracking
         if (!dailyData[orderDate].shopify.taxByState[stateCode]) {
           dailyData[orderDate].shopify.taxByState[stateCode] = {
             tax: 0,
-            sales: 0, // Item subtotal only
-            shipping: 0, // Shipping charges
-            orders: 0,
+            sales: 0, // Non-Shop Pay item subtotal only
+            shipping: 0, // Non-Shop Pay shipping charges
+            orders: 0, // Non-Shop Pay order count
             shopPayTax: 0,
             shopPaySales: 0,
             shopPayShipping: 0,
@@ -723,11 +726,8 @@ export default async function handler(req, res) {
             jurisdictions: {}
           };
         }
-        dailyData[orderDate].shopify.taxByState[stateCode].sales += orderSubtotal;
-        dailyData[orderDate].shopify.taxByState[stateCode].shipping += orderShipping;
-        dailyData[orderDate].shopify.taxByState[stateCode].orders += 1;
        
-        // Weekly state tracking (ALL orders)
+        // Weekly state tracking
         if (!weeklyData[weekEnding].shopify.taxByState[stateCode]) {
           weeklyData[weekEnding].shopify.taxByState[stateCode] = {
             tax: 0,
@@ -741,16 +741,13 @@ export default async function handler(req, res) {
             jurisdictions: {}
           };
         }
-        weeklyData[weekEnding].shopify.taxByState[stateCode].sales += orderSubtotal;
-        weeklyData[weekEnding].shopify.taxByState[stateCode].shipping += orderShipping;
-        weeklyData[weekEnding].shopify.taxByState[stateCode].orders += 1;
        
         // Global state tracking
         if (!taxByState[stateCode]) {
           taxByState[stateCode] = {
             stateCode,
             taxCollected: 0,
-            itemSales: 0, // Renamed for clarity
+            itemSales: 0,
             shipping: 0,
             orderCount: 0,
             excludedShopPayTax: 0,
@@ -759,9 +756,6 @@ export default async function handler(req, res) {
             shopPayOrders: 0,
           };
         }
-        taxByState[stateCode].itemSales += orderSubtotal;
-        taxByState[stateCode].shipping += orderShipping;
-        taxByState[stateCode].orderCount += 1;
       }
      
       // Now handle tax amounts based on Shop Pay status
@@ -773,7 +767,7 @@ export default async function handler(req, res) {
         weeklyData[weekEnding].shopify.shopPayTaxExcluded += orderTax;
         totalShopPayTaxExcluded += orderTax;
        
-        // Track Shop Pay tax separately by state (for visibility, not filing)
+        // Track Shop Pay sales/tax separately by state (for visibility, not filing)
         if (stateCode) {
           dailyData[orderDate].shopify.taxByState[stateCode].shopPayTax += orderTax;
           dailyData[orderDate].shopify.taxByState[stateCode].shopPaySales += orderSubtotal;
@@ -796,11 +790,24 @@ export default async function handler(req, res) {
         weeklyData[weekEnding].shopify.taxTotal += orderTax;
         totalTaxCollected += orderTax;
        
-        // Add to taxByState for non-Shop Pay (this is what you file)
+        // Add non-Shop Pay sales/shipping/orders/tax to taxByState
+        // NOTE: SalesTaxView combines sales + shopPaySales for totals,
+        // so we must NOT double-count by putting Shop Pay orders in both.
         if (stateCode) {
           dailyData[orderDate].shopify.taxByState[stateCode].tax += orderTax;
+          dailyData[orderDate].shopify.taxByState[stateCode].sales += orderSubtotal;
+          dailyData[orderDate].shopify.taxByState[stateCode].shipping += orderShipping;
+          dailyData[orderDate].shopify.taxByState[stateCode].orders += 1;
+
           weeklyData[weekEnding].shopify.taxByState[stateCode].tax += orderTax;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].sales += orderSubtotal;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].shipping += orderShipping;
+          weeklyData[weekEnding].shopify.taxByState[stateCode].orders += 1;
+
           taxByState[stateCode].taxCollected += orderTax;
+          taxByState[stateCode].itemSales += orderSubtotal;
+          taxByState[stateCode].shipping += orderShipping;
+          taxByState[stateCode].orderCount += 1;
         }
       }
       // Process tax jurisdictions (for detailed reporting by state/county/city)
