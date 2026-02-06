@@ -26637,7 +26637,49 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         };
       });
       
-      // Then aggregate weekly data for months not in periods
+      // Then aggregate DAILY data for months not in periods (more accurate than weekly due to exact calendar boundaries)
+      const sortedDaysForTrends = Object.keys(allDaysData).sort();
+      if (sortedDaysForTrends.length > 0) {
+        sortedDaysForTrends.forEach(day => {
+          const monthKey = day.substring(0, 7);
+          if (!monthData[monthKey]) {
+            const dateForLabel = new Date(monthKey + '-15T12:00:00');
+            monthData[monthKey] = {
+              key: monthKey,
+              label: dateForLabel.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+              source: 'daily',
+              revenue: 0, profit: 0, units: 0, margin: 0,
+              amazonRev: 0, amazonProfit: 0, amazonUnits: 0,
+              shopifyRev: 0, shopifyProfit: 0, shopifyUnits: 0,
+              adSpend: 0, roas: 0,
+              skuData: [], dayCount: 0,
+            };
+          }
+          if (monthData[monthKey].source === 'daily') {
+            const dd = allDaysData[day];
+            const azRev = dd.amazon?.sales || dd.amazon?.revenue || 0;
+            const azProfit = getProfit(dd.amazon);
+            const azUnits = dd.amazon?.units || 0;
+            const shRev = dd.shopify?.revenue || 0;
+            const shProfit = getProfit(dd.shopify);
+            const shUnits = dd.shopify?.units || 0;
+            
+            monthData[monthKey].revenue += dd.total?.revenue || (azRev + shRev);
+            monthData[monthKey].profit += getProfit(dd.total) || (azProfit + shProfit);
+            monthData[monthKey].units += dd.total?.units || (azUnits + shUnits);
+            monthData[monthKey].amazonRev += azRev;
+            monthData[monthKey].amazonProfit += azProfit;
+            monthData[monthKey].amazonUnits += azUnits;
+            monthData[monthKey].shopifyRev += shRev;
+            monthData[monthKey].shopifyProfit += shProfit;
+            monthData[monthKey].shopifyUnits += shUnits;
+            monthData[monthKey].adSpend += dd.total?.adSpend || (dd.adKPIs?.amazon?.spend || 0) + (dd.adKPIs?.google?.spend || 0) + (dd.adKPIs?.meta?.spend || 0);
+            monthData[monthKey].dayCount = (monthData[monthKey].dayCount || 0) + 1;
+          }
+        });
+      }
+      
+      // Then aggregate weekly data for months not in periods OR daily data
       sortedWeeks.forEach(w => {
         const monthKey = w.substring(0, 7);
         if (!monthData[monthKey]) {
@@ -26697,7 +26739,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
       
       // Calculate derived metrics
       Object.values(monthData).forEach(m => {
-        if (m.source === 'weekly') {
+        if (m.source === 'weekly' || m.source === 'daily') {
           m.margin = m.revenue > 0 ? (m.profit / m.revenue) * 100 : 0;
           m.roas = m.adSpend > 0 ? m.revenue / m.adSpend : 0;
         }
@@ -28328,7 +28370,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     
     // Get year data - prioritize period data if available, otherwise use weekly
     const getYearData = (year) => {
-      // Check if we have a period for this year
+      // Check if we have a period for this year (e.g., "2025" annual period)
       if (allPeriodsData[year]) {
         const p = allPeriodsData[year];
         return {
@@ -28342,6 +28384,27 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           shopifyRev: p.shopify?.revenue || 0,
           adSpend: p.total?.adSpend || 0,
           cogs: p.total?.cogs || 0,
+        };
+      }
+      // Prefer daily data (exact calendar boundaries) over weekly data
+      const yearDays = Object.keys(allDaysData).filter(d => d.startsWith(year)).sort();
+      if (yearDays.length > 0) {
+        const agg = { revenue: 0, profit: 0, units: 0, amazonRev: 0, shopifyRev: 0, adSpend: 0, cogs: 0 };
+        yearDays.forEach(d => {
+          const dd = allDaysData[d];
+          agg.revenue += dd.total?.revenue || 0;
+          agg.profit += getProfit(dd.total);
+          agg.units += dd.total?.units || (dd.amazon?.units || 0) + (dd.shopify?.units || 0);
+          agg.amazonRev += dd.amazon?.sales || dd.amazon?.revenue || 0;
+          agg.shopifyRev += dd.shopify?.revenue || 0;
+          agg.adSpend += dd.total?.adSpend || (dd.adKPIs?.amazon?.spend || 0) + (dd.adKPIs?.google?.spend || 0) + (dd.adKPIs?.meta?.spend || 0);
+          agg.cogs += dd.total?.cogs || 0;
+        });
+        return {
+          source: 'daily',
+          label: `${year} (${yearDays.length} days)`,
+          weeks: 0,
+          ...agg,
         };
       }
       // Fall back to weekly data
@@ -28368,14 +28431,30 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const buildAllMonthlyData = () => {
       const monthData = {};
       
-      // Identify monthly periods same as Trends
+      // PRIORITY 1: Use DAILY data when available (exact calendar month boundaries)
+      const sortedDays = Object.keys(allDaysData).sort();
+      if (sortedDays.length > 0) {
+        sortedDays.forEach(day => {
+          const monthKey = day.substring(0, 7); // "2026-01"
+          if (!monthData[monthKey]) {
+            monthData[monthKey] = { key: monthKey, source: 'daily', revenue: 0, profit: 0, units: 0 };
+          }
+          if (monthData[monthKey].source === 'daily') {
+            const dd = allDaysData[day];
+            monthData[monthKey].revenue += dd.total?.revenue || 0;
+            monthData[monthKey].profit += getProfit(dd.total);
+            monthData[monthKey].units += dd.total?.units || (dd.amazon?.units || 0) + (dd.shopify?.units || 0);
+          }
+        });
+      }
+      
+      // PRIORITY 2: Use period uploads for months not covered by daily data
       const monthlyPeriods = Object.keys(allPeriodsData).filter(p => {
         return /^(january|february|march|april|may|june|july|august|september|october|november|december)-?\d{4}$/i.test(p) ||
                /^\d{4}-\d{2}$/.test(p) ||
                /^[a-z]+-\d{4}$/i.test(p);
       });
       
-      // First, add period data for months (EXACT copy from Trends)
       monthlyPeriods.forEach(p => {
         const data = allPeriodsData[p];
         let monthKey = p;
@@ -28387,18 +28466,26 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
           }
         });
         
-        monthData[monthKey] = {
-          key: p,
-          source: 'period',
-          revenue: data.total?.revenue || 0,
-          profit: getProfit(data.total),
-          units: data.total?.units || 0,
-        };
+        // Only use period data if we don't already have daily data for this month
+        // OR if the period data has higher revenue (daily data might be incomplete)
+        const existing = monthData[monthKey];
+        if (!existing || (existing.source !== 'daily') || 
+            (existing.revenue < (data.total?.revenue || 0) * 0.5 && existing.revenue === 0)) {
+          if (!existing || existing.source !== 'daily') {
+            monthData[monthKey] = {
+              key: p,
+              source: 'period',
+              revenue: data.total?.revenue || 0,
+              profit: getProfit(data.total),
+              units: data.total?.units || 0,
+            };
+          }
+        }
       });
       
-      // Then aggregate weekly data for months not in periods (EXACT copy from Trends)
+      // PRIORITY 3: Fall back to weekly data for months with no daily or period data
       sortedWeeks.forEach(w => {
-        const monthKey = w.substring(0, 7); // "2025-01" format
+        const monthKey = w.substring(0, 7);
         if (!monthData[monthKey]) {
           monthData[monthKey] = {
             key: monthKey,
@@ -28409,7 +28496,7 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
         if (monthData[monthKey].source === 'weekly') {
           const week = allWeeksData[w];
           monthData[monthKey].revenue += week.total?.revenue || 0;
-          monthData[monthKey].profit += week.total?.netProfit || 0;
+          monthData[monthKey].profit += getProfit(week.total);
           monthData[monthKey].units += week.total?.units || 0;
         }
       });
