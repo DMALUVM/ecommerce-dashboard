@@ -11061,10 +11061,20 @@ const savePeriods = async (d) => {
     const newComparisons = getAmazonForecastComparison.filter(c => !existingWeeks.has(c.weekEnding));
     
     if (newComparisons.length > 0) {
+      // Filter out comparisons where actuals are zero (data not yet uploaded)
+      const validComparisons = newComparisons.filter(c => 
+        (c.actual?.revenue > 0 || c.actual?.units > 0)
+      );
+      
+      if (validComparisons.length === 0) return; // Don't poison the model with zero-actual records
+      
       // Add new records to history
       const updatedRecords = [
-        ...forecastAccuracyHistory.records,
-        ...newComparisons.map(c => ({
+        ...forecastAccuracyHistory.records.filter(r => 
+          // Also clean any existing bad records (actuals = 0)
+          r.actual?.revenue > 0 || r.actual?.units > 0
+        ),
+        ...validComparisons.map(c => ({
           weekEnding: c.weekEnding,
           recordedAt: new Date().toISOString(),
           forecast: c.forecast,
@@ -12667,14 +12677,39 @@ Keep insights brief and actionable. Format as numbered list.`;
       
       // ==================== INVENTORY ANALYSIS ====================
       const latestInvKey = Object.keys(invHistory).sort().reverse()[0];
-      const inventoryItems = latestInvKey ? (invHistory[latestInvKey]?.items || []).map(item => ({
-        sku: item.sku,
-        name: savedProductNames[item.sku] || item.name || item.sku,
+      // Deduplicate inventory items - merge items that are the same SKU with different casing
+      const rawInvItems = latestInvKey ? (invHistory[latestInvKey]?.items || []) : [];
+      const deduped = {};
+      rawInvItems.forEach(item => {
+        const normSku = (item.sku || '').toUpperCase();
+        if (!deduped[normSku] || (item.totalQty || 0) > (deduped[normSku].totalQty || 0)) {
+          // Keep the entry with more inventory, or merge quantities
+          if (deduped[normSku]) {
+            // Merge: add quantities from duplicate
+            item = { 
+              ...item, 
+              sku: normSku,
+              amazonQty: (item.amazonQty || 0) + (deduped[normSku].amazonQty || 0),
+              threeplQty: Math.max(item.threeplQty || 0, deduped[normSku].threeplQty || 0), // Don't double-count 3PL
+              homeQty: Math.max(item.homeQty || 0, deduped[normSku].homeQty || 0),
+              totalQty: (item.amazonQty || 0) + Math.max(item.threeplQty || 0, deduped[normSku].threeplQty || 0) + Math.max(item.homeQty || 0, deduped[normSku].homeQty || 0),
+            };
+          }
+          deduped[normSku] = item;
+        }
+      });
+      const inventoryItems = Object.values(deduped).map(item => ({
+        sku: (item.sku || '').toUpperCase(),
+        name: savedProductNames[item.sku] || savedProductNames[(item.sku || '').toUpperCase()] || item.name || item.sku,
         currentStock: item.totalQty || 0,
         weeklyVelocity: item.weeklyVel || 0,
         daysOfSupply: item.daysOfSupply || 0,
         health: item.health,
-      })) : [];
+        reorderByDate: item.reorderByDate,
+        daysUntilMustOrder: item.daysUntilMustOrder,
+        aiUrgency: item.aiUrgency,
+        aiAction: item.aiAction,
+      }));
       
       const criticalInventory = inventoryItems.filter(i => i.daysOfSupply > 0 && i.daysOfSupply < 14);
       const lowInventory = inventoryItems.filter(i => i.daysOfSupply >= 14 && i.daysOfSupply < 30);
@@ -15497,6 +15532,16 @@ Analyze the data and respond with ONLY this JSON:
       if (ctx.inventory?.lowStockItems?.length > 0) {
         alertsSummary.push(`LOW STOCK ALERT: ${ctx.inventory.lowStockItems.length} products need reorder (${ctx.inventory.lowStockItems.map(i => i.sku).join(', ')})`);
       }
+      // Add critical reorder deadline alerts
+      const criticalReorders = inventoryItems.filter(i => 
+        i.daysUntilMustOrder !== null && i.daysUntilMustOrder !== undefined && 
+        i.daysUntilMustOrder <= 14 && i.weeklyVelocity > 0
+      );
+      if (criticalReorders.length > 0) {
+        alertsSummary.push(`🚨 REORDER DEADLINES: ${criticalReorders.map(i => 
+          `${i.sku} (${i.daysUntilMustOrder <= 0 ? 'OVERDUE' : i.daysUntilMustOrder + ' days left'})`
+        ).join(', ')}`);
+      }
       if (ctx.salesTax?.nexusStates?.length > 0) {
         alertsSummary.push(`Sales tax nexus in ${ctx.salesTax.nexusStates.length} states: ${ctx.salesTax.nexusStates.map(s => s.state).join(', ')}`);
       }
@@ -16501,6 +16546,22 @@ ${ctx.banking ? `
 Banking data available from ${ctx.banking.dateRange?.start} to ${ctx.banking.dateRange?.end}
 Total transactions: ${ctx.banking.transactionCount}
 Last upload: ${ctx.banking.lastUpload ? new Date(ctx.banking.lastUpload).toLocaleString() : 'Unknown'}
+
+${bankingData?.profitAndLoss?.details ? `
+QUICKBOOKS PROFIT & LOSS (${bankingData.profitAndLoss.period?.start || 'unknown'} to ${bankingData.profitAndLoss.period?.end || 'unknown'}):
+- Total Income: $${(bankingData.profitAndLoss.details['Total Income'] || 0).toLocaleString()}
+- Total COGS: $${(bankingData.profitAndLoss.details['Total Cost of Goods Sold'] || 0).toLocaleString()}
+- Gross Profit: $${((bankingData.profitAndLoss.details['Total Income'] || 0) - (bankingData.profitAndLoss.details['Total Cost of Goods Sold'] || 0)).toLocaleString()}
+- Total Expenses: $${(bankingData.profitAndLoss.details['Total Expenses'] || 0).toLocaleString()}
+- Net Operating Income: $${((bankingData.profitAndLoss.details['Total Income'] || 0) - (bankingData.profitAndLoss.details['Total Cost of Goods Sold'] || 0) - (bankingData.profitAndLoss.details['Total Expenses'] || 0)).toLocaleString()}
+Key Expense Lines:
+${Object.entries(bankingData.profitAndLoss.details || {})
+  .filter(([k, v]) => typeof v === 'number' && v > 100 && !k.startsWith('Total') && !k.includes('Sales'))
+  .sort((a, b) => b[1] - a[1])
+  .slice(0, 10)
+  .map(([k, v]) => `  - ${k}: $${v.toLocaleString()}`)
+  .join('\n')}
+` : ''}
 
 MONTHLY CASH FLOW (last 12 months):
 ${ctx.banking.monthlySnapshots.map(m => 
