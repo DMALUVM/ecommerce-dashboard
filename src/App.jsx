@@ -9869,6 +9869,7 @@ const savePeriods = async (d) => {
   const getMonths = () => { const m = new Set(); Object.keys(allWeeksData).forEach(w => { const d = new Date(w+'T00:00:00'); m.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`); }); return Array.from(m).sort().reverse(); };
   const getYears = () => { const y = new Set(); Object.keys(allWeeksData).forEach(w => { y.add(new Date(w+'T00:00:00').getFullYear()); }); return Array.from(y).sort().reverse(); };
   const months = getMonths();
+  const now = new Date();
 
   const getMonthlyData = (ym) => {
     const [y, m] = ym.split('-').map(Number);
