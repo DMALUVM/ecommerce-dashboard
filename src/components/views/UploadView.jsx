@@ -2211,6 +2211,30 @@ const UploadView = ({
                                 notes: existing.notes,
                               };
                             });
+                            
+                            // Clean stale Shopify tax data for days in the sync range
+                            // that were NOT returned by the API (e.g. cancelled orders, timezone shifts).
+                            // Without this, old taxByState entries from buggy syncs persist forever.
+                            const syncedDates = new Set(Object.keys(data.dailyData || {}));
+                            const rangeStart = shopifySyncRange.start;
+                            const rangeEnd = shopifySyncRange.end;
+                            Object.keys(updatedDays).forEach(dateKey => {
+                              if (dateKey >= rangeStart && dateKey <= rangeEnd && !syncedDates.has(dateKey)) {
+                                // This day is in the sync range but API returned no orders for it
+                                // Clear Shopify tax data to prevent ghost entries
+                                if (updatedDays[dateKey]?.shopify?.taxByState) {
+                                  const hadTax = Object.keys(updatedDays[dateKey].shopify.taxByState).length > 0;
+                                  if (hadTax) {
+                                    console.log(`Clearing stale Shopify taxByState for ${dateKey}`);
+                                    updatedDays[dateKey].shopify.taxByState = {};
+                                    updatedDays[dateKey].shopify.taxTotal = 0;
+                                    updatedDays[dateKey].shopify.taxTotalAll = 0;
+                                    updatedDays[dateKey].shopify.shopPayTaxExcluded = 0;
+                                  }
+                                }
+                              }
+                            });
+                            
                             setAllDaysData(updatedDays);
                             // Save daily data to localStorage
                             try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}

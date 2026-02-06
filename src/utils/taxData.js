@@ -407,4 +407,28 @@ const STATE_FILING_FORMATS = {
   },
 };
 
-export { US_STATES_TAX_INFO, STATE_FILING_FORMATS };
+// Zero-filing penalties by state
+// ALL states with sales tax require zero filing when you have a permit/nexus registration.
+// These are the notable penalties for states where failure to file a $0 return has explicit consequences.
+const ZERO_FILING_PENALTIES = {
+  AL: { penalty: 'Greater of 10% of tax due or $50', note: 'Depends on locality' },
+  AZ: { penalty: '5% penalty', note: 'Must file zero return' },
+  CA: { penalty: 'Late filing penalty applies', note: 'Must file zero return' },
+  CO: { penalty: 'Estimated assessment if not filed', note: 'State will file on your behalf and bill you' },
+  DC: { penalty: 'Penalties accrue on missed payments', note: 'Must file if zero tax due' },
+  KS: { penalty: '$500-$10,000 if deemed intentional', note: 'Zero filing required' },
+  KY: { penalty: 'Minimum $100 late penalty', note: 'Criminal penalties possible' },
+  MA: { penalty: 'Up to $100 per return', note: 'Electronic filing required' },
+  MD: { penalty: 'Penalty + interest on late returns', note: 'Use telefile at 410-260-7225 for zero returns' },
+  ND: { penalty: '5% of state tax or $5 minimum', note: 'Zero filing required' },
+  OH: { penalty: '$50 or 10% of tax', note: 'Discount available for on-time filing' },
+  OK: { penalty: 'Complex penalty system', note: 'See Oklahoma Tax Commission penalty FAQ' },
+  PA: { penalty: 'Minimum $2 added', note: 'Zero filing required' },
+  RI: { penalty: '10% of tax due + 12% interest minimum', note: 'Must file listing zero sales and zero taxes' },
+  SC: { penalty: 'Penalties apply', note: 'File zero return by phone: 803-898-5918' },
+  WI: { penalty: '$20 late filing fee', note: 'For neglect to file' },
+  WV: { penalty: 'Late filing penalty if >6 months overdue', note: 'Zero filing required' },
+  WY: { penalty: '$10 for not filing by due date', note: 'Zero filing required' },
+};
+
+export { US_STATES_TAX_INFO, STATE_FILING_FORMATS, ZERO_FILING_PENALTIES };
