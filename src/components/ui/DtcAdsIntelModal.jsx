@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Upload, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, ShoppingCart, Zap, Download, FileText, Globe, Instagram } from 'lucide-react';
+import { X, Upload, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, ShoppingCart, Zap, Download, FileText, Globe, Instagram, Archive, Loader2 } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
 
 // ============ REPORT TYPES ============
@@ -55,7 +55,7 @@ const parseXlsxSmart = async (file) => {
   // Find the header row — look for known column names
   const knownHeaders = ['campaign', 'search term', 'keyword', 'ad group', 'ad set name', 'ad name', 
     'campaign name', 'search query', 'day', 'landing page type', 'asset group status', 'reporting starts',
-    'keyword status', 'ad group status', 'campaign state'];
+    'keyword status', 'ad group status', 'campaign state', 'reporting starts', 'amount spent'];
   
   let headerIdx = 0;
   for (let i = 0; i < Math.min(5, allRows.length); i++) {
@@ -115,6 +115,8 @@ const detectReportType = (headers, rows, fileName) => {
   if (hSet.has('ad name') && hSet.has('amount spent (usd)')) return 'metaAds';
   if (hSet.has('ad set name') && hSet.has('amount spent (usd)') && !hSet.has('ad name')) return 'metaAdSets';
   if (hSet.has('campaign name') && hSet.has('amount spent (usd)')) return 'metaCampaign';
+  // Meta Ads Manager export format (has Reporting starts/ends)
+  if (hSet.has('reporting starts') && (hSet.has('amount spent (usd)') || hSet.has('purchase roas (return on ad spend)'))) return 'metaCampaign';
   
   // === GOOGLE ===
   if (hSet.has('asset group status') || hSet.has('asset group')) return 'googleAssetGroups';
@@ -251,16 +253,16 @@ const aggregateGoogleAssetGroups = (rows, dateRange) => {
 // === META AGGREGATORS ===
 
 const aggregateMetaCampaigns = (rows, dateRange) => {
-  return rows.filter(r => r['Campaign name']).map(r => ({
-    campaign: r['Campaign name'],
-    delivery: r['Campaign delivery'] || '',
-    spend: num(r['Amount spent (USD)']),
+  return rows.filter(r => r['Campaign name'] || r['Campaign Name']).map(r => ({
+    campaign: r['Campaign name'] || r['Campaign Name'] || '',
+    delivery: r['Campaign delivery'] || r['Campaign Delivery'] || '',
+    spend: num(r['Amount spent (USD)'] || r['Amount Spent (USD)']),
     impressions: num(r['Impressions']),
     reach: num(r['Reach']),
     frequency: num(r['Frequency']),
     cpm: num(r['CPM (cost per 1,000 impressions) (USD)']),
     cpc: num(r['CPC (cost per link click) (USD)']),
-    clicks: num(r['Link clicks']),
+    clicks: num(r['Link clicks'] || r['Clicks (all)']),
     purchases: num(r['Purchases']),
     purchaseValue: num(r['Purchases conversion value']),
     costPerPurchase: num(r['Cost per purchase (USD)']),
@@ -268,7 +270,7 @@ const aggregateMetaCampaigns = (rows, dateRange) => {
     addToCart: num(r['Adds to cart']),
     checkouts: num(r['Checkouts initiated']),
     dateRange,
-  })).sort((a, b) => b.spend - a.spend);
+  })).filter(r => r.spend > 0 || r.campaign).sort((a, b) => b.spend - a.spend);
 };
 
 const aggregateMetaAdSets = (rows, dateRange) => {
@@ -606,7 +608,7 @@ ${intelData.shopifyLandingPages.slice(0, 15).map(p => `  ${p.path} [${p.type}] |
 
 // ============ AI REPORT PROMPT ============
 
-const buildDtcActionReportPrompt = (intelData) => {
+export const buildDtcActionReportPrompt = (intelData) => {
   if (!intelData) return null;
 
   const available = [];
@@ -630,52 +632,261 @@ const buildDtcActionReportPrompt = (intelData) => {
 
   const dataContext = buildDtcIntelContext(intelData);
 
-  const systemPrompt = `You are a senior DTC growth strategist who has scaled 100+ skincare/beauty brands from $500K to $10M+ using Meta Ads, Google Ads, and Amazon. You specialize in tallow-based skincare brands and understand the natural/clean beauty customer deeply.
+  // ===== COMPUTE ADVANCED CROSS-CHANNEL METRICS =====
+  let advancedContext = '';
 
-You think in frameworks:
+  // 1. Cross-channel ROAS comparison
+  const metaSpend = (intelData.metaCampaign || []).reduce((s, c) => s + c.spend, 0);
+  const metaRevenue = (intelData.metaCampaign || []).reduce((s, c) => s + c.purchaseValue, 0);
+  const metaPurchases = (intelData.metaCampaign || []).reduce((s, c) => s + c.purchases, 0);
+  const googleSpend = (intelData.googleCampaign || []).reduce((s, c) => s + c.cost, 0);
+  const googleRevenue = (intelData.googleCampaign || []).reduce((s, c) => s + c.convValue, 0);
+  const googleConversions = (intelData.googleCampaign || []).reduce((s, c) => s + c.conversions, 0);
+  const totalAdSpend = metaSpend + googleSpend;
+  const totalAdRevenue = metaRevenue + googleRevenue;
+  const shopifyRevenue = (intelData.shopifySales || []).reduce((s, d) => s + d.grossSales, 0);
+  const shopifyOrders = (intelData.shopifySales || []).reduce((s, d) => s + d.orders, 0);
+  const shopifyNet = (intelData.shopifySales || []).reduce((s, d) => s + d.netSales, 0);
+  const shopifyDays = (intelData.shopifySales || []).length || 1;
 
-FRAMEWORK 1: CROSS-CHANNEL ATTRIBUTION & ROAS TARGETS
-- Meta Ads (prospecting): Target 1.5-2.5x ROAS at 7-day click, 1-day view (know that Meta over-attributes ~20-30%)
-- Meta Ads (retargeting): Target 3-5x ROAS (but don't over-invest — diminishing returns above 20-25% of total spend)
-- Google Search (brand): Target 5-10x ROAS — these are cheap, high-intent clicks
-- Google Search (non-brand): Target 2-4x ROAS — category terms like "tallow lip balm"
-- Google PMax: Target 2-3x ROAS — but watch for brand cannibalization (check search terms!)
-- The TRUE blended ROAS needs to account for organic + direct traffic uplift from ads. Use Shopify total revenue / total ad spend as the north star.
+  // Funnel metrics
+  const avgSessions = (intelData.shopifySessions || []).reduce((s, d) => s + d.sessions, 0);
+  const avgConvRate = (intelData.shopifyConversion || []).length > 0
+    ? (intelData.shopifyConversion.reduce((s, d) => s + d.convRate, 0) / intelData.shopifyConversion.length)
+    : 0;
+  const avgAOV = (intelData.shopifyAOV || []).length > 0
+    ? (intelData.shopifyAOV.reduce((s, d) => s + d.aov, 0) / intelData.shopifyAOV.length)
+    : (shopifyOrders > 0 ? shopifyRevenue / shopifyOrders : 0);
+  const avgCartRate = (intelData.shopifyConversion || []).length > 0
+    ? (intelData.shopifyConversion.reduce((s, d) => s + (d.sessions > 0 ? d.cartSessions / d.sessions : 0), 0) / intelData.shopifyConversion.length)
+    : 0;
+  const avgCheckoutRate = (intelData.shopifyConversion || []).length > 0
+    ? (intelData.shopifyConversion.reduce((s, d) => s + (d.cartSessions > 0 ? d.checkoutSessions / d.cartSessions : 0), 0) / intelData.shopifyConversion.length)
+    : 0;
+  const avgCheckoutComplete = (intelData.shopifyConversion || []).length > 0
+    ? (intelData.shopifyConversion.reduce((s, d) => s + (d.checkoutSessions > 0 ? d.completedSessions / d.checkoutSessions : 0), 0) / intelData.shopifyConversion.length)
+    : 0;
 
-FRAMEWORK 2: META ADS CREATIVE ANALYSIS
-- Compare ad-level ROAS, CPP, and click-through rates to identify winning creative angles
-- Quality/Engagement/Conversion rankings from Meta: "Average" or better is acceptable; "Below average" needs replacement
-- Creative fatigue signals: increasing frequency (>2.5), declining CTR, rising CPM week over week
-- Test framework: 3-5 creatives per ad set, kill anything with 2x+ the average CPP after $20 spend
+  // Meta creative efficiency
+  let topAd = null, worstAd = null, avgCPP = 0;
+  if (intelData.metaAds?.length > 0) {
+    const adsWithPurchases = intelData.metaAds.filter(a => a.purchases > 0 && a.spend > 5);
+    if (adsWithPurchases.length > 0) {
+      avgCPP = adsWithPurchases.reduce((s, a) => s + a.costPerPurchase, 0) / adsWithPurchases.length;
+      topAd = adsWithPurchases.sort((a, b) => b.roas - a.roas)[0];
+      worstAd = intelData.metaAds.filter(a => a.spend > 10).sort((a, b) => a.roas - b.roas)[0];
+    }
+  }
 
-FRAMEWORK 3: GOOGLE SEARCH TERM MANAGEMENT
-- Negative keyword workflow same as Amazon: find wasteful terms → add as negative exact/phrase
-- PMax search term audit: check if Performance Max is cannibalizing brand traffic (common issue)
-- Impression share analysis: if Abs Top IS < 80% for brand terms, increase bids
-- If non-brand terms have ROAS < 1.5x after $50 spend, negate or reduce bids
+  // Meta frequency / fatigue analysis
+  const highFreqCampaigns = (intelData.metaCampaign || []).filter(c => c.frequency > 2.5 && c.spend > 20);
+  const lowROASPlacements = [];
+  if (intelData.metaAdSetPlacement?.length > 0) {
+    const byPlacement = {};
+    intelData.metaAdSetPlacement.forEach(r => {
+      if (!byPlacement[r.dimension]) byPlacement[r.dimension] = { spend: 0, purchases: 0, purchaseValue: 0 };
+      byPlacement[r.dimension].spend += r.spend;
+      byPlacement[r.dimension].purchases += r.purchases;
+      byPlacement[r.dimension].purchaseValue += r.purchaseValue;
+    });
+    Object.entries(byPlacement).forEach(([p, d]) => {
+      if (d.spend > 10 && d.purchases === 0) lowROASPlacements.push({ placement: p, spend: d.spend });
+    });
+  }
 
-FRAMEWORK 4: META AUDIENCE OPTIMIZATION
-- Use age/gender data to identify highest-ROAS demographics → focus Advantage+ signals accordingly
-- If one gender is 3x+ more efficient, consider gender-specific ad sets
-- Placement data: typically Feed > Stories > Reels > Audience Network for DTC — kill placements with 0 purchases and high spend
+  // Google brand vs non-brand split
+  let gBrandSpend = 0, gBrandConvVal = 0, gNonBrandSpend = 0, gNonBrandConvVal = 0;
+  const brandTerms = ['tallowbourn', 'tallowbourne', 'tallow bourn'];
+  if (intelData.googleSearchTerms) {
+    const st = intelData.googleSearchTerms;
+    [...(st.topByROAS || []), ...(st.topByRevenue || []), ...(st.wasteful || [])].forEach(t => {
+      const isBrand = brandTerms.some(b => (t.term || '').toLowerCase().includes(b));
+      if (isBrand) { gBrandSpend += t.cost; gBrandConvVal += t.convValue; }
+      else { gNonBrandSpend += t.cost; gNonBrandConvVal += t.convValue; }
+    });
+  }
 
-FRAMEWORK 5: SHOPIFY FUNNEL ANALYSIS
-- Healthy DTC conversion rate: 2-4% for cold traffic, 5-8% for retargeting
-- AOV optimization: if AOV is declining, need bundle offers or higher-priced products in ads
-- Landing page analysis: which product pages convert best from ads → focus ad traffic there
-- Cart abandonment: if cart-to-checkout drop is >50%, need checkout optimization or abandoned cart flows
+  // Google PMax brand cannibalization check
+  let pmaxBrandCannibal = [];
+  if (intelData.googleSearchTerms) {
+    const st = intelData.googleSearchTerms;
+    const allTerms = [...(st.topByROAS || []), ...(st.topByRevenue || [])];
+    pmaxBrandCannibal = allTerms.filter(t => {
+      const isBrand = brandTerms.some(b => (t.term || '').toLowerCase().includes(b));
+      const isPmax = (t.campaign || '').toLowerCase().includes('pmax') || (t.campaign || '').toLowerCase().includes('performance max');
+      return isBrand && isPmax;
+    });
+  }
 
-FRAMEWORK 6: CROSS-CHANNEL BUDGET ALLOCATION (for ~$200-300/day total DTC budget)
-- 60-70% Meta (primary acquisition engine for DTC skincare)
-- 20-25% Google (brand defense + high-intent non-brand search)
-- 5-10% Google PMax (incremental, but monitor brand cannibalization)
-- Shift budget from lowest-ROAS channel weekly
+  advancedContext = `
+=== ADVANCED COMPUTED METRICS ===
 
-FORMAT IN MARKDOWN. Be SPECIFIC and AGGRESSIVE. Every recommendation must include exact campaign names, ad names, keywords, bid amounts, or budget changes. Write as the operator who will make these changes today.`;
+CROSS-CHANNEL OVERVIEW:
+  Meta: Spend $${Math.round(metaSpend)} | Revenue $${Math.round(metaRevenue)} | ROAS ${metaSpend > 0 ? (metaRevenue / metaSpend).toFixed(2) : 'N/A'} | ${metaPurchases} purchases | CPP $${metaPurchases > 0 ? (metaSpend / metaPurchases).toFixed(2) : 'N/A'}
+  Google: Spend $${Math.round(googleSpend)} | Revenue $${Math.round(googleRevenue)} | ROAS ${googleSpend > 0 ? (googleRevenue / googleSpend).toFixed(2) : 'N/A'} | ${googleConversions} conversions
+  TOTAL ADS: Spend $${Math.round(totalAdSpend)} | Reported Revenue $${Math.round(totalAdRevenue)} | Blended ROAS ${totalAdSpend > 0 ? (totalAdRevenue / totalAdSpend).toFixed(2) : 'N/A'}
+  Shopify: ${shopifyDays}d | Revenue $${Math.round(shopifyRevenue)} | Net $${Math.round(shopifyNet)} | ${shopifyOrders} orders
+  TRUE BLENDED ROAS (Shopify rev / total ad spend): ${totalAdSpend > 0 ? (shopifyRevenue / totalAdSpend).toFixed(2) : 'N/A'}
+  Ad Spend as % of Shopify Revenue: ${shopifyRevenue > 0 ? (totalAdSpend / shopifyRevenue * 100).toFixed(1) : 'N/A'}%
+  Daily Run Rate: $${(totalAdSpend / shopifyDays).toFixed(0)}/day spend → $${(shopifyRevenue / shopifyDays).toFixed(0)}/day revenue
 
-  const userPrompt = `Generate a comprehensive DTC Advertising Action Report for Tallowbourn (tallow-based skincare: lip balms, body balms, deodorant).
+SHOPIFY FUNNEL METRICS:
+  Avg Sessions/Day: ${(avgSessions / shopifyDays).toFixed(0)}
+  Avg Conversion Rate: ${(avgConvRate * 100).toFixed(2)}%
+  Avg AOV: $${avgAOV.toFixed(2)}
+  Cart Add Rate: ${(avgCartRate * 100).toFixed(1)}%
+  Cart → Checkout Rate: ${(avgCheckoutRate * 100).toFixed(1)}%
+  Checkout → Purchase Rate: ${(avgCheckoutComplete * 100).toFixed(1)}%
+  Revenue Equation: ${(avgSessions / shopifyDays).toFixed(0)} sessions × ${(avgConvRate * 100).toFixed(2)}% conv × $${avgAOV.toFixed(2)} AOV = $${((avgSessions / shopifyDays) * avgConvRate * avgAOV).toFixed(0)}/day
+
+META CREATIVE EFFICIENCY:
+  Avg CPP across ads with purchases: $${avgCPP.toFixed(2)}
+  ${topAd ? `Best ad: "${topAd.adName}" ROAS ${topAd.roas.toFixed(2)} | CPP $${topAd.costPerPurchase.toFixed(2)}` : 'No ad-level data'}
+  ${worstAd ? `Worst spend ad: "${worstAd.adName}" ROAS ${worstAd.roas.toFixed(2)} | Spend $${worstAd.spend.toFixed(2)}` : ''}
+  High-frequency campaigns (>2.5): ${highFreqCampaigns.length > 0 ? highFreqCampaigns.map(c => `"${c.campaign}" freq ${c.frequency.toFixed(1)}`).join(', ') : 'None'}
+  Zero-purchase placements: ${lowROASPlacements.length > 0 ? lowROASPlacements.map(p => `${p.placement} ($${p.spend.toFixed(2)} wasted)`).join(', ') : 'None'}
+
+GOOGLE BRAND VS NON-BRAND:
+  Brand: Spend $${Math.round(gBrandSpend)} | Conv Value $${Math.round(gBrandConvVal)} | ROAS ${gBrandSpend > 0 ? (gBrandConvVal / gBrandSpend).toFixed(2) : 'N/A'}
+  Non-brand: Spend $${Math.round(gNonBrandSpend)} | Conv Value $${Math.round(gNonBrandConvVal)} | ROAS ${gNonBrandSpend > 0 ? (gNonBrandConvVal / gNonBrandSpend).toFixed(2) : 'N/A'}
+  Brand % of Google spend: ${googleSpend > 0 ? (gBrandSpend / googleSpend * 100).toFixed(1) : 0}%
+  ${pmaxBrandCannibal.length > 0 ? `⚠️ PMAX BRAND CANNIBALIZATION DETECTED: ${pmaxBrandCannibal.length} brand terms found in PMax campaigns → $${Math.round(pmaxBrandCannibal.reduce((s, t) => s + t.cost, 0))} spend on brand terms via PMax` : 'No PMax brand cannibalization detected'}
+
+GOOGLE WASTED SPEND SUMMARY:
+  Total wasteful terms (cost, $0 conversions): $${intelData.googleSearchTerms ? Math.round((intelData.googleSearchTerms.wasteful || []).reduce((s, t) => s + t.cost, 0)) : 0}
+  Unique zero-conversion terms: ${intelData.googleSearchTerms ? (intelData.googleSearchTerms.wasteful || []).length : 0}
+  Waste as % of total Google spend: ${googleSpend > 0 && intelData.googleSearchTerms ? ((intelData.googleSearchTerms.wasteful || []).reduce((s, t) => s + t.cost, 0) / googleSpend * 100).toFixed(1) : 0}%
+`;
+
+  const systemPrompt = `You are a fractional CMO / COO who has scaled 150+ DTC skincare/beauty brands from $500K to $10M+ annually. You operate as a hands-on growth executive — you log into Meta Ads Manager, Google Ads, Shopify Analytics, and Google Search Console personally. You've spent $100M+ across Meta and Google for DTC brands.
+
+You think in frameworks that a CEO/COO would use to make operational decisions:
+
+FRAMEWORK 1: THE DTC REVENUE EQUATION & UNIT ECONOMICS
+Revenue = Traffic × Conversion Rate × AOV × Purchase Frequency
+- Pull each lever independently. Diagnose which lever is broken before prescribing solutions.
+- Contribution Margin: Revenue - COGS - Ad Spend - Shipping - Payment Processing
+- Customer Acquisition Cost (CAC): Total ad spend / new customers acquired
+- LTV:CAC ratio should be 3:1+ for sustainable growth. Below 2:1 means you're buying growth at a loss.
+- Payback period: how many days until a customer's cumulative margin covers their CAC?
+- For tallow skincare DTC: target 60%+ gross margin, <30% of revenue on ads, CAC payback <60 days.
+
+FRAMEWORK 2: META ADS — OPERATOR PLAYBOOK
+Account structure (Advantage+ era):
+- 1 ASC campaign (Advantage+ Shopping) with 3-5 creatives → primary prospecting engine
+- 1 CBO retargeting campaign (website visitors 1-30d, ATC 1-14d, engaged video 1-7d)
+- 1 testing campaign (ABO) → 3 ad sets × 1 creative each → test new angles at $20/day per ad set
+- Kill rule: any ad with 2x the account-avg CPP after $30 spend → OFF
+- Scale rule: if ROAS > 2x account avg for 3 days straight → increase budget 20%
+
+Creative analysis:
+- Hook rate (3-sec video view / impressions): healthy is >25%. Below 15% = bad hook, swap first 3 seconds
+- Hold rate (ThruPlay / 3-sec views): >30% is good, <15% means content loses people
+- CTR (link click): above 1.5% for cold, above 2.5% for retargeting
+- Quality/Engagement/Conversion rankings: "Below average" on ANY = creative is penalized by algo → replace
+- Creative fatigue: frequency >3.0 + declining CTR over 7d = fatigue → need fresh creative
+- CPM benchmarks for DTC beauty: $8-15 for prospecting, $15-25 for retargeting. Above $25 = audience saturation
+
+Attribution reality check:
+- Meta 7d click / 1d view over-attributes by 20-40% vs actual Shopify revenue
+- TRUE test: turn off a campaign for 72 hours. If Shopify revenue drops proportionally, it was incremental. If not, it was cannibalizing organic.
+- Use UTM parameters + Shopify reports to cross-check Meta's claims
+
+FRAMEWORK 3: GOOGLE ADS — OPERATOR PLAYBOOK
+Campaign structure for DTC skincare:
+- Brand Search (exact + phrase): target 8-15x ROAS. If abs-top IS <85%, increase bids. These are your cheapest, highest-intent clicks.
+- Non-brand Search (category terms like "tallow lip balm", "natural deodorant"): target 2.5-4x ROAS. Be aggressive on exact match for proven converters.
+- Google PMax: target 2-3x ROAS BUT audit search terms monthly — PMax loves to cannibalize brand traffic and inflate its own ROAS. If >30% of PMax conversions come from brand queries, that's cannibalization.
+- Google Shopping (if separate from PMax): ROAS 3-5x. Product feed optimization is critical.
+
+Bid optimization formula:
+- Target Bid = Target CPA × Conversion Rate
+- Or: Target Bid = (Target ROAS threshold) × (Avg Order Value × Conv Rate) ÷ ROAS target
+- Always specify the EXACT new bid amount. Not "increase" — "$1.45 bid"
+
+Negative keyword management:
+- Add NEGATIVE EXACT: irrelevant term or >$15 spend with 0 conversions
+- Add NEGATIVE PHRASE: entire root phrase is irrelevant (e.g., "dog" for skincare)
+- NEVER negate your own brand terms
+- Review search terms weekly — Google bleeds money faster than you think on bad terms
+
+FRAMEWORK 4: ON-PAGE SEO & CONVERSION RATE OPTIMIZATION
+For a DTC skincare site, the CRO playbook:
+- Homepage: hero section must communicate value prop + social proof in 3 seconds. A/B test headlines quarterly.
+- Product pages (the real money pages):
+  - Title tag: [Primary Keyword] - [Brand] | e.g., "Tallow Lip Balm 3-Pack - Tallowbourn"
+  - Meta description: benefit-driven, 150-160 chars, includes primary keyword + CTA
+  - H1: must contain primary product keyword naturally
+  - Product images: minimum 5 (lifestyle, ingredient close-up, before/after, in-use, packaging). Alt tags on every image with keywords.
+  - Product description: lead with benefits not features. Use the "Problem → Agitate → Solution" framework.
+  - Reviews/UGC: above the fold or within first scroll. Minimum 4.5 stars. If <50 reviews, run a post-purchase email flow to collect more.
+  - Trust badges: cruelty-free, organic, made-in-USA, etc. Place near ATC button.
+  - ATC button: high contrast, sticky on mobile, visible without scrolling
+  - Cross-sell: "Frequently bought together" below ATC increases AOV 10-25%
+
+Landing page optimization for ads:
+- Dedicated landing pages for top ad campaigns (not just the homepage)
+- Lip Balm LP: hero image + "Why Tallow?" section + reviews + bundle offer + ATC
+- Meta ads → landing page congruence: the LP headline must mirror the ad's hook
+- Page speed: <3s load on mobile. Every 1s delay = 7% conversion loss.
+
+Technical SEO priorities:
+- Schema markup: Product, Review, FAQ on every product page
+- Internal linking: blog → product pages, collection → product pages
+- Blog content strategy: target long-tail keywords like "is tallow good for lips", "best natural deodorant that actually works", "tallow vs petroleum jelly" — these drive organic traffic that converts at 3-5x the rate of paid
+- Core Web Vitals: LCP <2.5s, FID <100ms, CLS <0.1. Check PageSpeed Insights monthly.
+
+FRAMEWORK 5: META & GOOGLE AUDIENCE STRATEGY
+Meta demographic optimization:
+- Use age × gender ROAS data to find your "golden cohort" — the demo that converts at 2x+ the average
+- If women 25-44 are 70%+ of purchases: double down with creative that speaks specifically to them
+- If one age bracket has ROAS <0.5x the average: exclude it from prospecting (let Advantage+ handle)
+- Placement: Feed and Reels typically outperform Stories and Audience Network for DTC. Kill placements with >$20 spend and 0 purchases.
+
+Google audience signals:
+- In-market audiences for "Beauty Products", "Skin Care" → layer onto PMax
+- Customer match list: upload your Shopify customer emails quarterly
+- Remarketing lists: ATC 7d, viewed product 14d, past purchasers 180d (for new product launches)
+
+FRAMEWORK 6: CROSS-CHANNEL BUDGET ALLOCATION & ATTRIBUTION
+For a $200-400/day DTC skincare brand:
+- Meta 55-65% (primary acquisition engine — skincare is visual, Meta wins here)
+- Google 25-35% (brand defense + high-intent non-brand + Shopping)
+- Google PMax 5-10% (incremental, but monitor cannibalization ruthlessly)
+- Shift budget WEEKLY from lowest true-ROAS channel to highest
+
+Attribution reality:
+- Meta reports 7d click / 1d view → inflated by 20-40%
+- Google reports last-click → undervalues brand awareness from Meta
+- TRUE north star: Shopify total revenue / total ad spend = your real blended ROAS
+- MER (Marketing Efficiency Ratio): total revenue / total marketing spend (including influencers, email, etc.)
+- If blended ROAS >2.5x at 60% margins → you're profitable. Scale.
+- If blended ROAS 1.5-2.5x → optimize before scaling.
+- If blended ROAS <1.5x → cut spend, fix fundamentals.
+
+FRAMEWORK 7: THE CEO'S WEEKLY OPERATING CADENCE
+Every Monday morning, a DTC founder should review:
+1. Blended ROAS (Shopify rev / total ad spend) — trending up or down?
+2. CAC by channel — which channel is getting cheaper/more expensive?
+3. AOV trend — is it stable? Any concerning drops?
+4. Conversion rate by device (mobile vs desktop) — mobile should be >60% of traffic
+5. Top 3 ads by spend — are they still performing or fatiguing?
+6. Google search term report — any new wasted spend to negate?
+7. Inventory levels — nothing kills momentum like going out of stock on a winning product
+
+FORMAT YOUR REPORT IN MARKDOWN. Be AGGRESSIVE, SPECIFIC, and OPERATOR-LEVEL. Every single recommendation must include:
+1. The EXACT campaign name, ad name, keyword, or page URL
+2. Current performance metrics from the data
+3. The SPECIFIC action to take (exact bid, exact budget change, exact creative kill/keep, exact page edit)
+4. Estimated dollar impact (weekly and monthly)
+5. Time to implement
+
+You are not an advisor giving suggestions. You are the fractional CMO sitting in the operator seat. Write as if you are the person who will log into Meta Ads Manager, Google Ads, and Shopify admin TODAY and make these changes. Use direct, confident language: "Kill this ad" not "Consider pausing." "Set bid to $2.10" not "You might want to adjust the bid."`;
+
+  const userPrompt = `Generate a comprehensive DTC Growth & Advertising Action Report for Tallowbourn (tallow-based skincare: lip balms, body balms, deodorant).
 
 REPORTS AVAILABLE: ${available.join(', ')}
+${available.length < 5 ? `\nNOTE: Only ${available.length} report types were uploaded. Analyze what's available and note which missing reports would enable deeper analysis.` : ''}
 
 PRODUCT CONTEXT:
 - Lip Balm 3-Pack — hero SKU, ~$14 price point, highest volume
@@ -686,73 +897,146 @@ PRODUCT CONTEXT:
 - ~$200-300/day total DTC ad budget (Meta + Google)
 - Target blended ROAS: 2.5x+ (Shopify revenue / total ad spend)
 - ~60% gross margins
+- Target CAC: <$15 for lip balm, <$25 for body balm, <$18 for deodorant
 
 ${dataContext}
 
-=== GENERATE THESE SECTIONS ===
+${advancedContext}
 
-## 📊 EXECUTIVE SUMMARY & HEALTH CHECK
-- Total DTC ad spend across Google + Meta
-- Total Shopify revenue in the period, blended ROAS (Shopify revenue / total ad spend)
-- Account health grade (A-F) for Google and Meta separately
-- Channel ROAS comparison: Google vs Meta vs Amazon organic
-- Top 3 wins and top 3 problems
+=== GENERATE ALL SECTIONS BELOW — SKIP NONE ===
+
+## 📊 EXECUTIVE SUMMARY & P&L HEALTH CHECK
+- Account health grade (A-F) for Google and Meta separately, with justification
+- Total DTC ad spend across Google + Meta for the period
+- Total Shopify revenue, net revenue, blended ROAS (Shopify revenue / total ad spend)
+- TRUE MER (Marketing Efficiency Ratio) and whether it's sustainable at 60% margins
+- CAC estimate by channel: Meta CAC, Google CAC
+- Revenue equation breakdown: Traffic × Conv Rate × AOV = Revenue. Which lever is broken?
+- Top 3 biggest wins right now
+- Top 3 biggest problems costing money right now
+- 1-sentence CEO verdict: "The business is [healthy/at risk/bleeding] because [reason]"
+
+## 🔴 META: KILL LIST — Ads & Audiences to Cut Immediately
+For EACH underperforming ad/ad set/campaign:
+| Name | Type | Spend | Purchases | ROAS | CPP | Quality/Eng/Conv Rank | Verdict |
+Kill rule: any ad with CPP > 2x account avg OR ROAS < 0.5x account avg after $30 spend → OFF
+Calculate: "Cutting these saves approximately $X/week and improves blended ROAS by ~X%"
+Also flag creative fatigue signals (frequency >3, declining CTR).
+
+## 🟢 META: SCALE LIST — Winners to Push
+For EACH high-performing ad/campaign:
+| Name | Spend | ROAS | CPP | CPC | Purchases | Action |
+- Which creatives to duplicate into new ad sets?
+- Which campaigns to increase budget (specify exact daily budget)?
+- New creative angles to test based on what's winning (specify the hook, format, and offer)
+
+## 🎨 META: CREATIVE STRATEGY & TESTING ROADMAP
+Based on the winning vs losing creatives:
+- What HOOK ANGLES are working? (e.g., problem-aware, ingredient-focused, UGC, before/after)
+- What FORMATS are working? (static vs video vs carousel vs UGC)
+- 5 specific new creative briefs to test next, each with: format, hook (first 3 seconds), body, CTA, and which product to feature
+- Creative testing budget allocation and kill criteria
+
+## 👥 META: AUDIENCE & DEMOGRAPHIC OPTIMIZATION
+Using age, gender, and placement data:
+- Which demographic is the "golden cohort" (highest ROAS)?
+- Which demographics to EXCLUDE from prospecting?
+- Placement verdict for each: Feed, Stories, Reels, Audience Network, etc.
+| Placement | Spend | Purchases | ROAS | Verdict (Scale / Keep / Kill) |
+- Specific Advantage+ audience signal recommendations
+- Retargeting vs prospecting spend ratio — is it optimal?
 
 ## 🔴 GOOGLE: NEGATIVE KEYWORDS & WASTED SPEND
-For EACH wasteful search term:
-| Search Term | Campaign | Cost | Clicks | Action (negative exact/phrase) |
-Minimum 10 negatives. Calculate total savings.
-Also: flag PMax brand cannibalization if visible in search terms.
+Use FRAMEWORK 3. For EACH wasteful search term:
+| Search Term | Campaign | Cost | Clicks | Conv | Action (negative exact/phrase) |
+Minimum 10 negatives. Calculate total savings: "Adding these negatives saves $X/month"
+⚠️ PMax brand cannibalization audit: flag any brand terms being captured by PMax campaigns. If found, specify exact negatives or campaign restructure to stop it.
 
 ## 🟢 GOOGLE: SCALE & BID OPTIMIZATION
 For EACH high-performing keyword/search term:
-| Keyword | Current CPC/Bid | ROAS | Conv | Recommended Bid | Action |
-Flag campaigns with low impression share that should get more budget.
-PMax asset group recommendations (ad strength, search themes).
+| Keyword | Campaign | Current CPC | ROAS | Conv | Suggested Bid | Action |
+Use bid formula: Target Bid = Target CPA × Conversion Rate. Specify EXACT new bid amounts.
+- Brand terms: abs-top impression share assessment. If <85%, increase bids to $X.XX.
+- Non-brand winners: which terms to promote from broad/phrase → exact match?
+- PMax asset group assessment: ad strength, search themes, and specific recommendations.
+- Campaigns hitting budget cap (spending full budget by afternoon) → increase to $X/day.
 
-## 📱 META: CREATIVE PERFORMANCE ANALYSIS
-For EACH ad with meaningful spend:
-| Ad Name | Spend | Purchases | ROAS | CPP | CPC | Quality Rank | Verdict |
-Identify winning vs losing creative angles.
-Recommend: keep/scale, test variation, or kill.
+## 🛒 SHOPIFY: CONVERSION RATE OPTIMIZATION & ON-PAGE SEO
+Use FRAMEWORK 4. Analyze the funnel data and landing pages:
 
-## 👥 META: AUDIENCE & PLACEMENT OPTIMIZATION
-- Age breakdown: which age ranges have best ROAS? Recommend targeting adjustments
-- Gender breakdown: should you skew male/female?
-- Placement breakdown: which placements waste money? Which perform?
-- Recommend specific audience signal changes for Advantage+
+### Funnel Diagnosis
+- Session → Cart rate: ${(avgCartRate * 100).toFixed(1)}% (benchmark: 8-12% for DTC skincare). Verdict and fix.
+- Cart → Checkout rate: ${(avgCheckoutRate * 100).toFixed(1)}% (benchmark: 55-70%). Verdict and fix.
+- Checkout → Purchase rate: ${(avgCheckoutComplete * 100).toFixed(1)}% (benchmark: 70-85%). Verdict and fix.
+- For each funnel stage that's below benchmark: 3 SPECIFIC actions to improve it.
 
-## 🔄 META: CAMPAIGN STRUCTURE & RETARGETING
-- Prospecting vs retargeting spend split — is it balanced?
-- Retargeting ROAS and efficiency
-- Campaign consolidation or restructure recommendations
-- Frequency analysis — creative fatigue signals?
+### Landing Page Performance
+For each top landing page from the data:
+| Page Path | Sessions | Cart Adds | Checkout Reach | Cart Rate | Verdict |
+- Which pages to send MORE ad traffic to? Which to STOP sending traffic to?
+- Specific on-page changes for the top 3 landing pages (headline, image, CTA, social proof placement)
 
-## 🛒 SHOPIFY: FUNNEL & CONVERSION ANALYSIS
-- Daily conversion rate trend — improving or declining?
-- AOV trend — any concerning drops?
-- Landing page performance — which pages convert best from ads?
-- Cart-to-checkout drop-off analysis
-- Specific recommendations to improve conversion rate
+### On-Page SEO Audit Priorities
+For the top product pages:
+- Title tag recommendation (include primary keyword, brand, under 60 chars)
+- Meta description recommendation (benefit-driven, 150-160 chars, CTA)
+- H1 tag recommendation
+- Product image alt-tag strategy
+- Schema markup priorities (Product, Review, FAQ)
+- Internal linking opportunities (blog → product, collection → product)
+- Blog content ideas: 5 long-tail keyword topics to create content for (based on what Google search terms are converting)
 
-## 🔍 AMAZON: ORGANIC SEARCH SHARE ANALYSIS
-- Top queries by volume — where is Tallowbourn winning and losing?
-- Market share opportunities (low brand share, high volume)
-- Queries to defend with increased ad spend
-- Cross-channel insight: are Google/Meta ads driving Amazon search volume?
+### AOV Optimization
+- Current AOV trend: stable, rising, or declining?
+- If declining: specific bundle offers, upsell strategies, free shipping threshold adjustments
+- Cross-sell / upsell recommendations based on product data
+
+## 🔍 AMAZON: ORGANIC SEARCH SHARE INTELLIGENCE
+Using Amazon Search Query Performance data:
+- Top 10 queries by volume: where is brand share strong vs weak?
+- Market share opportunities (high volume, low brand share) → size the revenue opportunity
+- Queries to DEFEND with increased ad spend (high purchase share = competitors targeting you)
+- Cross-channel insight: are Google/Meta DTC ads driving increased Amazon search volume for your brand?
 
 ## 📈 CROSS-CHANNEL BUDGET REALLOCATION
-| From | To | Amount/Day | Why | Expected Impact |
-Compare ROAS across channels and recommend specific dollar shifts.
-Account for attribution differences (Meta over-reports, Google last-click).
+Use FRAMEWORK 6. Current vs recommended budget split:
+| Channel | Current Spend/Day | Current ROAS | Recommended Spend/Day | Expected ROAS | $ Change |
+- Account for attribution differences (Meta over-reports 20-40%, Google last-click)
+- Calculate the TRUE incremental value of each channel
+- Recommend specific dollar shifts (total budget stays same)
+- Project: "This reallocation should improve blended ROAS from X to Y, adding ~$X/week in profit"
 
-## ⚡ TOP 5 ACTIONS THIS WEEK (priority order)
-For each:
-1. [Exact action with campaign/ad/keyword names]
-   - Current: [metric]
-   - Expected after: [metric]
+## 🏗️ CAMPAIGN STRUCTURE RECOMMENDATIONS
+Evaluate current account structure against best practices:
+- Meta: should you consolidate campaigns? Split prospecting/retargeting? Add a testing campaign?
+- Google: are campaigns properly segmented by brand/non-brand/PMax? Match type segregation?
+- Specific restructure recommendations with exact new campaign names and settings
+
+## ⚡ TOP 10 ACTIONS THIS WEEK (Priority Order)
+For EACH action:
+1. [Specific action with exact campaign/ad/keyword/page names]
+   - Current state: [exact metrics]
+   - After change: [expected improvement]
    - Time to implement: [X minutes]
-   - Est. weekly impact: [$X]`;
+   - Estimated weekly impact: [$X saved or $X additional revenue]
+   - WHERE to do it: [Meta Ads Manager / Google Ads / Shopify Admin / Shopify Theme Editor]
+
+Organize into:
+### 🟢 QUICK WINS (under 5 minutes each)
+### 🟡 MEDIUM EFFORT (5-15 minutes each)
+### 🔴 STRATEGIC (15+ minutes, but highest impact)
+
+## 📋 IMPLEMENTATION CHECKLIST
+Create a numbered checklist of EVERY specific action from the entire report above, organized by platform:
+### Meta Ads Manager
+### Google Ads
+### Shopify Admin / Theme Editor
+### Content / SEO
+Each item should be a single, copy-pasteable task with the exact action to take.
+
+## 📆 CEO's WEEKLY REVIEW TEMPLATE
+Based on this data, create a 7-item weekly checklist the CEO should review every Monday:
+1. [Metric to check] — where to find it — what "good" looks like — what to do if it's off`;
 
   return { systemPrompt, userPrompt };
 };
@@ -780,7 +1064,9 @@ const renderMarkdown = (md) => {
   html = html.replace(/(&lt;tr&gt;.*&lt;\/tr&gt;\n?)+/g, '&lt;table&gt;$&&lt;/table&gt;');
   html = html.replace(/\n\n/g, '&lt;/p&gt;&lt;p&gt;');
   html = html.replace(/\n/g, '&lt;br/&gt;');
-  html = html.replace(/&lt;(\/?(?:h[23]|strong|em|li|ul|ol|table|tr|td|th|p|br\/?))&gt;/g, function(_, tag) { return '<' + tag + '>'; });
+  // Now unescape our HTML tags
+  var unescapeRe = new RegExp('&lt;(\\/?(?:h[23]|strong|em|li|ul|ol|table|tr|td|th|p|br\\/?))&gt;', 'g');
+  html = html.replace(unescapeRe, function(_, tag) { return '<' + tag + '>'; });
   return html;
 };
 
@@ -827,15 +1113,54 @@ const DtcAdsIntelModal = ({
     setResults(null);
   };
 
-  const handleDrop = (e) => {
+  // Extract files from a ZIP archive (requires jszip: npm install jszip)
+  const extractZip = async (zipFile) => {
+    let JSZip;
+    try {
+      JSZip = (await import('jszip')).default;
+    } catch (e) {
+      throw new Error('ZIP support requires jszip. Run: npm install jszip');
+    }
+    const zip = await JSZip.loadAsync(zipFile);
+    const extracted = [];
+    for (const [name, entry] of Object.entries(zip.files)) {
+      if (entry.dir) continue;
+      const lower = name.toLowerCase();
+      if (!lower.endsWith('.csv') && !lower.endsWith('.xlsx') && !lower.endsWith('.xls')) continue;
+      if (name.includes('__MACOSX') || name.startsWith('.')) continue;
+      const blob = await entry.async('blob');
+      const cleanName = name.split('/').pop();
+      const file = new File([blob], cleanName, { type: lower.endsWith('.csv') ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      extracted.push(file);
+    }
+    return extracted;
+  };
+
+  const handleDrop = async (e) => {
     e.preventDefault();
     setDragOver(false);
-    const fileList = [...e.dataTransfer.files].filter(f => f.name.endsWith('.csv') || f.name.endsWith('.xlsx') || f.name.endsWith('.xls'));
+    const allFiles = [...e.dataTransfer.files];
+    let fileList = [];
+    for (const f of allFiles) {
+      if (f.name.toLowerCase().endsWith('.zip')) {
+        try { fileList.push(...await extractZip(f)); }
+        catch (err) { setDetectedFiles(prev => [...prev, { file: f, type: null, rows: 0, error: 'ZIP extract failed: ' + err.message }]); }
+      } else if (f.name.endsWith('.csv') || f.name.endsWith('.xlsx') || f.name.endsWith('.xls')) {
+        fileList.push(f);
+      }
+    }
     if (fileList.length > 0) readAndDetect(fileList);
   };
 
-  const handleFileInput = (e) => {
-    const fileList = [...e.target.files];
+  const handleFileInput = async (e) => {
+    const allFiles = [...e.target.files];
+    let fileList = [];
+    for (const f of allFiles) {
+      if (f.name.toLowerCase().endsWith('.zip')) {
+        try { fileList.push(...await extractZip(f)); }
+        catch (err) { setDetectedFiles(prev => [...prev, { file: f, type: null, rows: 0, error: 'ZIP extract failed: ' + err.message }]); }
+      } else { fileList.push(f); }
+    }
     if (fileList.length > 0) readAndDetect(fileList);
     e.target.value = '';
   };
@@ -1060,10 +1385,13 @@ const DtcAdsIntelModal = ({
                 onDrop={handleDrop}
                 className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-all cursor-pointer ${dragOver ? 'border-cyan-400 bg-cyan-500/10' : 'border-slate-600 hover:border-slate-500 bg-slate-800/30'}`}
               >
-                <input type="file" multiple accept=".csv,.xlsx,.xls" onChange={handleFileInput} className="absolute inset-0 opacity-0 cursor-pointer" />
+                <input type="file" multiple accept=".csv,.xlsx,.xls,.zip" onChange={handleFileInput} className="absolute inset-0 opacity-0 cursor-pointer" />
                 <Upload className={`w-10 h-10 mx-auto mb-3 ${dragOver ? 'text-cyan-400' : 'text-slate-500'}`} />
                 <p className="text-white font-medium mb-1">{detectedFiles.length > 0 ? 'Drop more files or click to add' : 'Drop all your Google, Meta, Shopify & Amazon reports'}</p>
                 <p className="text-slate-500 text-xs">XLSX & CSV — campaigns, ad sets, ads, search terms, keywords, sessions, sales, search queries</p>
+                <p className="text-slate-500 text-xs mt-1">
+                  <Archive className="w-3 h-3 inline mr-1" />ZIP archives supported — we'll extract and detect all files inside
+                </p>
               </div>
 
               {/* Detected files */}

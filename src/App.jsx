@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart, Sparkles, Keyboard } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart, Sparkles, Keyboard, Globe } from 'lucide-react';
 // Extracted utilities (keep App.jsx lean)
 import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
@@ -16606,6 +16606,8 @@ ${historicalContext}
 
 ${buildAdsIntelContext(adsIntelData)}
 
+${buildDtcIntelContext(dtcIntelData)}
+
 ═══════════════════════════════════════════
 RESPONSE FORMAT — MANDATORY STRUCTURE FOR EVERY RESPONSE:
 ═══════════════════════════════════════════
@@ -20040,6 +20042,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             <button onClick={() => setUploadTab('bulk-ads')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'bulk-ads' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Brain className="w-5 h-5" />Amazon PPC
             </button>
+            <button onClick={() => setUploadTab('dtc-ads')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'dtc-ads' ? 'bg-gradient-to-r from-blue-600 to-teal-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
+              <Globe className="w-5 h-5" />DTC / Meta / Google
+            </button>
             <button onClick={() => setUploadTab('inventory')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'inventory' ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
               <Boxes className="w-5 h-5" />Inventory
             </button>
@@ -20755,8 +20760,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   </div>
                 </div>
               </div>
-              
-              {/* DTC Ads (Meta/Google/Shopify) */}
+            </div>
+          )}
+          
+          {/* DTC Ads - Dedicated tab */}
+          {uploadTab === 'dtc-ads' && (
+            <div className="space-y-4">
               <div className="bg-gradient-to-br from-blue-900/30 to-teal-900/30 rounded-2xl border border-blue-500/30 p-6">
                 <div className="flex items-center justify-between mb-4">
                   <div>
@@ -20789,6 +20798,41 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                     🔬 Generate DTC Action Report
                   </button>
                 )}
+              </div>
+              
+              {/* Quick guide for DTC */}
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                <p className="text-sm text-slate-300 font-medium mb-2">📋 Where to find these files</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                  <div className="flex items-start gap-2">
+                    <span className="text-purple-400">🟣</span>
+                    <div>
+                      <p className="text-white font-medium">Meta Ads Manager</p>
+                      <p className="text-slate-500">Ads Manager → Campaigns/Ad Sets/Ads → Export → XLSX</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-blue-400">🔵</span>
+                    <div>
+                      <p className="text-white font-medium">Google Ads</p>
+                      <p className="text-slate-500">Campaigns/Keywords/Search Terms → Download → XLSX</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-green-400">🟢</span>
+                    <div>
+                      <p className="text-white font-medium">Shopify Analytics</p>
+                      <p className="text-slate-500">Analytics → Reports → Export CSV (Sales, Sessions, AOV)</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-orange-400">🟠</span>
+                    <div>
+                      <p className="text-white font-medium">Amazon Brand Analytics</p>
+                      <p className="text-slate-500">Brand Analytics → Search Query Performance → Download</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}
