@@ -12420,15 +12420,6 @@ Keep insights brief and actionable. Format as numbered list.`;
       
       let weightedPrediction = dailyBasedWeekly; // Start with core calculation
       
-      // Log all inputs for debugging
-        avg7Day,
-        dailyBasedWeekly,
-        weeklyTrend,
-        trendAdjustedWeekly,
-        adjustedAmazonForecast,
-        futureAmazonForecasts: futureAmazonForecasts.length,
-      });
-      
       // Apply SMALL adjustments (max ±15% total deviation from daily-based)
       if (adjustedAmazonForecast && futureAmazonForecasts.length > 0) {
         // Sanity check: Amazon forecast should be within 2x of daily-based
