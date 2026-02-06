@@ -17764,6 +17764,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     return <DashboardView
       activeStoreId={activeStoreId}
       adSpend={adSpend}
+      aggregateDailyToWeekly={aggregateDailyToWeekly}
       aiForecastLoading={aiForecastLoading}
       aiForecasts={aiForecasts}
       allDaysData={allDaysData}
@@ -17848,6 +17849,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   if (view === 'upload' || view === 'period-upload' || view === 'inv-upload') {
     return <UploadView
       adsIntelData={adsIntelData}
+      aggregateDailyToWeekly={aggregateDailyToWeekly}
       allDaysData={allDaysData}
       allPeriodsData={allPeriodsData}
       allWeeksData={allWeeksData}

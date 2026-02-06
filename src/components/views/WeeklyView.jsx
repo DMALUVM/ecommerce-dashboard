@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   BarChart3, Calendar, Check, ChevronLeft, ChevronRight, DollarSign, Edit, FileSpreadsheet, Package, RefreshCw, Save, ShoppingCart, Store, Trash2, TrendingUp, Truck, Upload
 } from 'lucide-react';
-import { deriveWeeksFromDays } from '../../utils/aggregation';
+import { deriveWeeksFromDays } from '../../utils/weekly';
 import { formatCurrency, formatNumber, formatPercent } from '../../utils/format';
 import { parseCSV } from '../../utils/csv';
 import NavTabs from '../ui/NavTabs';

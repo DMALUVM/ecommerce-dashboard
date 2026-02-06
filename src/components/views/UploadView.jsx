@@ -3,13 +3,13 @@ import {
   AlertCircle, AlertTriangle, Bell, Boxes, Brain, Calendar, CalendarRange, Check, ChevronDown, Clock, Database, DollarSign, Download, Edit, Eye, FileSpreadsheet, FileText, Globe, HelpCircle, Info, Link, List, Loader2, MoreHorizontal, Package, RefreshCw, Save, Search, Settings, ShoppingBag, ShoppingCart, Store, Trash2, TrendingUp, Truck, Upload, Zap
 } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../../utils/format';
-import { aggregateDailyToWeekly } from '../../utils/aggregation';
 import { parseCSV } from '../../utils/csv';
 import { safeLocalStorageSet, PRODUCT_NAMES_KEY } from '../../utils/storage';
 import NavTabs from '../ui/NavTabs';
 
 const UploadView = ({
   adsIntelData,
+  aggregateDailyToWeekly,
   allDaysData,
   allPeriodsData,
   allWeeksData,

@@ -3,7 +3,7 @@ import {
   AlertTriangle, Calculator, Check, Filter, Grid, Table, Target, TrendingDown, TrendingUp, Zap
 } from 'lucide-react';
 import { formatCurrency } from '../../utils/format';
-import { deriveWeeksFromDays } from '../../utils/aggregation';
+import { deriveWeeksFromDays } from '../../utils/weekly';
 import NavTabs from '../ui/NavTabs';
 import PnLView from '../../PnLView';
 

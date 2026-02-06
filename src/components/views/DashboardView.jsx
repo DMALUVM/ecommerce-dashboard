@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../../utils/format';
 import { formatDateKey } from '../../utils/date';
-import { deriveWeeksFromDays, aggregateDailyToWeekly } from '../../utils/aggregation';
+import { deriveWeeksFromDays } from '../../utils/weekly';
 import { getNextDueDate } from '../../utils/salesTax';
 import { US_STATES_TAX_INFO } from '../../utils/taxData';
 import NavTabs from '../ui/NavTabs';
@@ -12,6 +12,7 @@ import NavTabs from '../ui/NavTabs';
 const DashboardView = ({
   activeStoreId,
   adSpend,
+  aggregateDailyToWeekly,
   aiForecastLoading,
   aiForecasts,
   allDaysData,
