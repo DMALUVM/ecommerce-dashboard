@@ -1560,7 +1560,6 @@ const AmazonAdsIntelModal = ({
                     </div>
                   )}
                   </div>
-                </div>
               )}
             </div>
           )}
