@@ -11,6 +11,10 @@ import SettingRow from '../ui/SettingRow';
 import SettingSection from '../ui/SettingSection';
 import Toggle from '../ui/Toggle';
 
+
+// Helper: normalize SKU keys for comparison
+const normalizeSkuKey = (sku) => (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
+
 const SettingsView = ({
   actionItems,
   activeStoreId,
@@ -79,6 +83,7 @@ const SettingsView = ({
   setSelectedPeriod,
   setSelectedWeek,
   setSettingsTab,
+  setShow3PLBulkUpload,
   setShopifyCredentials,
   setShowAdsBulkUpload,
   setShowBenchmarks,
@@ -100,6 +105,7 @@ const SettingsView = ({
   storeLogo,
   storeName,
   stores,
+  switchStore,
   theme,
   toast,
   setView,

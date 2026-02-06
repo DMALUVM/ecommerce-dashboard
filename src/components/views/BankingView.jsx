@@ -7,6 +7,13 @@ import { hasDailySalesData } from '../../utils/date';
 import { lsSet } from '../../utils/storage';
 import NavTabs from '../ui/NavTabs';
 
+
+// Helper: extract profit from data object
+const getProfit = (obj) => {
+  if (!obj) return 0;
+  return obj.netProfit ?? obj.profit ?? 0;
+};
+
 const BankingView = ({
   allDaysData,
   allPeriodsData,
@@ -17,6 +24,7 @@ const BankingView = ({
   bankingDrilldown,
   bankingProcessing,
   bankingTab,
+  parseQBOTransactions,
   channelPeriod,
   combinedData,
   confirmedRecurring,

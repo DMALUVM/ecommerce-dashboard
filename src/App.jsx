@@ -18725,6 +18725,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   if (view === 'banking') {
     return <BankingView
       allDaysData={allDaysData}
+      parseQBOTransactions={parseQBOTransactions}
       allPeriodsData={allPeriodsData}
       allWeeksData={allWeeksData}
       appSettings={appSettings}
@@ -18866,6 +18867,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setSelectedWeek={setSelectedWeek}
       setSettingsTab={setSettingsTab}
       setShopifyCredentials={setShopifyCredentials}
+      setShow3PLBulkUpload={setShow3PLBulkUpload}
       setShowAdsBulkUpload={setShowAdsBulkUpload}
       setShowBenchmarks={setShowBenchmarks}
       setShowOnboarding={setShowOnboarding}
@@ -18886,6 +18888,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       storeLogo={storeLogo}
       storeName={storeName}
       stores={stores}
+      switchStore={switchStore}
       theme={theme}
       toast={toast}
       setView={setView}
