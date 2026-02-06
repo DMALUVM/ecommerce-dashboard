@@ -13,6 +13,14 @@ import Toggle from '../ui/Toggle';
 
 
 // Helper: normalize SKU keys for comparison
+
+// AI model options
+const AI_MODELS = {
+  'claude-sonnet-4-20250514': { label: 'Claude Sonnet 4', cost: '~$0.04/report', tier: 'Balanced', desc: 'Best value — fast, smart, cheap' },
+  'claude-opus-4-20250514': { label: 'Claude Opus 4', cost: '~$0.20/report', tier: 'Premium', desc: 'Deepest analysis, 5x cost' },
+  'claude-haiku-4-5-20251001': { label: 'Claude Haiku 4.5', cost: '~$0.01/report', tier: 'Fast', desc: 'Cheapest, shorter reports' },
+};
+
 const normalizeSkuKey = (sku) => (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
 
 const SettingsView = ({
