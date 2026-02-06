@@ -775,75 +775,259 @@ const buildActionReportPrompt = (intelData) => {
   if (intelData.searchQueryPerf?.length) available.push(`Search Query Perf (${intelData.searchQueryPerf.length} queries)`);
   if (intelData.dailyOverview?.days?.length) available.push(`Daily Overview (${intelData.dailyOverview.days.length} days)`);
   
+  // ===== COMPUTE ADVANCED METRICS FOR AI =====
+  let advancedContext = '';
+  
+  // 1. Campaign structure analysis (extract from campaign naming conventions)
+  if (intelData.spSearchTerms) {
+    const d = intelData.spSearchTerms;
+    const campaignTypes = {};
+    const matchTypeSplit = { EXACT: { spend: 0, sales: 0 }, PHRASE: { spend: 0, sales: 0 }, BROAD: { spend: 0, sales: 0 } };
+    
+    // Analyze search term match type efficiency
+    (d.topByROAS || []).concat(d.topBySales || []).concat(d.wasteful || []).forEach(t => {
+      (t.matchTypes || []).forEach(mt => {
+        const norm = mt.toUpperCase();
+        if (matchTypeSplit[norm]) {
+          matchTypeSplit[norm].spend += t.spend / (t.matchTypes.length || 1);
+          matchTypeSplit[norm].sales += t.sales / (t.matchTypes.length || 1);
+        }
+      });
+    });
+    
+    // Brand vs Non-Brand classification
+    const brandTerms = ['tallowbourn', 'tallowbourne', 'tallow bourn'];
+    let brandSpend = 0, brandSales = 0, nonBrandSpend = 0, nonBrandSales = 0;
+    const allTerms = [...(d.topByROAS || []), ...(d.topBySales || []), ...(d.wasteful || [])];
+    const seenTerms = new Set();
+    allTerms.forEach(t => {
+      if (seenTerms.has(t.term)) return;
+      seenTerms.add(t.term);
+      const isBrand = brandTerms.some(b => (t.term || '').toLowerCase().includes(b));
+      if (isBrand) { brandSpend += t.spend; brandSales += t.sales; }
+      else { nonBrandSpend += t.spend; nonBrandSales += t.sales; }
+    });
+    
+    advancedContext += `\n=== ADVANCED ANALYSIS (COMPUTED) ===
+
+MATCH TYPE EFFICIENCY:
+  EXACT: Spend ~$${Math.round(matchTypeSplit.EXACT.spend)} | Sales ~$${Math.round(matchTypeSplit.EXACT.sales)} | ROAS ${matchTypeSplit.EXACT.spend > 0 ? (matchTypeSplit.EXACT.sales / matchTypeSplit.EXACT.spend).toFixed(2) : 'N/A'}
+  PHRASE: Spend ~$${Math.round(matchTypeSplit.PHRASE.spend)} | Sales ~$${Math.round(matchTypeSplit.PHRASE.sales)} | ROAS ${matchTypeSplit.PHRASE.spend > 0 ? (matchTypeSplit.PHRASE.sales / matchTypeSplit.PHRASE.spend).toFixed(2) : 'N/A'}
+  BROAD: Spend ~$${Math.round(matchTypeSplit.BROAD.spend)} | Sales ~$${Math.round(matchTypeSplit.BROAD.sales)} | ROAS ${matchTypeSplit.BROAD.spend > 0 ? (matchTypeSplit.BROAD.sales / matchTypeSplit.BROAD.spend).toFixed(2) : 'N/A'}
+
+BRAND VS NON-BRAND SPLIT:
+  Brand terms: Spend $${Math.round(brandSpend)} | Sales $${Math.round(brandSales)} | ROAS ${brandSpend > 0 ? (brandSales / brandSpend).toFixed(2) : 'N/A'}
+  Non-brand terms: Spend $${Math.round(nonBrandSpend)} | Sales $${Math.round(nonBrandSales)} | ROAS ${nonBrandSpend > 0 ? (nonBrandSales / nonBrandSpend).toFixed(2) : 'N/A'}
+  Brand % of total spend: ${d.totalSpend > 0 ? (brandSpend / d.totalSpend * 100).toFixed(1) : 0}%
+
+WASTE ANALYSIS:
+  Total wasted spend ($0 sales terms): $${Math.round((d.wasteful || []).reduce((s, t) => s + t.spend, 0))}
+  Waste as % of total SP spend: ${d.totalSpend > 0 ? ((d.wasteful || []).reduce((s, t) => s + t.spend, 0) / d.totalSpend * 100).toFixed(1) : 0}%
+  Unique zero-sale terms: ${(d.wasteful || []).length}
+`;
+
+    // Compute suggested bids for top terms
+    // Formula: Target Bid = Target ACOS × (Avg Order Value) × Conversion Rate
+    const topTermsWithBidSuggestions = (d.topByROAS || []).filter(t => t.spend > 5 && t.orders > 0).slice(0, 20).map(t => {
+      const avgOrderValue = t.orders > 0 ? t.sales / t.orders : 0;
+      const convRate = t.clicks > 0 ? t.orders / t.clicks : 0;
+      const currentCPC = t.clicks > 0 ? t.spend / t.clicks : 0;
+      const targetAcos30 = 0.30; // 30% ACOS target
+      const targetAcos20 = 0.20; // 20% aggressive ACOS target  
+      const suggestedBid30 = targetAcos30 * avgOrderValue * convRate;
+      const suggestedBid20 = targetAcos20 * avgOrderValue * convRate;
+      return { 
+        term: t.term, currentCPC: currentCPC.toFixed(2), avgOrderValue: avgOrderValue.toFixed(2), 
+        convRate: (convRate * 100).toFixed(1), currentACOS: t.acos.toFixed(1),
+        suggestedBid30: suggestedBid30.toFixed(2), suggestedBid20: suggestedBid20.toFixed(2),
+        bidDelta: ((suggestedBid30 - currentCPC) / currentCPC * 100).toFixed(0)
+      };
+    });
+    
+    if (topTermsWithBidSuggestions.length > 0) {
+      advancedContext += `\nBID OPTIMIZATION DATA (Formula: Target Bid = Target ACOS × AOV × Conv Rate):
+${topTermsWithBidSuggestions.map(t => `  "${t.term}" | CPC $${t.currentCPC} | AOV $${t.avgOrderValue} | Conv ${t.convRate}% | Current ACOS ${t.currentACOS}% | Suggested bid @30% ACOS: $${t.suggestedBid30} | @20% ACOS: $${t.suggestedBid20} | Change: ${t.bidDelta}%`).join('\n')}
+`;
+    }
+  }
+
+  // 2. Placement modifier calculations
+  if (intelData.spPlacement) {
+    const pl = intelData.spPlacement.byPlacement || [];
+    const tosData = pl.find(p => p.placement === 'Top of Search on-Amazon');
+    const restData = pl.find(p => p.placement === 'Rest of search on Amazon' || p.placement === 'Other on-Amazon');
+    const productData = pl.find(p => p.placement === 'Product pages on Amazon' || p.placement === 'Detail page on-Amazon');
+    
+    if (tosData && (restData || productData)) {
+      const baselineRoas = restData?.roas || productData?.roas || 1;
+      const tosMultiplier = tosData.roas > 0 && baselineRoas > 0 ? (tosData.roas / baselineRoas) : 1;
+      advancedContext += `\nPLACEMENT MODIFIER CALCULATION:
+  Top of Search ROAS: ${tosData.roas.toFixed(2)} | Rest/Product ROAS: ${baselineRoas.toFixed(2)}
+  TOS performance multiplier: ${tosMultiplier.toFixed(2)}x
+  ${tosMultiplier > 1.3 ? `→ RECOMMENDED: Increase Top of Search bid modifier to +${Math.min(Math.round((tosMultiplier - 1) * 100), 900)}%` : tosMultiplier < 0.8 ? '→ RECOMMENDED: Decrease or remove Top of Search modifier — product pages converting better' : '→ TOS performing similarly to other placements — no modifier change needed'}
+`;
+    }
+  }
+
+  // 3. Search term isolation opportunities (broad/phrase converting terms not yet in exact)
+  if (intelData.spSearchTerms && intelData.spTargeting?.length) {
+    const targetedExact = new Set(
+      intelData.spTargeting
+        .filter(t => t.matchType?.toUpperCase() === 'EXACT')
+        .map(t => t.target?.toLowerCase().trim())
+    );
+    
+    const isolationCandidates = (intelData.spSearchTerms.topByROAS || [])
+      .filter(t => {
+        const termLower = (t.term || '').toLowerCase().trim();
+        const isFromBroad = (t.matchTypes || []).some(m => ['BROAD', 'PHRASE'].includes(m.toUpperCase()));
+        const notYetExact = !targetedExact.has(termLower);
+        return isFromBroad && notYetExact && t.orders >= 2 && t.spend >= 3;
+      })
+      .slice(0, 15);
+    
+    if (isolationCandidates.length > 0) {
+      advancedContext += `\nSEARCH TERM ISOLATION CANDIDATES (converting in broad/phrase, not yet exact targeted):
+${isolationCandidates.map(t => `  "${t.term}" | ${t.orders} orders | ROAS ${t.roas.toFixed(1)} | ACOS ${t.acos.toFixed(1)}% | from ${t.matchTypes.join('/')} → ADD as EXACT, negate in source campaign`).join('\n')}
+`;
+    }
+  }
+
   // Build the full data context
   const dataContext = buildAdsIntelContext(intelData);
   
-  const systemPrompt = `You are an elite Amazon PPC strategist working for a tallow-based skincare brand (Tallowbourn). 
-You produce SPECIFIC, ACTIONABLE optimization reports — not generic advice. Every recommendation must reference EXACT keywords, campaigns, ASINs, or targets from the data provided.
+  const systemPrompt = `You are a senior Amazon PPC consultant who has managed $50M+ in Amazon ad spend across 200+ brands. You specialize in tallow/skincare/beauty DTC brands scaling on Amazon. You think in frameworks:
 
-FORMAT YOUR REPORT IN MARKDOWN with these EXACT sections. Include every section that has relevant data, skip sections that don't apply.
+FRAMEWORK 1: ACOS TARGETS BY FUNNEL STAGE
+- Brand defense (branded keywords): Target ACOS 5-15% — these should be ultra-efficient since shoppers already know you
+- High-intent non-brand (e.g., "tallow lip balm"): Target ACOS 25-35% — willing to pay more for new customers who know the category
+- Category discovery (e.g., "natural lip balm"): Target ACOS 35-50% — top-of-funnel acquisition, acceptable higher cost
+- Competitor conquesting (e.g., competitor brand names): Target ACOS 30-45% — worth paying to steal share
+- Product targeting (ASIN targets): Target ACOS 25-40% — depends on relevance of target product
 
-For each recommendation, be SPECIFIC:
-- Name the exact keyword/target/campaign
-- State the current metrics (spend, ROAS, ACOS, clicks, etc.)
-- Give the SPECIFIC action (exact new bid, budget change, match type change, negative keyword to add)
-- Estimate the impact ($X saved, $Y additional revenue)`;
+FRAMEWORK 2: BID OPTIMIZATION FORMULA
+Target Bid = Target ACOS × Average Order Value × Conversion Rate
+If current CPC is BELOW this, increase bid to capture more volume.
+If current CPC is ABOVE this, decrease bid or pause.
+Always specify the exact bid amount, not just "increase" or "decrease."
 
-  const userPrompt = `Generate a comprehensive Amazon PPC Action Report for Tallowbourn.
+FRAMEWORK 3: SEARCH TERM MANAGEMENT WORKFLOW
+1. HARVEST: Find converting search terms in auto/broad/phrase campaigns
+2. ISOLATE: Add them as exact match keywords in a dedicated campaign 
+3. NEGATE: Add as negative exact in the source campaign to prevent cannibalization
+4. OPTIMIZE: Adjust bids on the new exact match based on performance
+Always specify WHICH campaign to add the negative to and WHICH to add the keyword to.
+
+FRAMEWORK 4: CAMPAIGN STRUCTURE EVALUATION
+- Single-keyword ad groups (or small, tightly themed groups) perform better
+- Separate campaigns by match type (exact, phrase, broad/auto) for bid control
+- Separate campaigns by product category (lip balm, body balm, deodorant)
+- Campaign naming should encode: Ad Type | Product | ASIN | Match Type | Strategy
+
+FRAMEWORK 5: PLACEMENT STRATEGY
+- Calculate placement modifier: (TOS ROAS / Rest ROAS - 1) × 100 = recommended TOS modifier %
+- If TOS converts 2x better than rest, set modifier to +100%
+- Cap at +900%, and only apply to campaigns where TOS has statistical significance (>50 clicks)
+
+FRAMEWORK 6: NEGATIVE KEYWORD RULES
+- Add as NEGATIVE EXACT if: the exact term is irrelevant or has >$10 spend with 0 orders
+- Add as NEGATIVE PHRASE if: the root phrase is irrelevant (e.g., "pet" for a skincare brand)  
+- NEVER negate your own brand terms
+- NEVER negate terms with <$5 spend (insufficient data)
+- Flag terms with 10+ clicks and 0 orders as candidates even if spend is low
+
+FORMAT YOUR REPORT IN MARKDOWN. Be AGGRESSIVE and SPECIFIC. Every recommendation must include:
+1. The EXACT keyword, campaign name, ASIN, or target
+2. Current performance metrics from the data
+3. The SPECIFIC action to take (exact bid amount, exact negative to add, etc.)
+4. Estimated dollar impact where possible
+
+You are not an advisor — you are the operator. Write as if you are the person who will log into Seller Central and make these changes TODAY. Use direct, confident language: "Set bid to $1.45" not "Consider adjusting the bid."`;
+
+  const userPrompt = `Generate a comprehensive Amazon PPC Action Report for Tallowbourn (tallow-based skincare: lip balms, body balms, deodorant).
 
 DATE RANGE: ${dateRange}
-AVAILABLE DATA: ${available.join(', ')}
+REPORTS AVAILABLE: ${available.join(', ')}
+${available.length < 5 ? `\nNOTE: Only ${available.length} report types were uploaded this period. Analyze what's available and note which missing reports would enable deeper analysis.` : ''}
+
+PRODUCT CONTEXT:
+- Lip Balm 3-Pack (Parent ASIN B0CLHTF8YN) — highest volume SKU
+- Body Balm 2oz (B0CLF4XDCP) — premium product, higher AOV
+- Deodorant (B0CLHSC2WC) — newer product, still building traction
+- Typical price points: Lip balm $10-14, Body balm $18-24, Deodorant $12-16
+- Target blended ACOS: 25% (willing to go higher for new customer acquisition)
+- Target TACOS: under 12%
 
 ${dataContext}
 
-=== REPORT SECTIONS TO GENERATE ===
+${advancedContext}
 
-## 📊 EXECUTIVE SUMMARY
-- Total ad spend, revenue, ROAS, ACOS across all channels (SP/SB/SD)
-- Key headline metrics and overall account health grade (A-F)
-- 3 biggest opportunities and 3 biggest problems
+=== GENERATE THESE SECTIONS ===
 
-## 🔴 KILL LIST — Negative Keywords & Targets to Add
-For EACH: exact keyword/target → which campaign → spend wasted → action (add as negative exact/phrase)
-Focus on: search terms with $5+ spend and 0 conversions, high-click-no-sale terms, irrelevant terms
-MUST include at least 10 specific keywords to negate
+## 📊 EXECUTIVE SUMMARY & ACCOUNT HEALTH
+- Account health grade (A-F) with justification
+- Total spend, revenue, ROAS, ACOS, TACOS across SP/SB/SD
+- Blended ACOS vs target (25%). How far off and trending which direction?
+- Top 3 biggest problems costing money right now
+- Top 3 biggest opportunities to capture more revenue
 
-## 🟢 SCALE LIST — Keywords & Campaigns to Increase Budget
-For EACH: exact keyword → current ROAS → current spend → recommended action (increase bid by X%, move to exact match campaign, increase budget)
-Focus on: >5x ROAS keywords not getting enough impressions, brand terms that could scale
-MUST include at least 8 specific keywords to scale
+## 🔴 KILL LIST — Negative Keywords to Add Immediately
+Use FRAMEWORK 6. For EACH keyword:
+| Keyword | Campaign to Negate In | Match Type | Spend Wasted | Clicks | Why Negate |
+Minimum 10 keywords. Prioritize by spend wasted.
+Then estimate: "Adding these negatives will save approximately $X/month"
 
-## 🔵 NEW KEYWORD OPPORTUNITIES — Search Terms to Add as Keywords
-For EACH: search term converting in broad/phrase → recommended match type → campaign to add it to
-Focus on: customer search terms that converted but aren't targeted directly
-MUST include at least 5 new keyword opportunities
+## 🟢 SCALE LIST — Increase Bids & Budgets
+Use FRAMEWORK 2 for bid calculations. For EACH:
+| Keyword | Current Bid/CPC | Current ROAS | Suggested Bid @25% ACOS | Action |
+Minimum 8 keywords.
+Also flag any campaigns that are budget-capped (spending full daily budget by early afternoon = missed impressions).
+
+## 🔵 SEARCH TERM ISOLATION — Harvest → Exact → Negate Workflow
+Use FRAMEWORK 3. For EACH converting search term found in broad/phrase:
+| Search Term | Source Campaign | Orders | ACOS | Action: Add Exact to [Campaign] + Negate in [Source] |
+Minimum 5 isolation actions.
 
 ## 📍 PLACEMENT OPTIMIZATION
-For EACH campaign with significant spend: which placement performs best → recommended placement bid adjustments (e.g., "Increase Top of Search modifier to 50% for campaign X")
+Use FRAMEWORK 5. For campaigns with significant spend:
+| Campaign | TOS ROAS | Rest ROAS | Current TOS Modifier | Recommended TOS Modifier |
+Calculate the exact modifier percentage using the formula.
 
-## 💰 SKU-LEVEL AD PROFITABILITY
-For EACH advertised ASIN: ad spend vs attributed sales → true ad ROAS → recommendation (increase/decrease/pause ads)
-Flag any ASINs with negative ad ROI
+## 💰 PRODUCT-LEVEL AD PROFITABILITY
+For EACH advertised ASIN:
+| ASIN/SKU | Ad Spend | Ad Revenue | ACOS | Conv Rate | Verdict |
+Flag products where ad ACOS exceeds margin (assume ~60% gross margin on Tallowbourn products).
+Recommend: increase spend, maintain, reduce, or pause for each.
 
-## 📢 SPONSORED BRANDS & DISPLAY INSIGHTS
-- SB campaign performance and recommendations
-- SD campaign performance and recommendations  
-- New-to-brand acquisition costs and efficiency
-- Any campaigns to pause or restructure
+## 📢 SPONSORED BRANDS & DISPLAY ASSESSMENT
+- SB: Which campaigns justify the spend? Which SB video campaigns are working?
+- SD: Purchase remarketing ROI? Audience targeting efficiency? New-to-brand acquisition cost?
+- Specific pause/restructure recommendations with campaign names
 
-## 🔍 ORGANIC SEARCH OPPORTUNITIES (if Search Query data available)
-- High-volume queries where brand share is low → opportunity size
-- Queries where brand converts well → defend with more ad spend
+## 🔍 SEARCH QUERY MARKET SHARE (if Search Query Performance data available)
+- Top 10 queries by volume where brand share is <20% → size the opportunity  
+- Queries with high purchase share → defend with increased ad spend
+- Category queries vs brand queries performance gap
 
-## 📈 BUDGET REALLOCATION PLAN
-- Current budget split by campaign type (SP/SB/SD)
-- Recommended reallocation with specific dollar amounts
-- Expected impact of reallocation on overall ROAS
+## 🏗️ CAMPAIGN STRUCTURE RECOMMENDATIONS
+Use FRAMEWORK 4. Evaluate current structure and recommend:
+- Any campaigns that should be split or consolidated
+- Match type segregation improvements
+- Product grouping improvements
+- Budget allocation between campaign types
 
-## ⚡ TOP 5 PRIORITY ACTIONS (DO THIS WEEK)
-Numbered list of the 5 highest-impact actions to take immediately, with specific steps
+## 📈 BUDGET REALLOCATION — Where to Move Money
+Current split by channel (SP/SB/SD) and recommended reallocation with:
+| From | To | Amount | Why | Expected Impact |
+Total budget stays the same — just move money from low-performing to high-performing.
 
-Be aggressive with recommendations. This is a growing DTC brand that needs to optimize every dollar. Use specific numbers from the data — never say "consider" when you can say "do this".`;
+## ⚡ TOP 5 ACTIONS — DO THIS WEEK (in priority order)
+For each action:
+1. [Specific action with exact keywords/campaigns/bids]
+   - Current state: [metrics]
+   - After change: [expected improvement]
+   - Time to implement: [X minutes]
+   - Estimated monthly impact: [$X saved or $X additional revenue]`;
 
   return { systemPrompt, userPrompt };
 };
