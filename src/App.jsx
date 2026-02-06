@@ -9898,6 +9898,7 @@ const savePeriods = async (d) => {
   const shown = null;
   const store = null;
   const totalOrders = null;
+  const total = null;
   const transactions = null;
   const unpaid = null;
   const uploads = null;
