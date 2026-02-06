@@ -453,24 +453,31 @@ const SalesTaxView = ({
                 </div>
               </div>
               
-              {hasShopifyTaxData ? (
+              {hasShopifyTaxData ? (() => {
+                // Calculate nexus-only tax (what you actually file/pay)
+                const nexusTaxOwed = taxData.byState
+                  .filter(s => nexusStates[s.stateCode]?.hasNexus)
+                  .reduce((sum, s) => sum + (s.taxOwed || s.tax || 0), 0);
+                const nexusStateCount = Object.values(nexusStates || {}).filter(s => s.hasNexus).length;
+                
+                return (
                 <>
                   {/* Main Summary Cards */}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                     <div className="bg-gradient-to-br from-rose-600/30 to-rose-900/30 border-2 border-rose-500/50 rounded-xl p-4 text-center">
                       <p className="text-xs text-rose-300 font-semibold uppercase tracking-wide mb-1">💰 YOU OWE</p>
-                      <p className="text-3xl font-bold text-rose-400">{formatCurrency(taxData.totalTax)}</p>
-                      <p className="text-rose-300/70 text-xs mt-1">Tax to remit this period</p>
+                      <p className="text-3xl font-bold text-rose-400">{formatCurrency(nexusTaxOwed)}</p>
+                      <p className="text-rose-300/70 text-xs mt-1">{nexusStateCount} nexus state{nexusStateCount !== 1 ? 's' : ''} this period</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-xl p-4 text-center">
+                      <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Total Collected</p>
+                      <p className="text-2xl font-bold text-white">{formatCurrency(taxData.totalTax)}</p>
+                      <p className="text-slate-500 text-xs mt-1">across all {taxData.byState.length} states</p>
                     </div>
                     <div className="bg-slate-800/50 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Shop Pay (Excluded)</p>
                       <p className="text-2xl font-bold text-slate-400">{formatCurrency(taxData.shopPayExcluded)}</p>
                       <p className="text-slate-500 text-xs mt-1">Shopify remits this</p>
-                    </div>
-                    <div className="bg-slate-800/50 rounded-xl p-4 text-center">
-                      <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">States</p>
-                      <p className="text-2xl font-bold text-white">{taxData.byState.length}</p>
-                      <p className="text-slate-500 text-xs mt-1">with sales this period</p>
                     </div>
                     <div className="bg-slate-800/50 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Days Synced</p>
@@ -1249,7 +1256,7 @@ const SalesTaxView = ({
                     </>
                   )}
                 </>
-              ) : (
+              ); })() : (
                 <div className="text-center py-6">
                   <ShoppingBag className="w-12 h-12 text-slate-600 mx-auto mb-3" />
                   <p className="text-slate-400">No Shopify tax data for this period</p>
