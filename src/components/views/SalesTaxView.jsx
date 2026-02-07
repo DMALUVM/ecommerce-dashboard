@@ -23,9 +23,11 @@ const SalesTaxView = ({
   globalModals,
   invHistory,
   navDropdown,
+  parsedTaxReport,
   periodLabel,
   salesTaxConfig,
   saveSalesTax,
+  selectedTaxState,
   setEditPortalUrlValue,
   setEditingPortalUrl,
   setFilingDetailState,
@@ -47,10 +49,14 @@ const SalesTaxView = ({
   setUploadTab,
   setViewingStateHistory,
   showHiddenStates,
+  showTaxStateConfig,
+  taxConfigState,
   taxFilterStatus,
   taxPeriodType,
   taxPeriodValue,
+  taxReportFileName,
   viewingStateHistory,
+  breakdown, m, result, sorted, t, transactions,
   setView,
   view
 }) => {
@@ -1316,7 +1322,7 @@ const SalesTaxView = ({
                             <p className="text-slate-500 text-xs">{Math.ceil((state.nextDue - now) / (1000 * 60 * 60 * 24))} days</p>
                           </div>
                           <button onClick={() => setSelectedTaxState(state.code)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg" title="File/Upload Report"><Upload className="w-4 h-4" /></button>
-                          <button onClick={() => setViewingStateHistory(state.code)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg" title="View History"><FileText className="w-4 h-4" /></button>
+                          <button onClick={() => { setViewingStateHistory(state.code); setTimeout(() => document.getElementById('filing-history')?.scrollIntoView({ behavior: 'smooth' }), 100); }} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg" title="View History"><FileText className="w-4 h-4" /></button>
                           <button onClick={() => { setTaxConfigState(state.code); setShowTaxStateConfig(true); }} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg" title="Settings"><Settings className="w-4 h-4" /></button>
                         </div>
                       </div>
@@ -1359,7 +1365,7 @@ const SalesTaxView = ({
         
         {/* Filing History */}
         {Object.keys(filingHistory || {}).length > 0 && (
-          <div className="mt-6 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
+          <div id="filing-history" className="mt-6 bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-white">Filing History</h3>
               <div className="flex items-center gap-2">
@@ -1481,7 +1487,220 @@ const SalesTaxView = ({
           </div>
         </div>
       </div>
-    </div>
+    
+    {/* ═══ FILING MODAL — Mark state filing as complete ═══ */}
+    {selectedTaxState && (() => {
+      const stateCode = selectedTaxState;
+      const stateInfo = US_STATES_TAX_INFO[stateCode] || {};
+      const config = nexusStates[stateCode] || {};
+      const periodKey = taxPeriodType === 'month' ? taxPeriodValue : `${taxPeriodValue.split('-')[0]}-Q${taxPeriodValue.split('-')[1]}`;
+      const existingFiling = filingHistory?.[stateCode]?.[periodKey];
+      const portalUrl = config.portalUrl || STATE_FILING_FORMATS[stateCode]?.website || null;
+      
+      return (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setSelectedTaxState(null)}>
+          <div className="bg-slate-800 rounded-2xl border border-slate-600 max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-r from-emerald-600 to-teal-600 p-5 rounded-t-2xl flex items-center justify-between">
+              <div>
+                <h3 className="text-white text-lg font-bold">File Return — {stateInfo.name || stateCode}</h3>
+                <p className="text-white/70 text-sm">Period: {periodKey} • {config.frequency || 'monthly'} filing</p>
+              </div>
+              <button onClick={() => setSelectedTaxState(null)} className="p-2 hover:bg-white/20 rounded-lg text-white"><X className="w-5 h-5" /></button>
+            </div>
+            
+            <div className="p-5 space-y-4">
+              {existingFiling?.filed ? (
+                <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-4 text-center">
+                  <CheckCircle className="w-10 h-10 text-emerald-400 mx-auto mb-2" />
+                  <p className="text-emerald-400 font-semibold">Already Filed</p>
+                  <p className="text-slate-400 text-sm">Filed {existingFiling.filedDate ? new Date(existingFiling.filedDate).toLocaleDateString() : ''} • {formatCurrency(existingFiling.amount || 0)}</p>
+                  {existingFiling.confirmationNum && <p className="text-slate-500 text-xs mt-1">Confirmation: {existingFiling.confirmationNum}</p>}
+                </div>
+              ) : (
+                <>
+                  {/* Portal Link */}
+                  {portalUrl && (
+                    <a href={portalUrl} target="_blank" rel="noopener noreferrer" className="block bg-blue-900/30 border border-blue-500/30 rounded-xl p-3 hover:bg-blue-900/50 transition-colors">
+                      <div className="flex items-center gap-3">
+                        <ArrowUpRight className="w-5 h-5 text-blue-400 flex-shrink-0" />
+                        <div>
+                          <p className="text-blue-300 font-medium text-sm">Open {stateInfo.name} Tax Portal</p>
+                          <p className="text-blue-400/60 text-xs truncate">{portalUrl}</p>
+                        </div>
+                      </div>
+                    </a>
+                  )}
+                  {!portalUrl && (
+                    <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-3 text-center">
+                      <p className="text-amber-400 text-sm">No portal URL set — add one in state settings (⚙️)</p>
+                    </div>
+                  )}
+                  
+                  {/* Filing Form */}
+                  <form onSubmit={e => {
+                    e.preventDefault();
+                    const fd = new FormData(e.target);
+                    markFilingComplete(stateCode, periodKey, {
+                      amount: parseFloat(fd.get('amount')) || 0,
+                      confirmationNum: fd.get('confirmation') || '',
+                      notes: fd.get('notes') || '',
+                      zeroReturn: parseFloat(fd.get('amount')) === 0,
+                    });
+                    setToast({ message: `${stateInfo.name} filing marked as complete for ${periodKey}`, type: 'success' });
+                    setSelectedTaxState(null);
+                  }}>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-slate-400 text-xs block mb-1">Amount Paid ($)</label>
+                        <input name="amount" type="number" step="0.01" defaultValue="0.00" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:border-emerald-500 focus:outline-none" autoFocus />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 text-xs block mb-1">Confirmation / Reference #</label>
+                        <input name="confirmation" type="text" placeholder="e.g., RI-2026-001234" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:border-emerald-500 focus:outline-none" />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 text-xs block mb-1">Notes (optional)</label>
+                        <textarea name="notes" rows={2} placeholder="e.g., Filed via TaxJar, zero return..." className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:border-emerald-500 focus:outline-none resize-none" />
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-3 mt-5">
+                      <button type="submit" className="flex-1 px-4 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-white font-semibold flex items-center justify-center gap-2">
+                        <Check className="w-4 h-4" /> Mark as Filed
+                      </button>
+                      <button type="button" onClick={() => setSelectedTaxState(null)} className="px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl text-slate-300">Cancel</button>
+                    </div>
+                  </form>
+                </>
+              )}
+              
+              {/* State Info */}
+              <div className="bg-slate-900/50 rounded-xl p-3 text-xs text-slate-500 space-y-1">
+                <p><span className="text-slate-400">Rate:</span> {((stateInfo.stateRate || 0) * 100).toFixed(2)}% state rate</p>
+                <p><span className="text-slate-400">Threshold:</span> {stateInfo.nexusThreshold ? `$${stateInfo.nexusThreshold.sales?.toLocaleString() || 'N/A'} sales${stateInfo.nexusThreshold.transactions ? ` / ${stateInfo.nexusThreshold.transactions} transactions` : ''}` : 'N/A'}</p>
+                <p><span className="text-slate-400">Registration:</span> {config.registrationId || 'Not set'}</p>
+                {stateInfo.note && <p><span className="text-slate-400">Note:</span> {stateInfo.note}</p>}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    })()}
+    
+    {/* ═══ STATE CONFIG MODAL — Edit registration, portal URL, frequency ═══ */}
+    {showTaxStateConfig && taxConfigState && (() => {
+      const stateCode = taxConfigState;
+      const stateInfo = US_STATES_TAX_INFO[stateCode] || {};
+      const config = nexusStates[stateCode] || {};
+      
+      return (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => { setShowTaxStateConfig(false); setTaxConfigState(null); }}>
+          <div className="bg-slate-800 rounded-2xl border border-slate-600 max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-r from-slate-600 to-slate-700 p-5 rounded-t-2xl flex items-center justify-between">
+              <div>
+                <h3 className="text-white text-lg font-bold">⚙️ {stateInfo.name || stateCode} — Settings</h3>
+                <p className="text-white/70 text-sm">Configure nexus registration and filing details</p>
+              </div>
+              <button onClick={() => { setShowTaxStateConfig(false); setTaxConfigState(null); }} className="p-2 hover:bg-white/20 rounded-lg text-white"><X className="w-5 h-5" /></button>
+            </div>
+            
+            <form onSubmit={e => {
+              e.preventDefault();
+              const fd = new FormData(e.target);
+              const updated = { ...salesTaxConfig };
+              updated.nexusStates = { ...updated.nexusStates };
+              updated.nexusStates[stateCode] = {
+                ...updated.nexusStates[stateCode],
+                hasNexus: true,
+                registrationId: fd.get('registrationId') || '',
+                portalUrl: fd.get('portalUrl') || '',
+                frequency: fd.get('frequency') || 'monthly',
+                autoFile: fd.get('autoFile') === 'on',
+                notes: fd.get('notes') || '',
+              };
+              saveSalesTax(updated);
+              setToast({ message: `${stateInfo.name} settings saved`, type: 'success' });
+              setShowTaxStateConfig(false);
+              setTaxConfigState(null);
+            }}>
+              <div className="p-5 space-y-4">
+                {/* Registration ID */}
+                <div>
+                  <label className="text-slate-300 text-sm font-medium block mb-1">Registration / Tax ID</label>
+                  <input name="registrationId" type="text" defaultValue={config.registrationId || ''} placeholder="e.g., 12345-6789" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:border-blue-500 focus:outline-none" />
+                  <p className="text-slate-500 text-xs mt-1">Your state tax registration or license number</p>
+                </div>
+                
+                {/* Portal URL */}
+                <div>
+                  <label className="text-slate-300 text-sm font-medium block mb-1">Tax Portal URL</label>
+                  <input name="portalUrl" type="url" defaultValue={config.portalUrl || STATE_FILING_FORMATS[stateCode]?.website || ''} placeholder="https://taxportal.state.gov/..." className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:border-blue-500 focus:outline-none" />
+                  <p className="text-slate-500 text-xs mt-1">Direct link to the state's online filing portal</p>
+                  {STATE_FILING_FORMATS[stateCode]?.website && !config.portalUrl && (
+                    <button type="button" onClick={e => { e.target.closest('div').querySelector('input').value = STATE_FILING_FORMATS[stateCode].website; }} className="text-blue-400 text-xs mt-1 hover:underline">
+                      Use default: {STATE_FILING_FORMATS[stateCode].website}
+                    </button>
+                  )}
+                </div>
+                
+                {/* Filing Frequency */}
+                <div>
+                  <label className="text-slate-300 text-sm font-medium block mb-1">Filing Frequency</label>
+                  <select name="frequency" defaultValue={config.frequency || 'monthly'} className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:border-blue-500 focus:outline-none">
+                    <option value="monthly">Monthly</option>
+                    <option value="quarterly">Quarterly</option>
+                    <option value="semi-annual">Semi-Annual</option>
+                    <option value="annual">Annual</option>
+                  </select>
+                  <p className="text-slate-500 text-xs mt-1">How often you're required to file in this state</p>
+                </div>
+                
+                {/* Notes */}
+                <div>
+                  <label className="text-slate-300 text-sm font-medium block mb-1">Notes</label>
+                  <textarea name="notes" rows={2} defaultValue={config.notes || ''} placeholder="e.g., Uses SSUT program, marketplace facilitator covers most sales..." className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:border-blue-500 focus:outline-none resize-none" />
+                </div>
+                
+                {/* State Info */}
+                <div className="bg-slate-900/50 rounded-xl p-3 text-xs text-slate-500 space-y-1">
+                  <p><span className="text-slate-400">State Rate:</span> {((stateInfo.stateRate || 0) * 100).toFixed(2)}%</p>
+                  <p><span className="text-slate-400">Nexus Threshold:</span> {stateInfo.nexusThreshold ? `$${stateInfo.nexusThreshold.sales?.toLocaleString() || 'N/A'} sales${stateInfo.nexusThreshold.transactions ? ` / ${stateInfo.nexusThreshold.transactions} transactions` : ''}` : 'N/A'}</p>
+                  <p><span className="text-slate-400">Marketplace Facilitator:</span> {stateInfo.marketplaceFacilitator ? '✅ Yes' : '❌ No'}</p>
+                  <p><span className="text-slate-400">SST Member:</span> {stateInfo.sst ? '✅ Yes' : '❌ No'}</p>
+                  {stateInfo.note && <p><span className="text-slate-400">Note:</span> {stateInfo.note}</p>}
+                </div>
+                
+                {/* Danger Zone */}
+                <div className="border-t border-slate-700 pt-4">
+                  <button type="button" onClick={() => {
+                    if (window.confirm(`Remove ${stateInfo.name} from your nexus states? Filing history will be preserved.`)) {
+                      const updated = { ...salesTaxConfig };
+                      updated.nexusStates = { ...updated.nexusStates };
+                      updated.nexusStates[stateCode] = { ...updated.nexusStates[stateCode], hasNexus: false };
+                      saveSalesTax(updated);
+                      setToast({ message: `${stateInfo.name} removed from nexus states`, type: 'info' });
+                      setShowTaxStateConfig(false);
+                      setTaxConfigState(null);
+                    }
+                  }} className="text-red-400 hover:text-red-300 text-xs flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" /> Remove from nexus states
+                  </button>
+                </div>
+              </div>
+              
+              <div className="p-5 pt-0 flex gap-3">
+                <button type="submit" className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl text-white font-semibold flex items-center justify-center gap-2">
+                  <Save className="w-4 h-4" /> Save Settings
+                </button>
+                <button type="button" onClick={() => { setShowTaxStateConfig(false); setTaxConfigState(null); }} className="px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl text-slate-300">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    })()}
+    
+  </div>
   );
 };
 

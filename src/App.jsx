@@ -18673,9 +18673,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       globalModals={globalModals}
       invHistory={invHistory}
       navDropdown={navDropdown}
+      parsedTaxReport={parsedTaxReport}
       periodLabel={periodLabel}
       salesTaxConfig={salesTaxConfig}
       saveSalesTax={saveSalesTax}
+      selectedTaxState={selectedTaxState}
       setEditPortalUrlValue={setEditPortalUrlValue}
       setEditingPortalUrl={setEditingPortalUrl}
       setFilingDetailState={setFilingDetailState}
@@ -18697,9 +18699,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setUploadTab={setUploadTab}
       setViewingStateHistory={setViewingStateHistory}
       showHiddenStates={showHiddenStates}
+      showTaxStateConfig={showTaxStateConfig}
+      taxConfigState={taxConfigState}
       taxFilterStatus={taxFilterStatus}
       taxPeriodType={taxPeriodType}
       taxPeriodValue={taxPeriodValue}
+      taxReportFileName={taxReportFileName}
       viewingStateHistory={viewingStateHistory}
       breakdown={breakdown}
       m={m}
