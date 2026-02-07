@@ -1783,6 +1783,7 @@ const handleLogout = async () => {
   const [adsAiMessages, setAdsAiMessages] = useState([]);
   const [adsAiInput, setAdsAiInput] = useState('');
   const [adsAiLoading, setAdsAiLoading] = useState(false);
+  const [aiChatModel, setAiChatModel] = useState('claude-sonnet-4-5-20250929');
   const pendingAdsAnalysisRef = useRef(false);
   
   // Help modal
@@ -16562,7 +16563,7 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
       const aiResponse = await callAI({
         system: systemPrompt,
         messages: [...aiMessages.slice(-10).map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
-      }, '', 'claude-haiku-4-5-20251001');
+      }, '', aiChatModel);
       
       setAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
     } catch (error) {
@@ -16800,7 +16801,7 @@ HARD RULES — VIOLATING THESE MAKES THE PLAN USELESS:
       const aiResponse = await callAI({
         system: systemPrompt,
         messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
-      }, '', 'claude-haiku-4-5-20251001');
+      }, '', aiChatModel);
       
       setAdsAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
     } catch (error) {
@@ -18627,6 +18628,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       adSpend={adSpend}
       adsAiInput={adsAiInput}
       adsAiLoading={adsAiLoading}
+      aiChatModel={aiChatModel}
+      setAiChatModel={setAiChatModel}
       adsAiMessages={adsAiMessages}
       adsIntelData={adsIntelData}
       adsMonth={adsMonth}

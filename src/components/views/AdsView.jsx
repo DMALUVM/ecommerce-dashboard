@@ -11,6 +11,7 @@ import NavTabs from '../ui/NavTabs';
 
 const AdsView = ({
   adSpend, adsAiInput, adsAiLoading, adsAiMessages, adsIntelData,
+  aiChatModel, setAiChatModel,
   adsMonth, adsQuarter, adsSelectedDay, adsSelectedWeek, adsTimeTab,
   adsViewMode, adsYear, allDaysData, allPeriodsData, allWeeksData,
   amazonCampaignFilter, amazonCampaignSort, amazonCampaigns, appSettings,
@@ -539,9 +540,10 @@ const AdsView = ({
                 <h3 className="text-white text-lg font-semibold flex items-center gap-2"><Brain className="w-6 h-6 text-orange-400"/>AI Comprehensive Ads Audit</h3>
                 <p className="text-slate-400 text-sm mt-1">Generates a full cross-platform audit from ALL available data — search terms, placements, campaigns, daily performance, Brand Analytics.</p>
               </div>
-              <select className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm">
+              <select value={aiChatModel} onChange={e => setAiChatModel(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm">
                 <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5</option>
                 <option value="claude-opus-4-5-20250918">Claude Opus 4.5</option>
+                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fast)</option>
               </select>
             </div>
 
@@ -590,6 +592,11 @@ const AdsView = ({
                   <div><h3 className="text-white font-semibold">AI Ads Analyst</h3><p className="text-white/70 text-xs">{sortedDays.length}d daily{tier2Summary.count>0?` • ${tier2Summary.count} deep reports`:''}</p></div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <select value={aiChatModel} onChange={e=>setAiChatModel(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-white text-xs">
+                    <option value="claude-sonnet-4-5-20250929">Sonnet</option>
+                    <option value="claude-opus-4-5-20250918">Opus</option>
+                    <option value="claude-haiku-4-5-20251001">Haiku</option>
+                  </select>
                   <button onClick={()=>setAdsAiMessages([])} className="p-2 hover:bg-white/20 rounded-lg text-white/70 hover:text-white" title="Clear"><RefreshCw className="w-4 h-4"/></button>
                   <button onClick={()=>setShowAdsAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white"><X className="w-5 h-5"/></button>
                 </div>
