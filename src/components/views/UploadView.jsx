@@ -16,6 +16,7 @@ const UploadView = ({
   amazonBulkFiles,
   amazonBulkParsed,
   amazonBulkProcessing,
+  amazonCampaigns,
   amazonCredentials,
   amazonForecasts,
   appSettings,
@@ -835,6 +836,11 @@ const UploadView = ({
                   🔬 Generate Action Report from Existing Data
                 </button>
               )}
+              {!adsIntelData?.lastUpdated && (amazonCampaigns?.analytics?.totals || amazonCampaigns?.historicalDaily) && (
+                <button onClick={() => setShowAdsIntelUpload(true)} className="w-full mt-2 px-6 py-3 bg-gradient-to-r from-rose-600/80 to-orange-600/80 hover:from-rose-500 hover:to-orange-500 rounded-xl text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-rose-500/20">
+                  🔬 Generate Action Report from Dashboard Data
+                </button>
+              )}
               </div>
               
               {/* What data goes where - helpful guide */}
@@ -907,6 +913,11 @@ const UploadView = ({
                 {dtcIntelData?.lastUpdated && (
                   <button onClick={() => setShowDtcIntelUpload(true)} className="w-full mt-2 px-6 py-3 bg-gradient-to-r from-blue-700/60 to-teal-700/60 hover:from-blue-600 hover:to-teal-600 rounded-xl text-white font-medium flex items-center justify-center gap-2">
                     🔬 Generate DTC Action Report
+                  </button>
+                )}
+                {!dtcIntelData?.lastUpdated && allDaysData && Object.keys(allDaysData).some(d => (allDaysData[d]?.shopify?.googleAds || 0) > 0 || (allDaysData[d]?.shopify?.metaAds || 0) > 0) && (
+                  <button onClick={() => setShowDtcIntelUpload(true)} className="w-full mt-2 px-6 py-3 bg-gradient-to-r from-blue-700/60 to-teal-700/60 hover:from-blue-600 hover:to-teal-600 rounded-xl text-white font-medium flex items-center justify-center gap-2">
+                    🔬 Generate DTC Action Report from Dashboard Data
                   </button>
                 )}
               </div>

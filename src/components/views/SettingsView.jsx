@@ -2754,7 +2754,7 @@ const SettingsView = ({
 
         {/* AI Model Selection */}
         <SettingSection title="🧠 AI Model">
-          <SettingRow label="Report Generation Model" desc="Controls Amazon PPC & DTC Action Reports only">
+          <SettingRow label="AI Model" desc="Controls Action Reports, Forecasts & Analytics">
             <select
               value={currentLocalSettings.aiModel || 'claude-sonnet-4-20250514'}
               onChange={(e) => updateSetting('aiModel', e.target.value)}
@@ -2767,9 +2767,9 @@ const SettingsView = ({
           </SettingRow>
           <div className="bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400 space-y-1">
             <p><strong className="text-white">How models are routed:</strong></p>
-            <p>🟣 <strong className="text-violet-300">Action Reports</strong> (Amazon PPC + DTC) → <strong className="text-white">Your selection above</strong> (default: Sonnet 4)</p>
-            <p>💬 <strong className="text-cyan-300">AI Chat</strong> → Haiku 4.5 (fast, cheap — ~$0.01/message)</p>
-            <p>📈 <strong className="text-emerald-300">Forecasts & Analytics</strong> → Sonnet 4 (always, needs precision)</p>
+            <p>🟣 <strong className="text-violet-300">Action Reports</strong> (Amazon PPC + DTC) → <strong className="text-white">Your selection above</strong></p>
+            <p>📈 <strong className="text-emerald-300">Forecasts & Analytics</strong> → <strong className="text-white">Your selection above</strong></p>
+            <p>💬 <strong className="text-cyan-300">AI Chat</strong> → Selectable in chat header (default: Haiku 4.5)</p>
             <p className="text-slate-500 mt-2">Sonnet = best value for reports. Switch to Opus for quarterly deep-dives (~5x cost, deepest reasoning).</p>
           </div>
         </SettingSection>

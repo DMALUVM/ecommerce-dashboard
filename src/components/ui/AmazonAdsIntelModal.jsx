@@ -1196,6 +1196,145 @@ const renderMarkdown = (md) => {
   return html;
 };
 
+// ============ DASHBOARD DATA REPORT (no CSV upload needed) ============
+
+export const buildDashboardReportPrompt = (amazonCampaigns, allDaysData) => {
+  if (!amazonCampaigns?.analytics && !amazonCampaigns?.historicalDaily) return null;
+  
+  const analytics = amazonCampaigns.analytics || {};
+  const totals = analytics.totals || {};
+  const weekly = analytics.weeklyTrends || [];
+  const monthly = analytics.monthlyTrends || [];
+  const hist = amazonCampaigns.historicalDaily || {};
+  const campaigns = amazonCampaigns.campaigns || [];
+  const dateRange = amazonCampaigns.historicalDateRange || {};
+  
+  let dataContext = `=== AMAZON PPC DASHBOARD DATA ===\n`;
+  
+  // Overall totals
+  dataContext += `\nOVERALL TOTALS (${analytics.daysAnalyzed || 0} days analyzed):\n`;
+  dataContext += `  Total Spend: $${(totals.spend || 0).toFixed(2)}\n`;
+  dataContext += `  Total Ad Revenue: $${(totals.totalRevenue || 0).toFixed(2)}\n`;
+  dataContext += `  Total Clicks: ${totals.clicks || 0}\n`;
+  dataContext += `  Total Conversions: ${totals.conversions || 0}\n`;
+  dataContext += `  Impressions: ${totals.impressions || 0}\n`;
+  if (totals.spend > 0) {
+    dataContext += `  ROAS: ${(totals.totalRevenue / totals.spend).toFixed(2)}\n`;
+    dataContext += `  ACOS: ${(totals.spend / totals.totalRevenue * 100).toFixed(1)}%\n`;
+  }
+  
+  // Weekly trends
+  if (weekly.length > 0) {
+    dataContext += `\nWEEKLY TRENDS (last ${weekly.length} weeks):\n`;
+    weekly.forEach(w => {
+      dataContext += `  ${w.weekEnding}: Spend $${(w.spend || 0).toFixed(0)} | Revenue $${(w.revenue || 0).toFixed(0)} | ROAS ${(w.roas || 0).toFixed(2)} | ACOS ${(w.acos || 0).toFixed(1)}% | TACOS ${(w.tacos || 0).toFixed(1)}% | Orders ${w.orders || 0}\n`;
+    });
+  }
+  
+  // Best/worst days
+  if (analytics.bestPerformingDay) {
+    const b = analytics.bestPerformingDay;
+    dataContext += `\nBEST DAY: ${b.date} — ROAS ${(b.roas || 0).toFixed(2)}, Spend $${(b.spend || 0).toFixed(0)}, Revenue $${(b.revenue || 0).toFixed(0)}\n`;
+  }
+  if (analytics.worstPerformingDay) {
+    const w = analytics.worstPerformingDay;
+    dataContext += `WORST DAY: ${w.date} — ROAS ${(w.roas || 0).toFixed(2)}, Spend $${(w.spend || 0).toFixed(0)}, Revenue $${(w.revenue || 0).toFixed(0)}\n`;
+  }
+  
+  // Day of week insights
+  if (analytics.dayOfWeekInsights?.length > 0) {
+    dataContext += `\nDAY-OF-WEEK PERFORMANCE:\n`;
+    analytics.dayOfWeekInsights.forEach(d => {
+      dataContext += `  ${d.day}: Avg Spend $${(d.avgSpend || 0).toFixed(0)} | Avg Revenue $${(d.avgRevenue || 0).toFixed(0)} | Avg ROAS ${(d.avgROAS || 0).toFixed(2)}\n`;
+    });
+  }
+  
+  // Campaign list
+  const enabledCampaigns = campaigns.filter(c => c.state === 'enabled');
+  if (campaigns.length > 0) {
+    dataContext += `\nCAMPAIGNS (${campaigns.length} total, ${enabledCampaigns.length} enabled):\n`;
+    campaigns.slice(0, 20).forEach(c => {
+      dataContext += `  ${c.name} | Type: ${c.type || c.typeName} | State: ${c.state} | Budget: $${c.budget || 0}/day\n`;
+    });
+  }
+  
+  // Recent daily performance (last 14 days from historicalDaily)
+  const recentDays = Object.keys(hist).sort().slice(-14);
+  if (recentDays.length > 0) {
+    dataContext += `\nRECENT DAILY PPC PERFORMANCE (${recentDays.length} days):\n`;
+    recentDays.forEach(d => {
+      const day = hist[d];
+      dataContext += `  ${d}: Spend $${(day.spend || 0).toFixed(0)} | AdRev $${(day.adRevenue || 0).toFixed(0)} | ROAS ${(day.roas || 0).toFixed(2)} | ACOS ${(day.acos || 0).toFixed(1)}% | CPC $${(day.cpc || 0).toFixed(2)} | ConvRate ${(day.convRate || 0).toFixed(1)}%\n`;
+    });
+  }
+  
+  // Enrich with daily sales data for total revenue context
+  if (allDaysData) {
+    const salesDays = Object.keys(allDaysData).sort().slice(-14);
+    if (salesDays.length > 0) {
+      dataContext += `\nTOTAL BUSINESS PERFORMANCE (last ${salesDays.length} days):\n`;
+      salesDays.forEach(d => {
+        const day = allDaysData[d];
+        const amz = day?.amazon || {};
+        const shop = day?.shopify || {};
+        const rev = (day?.total?.revenue || 0);
+        const amzRev = amz.revenue || 0;
+        const shopRev = shop.revenue || 0;
+        const adSpend = (amz.adSpend || 0) + (shop.googleAds || 0) + (shop.metaAds || 0);
+        if (rev > 0) {
+          dataContext += `  ${d}: Total Rev $${rev.toFixed(0)} (AMZ $${amzRev.toFixed(0)} + Shop $${shopRev.toFixed(0)}) | Total Ad Spend $${adSpend.toFixed(0)} | TACOS ${rev > 0 ? (adSpend/rev*100).toFixed(1) : 0}%\n`;
+        }
+      });
+    }
+  }
+  
+  const systemPrompt = `You are an expert Amazon PPC strategist with 10+ years experience managing 8-figure budgets across SP, SB, and SD campaigns. Analyze the provided dashboard data and generate a comprehensive, actionable report. Use concrete numbers and specific recommendations.`;
+  
+  const userPrompt = `Generate a comprehensive Amazon PPC Action Report for Tallowbourn (tallow-based skincare: lip balms, body balms, deodorant).
+
+DATA SOURCE: Dashboard analytics (historical daily data, weekly trends, campaign list)
+DATE RANGE: ${dateRange.start || 'earliest'} to ${dateRange.end || 'latest'}
+
+PRODUCT CONTEXT:
+- Lip Balm 3-Pack (Parent ASIN B0CLHTF8YN) — highest volume SKU
+- Body Balm 2oz (B0CLF4XDCP) — premium product, higher AOV
+- Deodorant (B0CLHSC2WC) — newer product, still building traction
+- Typical price points: Lip balm $10-14, Body balm $18-24, Deodorant $12-16
+- Target blended ACOS: 25% (willing to go higher for new customer acquisition)
+- Target TACOS: under 12%
+
+${dataContext}
+
+NOTE: This report is generated from dashboard-level data (aggregate daily metrics, weekly trends, campaign list). Detailed search term, placement, and targeting breakdowns are not available — focus analysis on overall performance trends, budget allocation, day-of-week optimization, ROAS/ACOS trends, and campaign structure recommendations.
+
+=== GENERATE THESE SECTIONS ===
+
+## 📊 EXECUTIVE SUMMARY
+Key metrics, performance trajectory, biggest opportunities
+
+## 📈 PERFORMANCE TRENDS
+Weekly ROAS/ACOS trajectory, spend efficiency, conversion rate changes
+
+## 💰 BUDGET & SPEND ANALYSIS
+Is spend level optimal? Day-of-week budget opportunities. TACOS analysis.
+
+## 🏗️ CAMPAIGN STRUCTURE RECOMMENDATIONS
+Based on campaign types and states — restructuring suggestions
+
+## 📅 DAY-OF-WEEK OPTIMIZATION
+Which days deserve more/less budget based on performance data
+
+## ⚡ TOP 5 ACTIONS — DO THIS WEEK
+Specific, measurable actions with expected impact
+
+## 📋 DATA GAPS
+What additional reports (search terms, placements, targeting) would enable deeper optimization
+
+Generate all sections with specific numbers and actionable recommendations.`;
+  
+  return { systemPrompt, userPrompt };
+};
+
 // ============ COMPONENT ============
 
 const AmazonAdsIntelModal = ({
@@ -1432,13 +1571,21 @@ const AmazonAdsIntelModal = ({
   };
 
   const generateActionReport = async () => {
-    if (!callAI || !adsIntelData?.lastUpdated) return;
+    if (!callAI) return;
+    if (!adsIntelData?.lastUpdated && !hasDashboardData) return;
     setGeneratingReport(true);
     setReportError(null);
     setActionReport(null);
     
     try {
-      const prompts = buildActionReportPrompt(adsIntelData);
+      let prompts;
+      if (adsIntelData?.lastUpdated) {
+        prompts = buildActionReportPrompt(adsIntelData);
+      }
+      if (!prompts && hasDashboardData) {
+        // Build report from amazonCampaigns dashboard data
+        prompts = buildDashboardReportPrompt(amazonCampaigns, allDaysData);
+      }
       if (!prompts) throw new Error('No data available for report');
       
       const response = await callAI(prompts.userPrompt, prompts.systemPrompt);
@@ -1482,6 +1629,7 @@ const AmazonAdsIntelModal = ({
   const validFiles = detectedFiles.filter(d => d.type && !d.error);
   const unknownFiles = detectedFiles.filter(d => !d.type || d.error);
   const hasExistingData = adsIntelData?.lastUpdated;
+  const hasDashboardData = amazonCampaigns?.analytics?.totals || amazonCampaigns?.historicalDaily;
   const typeLabels = Object.fromEntries(REPORT_TYPES.map(r => [r.key, r.label]));
   const typeColors = Object.fromEntries(REPORT_TYPES.map(r => [r.key, r.color]));
   const showReportView = actionReport || generatingReport || reportError;
@@ -1531,6 +1679,31 @@ const AmazonAdsIntelModal = ({
                 >
                   <FileText className="w-4 h-4" />
                   🔬 Generate Action Report from This Data
+                </button>
+              )}
+            </div>
+          )}
+          
+          {/* Dashboard data available (from API - no CSV upload needed) */}
+          {!hasExistingData && hasDashboardData && (
+            <div className="bg-indigo-900/30 border border-indigo-500/30 rounded-lg p-3 text-sm">
+              <p className="text-indigo-400 font-medium">📊 Dashboard PPC data available</p>
+              <p className="text-slate-400 text-xs mt-1">
+                {[
+                  amazonCampaigns.campaigns?.length && `${amazonCampaigns.campaigns.length} campaigns`,
+                  amazonCampaigns.historicalDaily && `${Object.keys(amazonCampaigns.historicalDaily).length}d historical`,
+                  amazonCampaigns.analytics?.daysAnalyzed && `${amazonCampaigns.analytics.daysAnalyzed}d analyzed`,
+                  amazonCampaigns.analytics?.weeklyTrends?.length && `${amazonCampaigns.analytics.weeklyTrends.length} weekly trends`,
+                ].filter(Boolean).join(' · ')}
+              </p>
+              <p className="text-slate-500 text-xs mt-1">From Amazon SP-API · For deeper analysis, upload CSV reports below</p>
+              {callAI && !actionReport && !generatingReport && (
+                <button
+                  onClick={generateActionReport}
+                  className="mt-3 w-full px-4 py-2.5 bg-gradient-to-r from-rose-600 to-orange-600 hover:from-rose-500 hover:to-orange-500 rounded-lg text-white font-medium flex items-center justify-center gap-2 text-sm shadow-lg shadow-rose-500/20"
+                >
+                  <FileText className="w-4 h-4" />
+                  🔬 Generate Action Report from Dashboard Data
                 </button>
               )}
             </div>
