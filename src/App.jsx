@@ -509,9 +509,10 @@ const AI_CONFIG = {
 // Can be called as:
 //   callAI(prompt, systemPrompt) - for simple prompts
 //   callAI({ messages: [...], system: '...' }) - for chat with history or complex content
-const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null) => {
+const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, maxTokensOverride = null) => {
   // Model priority: explicit override > window global (report selector) > AI_CONFIG default
   const selectedModel = modelOverride || (typeof window !== 'undefined' && window.__aiModelOverride) || AI_CONFIG.model;
+  const tokenLimit = maxTokensOverride || AI_CONFIG.maxTokens;
   let requestBody;
   
   if (typeof promptOrOptions === 'string') {
@@ -520,7 +521,7 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null) 
       system: systemPrompt || 'You are a helpful e-commerce analytics AI. Respond with JSON when requested.',
       messages: [{ role: 'user', content: promptOrOptions }],
       model: selectedModel,
-      max_tokens: AI_CONFIG.maxTokens,
+      max_tokens: tokenLimit,
     };
   } else {
     // Options object with messages array (supports complex content like PDFs)
@@ -528,7 +529,7 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null) 
       system: promptOrOptions.system || 'You are a helpful e-commerce analytics AI.',
       messages: promptOrOptions.messages || [],
       model: selectedModel,
-      max_tokens: AI_CONFIG.maxTokens,
+      max_tokens: tokenLimit,
     };
   }
   
@@ -1780,10 +1781,16 @@ const handleLogout = async () => {
   
   // AI Ads Insights Chat (separate from main AI chat)
   const [showAdsAIChat, setShowAdsAIChat] = useState(false);
-  const [adsAiMessages, setAdsAiMessages] = useState([]);
+  const [adsAiMessages, setAdsAiMessages] = useState(() => {
+    try { return safeLocalStorageGet('ecommerce_ads_ai_chat_v1', []); } catch { return []; }
+  });
   const [adsAiInput, setAdsAiInput] = useState('');
   const [adsAiLoading, setAdsAiLoading] = useState(false);
   const [aiChatModel, setAiChatModel] = useState('claude-sonnet-4-5-20250929');
+  // Prior report summaries — persisted so AI remembers past analyses
+  const [adsAiReportHistory, setAdsAiReportHistory] = useState(() => {
+    try { return safeLocalStorageGet('ecommerce_ads_report_history_v1', []); } catch { return []; }
+  });
   const pendingAdsAnalysisRef = useRef(false);
   
   // Help modal
@@ -2009,6 +2016,21 @@ const handleLogout = async () => {
       safeLocalStorageSet('ecommerce_ai_chat_history_v1', JSON.stringify(messagesToSave));
     }
   }, [aiMessages]);
+  
+  // Persist Ads AI conversation across sessions
+  useEffect(() => {
+    if (adsAiMessages.length > 0) {
+      const messagesToSave = adsAiMessages.slice(-60); // Keep last 60 messages
+      safeLocalStorageSet('ecommerce_ads_ai_chat_v1', JSON.stringify(messagesToSave));
+    }
+  }, [adsAiMessages]);
+  
+  // Persist prior report summaries
+  useEffect(() => {
+    if (adsAiReportHistory.length > 0) {
+      safeLocalStorageSet('ecommerce_ads_report_history_v1', JSON.stringify(adsAiReportHistory.slice(-10))); // Last 10 reports
+    }
+  }, [adsAiReportHistory]);
   
   // Listen for QBO OAuth callback from popup window
   useEffect(() => {
@@ -16574,7 +16596,7 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
     }
   };
 
-  // Send AI Ads Message - uses comprehensive prompt builder for Tier 2 data
+  // Send AI Ads Message - Elite PPC analysis with memory + token efficiency
   const sendAdsAIMessage = async (directMessage) => {
     const userMessage = directMessage || adsAiInput.trim();
     if (!userMessage || adsAiLoading) return;
@@ -16583,33 +16605,103 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
     setAdsAiLoading(true);
     
     try {
-      // ── Build comprehensive data context ──
-      // Only send FULL data context on first message or explicit audit requests
-      // Follow-up questions use conversation history + lightweight context
+      // ── Determine request type for smart token allocation ──
+      const isAuditRequest = /comprehensive|full audit|action plan|deep dive|generate.*report|all.*data|complete.*analysis|weekly.*review/i.test(userMessage);
       const isFirstMessage = adsAiMessages.length === 0;
-      const isAuditRequest = /comprehensive|full audit|action plan|deep dive|all (available )?data/i.test(userMessage);
       const needsFullContext = isFirstMessage || isAuditRequest;
       
-      let dataContext = '';
+      // Opus gets 16K for audits, Sonnet 12K, Haiku 8K (their sweet spots)
+      const isOpus = aiChatModel.includes('opus');
+      const isSonnet = aiChatModel.includes('sonnet');
+      const auditTokens = isOpus ? 16000 : isSonnet ? 12000 : 8000;
+      const followUpTokens = isOpus ? 12000 : isSonnet ? 8000 : 4096;
+      const tokenBudget = needsFullContext ? auditTokens : followUpTokens;
+      
+      // ── SYSTEM PROMPT: Instructions only (cacheable, no data) ──
+      const systemPrompt = `You are a $15,000/month Amazon PPC strategist and multi-channel advertising expert performing analysis for Tallowbourn, a tallow-based skincare brand selling lip balms, body balms, and natural deodorant through Amazon and Shopify (DTC).
+
+BUSINESS CONTEXT:
+- Brand: Tallowbourn (premium tallow skincare — niche, health-conscious audience)
+- Channels: Amazon (primary revenue) + Shopify DTC
+- Products: Natural tallow lip balm, body balm, deodorant
+- Ad platforms: Amazon Ads (SP/SB/SD), Google Ads, Meta Ads
+- Key competitive space: natural/organic skincare, tallow skincare, clean beauty
+
+YOUR ANALYSIS STANDARDS:
+You produce reports that would justify a $15K/month retainer. Every recommendation must pass this test: "Would a CMO pay for this insight, or could they have Googled it?"
+
+HARD RULES — NON-NEGOTIABLE:
+1. CITE SPECIFIC DATA: Every claim must reference actual campaign names, search terms, ASINs, dollar amounts, and percentages from the provided data
+2. SHOW THE MATH: "Search term 'tallow lip balm' spent $147 over 30d with 0 orders → $4.90/day wasted → $147/month savings if negated"
+3. NO VAGUE LANGUAGE: Never say "consider", "you might", "look into", "it could be beneficial" — say DO THIS or STOP THIS
+4. PRIORITIZE BY DOLLAR IMPACT: Lead with highest-savings or highest-revenue-potential items
+5. IMPLEMENTATION STEPS: For every action, give exact click-path in Amazon/Google/Meta ad console
+6. MATCH TYPE MATTERS: Always specify exact/phrase/broad for keyword recommendations
+7. CROSS-REFERENCE: Compare SP vs SB vs SD efficiency, TOS vs RoS vs Product Pages, paid vs organic share
+8. MISSING DATA: When data is insufficient, state exactly which report to download and upload
+9. BID SPECIFICS: Include exact bid amounts, not just "increase bids"
+10. TIME-BOUND: Every recommendation gets a "do by" date (this week / next 7 days / next 30 days)
+
+FOR FULL AUDIT/ACTION PLAN REQUESTS — USE THIS STRUCTURE:
+
+## 📊 EXECUTIVE SUMMARY
+- Ad health score (1-10) with specific justification
+- Total spend, revenue, blended ROAS, TACOS across all channels
+- #1 urgent problem (with dollar impact) and #1 biggest opportunity
+
+## 🔴 STOP: Cut Waste (This Week)
+Each item: KEYWORD/CAMPAIGN → EXACT SPEND & TIMEFRAME → ZERO OR LOW SALES → SPECIFIC ACTION (negative match type, pause, reduce bid to $X) → MONTHLY SAVINGS
+
+## 🟢 PROTECT: What's Working
+Each item: KEYWORD/CAMPAIGN → ROAS, ACOS, CONV RATE → DEFEND STRATEGY (budget floor, bid floor, exact match isolation)
+
+## 🚀 SCALE: Growth Opportunities  
+Each item: OPPORTUNITY → MATH ("converting at X% with $Y/day — scaling to $Z/day projects $W additional revenue at similar ROAS") → STEP-BY-STEP LAUNCH PLAN
+
+## 🔄 PLACEMENT OPTIMIZATION
+TOS vs Product Pages vs RoS: ROAS comparison → Specific bid modifier recommendations with exact percentages
+
+## 💰 BUDGET REALLOCATION
+Current split → Recommended split with dollar amounts and rationale
+
+## 📈 TREND DIAGNOSIS  
+MoM trajectory with % changes, TACOS trend (growing ad-dependence?), seasonal preparation
+
+## 🎯 THIS WEEK: Top 5 Priority Actions
+1. [Specific action] → [$X impact] → [Y minutes to implement] → [Exact steps]
+
+FOR FOLLOW-UP QUESTIONS:
+Reference the full data from the prior analysis. Be concise but still specific with numbers. If asking about a specific campaign or keyword, zoom in on that data point.`;
+
+      // ── USER MESSAGE: Data context + question (changes per request) ──
+      let dataBlock = '';
       
       if (needsFullContext) {
-        // Build last 30 days snippet from allDaysData for Tier 1 context
+        // Full data dump for comprehensive analysis
         const sortedDays = Object.keys(allDaysData || {}).sort();
         const last30Days = {};
         sortedDays.slice(-30).forEach(d => { last30Days[d] = allDaysData[d]; });
         
-        // Use the comprehensive prompt builder (handles both Tier 1 + Tier 2)
-        dataContext = buildComprehensiveAdsPrompt(adsIntelData, last30Days, amazonCampaigns);
+        // Primary: New Tier 2 comprehensive prompt (from adsReportParser)
+        dataBlock = buildComprehensiveAdsPrompt(adsIntelData, last30Days, amazonCampaigns);
         
-        // Also append old-format intel if available (backward compatibility)
+        // Append old-format intel if available and not redundant
         const oldContext = buildAdsIntelContext(adsIntelData);
-        if (oldContext && !dataContext.includes('SP SEARCH TERM')) {
-          dataContext += '\n' + oldContext;
+        if (oldContext && !dataBlock.includes('SP SEARCH TERM')) {
+          dataBlock += '\n' + oldContext;
         }
         const dtcContext = buildDtcIntelContext(dtcIntelData);
-        if (dtcContext) dataContext += '\n' + dtcContext;
+        if (dtcContext) dataBlock += '\n' + dtcContext;
+        
+        // ── Inject prior report memory for continuity ──
+        if (adsAiReportHistory.length > 0) {
+          const priorSummaries = adsAiReportHistory.slice(-3).map((r, i) => 
+            `Report ${i + 1} (${r.date}): Health ${r.healthScore || '?'}/10 | Key issues: ${r.keyIssues || 'N/A'} | Actions taken: ${r.actionsTaken || 'pending'}`
+          ).join('\n');
+          dataBlock += `\n\n## PRIOR REPORT MEMORY (for tracking progress)\n${priorSummaries}\nCompare current data against these prior findings. Note what improved, what got worse, and what's stagnant.`;
+        }
       } else {
-        // Lightweight context for follow-ups — just key metrics
+        // Lightweight context for follow-ups
         const sortedDays = Object.keys(allDaysData || {}).sort();
         const last7 = sortedDays.slice(-7);
         let recentSpend = 0, recentRev = 0;
@@ -16618,83 +16710,44 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
           recentSpend += (day?.amazon?.adSpend || 0) + (day?.shopify?.googleSpend || 0) + (day?.shopify?.metaSpend || 0);
           recentRev += (day?.amazon?.revenue || 0) + (day?.shopify?.revenue || 0);
         });
-        dataContext = `[Follow-up context: Last 7d spend $${recentSpend.toFixed(0)}, revenue $${recentRev.toFixed(0)}, ROAS ${recentSpend > 0 ? (recentRev/recentSpend).toFixed(2) : 'N/A'}x. Full data was provided in earlier messages — reference that for specifics.]`;
+        dataBlock = `[Quick context: Last 7d spend $${recentSpend.toFixed(0)}, revenue $${recentRev.toFixed(0)}, ROAS ${recentSpend > 0 ? (recentRev/recentSpend).toFixed(2) : 'N/A'}x. Full dataset was provided earlier in this conversation.]`;
       }
+      
+      // Build message with data separated from question
+      const userContent = needsFullContext 
+        ? `Here is my current advertising data:\n\n${dataBlock}\n\n---\n\nMy request: ${userMessage}`
+        : `${dataBlock}\n\n${userMessage}`;
 
-      const systemPrompt = `You are a world-class Amazon PPC and multi-channel advertising strategist — the kind that brands pay $15,000/month for. You produce ELITE ACTION REPORTS that are the gold standard in ecommerce advertising optimization.
-
-YOUR ANALYSIS FRAMEWORK:
-1. Data-first: Every claim backed by specific numbers from the data
-2. Prioritized by impact: Highest-dollar-impact actions first
-3. Implementation-ready: Step-by-step instructions, not vague suggestions
-4. Cross-referenced: Compare across platforms, placements, match types, and time periods
-
-${dataContext}
-
-═══════════════════════════════════════════════════════════════
-RESPONSE FORMAT — USE THIS STRUCTURE FOR AUDIT/ACTION PLAN REQUESTS:
-═══════════════════════════════════════════════════════════════
-
-## 📊 EXECUTIVE SUMMARY
-- Overall advertising health score (1-10) with justification
-- Total spend, revenue, blended ROAS across all channels
-- The #1 most urgent problem and #1 biggest opportunity
-
-## 🔴 STOP IMMEDIATELY (Cut Waste This Week)
-For EACH item — be brutally specific:
-- WHAT: Exact campaign name, keyword, placement, or targeting to pause/negative
-- DATA: Spend $X over Y days, $0 sales, Z clicks — or ROAS below X
-- ACTION: "Go to Campaign Manager → [name] → Negative Keywords → Add '[term]' as Phrase match"
-- SAVINGS: "$X/month based on [period] run rate"
-
-## 🟢 PROTECT & OPTIMIZE (What's Working)
-For EACH item:
-- WHAT: Specific campaign, keyword, ASIN performing well
-- METRICS: ROAS, ACOS, conversion rate with exact numbers
-- RISK: What could break it (competition, seasonality, budget caps)
-- ACTION: "Increase daily budget from $X to $Y" or "Add as exact match in new campaign"
-
-## 🚀 SCALE OPPORTUNITIES (Grow Revenue)
-For EACH item:
-- WHAT: Specific scaling action with expected math
-- WHY: "Converting at X% with only $Y daily spend — headroom to scale"
-- HOW: Step-by-step campaign creation or bid adjustment
-- PROJECTED: "$X additional revenue/month at Y ROAS based on current conversion rate"
-
-## 💰 BUDGET REALLOCATION
-- Current split: Amazon X% / Google Y% / Meta Z%
-- Recommended split with rationale
-- Specific dollar amounts to move and where
-
-## 📈 TREND DIAGNOSIS
-- MoM trajectory: improving/declining with specific % changes
-- TACOS trend: ad-dependent vs organic growth
-- Placement efficiency shifts
-- Seasonal factors to prepare for
-
-## 🎯 THIS WEEK'S TOP 5 PRIORITIES
-1. [Action] → [Expected impact $] → [Time: X min] → [Difficulty: Easy/Med/Hard]
-2-5. Same format
-
-═══════════════════════════════════════════════════════════════
-HARD RULES:
-═══════════════════════════════════════════════════════════════
-- ALWAYS cite specific search terms, campaign names, ASINs, ad names, and dollar amounts
-- NEVER use vague language: no "consider", "you might want to", "look into" — say DO or STOP
-- For every recommendation: show the math (spend, sales, ROAS, projected impact)
-- Cross-reference: paid vs organic, SP vs SB vs SD, placement A vs B, Google vs Meta
-- When data is missing: say exactly which report to upload
-- Be blunt: "This campaign is burning $X/month with zero return — pause TODAY"
-- Include specific bid amounts when recommending changes
-- For keyword recommendations: specify match type (exact/phrase/broad)
-- Format currency as $X,XXX not just numbers`;
-
+      // ── Send with smart token budget ──
       const aiResponse = await callAI({
         system: systemPrompt,
-        messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
-      }, '', aiChatModel);
+        messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userContent }],
+      }, '', aiChatModel, tokenBudget);
       
-      setAdsAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
+      const responseText = aiResponse || 'Sorry, I could not process that.';
+      setAdsAiMessages(prev => [...prev, { role: 'assistant', content: responseText }]);
+      
+      // ── Auto-save report summary for future memory ──
+      if (isAuditRequest || isFirstMessage) {
+        // Extract health score if present
+        const healthMatch = responseText.match(/health.*?(\d+)\s*\/\s*10|score.*?(\d+)\s*\/\s*10|(\d+)\s*\/\s*10/i);
+        const healthScore = healthMatch ? (healthMatch[1] || healthMatch[2] || healthMatch[3]) : null;
+        
+        // Extract key issues (first few bullet points from STOP section)
+        const stopSection = responseText.match(/##.*?STOP.*?\n([\s\S]*?)(?=##|$)/i);
+        const keyIssues = stopSection 
+          ? stopSection[1].split('\n').filter(l => l.trim().startsWith('-') || l.trim().startsWith('*')).slice(0, 3).map(l => l.replace(/^[\s\-\*]+/, '').substring(0, 80)).join('; ')
+          : 'See report';
+        
+        setAdsAiReportHistory(prev => [...prev, {
+          date: new Date().toISOString().slice(0, 10),
+          model: aiChatModel.includes('opus') ? 'Opus' : aiChatModel.includes('sonnet') ? 'Sonnet' : 'Haiku',
+          healthScore,
+          keyIssues,
+          actionsTaken: 'pending', // User can update this
+          tokenBudget,
+        }]);
+      }
     } catch (error) {
       console.error('Ads AI Chat error:', error);
       setAdsAiMessages(prev => [...prev, { role: 'assistant', content: `Error: ${error.message}. Try a simpler question.` }]);
@@ -18521,6 +18574,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       adsAiLoading={adsAiLoading}
       aiChatModel={aiChatModel}
       setAiChatModel={setAiChatModel}
+      adsAiReportHistory={adsAiReportHistory}
+      setAdsAiReportHistory={setAdsAiReportHistory}
       adsAiMessages={adsAiMessages}
       adsIntelData={adsIntelData}
       adsMonth={adsMonth}

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertTriangle, BarChart3, Brain, Check, ChevronLeft, ChevronRight,
+  AlertTriangle, BarChart3, Brain, Check, ChevronLeft, ChevronRight, Clock,
   Database, DollarSign, FileSpreadsheet, Loader2, RefreshCw, Search,
   Send, Target, TrendingUp, Trophy, Upload, X, Zap
 } from 'lucide-react';
@@ -12,6 +12,7 @@ import NavTabs from '../ui/NavTabs';
 const AdsView = ({
   adSpend, adsAiInput, adsAiLoading, adsAiMessages, adsIntelData,
   aiChatModel, setAiChatModel,
+  adsAiReportHistory, setAdsAiReportHistory,
   adsMonth, adsQuarter, adsSelectedDay, adsSelectedWeek, adsTimeTab,
   adsViewMode, adsYear, allDaysData, allPeriodsData, allWeeksData,
   amazonCampaignFilter, amazonCampaignSort, amazonCampaigns, appSettings,
@@ -566,6 +567,36 @@ const AdsView = ({
               </div>
             </div>
           </div>
+
+          {/* Prior Report History */}
+          {adsAiReportHistory && adsAiReportHistory.length > 0 && (
+            <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-4 mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-slate-300 font-medium text-sm flex items-center gap-2"><Clock className="w-4 h-4"/>Report History ({adsAiReportHistory.length})</h3>
+                <button onClick={()=>{if(window.confirm('Clear all report history? The AI will lose memory of prior analyses.')){setAdsAiReportHistory([]);}}} className="text-xs text-slate-500 hover:text-red-400">Clear History</button>
+              </div>
+              <div className="space-y-2">
+                {adsAiReportHistory.slice(-5).reverse().map((r,i)=>(
+                  <div key={i} className="flex items-center justify-between bg-slate-900/50 rounded-lg px-3 py-2 text-xs">
+                    <div className="flex items-center gap-3">
+                      <span className="text-slate-400">{r.date}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${r.model==='Opus'?'bg-violet-900/50 text-violet-300':r.model==='Sonnet'?'bg-blue-900/50 text-blue-300':'bg-slate-700 text-slate-300'}`}>{r.model}</span>
+                      {r.healthScore && <span className={`font-bold ${parseInt(r.healthScore)>=7?'text-emerald-400':parseInt(r.healthScore)>=4?'text-amber-400':'text-red-400'}`}>{r.healthScore}/10</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-500 max-w-[300px] truncate">{r.keyIssues}</span>
+                      <select value={r.actionsTaken||'pending'} onChange={e=>{setAdsAiReportHistory(prev=>prev.map((rr,ri)=>ri===prev.length-1-i?{...rr,actionsTaken:e.target.value}:rr));}} className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-300">
+                        <option value="pending">⏳ Pending</option>
+                        <option value="in-progress">🔄 In Progress</option>
+                        <option value="completed">✅ Completed</option>
+                        <option value="skipped">⏭ Skipped</option>
+                      </select>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {adsAiMessages.length>0 && (
             <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-6">
