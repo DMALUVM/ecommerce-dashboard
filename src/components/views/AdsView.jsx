@@ -9,6 +9,44 @@ import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from '../../utils/ads
 import { hasDailySalesData } from '../../utils/date';
 import NavTabs from '../ui/NavTabs';
 
+// Simple markdown → HTML converter for export (no external deps)
+const markdownToHtml = (md) => {
+  if (!md) return '';
+  let html = md
+    // Escape HTML entities
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    // Headers
+    .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    // Bold and italic
+    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    // Code
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // Horizontal rules
+    .replace(/^---$/gm, '<hr/>')
+    // Unordered lists
+    .replace(/^[\-\*] (.+)$/gm, '<li>$1</li>')
+    // Numbered lists
+    .replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  
+  // Wrap consecutive <li> in <ul>
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+  
+  // Paragraphs (lines not already wrapped in HTML tags)
+  html = html.split('\n').map(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return '';
+    if (/^<[a-z]/.test(trimmed)) return trimmed;
+    return `<p>${trimmed}</p>`;
+  }).join('\n');
+  
+  return html;
+};
+
 const AdsView = ({
   adSpend, adsAiInput, adsAiLoading, adsAiMessages, adsIntelData,
   aiChatModel, setAiChatModel,
@@ -33,6 +71,7 @@ const AdsView = ({
 
   const [uploadStatus, setUploadStatus] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [showDataSources, setShowDataSources] = useState(false);
   const fileInputRef = useRef(null);
 
   const campaigns = amazonCampaigns?.campaigns || [];
@@ -548,12 +587,66 @@ const AdsView = ({
               </select>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
-              <div className={`rounded-lg p-2 text-xs text-center ${sortedDays.length>0?'bg-emerald-900/30 text-emerald-400 border border-emerald-500/30':'bg-slate-800/50 text-slate-500 border border-slate-700'}`}>Daily KPIs: {sortedDays.length}d</div>
-              <div className={`rounded-lg p-2 text-xs text-center ${tier2Summary.platforms.includes('amazon')?'bg-emerald-900/30 text-emerald-400 border border-emerald-500/30':'bg-slate-800/50 text-slate-500 border border-slate-700'}`}>Amazon: {adsIntelData?.amazon?Object.keys(adsIntelData.amazon).length:0} reports</div>
-              <div className={`rounded-lg p-2 text-xs text-center ${tier2Summary.platforms.includes('google')?'bg-emerald-900/30 text-emerald-400 border border-emerald-500/30':'bg-slate-800/50 text-slate-500 border border-slate-700'}`}>Google: {adsIntelData?.google?Object.keys(adsIntelData.google).length:0} reports</div>
-              <div className={`rounded-lg p-2 text-xs text-center ${tier2Summary.platforms.includes('meta')?'bg-emerald-900/30 text-emerald-400 border border-emerald-500/30':'bg-slate-800/50 text-slate-500 border border-slate-700'}`}>Meta: {adsIntelData?.meta?Object.keys(adsIntelData.meta).length:0} reports</div>
-            </div>
+            {/* Data Sources Manifest — shows exactly what the AI will analyze */}
+            {(() => {
+              const sources = [];
+              // Tier 1: Daily KPIs
+              if (sortedDays.length > 0) sources.push({ platform: 'Dashboard', type: 'Daily KPIs (SP-API + Shopify)', rows: sortedDays.length, unit: 'days', date: sortedDays[sortedDays.length-1], color: 'violet' });
+              // SP-API campaigns
+              if (hasCampaignData) sources.push({ platform: 'Amazon', type: 'SP-API Campaigns', rows: campaigns.length, unit: 'campaigns', date: 'Live', color: 'orange' });
+              // Tier 2 reports
+              if (adsIntelData) {
+                ['amazon','google','meta','shopify'].forEach(plat => {
+                  if (!adsIntelData[plat] || typeof adsIntelData[plat] !== 'object') return;
+                  Object.entries(adsIntelData[plat]).forEach(([reportType, data]) => {
+                    if (!data?.records) return;
+                    const label = data.meta?.label || reportType.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+                    sources.push({
+                      platform: plat.charAt(0).toUpperCase()+plat.slice(1),
+                      type: label,
+                      rows: data.records.length,
+                      unit: 'rows',
+                      date: data.meta?.uploadedAt?.slice(0,10) || 'unknown',
+                      color: plat==='amazon'?'orange':plat==='google'?'red':plat==='meta'?'blue':'emerald',
+                    });
+                  });
+                });
+              }
+              const totalSources = sources.length;
+              const platformColors = { Amazon:'orange', Google:'red', Meta:'blue', Shopify:'emerald', Dashboard:'violet' };
+              return (
+                <div className="mb-4">
+                  <button onClick={()=>setShowDataSources(p=>!p)} className="flex items-center gap-2 text-sm text-slate-300 hover:text-white mb-2">
+                    <Database className="w-4 h-4"/>
+                    <span className="font-medium">{totalSources} data source{totalSources!==1?'s':''} loaded</span>
+                    <span className="text-slate-500 text-xs">({sources.reduce((s,r)=>s+r.rows,0).toLocaleString()} total records)</span>
+                    <ChevronRight className={`w-3 h-3 transition-transform ${showDataSources?'rotate-90':''}`}/>
+                  </button>
+                  {showDataSources && (
+                    <div className="bg-slate-900/60 rounded-xl border border-slate-700 p-3 space-y-1.5 max-h-[300px] overflow-y-auto">
+                      {totalSources===0 ? (
+                        <p className="text-slate-500 text-xs text-center py-4">No data loaded yet. Upload reports or connect SP-API to populate data sources.</p>
+                      ) : sources.map((s,i) => (
+                        <div key={i} className="flex items-center justify-between text-xs bg-slate-800/60 rounded-lg px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full bg-${s.color}-500`}/>
+                            <span className="text-slate-400 w-16">{s.platform}</span>
+                            <span className="text-white">{s.type}</span>
+                          </div>
+                          <div className="flex items-center gap-3 text-slate-500">
+                            <span>{s.rows.toLocaleString()} {s.unit}</span>
+                            <span className="text-[10px]">{s.date}</span>
+                          </div>
+                        </div>
+                      ))}
+                      {totalSources>0 && (
+                        <p className="text-slate-600 text-[10px] pt-1 text-center">The AI report will analyze all sources listed above. Upload more reports for deeper insights.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             <div className="space-y-3">
               <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Generate a COMPREHENSIVE cross-platform advertising audit using ALL available data. Cover: Executive Summary, Amazon PPC deep analysis (search terms, placements, targeting, ACOS trends), Google Ads analysis (campaigns, search terms, keywords), Meta Ads analysis (creative performance, audiences, placements), Cross-Channel budget allocation, Immediate Actions for this week, and 30-day Strategic Recommendations. Be BRUTALLY specific — cite exact campaign names, search terms, ASINs, ad names, and dollar amounts."),200);}} className="w-full px-6 py-4 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-semibold shadow-lg shadow-orange-500/20 flex items-center justify-center gap-3">
@@ -600,23 +693,85 @@ const AdsView = ({
 
           {adsAiMessages.length>0 && (
             <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-6">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
                 <h3 className="text-white font-semibold">Report Output</h3>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* Copy plain text */}
                   <button onClick={()=>{
                     const report = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n');
-                    navigator.clipboard.writeText(report).then(()=>setToast({message:'Report copied to clipboard',type:'success'})).catch(()=>setToast({message:'Copy failed',type:'error'}));
-                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1 bg-slate-700/50 rounded-lg hover:bg-slate-700">📋 Copy</button>
+                    navigator.clipboard.writeText(report).then(()=>setToast({message:'Report copied as plain text',type:'success'})).catch(()=>setToast({message:'Copy failed',type:'error'}));
+                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1.5 bg-slate-700/50 rounded-lg hover:bg-slate-700" title="Copy as plain text">📋 Copy Text</button>
+                  
+                  {/* Copy rich HTML for Google Docs */}
+                  <button onClick={()=>{
+                    const report = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n');
+                    const html = markdownToHtml(report);
+                    const blob = new Blob([html], {type:'text/html'});
+                    const item = new ClipboardItem({'text/html': blob, 'text/plain': new Blob([report], {type:'text/plain'})});
+                    navigator.clipboard.write([item]).then(()=>setToast({message:'Copied as rich text — paste into Google Docs, Notion, etc.',type:'success'})).catch(()=>{
+                      navigator.clipboard.writeText(report).then(()=>setToast({message:'Copied as plain text (rich copy not supported in this browser)',type:'success'}));
+                    });
+                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1.5 bg-slate-700/50 rounded-lg hover:bg-slate-700" title="Copy as formatted HTML for Google Docs">📄 Copy for Docs</button>
+                  
+                  {/* Download markdown */}
                   <button onClick={()=>{
                     const report = adsAiMessages.map(m=>m.role==='user'?`**PROMPT:** ${m.content}`:m.content).join('\n\n---\n\n');
-                    const header = `# Advertising Audit Report\n**Generated:** ${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}\n**Model:** ${aiChatModel}\n\n---\n\n`;
+                    const header = `# Tallowbourn Advertising Audit Report\n**Generated:** ${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}\n**Model:** ${aiChatModel.includes('opus')?'Claude Opus 4.5':aiChatModel.includes('sonnet')?'Claude Sonnet 4.5':'Claude Haiku 4.5'}\n\n---\n\n`;
                     const blob = new Blob([header + report], {type:'text/markdown'});
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a'); a.href = url; a.download = `ads-audit-${new Date().toISOString().slice(0,10)}.md`; a.click();
-                    URL.revokeObjectURL(url);
-                    setToast({message:'Report downloaded as markdown',type:'success'});
-                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1 bg-slate-700/50 rounded-lg hover:bg-slate-700">⬇️ Download .md</button>
-                  <button onClick={()=>setAdsAiMessages([])} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1 bg-slate-700/50 rounded-lg hover:bg-slate-700"><RefreshCw className="w-3 h-3"/>Clear</button>
+                    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `tallowbourn-ads-audit-${new Date().toISOString().slice(0,10)}.md`; a.click(); URL.revokeObjectURL(url);
+                    setToast({message:'Downloaded as markdown',type:'success'});
+                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1.5 bg-slate-700/50 rounded-lg hover:bg-slate-700" title="Download markdown file">⬇️ .md</button>
+                  
+                  {/* Export as PDF (styled print window) */}
+                  <button onClick={()=>{
+                    const report = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n');
+                    const dateStr = new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+                    const modelName = aiChatModel.includes('opus')?'Claude Opus 4.5':aiChatModel.includes('sonnet')?'Claude Sonnet 4.5':'Claude Haiku 4.5';
+                    const htmlBody = markdownToHtml(report);
+                    const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tallowbourn Ads Audit - ${dateStr}</title>
+<style>
+  @page { margin: 0.75in; size: letter; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #1a1a2e; line-height: 1.6; max-width: 100%; padding: 0; margin: 0; font-size: 11pt; }
+  .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: white; padding: 30px 40px; margin: -0.75in -0.75in 30px; }
+  .header h1 { font-size: 22pt; margin: 0 0 8px; font-weight: 700; }
+  .header .meta { font-size: 9pt; opacity: 0.8; }
+  .header .meta span { margin-right: 20px; }
+  h2 { color: #1a1a2e; border-bottom: 2px solid #e94560; padding-bottom: 6px; margin-top: 28px; font-size: 14pt; page-break-after: avoid; }
+  h3 { color: #16213e; margin-top: 20px; font-size: 12pt; page-break-after: avoid; }
+  h4 { color: #444; margin-top: 16px; font-size: 11pt; }
+  p, li { font-size: 11pt; }
+  ul, ol { padding-left: 20px; }
+  li { margin-bottom: 4px; }
+  strong { color: #e94560; }
+  code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 10pt; }
+  hr { border: none; border-top: 1px solid #ddd; margin: 24px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 10pt; }
+  th { background: #1a1a2e; color: white; padding: 8px 10px; text-align: left; }
+  td { padding: 6px 10px; border-bottom: 1px solid #eee; }
+  tr:nth-child(even) td { background: #f8f9fa; }
+  .footer { margin-top: 40px; padding-top: 16px; border-top: 2px solid #1a1a2e; font-size: 8pt; color: #888; text-align: center; }
+  @media print { .no-print { display: none; } .header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style></head><body>
+<div class="header">
+  <h1>📊 Tallowbourn Advertising Audit</h1>
+  <div class="meta"><span>📅 ${dateStr}</span><span>🤖 ${modelName}</span><span>📁 ${(adsAiMessages.filter(m=>m.role==='assistant').length)} report sections</span></div>
+</div>
+<div class="no-print" style="background:#fff3cd;padding:12px 20px;margin-bottom:20px;border-radius:8px;font-size:10pt;color:#856404;">
+  💡 <strong>To save as PDF:</strong> Press Ctrl+P (or ⌘+P on Mac) → Select "Save as PDF" as the destination → Click Save
+</div>
+${htmlBody}
+<div class="footer">
+  <p>Generated by Tallowbourn Advertising Command Center • ${dateStr} • ${modelName}</p>
+</div>
+</body></html>`;
+                    const w = window.open('','_blank','width=900,height=700');
+                    w.document.write(printDoc); w.document.close();
+                    setTimeout(()=>w.print(), 500);
+                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1.5 bg-orange-900/50 rounded-lg hover:bg-orange-800/50 border border-orange-500/30" title="Export as PDF (opens print dialog)">📑 PDF</button>
+                  
+                  {/* Clear */}
+                  <button onClick={()=>{if(adsAiMessages.length>4){if(!window.confirm('Clear report? This will remove all AI output from this session.'))return;}setAdsAiMessages([]);}} className="text-slate-400 hover:text-red-400 text-xs flex items-center gap-1 px-2 py-1.5 bg-slate-700/50 rounded-lg hover:bg-slate-700"><RefreshCw className="w-3 h-3"/>Clear</button>
                 </div>
               </div>
               <div className="space-y-4 max-h-[600px] overflow-y-auto">

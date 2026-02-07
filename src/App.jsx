@@ -16700,6 +16700,25 @@ Reference the full data from the prior analysis. Be concise but still specific w
           ).join('\n');
           dataBlock += `\n\n## PRIOR REPORT MEMORY (for tracking progress)\n${priorSummaries}\nCompare current data against these prior findings. Note what improved, what got worse, and what's stagnant.`;
         }
+        
+        // ── Build data sources manifest so AI cites its sources ──
+        const sourcesList = [];
+        const sortedDaysLocal = Object.keys(allDaysData || {}).sort();
+        if (sortedDaysLocal.length > 0) sourcesList.push(`• Dashboard Daily KPIs: ${sortedDaysLocal.length} days (${sortedDaysLocal[0]} to ${sortedDaysLocal[sortedDaysLocal.length-1]}) — SP-API + Shopify`);
+        if (amazonCampaigns?.campaigns?.length > 0) sourcesList.push(`• Amazon SP-API Campaigns: ${amazonCampaigns.campaigns.length} campaigns (live data)`);
+        if (adsIntelData) {
+          ['amazon','google','meta','shopify'].forEach(plat => {
+            if (!adsIntelData[plat] || typeof adsIntelData[plat] !== 'object') return;
+            Object.entries(adsIntelData[plat]).forEach(([reportType, data]) => {
+              if (!data?.records) return;
+              const label = data.meta?.label || reportType.replace(/_/g,' ');
+              sourcesList.push(`• ${plat.charAt(0).toUpperCase()+plat.slice(1)} ${label}: ${data.records.length} rows (uploaded ${data.meta?.uploadedAt?.slice(0,10) || 'unknown'})`);
+            });
+          });
+        }
+        if (sourcesList.length > 0) {
+          dataBlock += `\n\n## DATA SOURCES ANALYZED\n${sourcesList.join('\n')}\n\nIMPORTANT: Begin your report with a "📂 Sources Analyzed" section listing these exact data sources so the reader knows what the analysis is based on. If critical data is MISSING (e.g., no search terms, no placement data), call it out explicitly as a gap.`;
+        }
       } else {
         // Lightweight context for follow-ups
         const sortedDays = Object.keys(allDaysData || {}).sort();
