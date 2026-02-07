@@ -7,13 +7,6 @@ import { hasDailySalesData } from '../../utils/date';
 import { lsSet } from '../../utils/storage';
 import NavTabs from '../ui/NavTabs';
 
-
-// Helper: extract profit from data object
-const getProfit = (obj) => {
-  if (!obj) return 0;
-  return obj.netProfit ?? obj.profit ?? 0;
-};
-
 const BankingView = ({
   allDaysData,
   allPeriodsData,
@@ -24,7 +17,6 @@ const BankingView = ({
   bankingDrilldown,
   bankingProcessing,
   bankingTab,
-  parseQBOTransactions,
   channelPeriod,
   combinedData,
   confirmedRecurring,
@@ -38,6 +30,7 @@ const BankingView = ({
   productionPipeline,
   profitTrackerCustomRange,
   profitTrackerPeriod,
+  qboCredentials,
   recurringForm,
   selectedTxnIds,
   setBankingData,
@@ -669,6 +662,7 @@ const BankingView = ({
   // Check if data is stale
   const isDataStale = !bankingData.lastUpload || 
     new Date().toDateString() !== new Date(bankingData.lastUpload).toDateString();
+  const isQboConnected = qboCredentials?.connected;
   
   // Monthly trend data
   const monthKeys = Object.keys(monthlySnapshots).sort().slice(-12);
@@ -959,8 +953,8 @@ const BankingView = ({
           </div>
           
           <div className="flex items-center gap-3">
-            {/* Stale Data Alert */}
-            {isDataStale && bankingData.transactions?.length > 0 && (
+            {/* Stale Data Alert - suppress if QBO auto-sync is connected */}
+            {isDataStale && !isQboConnected && bankingData.transactions?.length > 0 && (
               <div className="px-3 py-2 bg-amber-500/20 border border-amber-500/50 rounded-lg text-amber-300 text-sm flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4" />
                 Banking data not uploaded today

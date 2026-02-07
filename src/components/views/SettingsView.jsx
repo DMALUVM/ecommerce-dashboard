@@ -2101,6 +2101,27 @@ const SettingsView = ({
                       <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.packiyo !== false ? 'left-5' : 'left-0.5'}`} />
                     </button>
                   </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${qboCredentials.connected ? 'bg-green-400' : 'bg-slate-500'}`} />
+                      <span className="text-slate-300">QuickBooks</span>
+                      {qboCredentials.lastSync && (
+                        <span className="text-slate-500 text-xs">
+                          Last: {new Date(qboCredentials.lastSync).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setAppSettings(prev => ({
+                        ...prev,
+                        autoSync: { ...prev.autoSync, qbo: !prev.autoSync?.qbo }
+                      }))}
+                      disabled={!qboCredentials.connected}
+                      className={`w-10 h-5 rounded-full transition-colors relative ${appSettings.autoSync?.qbo !== false && qboCredentials.connected ? 'bg-green-500' : 'bg-slate-600'} ${!qboCredentials.connected ? 'opacity-50' : ''}`}
+                    >
+                      <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.qbo !== false ? 'left-5' : 'left-0.5'}`} />
+                    </button>
+                  </div>
                 </div>
               </div>
               

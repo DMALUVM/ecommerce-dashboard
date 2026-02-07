@@ -3624,6 +3624,7 @@ allWeekKeys.forEach((weekKey) => {
       amazon: true, // Include Amazon in auto-sync
       shopify: true, // Include Shopify in auto-sync
       packiyo: true, // Include Packiyo in auto-sync
+      qbo: true, // Include QuickBooks in auto-sync
     },
 
     // AI model selection
@@ -11747,6 +11748,90 @@ const savePeriods = async (d) => {
         }
       }
       
+      // Check QuickBooks Online
+      if (appSettings.autoSync?.qbo !== false && qboCredentials.connected) {
+        const qboStale = isServiceStale(qboCredentials.lastSync, threshold);
+        
+        if (qboStale || force) {
+          try {
+            let currentAccessToken = qboCredentials.accessToken;
+            
+            let res = await fetch('/api/qbo/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                realmId: qboCredentials.realmId,
+                accessToken: currentAccessToken,
+                refreshToken: qboCredentials.refreshToken,
+              }),
+            });
+            
+            // If token expired, try to refresh
+            if (res.status === 401) {
+              try {
+                const refreshRes = await fetch('/api/qbo/refresh', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ refreshToken: qboCredentials.refreshToken }),
+                });
+                if (refreshRes.ok) {
+                  const refreshData = await refreshRes.json();
+                  currentAccessToken = refreshData.accessToken;
+                  setQboCredentials(p => ({
+                    ...p,
+                    accessToken: refreshData.accessToken,
+                    refreshToken: refreshData.refreshToken || p.refreshToken,
+                  }));
+                  // Retry with new token
+                  res = await fetch('/api/qbo/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      realmId: qboCredentials.realmId,
+                      accessToken: currentAccessToken,
+                      refreshToken: refreshData.refreshToken || qboCredentials.refreshToken,
+                    }),
+                  });
+                } else {
+                  const refreshError = await refreshRes.json();
+                  if (refreshError.needsReauth) {
+                    setQboCredentials(p => ({ ...p, connected: false, accessToken: '', refreshToken: '' }));
+                  }
+                  throw new Error('QBO token refresh failed');
+                }
+              } catch (refreshErr) {
+                throw refreshErr;
+              }
+            }
+            
+            if (res.ok) {
+              const data = await res.json();
+              // Merge transactions (same dedup logic as manual sync)
+              setBankingData(prev => {
+                const existingIds = new Set((prev?.transactions || []).map(t => t.qboId).filter(Boolean));
+                const newTransactions = (data.transactions || []).filter(t => !existingIds.has(t.qboId));
+                const allTxns = [...(prev?.transactions || []), ...newTransactions];
+                return {
+                  ...prev,
+                  transactions: allTxns,
+                  lastUpdated: new Date().toISOString(),
+                  lastUpload: new Date().toISOString(),
+                };
+              });
+              setQboCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+              const txnCount = data.transactions?.length || 0;
+              results.push({ service: 'QuickBooks', success: true, transactions: txnCount });
+            } else {
+              results.push({ service: 'QuickBooks', success: false, error: `HTTP ${res.status}` });
+              devWarn('QBO auto-sync failed:', res.status);
+            }
+          } catch (err) {
+            results.push({ service: 'QuickBooks', success: false, error: err.message });
+            devWarn('QBO auto-sync error:', err.message);
+          }
+        }
+      }
+      
       // Show results
       const successful = results.filter(r => r.success);
       const failed = results.filter(r => !r.success);
@@ -11756,6 +11841,7 @@ const savePeriods = async (d) => {
           if (r.service === 'Amazon') return 'Amazon';
           if (r.service === 'Shopify') return `Shopify (${r.orders} orders)`;
           if (r.service === 'Packiyo') return `Packiyo (${r.skus} SKUs)`;
+          if (r.service === 'QuickBooks') return `QBO (${r.transactions} txns)`;
           return r.service;
         });
         setToast({
@@ -11784,7 +11870,7 @@ const savePeriods = async (d) => {
       audit('auto_sync', `${results.length} services: ${results.map(r => `${r.service}:${r.success ? 'ok' : 'fail'}`).join(', ')}`);
       setAutoSyncStatus(prev => ({ ...prev, running: false, results }));
     }
-  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs]);
+  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, qboCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs]);
   
   // Run auto-sync on app load (if enabled)
   const runAutoSyncRef = useRef(runAutoSync);
@@ -18860,6 +18946,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       productionPipeline={productionPipeline}
       profitTrackerCustomRange={profitTrackerCustomRange}
       profitTrackerPeriod={profitTrackerPeriod}
+      qboCredentials={qboCredentials}
       recurringForm={recurringForm}
       selectedTxnIds={selectedTxnIds}
       setBankingData={setBankingData}
