@@ -447,28 +447,63 @@ const SalesTaxView = ({
               {hasShopifyTaxData ? (
                 <>
                   {/* Main Summary Cards */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                    <div className="bg-gradient-to-br from-rose-600/30 to-rose-900/30 border-2 border-rose-500/50 rounded-xl p-4 text-center">
-                      <p className="text-xs text-rose-300 font-semibold uppercase tracking-wide mb-1">💰 YOU OWE</p>
-                      <p className="text-3xl font-bold text-rose-400">{formatCurrency(taxData.totalTax)}</p>
-                      <p className="text-rose-300/70 text-xs mt-1">Tax to remit this period</p>
+                  {(() => {
+                    // Calculate what you actually owe: only nexus states with filing due this period
+                    const isFilingDue = (stateCode) => {
+                      const config = nexusStates[stateCode] || {};
+                      const frequency = config.frequency || 'monthly';
+                      if (taxPeriodType !== 'month') return true;
+                      const periodMonth = parseInt(taxPeriodValue.split('-')[1]);
+                      if (frequency === 'monthly') return true;
+                      if (frequency === 'quarterly') return [3, 6, 9, 12].includes(periodMonth);
+                      if (frequency === 'semi-annual') return [6, 12].includes(periodMonth);
+                      if (frequency === 'annual') return periodMonth === 12;
+                      return true;
+                    };
+                    
+                    const nexusStatesDue = taxData.byState.filter(s => 
+                      nexusStates[s.stateCode]?.hasNexus && isFilingDue(s.stateCode)
+                    );
+                    const nexusStatesAccumulating = taxData.byState.filter(s =>
+                      nexusStates[s.stateCode]?.hasNexus && !isFilingDue(s.stateCode)
+                    );
+                    const youOwe = nexusStatesDue.reduce((sum, s) => sum + (s.taxOwed || s.tax || 0), 0);
+                    const accumulating = nexusStatesAccumulating.reduce((sum, s) => sum + (s.taxOwed || s.tax || 0), 0);
+                    const nexusStateCount = taxData.byState.filter(s => nexusStates[s.stateCode]?.hasNexus).length;
+                    const periodKey = taxPeriodType === 'month' ? taxPeriodValue : `${taxPeriodValue.split('-')[0]}-Q${taxPeriodValue.split('-')[1]}`;
+                    const filedCount = nexusStatesDue.filter(s => salesTaxConfig.filingHistory?.[s.stateCode]?.[periodKey]?.filed).length;
+                    
+                    return (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                      <div className={`bg-gradient-to-br ${youOwe > 0 ? 'from-rose-600/30 to-rose-900/30 border-rose-500/50' : 'from-emerald-600/20 to-emerald-900/20 border-emerald-500/50'} border-2 rounded-xl p-4 text-center`}>
+                        <p className="text-xs text-rose-300 font-semibold uppercase tracking-wide mb-1">💰 YOU OWE</p>
+                        <p className={`text-3xl font-bold ${youOwe > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>{formatCurrency(youOwe)}</p>
+                        <p className="text-rose-300/70 text-xs mt-1">
+                          {nexusStatesDue.length} nexus state{nexusStatesDue.length !== 1 ? 's' : ''} due
+                          {filedCount > 0 ? ` (${filedCount} filed)` : ''}
+                        </p>
+                        {accumulating > 0 && (
+                          <p className="text-amber-400/60 text-[10px] mt-1">+{formatCurrency(accumulating)} accumulating</p>
+                        )}
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl p-4 text-center">
+                        <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Total Collected</p>
+                        <p className="text-2xl font-bold text-white">{formatCurrency(taxData.totalTax + (taxData.shopPayExcluded || 0))}</p>
+                        <p className="text-slate-500 text-xs mt-1">all {taxData.byState.length} states</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl p-4 text-center">
+                        <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Nexus States</p>
+                        <p className="text-2xl font-bold text-white">{nexusStateCount}</p>
+                        <p className="text-slate-500 text-xs mt-1">{nexusStatesDue.length} due this period</p>
+                      </div>
+                      <div className="bg-slate-800/50 rounded-xl p-4 text-center">
+                        <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Days Synced</p>
+                        <p className="text-2xl font-bold text-white">{taxData.daysWithData}</p>
+                        <p className="text-slate-500 text-xs mt-1">in selected period</p>
+                      </div>
                     </div>
-                    <div className="bg-slate-800/50 rounded-xl p-4 text-center">
-                      <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Total Collected</p>
-                      <p className="text-2xl font-bold text-white">{formatCurrency(taxData.totalTax + taxData.shopPayExcluded)}</p>
-                      <p className="text-slate-500 text-xs mt-1">from all orders</p>
-                    </div>
-                    <div className="bg-slate-800/50 rounded-xl p-4 text-center">
-                      <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">States</p>
-                      <p className="text-2xl font-bold text-white">{taxData.byState.length}</p>
-                      <p className="text-slate-500 text-xs mt-1">with sales this period</p>
-                    </div>
-                    <div className="bg-slate-800/50 rounded-xl p-4 text-center">
-                      <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Days Synced</p>
-                      <p className="text-2xl font-bold text-white">{taxData.daysWithData}</p>
-                      <p className="text-slate-500 text-xs mt-1">in selected period</p>
-                    </div>
-                  </div>
+                    );
+                  })()}
                   
                   {/* States Where You Owe Tax */}
                   {taxData.byState.filter(s => s.tax > 0).length > 0 && (
