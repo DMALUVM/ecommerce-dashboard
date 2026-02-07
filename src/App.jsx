@@ -19,6 +19,8 @@ import {
 
 // Extracted UI components
 import NotificationCenter from './components/ui/NotificationCenter';
+import EmptyState from './components/ui/EmptyState';
+import { PrintButton, printProfitability, printInventory, printSalesTax, printDailySummary } from './components/ui/PrintView';
 import MetricCard from './components/ui/MetricCard';
 import HealthBadge from './components/ui/HealthBadge';
 import SettingSection from './components/ui/SettingSection';
@@ -14119,6 +14121,15 @@ Analyze the data and respond with ONLY this JSON:
           className="bg-slate-900 border border-slate-600 rounded-lg px-2 py-1 text-sm text-white w-44" />
       </div>
       <div className="flex-1" />
+      <PrintButton title="Print Report" onPrint={() => {
+        const hasDaily = Object.keys(allDaysData).length > 0;
+        const hasWeekly = Object.keys(allWeeksData).length > 0;
+        const hasInv = Object.keys(invHistory).length > 0;
+        if (hasDaily) printDailySummary({ storeName, allDaysData });
+        else if (hasWeekly) printProfitability({ storeName, allWeeksData, allDaysData, savedCogs });
+        else if (hasInv) printInventory({ storeName, invHistory, savedCogs, appSettings });
+        else setToast({ message: 'No data to print yet. Upload some data first.', type: 'warning' });
+      }} />
       <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" /><span className="hidden sm:inline">Export</span></button>
       <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" /><span className="hidden sm:inline">Import</span><input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
       <NotificationCenter salesTaxConfig={salesTaxConfig} inventoryData={invHistory?.[Object.keys(invHistory || {}).sort().pop()]?.products || []} allDaysData={allDaysData} appSettings={appSettings} lastBackupDate={lastBackupDate} setView={setView} setToast={setToast} />
@@ -18310,6 +18321,16 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
 
   // Inventory Dashboard View
   if (view === 'inventory') {
+    if (Object.keys(invHistory).length === 0) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-3 sm:p-4 lg:p-6">
+          <div className="max-w-7xl mx-auto">{globalModals}
+            <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
+            <EmptyState preset="inventory" setView={setView} />
+          </div>
+        </div>
+      );
+    }
     return <InventoryView
       aiLoading={aiLoading}
       allDaysData={allDaysData}
@@ -18395,6 +18416,17 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
 
   // ==================== TRENDS VIEW ====================
   if (view === 'trends') {
+    const hasTrendsData = Object.keys(allWeeksData).length >= 2 || Object.keys(allDaysData).length >= 7 || Object.keys(allPeriodsData).length >= 2;
+    if (!hasTrendsData) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-3 sm:p-4 lg:p-6">
+          <div className="max-w-7xl mx-auto">{globalModals}
+            <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
+            <EmptyState preset="trends" setView={setView} />
+          </div>
+        </div>
+      );
+    }
     return <TrendsView
       adSpend={adSpend}
       allDaysData={allDaysData}
@@ -18439,6 +18471,17 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
 
   // ==================== YEAR-OVER-YEAR VIEW ====================
   if (view === 'yoy') {
+    const hasYoYData = Object.keys(allWeeksData).length >= 2 || Object.keys(allPeriodsData).length >= 2;
+    if (!hasYoYData) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-3 sm:p-4 lg:p-6">
+          <div className="max-w-7xl mx-auto">{globalModals}
+            <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
+            <EmptyState preset="yoy" setView={setView} />
+          </div>
+        </div>
+      );
+    }
     return <YoYView
       adSpend={adSpend}
       allDaysData={allDaysData}
@@ -18502,6 +18545,17 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
 
   // ==================== SKU RANKINGS VIEW ====================
   if (view === 'skus') {
+    const hasSkuData = Object.keys(allWeeksData).length > 0 || Object.keys(allPeriodsData).length > 0 || Object.keys(allDaysData).length > 0;
+    if (!hasSkuData) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-3 sm:p-4 lg:p-6">
+          <div className="max-w-7xl mx-auto">{globalModals}
+            <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
+            <EmptyState preset="skus" setView={setView} />
+          </div>
+        </div>
+      );
+    }
     return <SkuRankingsView
       allDaysData={allDaysData}
       allPeriodsData={allPeriodsData}
@@ -18554,6 +18608,17 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
 
   // ==================== PROFITABILITY VIEW ====================
   if (view === 'profitability') {
+    const hasProfitData = Object.keys(allWeeksData).length > 0 || Object.keys(allPeriodsData).length > 0;
+    if (!hasProfitData) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-3 sm:p-4 lg:p-6">
+          <div className="max-w-7xl mx-auto">{globalModals}
+            <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
+            <EmptyState preset="profitability" setView={setView} setShowCogsManager={setShowCogsManager} />
+          </div>
+        </div>
+      );
+    }
     return <ProfitabilityView
       adSpend={adSpend}
       adsIntelData={adsIntelData}
