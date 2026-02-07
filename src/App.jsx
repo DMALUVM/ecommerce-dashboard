@@ -8,7 +8,7 @@ import { formatCurrency, formatPercent, formatNumber } from './utils/format';
 import { hasDailySalesData, formatDateKey, getSunday } from './utils/date';
 import { deriveWeeksFromDays, mergeWeekData } from './utils/weekly';
 import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from './utils/ads';
-import { processUploadedFiles, mergeTier1IntoDailySales, mergeTier2IntoIntelData } from './utils/adsReportParser';
+import { processUploadedFiles, mergeTier1IntoDailySales, mergeTier2IntoIntelData, buildComprehensiveAdsPrompt } from './utils/adsReportParser';
 import { withShippingSkuRow, sumSkuRows } from './utils/reconcile';
 import {
   STORAGE_KEY, INVENTORY_KEY, COGS_KEY, STORE_KEY, GOALS_KEY, PERIODS_KEY, SALES_TAX_KEY, PRODUCT_NAMES_KEY,
@@ -16574,7 +16574,7 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
     }
   };
 
-  // Send AI Ads Message - specialized for advertising insights only
+  // Send AI Ads Message - uses comprehensive prompt builder for Tier 2 data
   const sendAdsAIMessage = async (directMessage) => {
     const userMessage = directMessage || adsAiInput.trim();
     if (!userMessage || adsAiLoading) return;
@@ -16583,220 +16583,111 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
     setAdsAiLoading(true);
     
     try {
-      // Prepare comprehensive ads context
-      const campaigns = amazonCampaigns?.campaigns || [];
-      const historicalDaily = amazonCampaigns?.historicalDaily || {};
-      const summary = amazonCampaigns?.summary || {};
+      // ── Build comprehensive data context ──
+      // Only send FULL data context on first message or explicit audit requests
+      // Follow-up questions use conversation history + lightweight context
+      const isFirstMessage = adsAiMessages.length === 0;
+      const isAuditRequest = /comprehensive|full audit|action plan|deep dive|all (available )?data/i.test(userMessage);
+      const needsFullContext = isFirstMessage || isAuditRequest;
       
-      // === CAMPAIGN ANALYSIS ===
-      let campaignContext = 'NO CAMPAIGN DATA - Upload campaign performance report.\n';
+      let dataContext = '';
       
-      if (campaigns.length > 0) {
-        // Group by campaign type
-        const byType = { SP: [], SB: [], SB2: [], SD: [] };
-        campaigns.forEach(c => {
-          const type = c.type || 'SP';
-          if (!byType[type]) byType[type] = [];
-          byType[type].push(c);
-        });
+      if (needsFullContext) {
+        // Build last 30 days snippet from allDaysData for Tier 1 context
+        const sortedDays = Object.keys(allDaysData || {}).sort();
+        const last30Days = {};
+        sortedDays.slice(-30).forEach(d => { last30Days[d] = allDaysData[d]; });
         
-        // Calculate type summaries
-        const typeSummaries = Object.entries(byType)
-          .filter(([_, arr]) => arr.length > 0)
-          .map(([type, arr]) => {
-            const spend = arr.reduce((s, c) => s + (c.spend || 0), 0);
-            const sales = arr.reduce((s, c) => s + (c.sales || 0), 0);
-            const orders = arr.reduce((s, c) => s + (c.orders || 0), 0);
-            const roas = spend > 0 ? sales / spend : 0;
-            const acos = sales > 0 ? (spend / sales) * 100 : 0;
-            return `${type}: ${arr.length} campaigns | Spend $${Math.round(spend)} | Sales $${Math.round(sales)} | ROAS ${roas.toFixed(2)} | ACOS ${acos.toFixed(1)}%`;
-          }).join('\n');
+        // Use the comprehensive prompt builder (handles both Tier 1 + Tier 2)
+        dataContext = buildComprehensiveAdsPrompt(adsIntelData, last30Days, amazonCampaigns);
         
-        // Top performers (ROAS > 3)
-        const topPerformers = campaigns
-          .filter(c => c.state === 'ENABLED' && c.roas >= 3 && c.spend > 100)
-          .sort((a, b) => b.roas - a.roas)
-          .slice(0, 10)
-          .map(c => `  - ${c.name.substring(0, 60)} | ROAS: ${c.roas.toFixed(2)} | Spend: $${Math.round(c.spend)} | ACOS: ${c.acos?.toFixed(1) || 0}%`);
-        
-        // Underperformers (ROAS < 2, spend > $100)
-        const underperformers = campaigns
-          .filter(c => c.state === 'ENABLED' && c.roas < 2 && c.spend > 100)
-          .sort((a, b) => a.roas - b.roas)
-          .slice(0, 10)
-          .map(c => `  - ${c.name.substring(0, 60)} | ROAS: ${c.roas.toFixed(2)} | Spend: $${Math.round(c.spend)} | ACOS: ${c.acos?.toFixed(1) || 0}%`);
-        
-        // High spend, low conversion
-        const wasteful = campaigns
-          .filter(c => c.state === 'ENABLED' && c.spend > 200 && (c.orders === 0 || c.convRate < 2))
-          .sort((a, b) => b.spend - a.spend)
-          .slice(0, 5)
-          .map(c => `  - ${c.name.substring(0, 60)} | Spend: $${Math.round(c.spend)} | Orders: ${c.orders} | Conv: ${c.convRate?.toFixed(1) || 0}%`);
-        
-        // Opportunities (high CTR but low spend - could scale)
-        const opportunities = campaigns
-          .filter(c => c.state === 'ENABLED' && c.ctr > 0.5 && c.roas > 3 && c.spend < 500)
-          .sort((a, b) => b.roas - a.roas)
-          .slice(0, 5)
-          .map(c => `  - ${c.name.substring(0, 60)} | ROAS: ${c.roas.toFixed(2)} | Spend: $${Math.round(c.spend)} | CTR: ${(c.ctr * 100).toFixed(2)}%`);
-        
-        campaignContext = `=== AMAZON CAMPAIGN PERFORMANCE (${campaigns.length} total) ===
-OVERALL: Spend $${Math.round(summary.totalSpend || 0)} | Sales $${Math.round(summary.totalSales || 0)} | ROAS ${(summary.roas || 0).toFixed(2)} | ACOS ${(summary.acos || 0).toFixed(1)}%
-
-BY TYPE:
-${typeSummaries}
-
-TOP PERFORMERS (ROAS ≥ 3):
-${topPerformers.length > 0 ? topPerformers.join('\n') : '  None found'}
-
-UNDERPERFORMERS (ROAS < 2, Spend > $100):
-${underperformers.length > 0 ? underperformers.join('\n') : '  None found'}
-
-WASTEFUL SPEND (High spend, low/no conversions):
-${wasteful.length > 0 ? wasteful.join('\n') : '  None found'}
-
-SCALING OPPORTUNITIES (High ROAS, low spend):
-${opportunities.length > 0 ? opportunities.join('\n') : '  None found'}
-`;
-      }
-      
-      // === HISTORICAL TRENDS ===
-      let historicalContext = 'NO HISTORICAL DATA - Upload daily performance export.\n';
-      
-      const histDates = Object.keys(historicalDaily).sort();
-      if (histDates.length > 0) {
-        // Monthly aggregation
-        const monthly = {};
-        histDates.forEach(date => {
-          const d = historicalDaily[date];
-          const monthKey = date.substring(0, 7); // YYYY-MM
-          if (!monthly[monthKey]) monthly[monthKey] = { spend: 0, revenue: 0, orders: 0, clicks: 0, impressions: 0, totalRevenue: 0 };
-          monthly[monthKey].spend += d.spend || 0;
-          monthly[monthKey].revenue += d.adRevenue || d.revenue || 0;
-          monthly[monthKey].orders += d.orders || 0;
-          monthly[monthKey].clicks += d.clicks || 0;
-          monthly[monthKey].impressions += d.impressions || 0;
-          monthly[monthKey].totalRevenue += d.totalRevenue || 0;
-        });
-        
-        const monthlyTrend = Object.entries(monthly)
-          .sort((a, b) => a[0].localeCompare(b[0]))
-          .slice(-6) // Last 6 months
-          .map(([month, d]) => {
-            const roas = d.spend > 0 ? d.revenue / d.spend : 0;
-            const acos = d.revenue > 0 ? (d.spend / d.revenue) * 100 : 0;
-            const tacos = d.totalRevenue > 0 ? (d.spend / d.totalRevenue) * 100 : 0;
-            return `${month}: Spend $${Math.round(d.spend)} | AdRev $${Math.round(d.revenue)} | ROAS ${roas.toFixed(2)} | ACOS ${acos.toFixed(1)}% | TACOS ${tacos.toFixed(1)}%`;
-          });
-        
-        // Calculate trend direction
-        const recentMonths = Object.entries(monthly).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 3);
-        let trendDirection = 'stable';
-        if (recentMonths.length >= 2) {
-          const recent = recentMonths[0][1];
-          const prior = recentMonths[1][1];
-          const recentROAS = recent.spend > 0 ? recent.revenue / recent.spend : 0;
-          const priorROAS = prior.spend > 0 ? prior.revenue / prior.spend : 0;
-          if (recentROAS > priorROAS * 1.1) trendDirection = 'improving';
-          else if (recentROAS < priorROAS * 0.9) trendDirection = 'declining';
+        // Also append old-format intel if available (backward compatibility)
+        const oldContext = buildAdsIntelContext(adsIntelData);
+        if (oldContext && !dataContext.includes('SP SEARCH TERM')) {
+          dataContext += '\n' + oldContext;
         }
-        
-        // Overall totals
-        const totals = histDates.reduce((acc, d) => {
-          const data = historicalDaily[d];
-          return {
-            spend: acc.spend + (data.spend || 0),
-            revenue: acc.revenue + (data.adRevenue || data.revenue || 0),
-            totalRevenue: acc.totalRevenue + (data.totalRevenue || 0),
-            orders: acc.orders + (data.orders || 0),
-          };
-        }, { spend: 0, revenue: 0, totalRevenue: 0, orders: 0 });
-        
-        historicalContext = `=== HISTORICAL PERFORMANCE (${histDates.length} days: ${histDates[0]} to ${histDates[histDates.length - 1]}) ===
-TOTALS: Ad Spend $${Math.round(totals.spend)} | Ad Revenue $${Math.round(totals.revenue)} | Total Revenue $${Math.round(totals.totalRevenue)}
-OVERALL ROAS: ${totals.spend > 0 ? (totals.revenue / totals.spend).toFixed(2) : 'N/A'}
-OVERALL ACOS: ${totals.revenue > 0 ? ((totals.spend / totals.revenue) * 100).toFixed(1) : 'N/A'}%
-OVERALL TACOS: ${totals.totalRevenue > 0 ? ((totals.spend / totals.totalRevenue) * 100).toFixed(1) : 'N/A'}%
-TREND: ${trendDirection.toUpperCase()}
-
-MONTHLY PERFORMANCE (Last 6 months):
-${monthlyTrend.join('\n')}
-`;
-        
-        // Add pre-computed analytics if available
-        const analytics = amazonCampaigns?.analytics;
-        if (analytics?.dayOfWeekInsights?.length > 0) {
-          const dowLines = analytics.dayOfWeekInsights
-            .sort((a, b) => b.avgRoas - a.avgRoas)
-            .map(d => `  ${d.day}: Avg ROAS ${d.avgRoas.toFixed(2)} | Avg ACOS ${d.avgAcos.toFixed(1)}% | Avg Spend $${d.avgSpend.toFixed(0)} | Avg Conv ${d.avgConversions.toFixed(1)}`);
-          
-          historicalContext += `
-DAY OF WEEK PERFORMANCE (Best to Worst by ROAS):
-${dowLines.join('\n')}
-BEST DAY: ${analytics.bestPerformingDay?.day || 'N/A'} (ROAS: ${analytics.bestPerformingDay?.avgRoas?.toFixed(2) || 'N/A'})
-WORST DAY: ${analytics.worstPerformingDay?.day || 'N/A'} (ROAS: ${analytics.worstPerformingDay?.avgRoas?.toFixed(2) || 'N/A'})
-`;
-        }
+        const dtcContext = buildDtcIntelContext(dtcIntelData);
+        if (dtcContext) dataContext += '\n' + dtcContext;
+      } else {
+        // Lightweight context for follow-ups — just key metrics
+        const sortedDays = Object.keys(allDaysData || {}).sort();
+        const last7 = sortedDays.slice(-7);
+        let recentSpend = 0, recentRev = 0;
+        last7.forEach(d => {
+          const day = allDaysData[d];
+          recentSpend += (day?.amazon?.adSpend || 0) + (day?.shopify?.googleSpend || 0) + (day?.shopify?.metaSpend || 0);
+          recentRev += (day?.amazon?.revenue || 0) + (day?.shopify?.revenue || 0);
+        });
+        dataContext = `[Follow-up context: Last 7d spend $${recentSpend.toFixed(0)}, revenue $${recentRev.toFixed(0)}, ROAS ${recentSpend > 0 ? (recentRev/recentSpend).toFixed(2) : 'N/A'}x. Full data was provided in earlier messages — reference that for specifics.]`;
       }
-      
-      const systemPrompt = `You are an elite Amazon PPC strategist and business analyst. You produce ACTIONABLE BATTLE PLANS — not summaries. Every response must be a structured action plan the seller can immediately implement.
 
-${campaignContext}
+      const systemPrompt = `You are a world-class Amazon PPC and multi-channel advertising strategist — the kind that brands pay $15,000/month for. You produce ELITE ACTION REPORTS that are the gold standard in ecommerce advertising optimization.
 
-${historicalContext}
+YOUR ANALYSIS FRAMEWORK:
+1. Data-first: Every claim backed by specific numbers from the data
+2. Prioritized by impact: Highest-dollar-impact actions first
+3. Implementation-ready: Step-by-step instructions, not vague suggestions
+4. Cross-referenced: Compare across platforms, placements, match types, and time periods
 
-${buildAdsIntelContext(adsIntelData)}
+${dataContext}
 
-${buildDtcIntelContext(dtcIntelData)}
+═══════════════════════════════════════════════════════════════
+RESPONSE FORMAT — USE THIS STRUCTURE FOR AUDIT/ACTION PLAN REQUESTS:
+═══════════════════════════════════════════════════════════════
 
-═══════════════════════════════════════════
-RESPONSE FORMAT — MANDATORY STRUCTURE FOR EVERY RESPONSE:
-═══════════════════════════════════════════
+## 📊 EXECUTIVE SUMMARY
+- Overall advertising health score (1-10) with justification
+- Total spend, revenue, blended ROAS across all channels
+- The #1 most urgent problem and #1 biggest opportunity
 
-You MUST use this exact structure. Adapt which sections are relevant, but ALWAYS include numbered action items with specific data.
+## 🔴 STOP IMMEDIATELY (Cut Waste This Week)
+For EACH item — be brutally specific:
+- WHAT: Exact campaign name, keyword, placement, or targeting to pause/negative
+- DATA: Spend $X over Y days, $0 sales, Z clicks — or ROAS below X
+- ACTION: "Go to Campaign Manager → [name] → Negative Keywords → Add '[term]' as Phrase match"
+- SAVINGS: "$X/month based on [period] run rate"
 
-## 🔴 STOP DOING (Cut Waste)
-For each item:
-- WHAT: The specific search term, campaign, targeting, or placement to cut/pause/negative
-- WHY: The exact numbers (spend, ROAS, orders, ACOS) that prove it's wasteful
-- HOW: Step-by-step instructions (e.g., "Go to Campaign Manager → [campaign name] → Negative Keywords → Add '[term]' as Phrase match")
-- IMPACT: "Saves ~$X/month based on last [period] spend"
+## 🟢 PROTECT & OPTIMIZE (What's Working)
+For EACH item:
+- WHAT: Specific campaign, keyword, ASIN performing well
+- METRICS: ROAS, ACOS, conversion rate with exact numbers
+- RISK: What could break it (competition, seasonality, budget caps)
+- ACTION: "Increase daily budget from $X to $Y" or "Add as exact match in new campaign"
 
-## 🟢 KEEP DOING (What's Working)
-For each item:
-- WHAT: The specific campaigns, terms, placements, or ASINs performing well
-- METRICS: Exact ROAS, ACOS, conversion rate, spend, revenue numbers
-- PROTECT: How to ensure these keep performing (budget allocation, bid floors, etc.)
+## 🚀 SCALE OPPORTUNITIES (Grow Revenue)
+For EACH item:
+- WHAT: Specific scaling action with expected math
+- WHY: "Converting at X% with only $Y daily spend — headroom to scale"
+- HOW: Step-by-step campaign creation or bid adjustment
+- PROJECTED: "$X additional revenue/month at Y ROAS based on current conversion rate"
 
-## 🚀 START DOING (Scale Opportunities)
-For each item:
-- WHAT: Specific action to take (increase bids, launch campaign, add keywords, etc.)
-- WHY: Data showing the opportunity (high conversion + low spend, good organic rank to defend, etc.)
-- HOW: Step-by-step implementation instructions
-- POTENTIAL: "Could generate ~$X additional revenue at ~Y ROAS based on current conversion rate of Z%"
+## 💰 BUDGET REALLOCATION
+- Current split: Amazon X% / Google Y% / Meta Z%
+- Recommended split with rationale
+- Specific dollar amounts to move and where
 
-## 📊 TREND DIAGNOSIS
-- Month-over-month: Is ROAS improving or declining? By how much? Why?
-- Week-over-week momentum: Recent 7d vs prior 7d — acceleration or deceleration?
-- TACOS trend: Is organic growing or is the brand becoming more ad-dependent?
-- Day-of-week: Best/worst performing days and what to do about it
+## 📈 TREND DIAGNOSIS
+- MoM trajectory: improving/declining with specific % changes
+- TACOS trend: ad-dependent vs organic growth
+- Placement efficiency shifts
+- Seasonal factors to prepare for
 
-## 🎯 THIS WEEK'S PRIORITY ACTIONS (Top 5)
-Numbered 1-5 in order of impact. Each must have:
-1. [Action] → [Expected impact in $] → [Time to implement: X minutes]
+## 🎯 THIS WEEK'S TOP 5 PRIORITIES
+1. [Action] → [Expected impact $] → [Time: X min] → [Difficulty: Easy/Med/Hard]
+2-5. Same format
 
-═══════════════════════════════════════════
-HARD RULES — VIOLATING THESE MAKES THE PLAN USELESS:
-═══════════════════════════════════════════
-- ALWAYS cite SPECIFIC search terms, campaign names, ASINs, placement names, and dollar amounts from the data
-- NEVER use vague language: no "consider", "you might want to", "it could be beneficial", "look into" — say "DO THIS" or "STOP THIS"  
-- For every cut: estimate monthly savings with math shown: "Term 'xyz' spent $X over Y days = ~$Z/month with 0 orders → NEGATIVE MATCH NOW"
-- For every scale recommendation: estimate potential with math: "Term 'abc' converts at X% with $Y CPC — increasing daily budget by $Z could yield ~$W additional revenue"
-- Cross-reference sources: paid search terms vs organic brand share, placement ROAS vs campaign ROAS, SP vs SB vs SD efficiency
-- When data is missing for a section, say exactly what report the seller needs to upload to fill the gap
-- Be blunt. If something is burning money, say "This is burning money"
-- Include exact bid change amounts when recommending bid adjustments (e.g., "Increase TOS bid modifier from current to 40%")
-- When discussing placements: always compare TOS vs Product Pages vs Rest of Search with specific ROAS for each`;
+═══════════════════════════════════════════════════════════════
+HARD RULES:
+═══════════════════════════════════════════════════════════════
+- ALWAYS cite specific search terms, campaign names, ASINs, ad names, and dollar amounts
+- NEVER use vague language: no "consider", "you might want to", "look into" — say DO or STOP
+- For every recommendation: show the math (spend, sales, ROAS, projected impact)
+- Cross-reference: paid vs organic, SP vs SB vs SD, placement A vs B, Google vs Meta
+- When data is missing: say exactly which report to upload
+- Be blunt: "This campaign is burning $X/month with zero return — pause TODAY"
+- Include specific bid amounts when recommending changes
+- For keyword recommendations: specify match type (exact/phrase/broad)
+- Format currency as $X,XXX not just numbers`;
 
       const aiResponse = await callAI({
         system: systemPrompt,

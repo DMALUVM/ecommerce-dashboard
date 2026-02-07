@@ -6,6 +6,7 @@ import { formatCurrency, formatPercent, formatNumber } from '../../utils/format'
 import { parseCSV } from '../../utils/csv';
 import { hasDailySalesData } from '../../utils/date';
 // storage import removed — URL save now via saveSalesTax prop
+import { US_STATES_TAX_INFO, STATE_FILING_FORMATS } from '../../utils/taxData';
 import NavTabs from '../ui/NavTabs';
 
 const SalesTaxView = ({

@@ -569,7 +569,25 @@ const AdsView = ({
 
           {adsAiMessages.length>0 && (
             <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-6">
-              <div className="flex items-center justify-between mb-4"><h3 className="text-white font-semibold">Report Output</h3><button onClick={()=>setAdsAiMessages([])} className="text-slate-400 hover:text-white text-xs flex items-center gap-1"><RefreshCw className="w-3 h-3"/>Clear</button></div>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-white font-semibold">Report Output</h3>
+                <div className="flex items-center gap-2">
+                  <button onClick={()=>{
+                    const report = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n');
+                    navigator.clipboard.writeText(report).then(()=>setToast({message:'Report copied to clipboard',type:'success'})).catch(()=>setToast({message:'Copy failed',type:'error'}));
+                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1 bg-slate-700/50 rounded-lg hover:bg-slate-700">📋 Copy</button>
+                  <button onClick={()=>{
+                    const report = adsAiMessages.map(m=>m.role==='user'?`**PROMPT:** ${m.content}`:m.content).join('\n\n---\n\n');
+                    const header = `# Advertising Audit Report\n**Generated:** ${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}\n**Model:** ${aiChatModel}\n\n---\n\n`;
+                    const blob = new Blob([header + report], {type:'text/markdown'});
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a'); a.href = url; a.download = `ads-audit-${new Date().toISOString().slice(0,10)}.md`; a.click();
+                    URL.revokeObjectURL(url);
+                    setToast({message:'Report downloaded as markdown',type:'success'});
+                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1 bg-slate-700/50 rounded-lg hover:bg-slate-700">⬇️ Download .md</button>
+                  <button onClick={()=>setAdsAiMessages([])} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1 bg-slate-700/50 rounded-lg hover:bg-slate-700"><RefreshCw className="w-3 h-3"/>Clear</button>
+                </div>
+              </div>
               <div className="space-y-4 max-h-[600px] overflow-y-auto">
                 {adsAiMessages.map((msg,i)=>(
                   <div key={i} className={`${msg.role==='user'?'bg-orange-900/20 border border-orange-500/20':'bg-slate-900/50'} rounded-xl p-4`}>
