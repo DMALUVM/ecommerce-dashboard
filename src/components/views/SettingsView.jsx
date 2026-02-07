@@ -6,6 +6,7 @@ import {
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import { lsSet } from '../../utils/storage';
 import { hasDailySalesData } from '../../utils/date';
+import { AI_MODELS, AI_DEFAULT_MODEL } from '../../utils/config';
 import NavTabs from '../ui/NavTabs';
 import NumberInput from '../ui/NumberInput';
 import SettingRow from '../ui/SettingRow';
@@ -142,7 +143,7 @@ const SettingsView = ({
     alertSalesTaxEnabled: true,
     currencySymbol: '$',
     dateFormat: 'US',
-    aiModel: 'claude-sonnet-4-20250514',
+    aiModel: AI_DEFAULT_MODEL,
   };
   
   // Merge defaults with saved settings
@@ -2742,7 +2743,7 @@ const SettingsView = ({
         <SettingSection title="🧠 AI Model">
           <SettingRow label="Report Generation Model" desc="Controls Amazon PPC & DTC Action Reports only">
             <select
-              value={currentLocalSettings.aiModel || 'claude-sonnet-4-20250514'}
+              value={currentLocalSettings.aiModel || AI_DEFAULT_MODEL}
               onChange={(e) => updateSetting('aiModel', e.target.value)}
               className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
             >
@@ -2753,10 +2754,10 @@ const SettingsView = ({
           </SettingRow>
           <div className="bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400 space-y-1">
             <p><strong className="text-white">How models are routed:</strong></p>
-            <p>🟣 <strong className="text-violet-300">Action Reports</strong> (Amazon PPC + DTC) → <strong className="text-white">Your selection above</strong> (default: Sonnet 4)</p>
-            <p>💬 <strong className="text-cyan-300">AI Chat</strong> → Haiku 4.5 (fast, cheap — ~$0.01/message)</p>
-            <p>📈 <strong className="text-emerald-300">Forecasts & Analytics</strong> → Sonnet 4 (always, needs precision)</p>
-            <p className="text-slate-500 mt-2">Sonnet = best value for reports. Switch to Opus for quarterly deep-dives (~5x cost, deepest reasoning).</p>
+            <p>🟣 <strong className="text-violet-300">Action Reports</strong> (Amazon PPC + DTC) → <strong className="text-white">Your selection above</strong> (default: Sonnet 4.5)</p>
+            <p>💬 <strong className="text-cyan-300">AI Chat</strong> → Your selection in Ads tab (default: Sonnet 4.5)</p>
+            <p>📈 <strong className="text-emerald-300">Forecasts & Analytics</strong> → Sonnet 4.5 (always, needs precision)</p>
+            <p className="text-slate-500 mt-2">Sonnet 4.5 = best value for reports. Switch to Opus for quarterly deep-dives (~5x cost, deepest reasoning).</p>
           </div>
         </SettingSection>
         

@@ -94,17 +94,18 @@ const NotificationCenter = ({
 
       inventoryData.forEach(item => {
         if (!item?.sku) return;
-        const daysLeft = item.daysOfInventory || item.daysRemaining || 0;
-        const qty = item.quantity || item.availableQuantity || 0;
+        const daysLeft = item.daysOfSupply || item.daysOfInventory || 0;
+        const qty = item.totalQty || item.quantity || 0;
+        const displayName = item.name || item.productName || item.sku;
 
-        if (qty === 0) {
+        if (qty === 0 && item.weeklyVel > 0) {
           notifs.push({
             id: `inv-oos-${item.sku}`,
             type: 'critical',
             category: 'inventory',
             icon: Package,
             title: `${item.sku} is OUT OF STOCK`,
-            body: `${item.productName || item.sku} has 0 units available.`,
+            body: `${displayName} has 0 units available.`,
             action: () => setView('inventory'),
             actionLabel: 'View Inventory',
             timestamp: now,

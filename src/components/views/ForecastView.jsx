@@ -388,9 +388,9 @@ const ForecastView = ({
                     
                     <div className="flex items-center justify-between">
                       <span className={`px-2 py-1 rounded text-xs ${
-                        aiForecasts.source === 'claude-ai-premium' ? 'bg-purple-500/20 text-purple-300' : 'bg-slate-700 text-slate-400'
+                        aiForecasts.source?.startsWith('claude') ? 'bg-purple-500/20 text-purple-300' : 'bg-slate-700 text-slate-400'
                       }`}>
-                        {aiForecasts.source === 'claude-ai-premium' ? '🧠 Claude AI Premium' : '🤖 AI Generated'}
+                        {aiForecasts.source?.startsWith('claude') ? '🧠 Claude AI' : '🤖 AI Generated'}
                       </span>
                       <p className="text-slate-500 text-xs">
                         Last updated: {aiForecasts.generatedAt ? new Date(aiForecasts.generatedAt).toLocaleString() : '—'}

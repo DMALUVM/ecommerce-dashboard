@@ -17,6 +17,7 @@ import {
   WEEKLY_REPORTS_KEY, FORECAST_ACCURACY_KEY, FORECAST_CORRECTIONS_KEY,
   LZCompress, COMPRESSED_KEYS, lsGet, lsSet
 } from './utils/storage';
+import { AI_MODELS, AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, AI_MODEL_OPTIONS, getModelTier, getModelLabel } from './utils/config';
 
 // Extracted UI components
 import NotificationCenter from './components/ui/NotificationCenter';
@@ -476,15 +477,10 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
 };
 
 // ============ UNIFIED AI CONFIGURATION (Pro Plan) ============
-// All AI features use these consistent settings for best results
-const AI_MODELS = {
-  'claude-sonnet-4-20250514': { label: 'Claude Sonnet 4', cost: '~$0.04/report', tier: 'Balanced', desc: 'Best value — fast, smart, cheap' },
-  'claude-opus-4-20250514': { label: 'Claude Opus 4', cost: '~$0.20/report', tier: 'Premium', desc: 'Deepest analysis, 5x cost' },
-  'claude-haiku-4-5-20251001': { label: 'Claude Haiku 4.5', cost: '~$0.01/report', tier: 'Fast', desc: 'Cheapest, shorter reports' },
-};
+// AI_MODELS imported from ./utils/config.js — edit ONLY there when models update
 
 const AI_CONFIG = {
-  model: 'claude-sonnet-4-20250514',
+  model: AI_DEFAULT_MODEL,
   maxTokens: 12000,  // Reports need 8K-12K tokens for full output
   maxDuration: 60,  // Pro plan 60-second timeout
   streaming: true,  // Use streaming to avoid 25s first-byte timeout
@@ -1794,7 +1790,7 @@ const handleLogout = async () => {
   });
   const [adsAiInput, setAdsAiInput] = useState('');
   const [adsAiLoading, setAdsAiLoading] = useState(false);
-  const [aiChatModel, setAiChatModel] = useState('claude-sonnet-4-5-20250929');
+  const [aiChatModel, setAiChatModel] = useState(AI_DEFAULT_MODEL);
   // Prior report summaries — persisted so AI remembers past analyses
   const [adsAiReportHistory, setAdsAiReportHistory] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_ads_report_history_v1', []); } catch (e) { devWarn("[init]", e?.message); return []; }
@@ -3631,7 +3627,7 @@ allWeekKeys.forEach((weekKey) => {
     },
 
     // AI model selection
-    aiModel: 'claude-sonnet-4-20250514',
+    aiModel: AI_DEFAULT_MODEL,
   });
   
   // Sync AI model selection to window global so outer-scope callAI can read it
@@ -12800,7 +12796,7 @@ Keep insights brief and actionable. Format as numbered list.`;
           body: JSON.stringify({
             system: systemPrompt,
             messages: [{ role: 'user', content: prompt }],
-            model: 'claude-sonnet-4-20250514',
+            model: AI_DEFAULT_MODEL,
             max_tokens: 4000,
           }),
         });
@@ -12998,8 +12994,8 @@ Respond with ONLY this JSON (no markdown):
         setAiForecasts({
           ...forecast,
           generatedAt: new Date().toISOString(),
-          source: 'claude-ai-pro',
-          model: 'claude-sonnet-4-20250514',
+          source: 'claude-ai',
+          model: AI_DEFAULT_MODEL,
           calculatedSignals: {
             dailyAvg7: avg7Day,
             dailyAvg14: avg14Day,
@@ -14139,7 +14135,7 @@ Analyze the data and respond with ONLY this JSON:
       <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" /><span className="hidden sm:inline">Export</span></button>
       <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" /><span className="hidden sm:inline">Import</span><input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
       <button onClick={() => setShowAuditLog(true)} className="flex items-center gap-2 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-400 hover:text-white transition-colors" title="Activity Log"><Clock className="w-4 h-4" /></button>
-      <NotificationCenter salesTaxConfig={salesTaxConfig} inventoryData={invHistory?.[Object.keys(invHistory || {}).sort().pop()]?.products || []} allDaysData={allDaysData} appSettings={appSettings} lastBackupDate={lastBackupDate} setView={setView} setToast={setToast} />
+      <NotificationCenter salesTaxConfig={salesTaxConfig} inventoryData={invHistory?.[Object.keys(invHistory || {}).sort().pop()]?.items || []} allDaysData={allDaysData} appSettings={appSettings} lastBackupDate={lastBackupDate} setView={setView} setToast={setToast} />
     </div>
   ), [allWeeksData, allDaysData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session, stores, activeStoreId, dataStatus, salesTaxConfig, invHistory, appSettings, lastBackupDate]);
 
@@ -16678,11 +16674,9 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
       const needsFullContext = isFirstMessage || isAuditRequest;
       
       // Opus gets 16K for audits, Sonnet 12K, Haiku 8K (their sweet spots)
-      const isOpus = aiChatModel.includes('opus');
-      const isSonnet = aiChatModel.includes('sonnet');
-      const auditTokens = isOpus ? 16000 : isSonnet ? 12000 : 8000;
-      const followUpTokens = isOpus ? 12000 : isSonnet ? 8000 : 4096;
-      const tokenBudget = needsFullContext ? auditTokens : followUpTokens;
+      const tier = getModelTier(aiChatModel);
+      const budgets = AI_TOKEN_BUDGETS[tier];
+      const tokenBudget = needsFullContext ? budgets.audit : budgets.followUp;
       
       // ── SYSTEM PROMPT: Instructions only (cacheable, no data) ──
       const systemPrompt = `You are a $15,000/month Amazon PPC strategist and multi-channel advertising expert performing analysis for Tallowbourn, a tallow-based skincare brand selling lip balms, body balms, and natural deodorant through Amazon and Shopify (DTC).
@@ -16827,7 +16821,7 @@ Reference the full data from the prior analysis. Be concise but still specific w
         
         setAdsAiReportHistory(prev => [...prev, {
           date: new Date().toISOString().slice(0, 10),
-          model: aiChatModel.includes('opus') ? 'Opus' : aiChatModel.includes('sonnet') ? 'Sonnet' : 'Haiku',
+          model: getModelLabel(aiChatModel),
           healthScore,
           keyIssues,
           actionsTaken: 'pending', // User can update this

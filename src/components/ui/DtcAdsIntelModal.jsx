@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Upload, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, ShoppingCart, Zap, Download, FileText, Globe, Instagram, Archive, Loader2 } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
+import { AI_DEFAULT_MODEL } from '../../utils/config';
 
 // ============ REPORT TYPES ============
 
@@ -1022,120 +1023,6 @@ const renderMarkdown = (md) => {
   return html;
 };
 
-// ============ DASHBOARD DATA DTC REPORT (no CSV upload needed) ============
-
-export const buildDtcDashboardReportPrompt = (allDaysData) => {
-  if (!allDaysData) return null;
-  
-  // Collect DTC ad spend data from daily sales
-  const days = Object.keys(allDaysData).sort();
-  const dtcDays = days.filter(d => {
-    const shop = allDaysData[d]?.shopify || {};
-    return (shop.googleAds || 0) > 0 || (shop.metaAds || 0) > 0 || (shop.revenue || 0) > 0;
-  });
-  
-  if (dtcDays.length < 3) return null;
-  
-  let dataContext = `=== DTC DASHBOARD DATA ===\n`;
-  
-  // Aggregate totals
-  let totalGoogleSpend = 0, totalMetaSpend = 0, totalShopifyRev = 0, totalShopifyOrders = 0;
-  const recentDays = dtcDays.slice(-30);
-  
-  recentDays.forEach(d => {
-    const shop = allDaysData[d]?.shopify || {};
-    totalGoogleSpend += shop.googleAds || 0;
-    totalMetaSpend += shop.metaAds || 0;
-    totalShopifyRev += shop.revenue || 0;
-    totalShopifyOrders += shop.orders || 0;
-  });
-  
-  dataContext += `\nLAST ${recentDays.length} DAYS TOTALS:\n`;
-  dataContext += `  Google Ads Spend: $${totalGoogleSpend.toFixed(2)}\n`;
-  dataContext += `  Meta Ads Spend: $${totalMetaSpend.toFixed(2)}\n`;
-  dataContext += `  Total DTC Ad Spend: $${(totalGoogleSpend + totalMetaSpend).toFixed(2)}\n`;
-  dataContext += `  Shopify Revenue: $${totalShopifyRev.toFixed(2)}\n`;
-  dataContext += `  Shopify Orders: ${totalShopifyOrders}\n`;
-  if (totalGoogleSpend + totalMetaSpend > 0) {
-    dataContext += `  Blended ROAS: ${(totalShopifyRev / (totalGoogleSpend + totalMetaSpend)).toFixed(2)}\n`;
-  }
-  
-  // Daily breakdown (last 14 days)
-  const last14 = dtcDays.slice(-14);
-  if (last14.length > 0) {
-    dataContext += `\nDAILY DTC PERFORMANCE (last ${last14.length} days):\n`;
-    last14.forEach(d => {
-      const shop = allDaysData[d]?.shopify || {};
-      const g = shop.googleAds || 0;
-      const m = shop.metaAds || 0;
-      const rev = shop.revenue || 0;
-      const orders = shop.orders || 0;
-      const totalAd = g + m;
-      dataContext += `  ${d}: Rev $${rev.toFixed(0)} | Orders ${orders} | Google $${g.toFixed(0)} | Meta $${m.toFixed(0)} | ROAS ${totalAd > 0 ? (rev / totalAd).toFixed(1) : 'N/A'}\n`;
-    });
-  }
-  
-  // Weekly aggregation
-  const weeklyAgg = {};
-  dtcDays.forEach(d => {
-    const date = new Date(d + 'T00:00:00');
-    const day = date.getDay();
-    const sun = new Date(date);
-    sun.setDate(date.getDate() + (7 - day) % 7);
-    const wk = sun.toISOString().split('T')[0];
-    if (!weeklyAgg[wk]) weeklyAgg[wk] = { google: 0, meta: 0, rev: 0, orders: 0, days: 0 };
-    const shop = allDaysData[d]?.shopify || {};
-    weeklyAgg[wk].google += shop.googleAds || 0;
-    weeklyAgg[wk].meta += shop.metaAds || 0;
-    weeklyAgg[wk].rev += shop.revenue || 0;
-    weeklyAgg[wk].orders += shop.orders || 0;
-    weeklyAgg[wk].days++;
-  });
-  
-  const weekKeys = Object.keys(weeklyAgg).sort().slice(-8);
-  if (weekKeys.length > 0) {
-    dataContext += `\nWEEKLY DTC TRENDS (last ${weekKeys.length} weeks):\n`;
-    weekKeys.forEach(wk => {
-      const w = weeklyAgg[wk];
-      const totalAd = w.google + w.meta;
-      dataContext += `  ${wk}: Rev $${w.rev.toFixed(0)} | Orders ${w.orders} | Google $${w.google.toFixed(0)} | Meta $${w.meta.toFixed(0)} | ROAS ${totalAd > 0 ? (w.rev / totalAd).toFixed(2) : 'N/A'} (${w.days}d)\n`;
-    });
-  }
-  
-  const systemPrompt = `You are an expert DTC (direct-to-consumer) advertising strategist specializing in Shopify stores running Google and Meta ads. Analyze the provided dashboard data and generate actionable recommendations.`;
-  
-  const userPrompt = `Generate a DTC Growth & Advertising Action Report for Tallowbourn (tallow-based skincare on Shopify: lip balms, body balms, deodorant).
-
-DATA SOURCE: Dashboard daily sales data with Google/Meta ad spend tracking
-${dataContext}
-
-NOTE: This report is generated from dashboard-level spend tracking. Detailed campaign/ad set breakdowns, audience data, and creative performance are not available. Focus on spend allocation, ROAS trends, revenue attribution, and strategic recommendations.
-
-=== GENERATE THESE SECTIONS ===
-
-## 📊 EXECUTIVE SUMMARY
-Overall DTC performance, spend efficiency, key trends
-
-## 📈 CHANNEL PERFORMANCE
-Google vs Meta: which is more efficient? Spend split recommendations.
-
-## 💰 ROAS & SPEND ANALYSIS
-Is current spend level optimal? Daily/weekly trends in efficiency.
-
-## 📅 TIMING OPTIMIZATION
-Day-of-week patterns, best/worst performing days
-
-## ⚡ TOP 5 ACTIONS — DO THIS WEEK
-Specific, measurable actions with expected impact
-
-## 📋 DATA GAPS
-What additional data (campaign reports, audience breakdowns, creative performance) would enable deeper optimization
-
-Generate all sections with specific numbers and actionable recommendations.`;
-  
-  return { systemPrompt, userPrompt };
-};
-
 // ============ COMPONENT ============
 
 const DtcAdsIntelModal = ({
@@ -1147,9 +1034,6 @@ const DtcAdsIntelModal = ({
   setToast,
   callAI,
   saveReportToHistory,
-  allDaysData,
-  appSettings,
-  storeName,
 }) => {
   const [detectedFiles, setDetectedFiles] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -1319,30 +1203,13 @@ const DtcAdsIntelModal = ({
     }
   };
 
-  // Check if we have DTC ad spend in daily data
-  const hasDashboardDtcData = (() => {
-    if (!allDaysData) return false;
-    const days = Object.keys(allDaysData);
-    return days.some(d => {
-      const shop = allDaysData[d]?.shopify || {};
-      return (shop.googleAds || 0) > 0 || (shop.metaAds || 0) > 0;
-    });
-  })();
-
   const generateActionReport = async () => {
-    if (!callAI) return;
-    if (!dtcIntelData?.lastUpdated && !hasDashboardDtcData) return;
+    if (!callAI || !dtcIntelData?.lastUpdated) return;
     setGeneratingReport(true);
     setReportError(null);
     setActionReport(null);
     try {
-      let prompts;
-      if (dtcIntelData?.lastUpdated) {
-        prompts = buildDtcActionReportPrompt(dtcIntelData);
-      }
-      if (!prompts && hasDashboardDtcData) {
-        prompts = buildDtcDashboardReportPrompt(allDaysData);
-      }
+      const prompts = buildDtcActionReportPrompt(dtcIntelData);
       if (!prompts) throw new Error('No data available');
       const response = await callAI(prompts.userPrompt, prompts.systemPrompt);
       setActionReport(response);
@@ -1358,7 +1225,7 @@ const DtcAdsIntelModal = ({
         saveReportToHistory({
           type: 'dtc',
           content: response,
-          model: window.__aiModelOverride || 'claude-sonnet-4-20250514',
+          model: window.__aiModelOverride || AI_DEFAULT_MODEL,
           metrics: {
             revenue: totalRev,
             adSpend: totalSpend,
@@ -1434,19 +1301,6 @@ const DtcAdsIntelModal = ({
               {callAI && !actionReport && !generatingReport && (
                 <button onClick={generateActionReport} className="mt-3 w-full px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-lg text-white font-medium flex items-center justify-center gap-2 text-sm shadow-lg shadow-cyan-500/20">
                   <FileText className="w-4 h-4" />🔬 Generate DTC Action Report from This Data
-                </button>
-              )}
-            </div>
-          )}
-          
-          {/* Dashboard data available (from daily sales - no CSV upload needed) */}
-          {!hasExistingData && hasDashboardDtcData && (
-            <div className="bg-indigo-900/30 border border-indigo-500/30 rounded-lg p-3 text-sm">
-              <p className="text-indigo-400 font-medium">📊 Dashboard DTC ad data available</p>
-              <p className="text-slate-400 text-xs mt-1">Google & Meta spend tracked in daily sales data · For deeper analysis, upload CSV reports below</p>
-              {callAI && !actionReport && !generatingReport && (
-                <button onClick={generateActionReport} className="mt-3 w-full px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-lg text-white font-medium flex items-center justify-center gap-2 text-sm shadow-lg shadow-cyan-500/20">
-                  <FileText className="w-4 h-4" />🔬 Generate DTC Action Report from Dashboard Data
                 </button>
               )}
             </div>

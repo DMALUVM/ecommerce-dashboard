@@ -1,5 +1,49 @@
 // Dashboard configuration constants
 
+// ============================================================
+// AI MODEL CONFIGURATION
+// ============================================================
+// 🔧 UPDATE MODELS HERE when new versions are released.
+//    This is the SINGLE SOURCE OF TRUTH — all components import from here.
+//    After editing, no other files need to change.
+//
+//    To add a new model: add an entry to AI_MODELS below.
+//    To change the default: update AI_DEFAULT_MODEL.
+//    To retire a model: remove its entry from AI_MODELS.
+// ============================================================
+
+const AI_MODELS = {
+  'claude-opus-4-6':             { label: 'Claude Opus 4.6',    cost: '~$0.25/report', tier: 'Premium',  desc: 'Most intelligent, deepest analysis' },
+  'claude-sonnet-4-5-20250929':  { label: 'Claude Sonnet 4.5',  cost: '~$0.04/report', tier: 'Balanced', desc: 'Best value — fast, smart, cheap' },
+  'claude-opus-4-5-20250918':    { label: 'Claude Opus 4.5',    cost: '~$0.20/report', tier: 'Premium',  desc: 'Deep analysis, 5x cost' },
+  'claude-haiku-4-5-20251001':   { label: 'Claude Haiku 4.5',   cost: '~$0.01/report', tier: 'Fast',     desc: 'Cheapest, shorter reports' },
+};
+
+// Default model used for reports, forecasts, and new chat sessions
+const AI_DEFAULT_MODEL = 'claude-sonnet-4-5-20250929';
+
+// Token budgets per model tier (used by ads chat & report generation)
+const AI_TOKEN_BUDGETS = {
+  opus:   { audit: 16000, followUp: 12000, report: 12000 },
+  sonnet: { audit: 12000, followUp:  8000, report: 12000 },
+  haiku:  { audit:  8000, followUp:  4096, report:  8000 },
+};
+
+// Helper: get tier name from model string
+const getModelTier = (model) => {
+  if (model?.includes('opus'))   return 'opus';
+  if (model?.includes('haiku'))  return 'haiku';
+  return 'sonnet'; // default
+};
+
+// Helper: get display label for a model string
+const getModelLabel = (model) => AI_MODELS[model]?.label || model;
+
+// Ordered list for <select> dropdowns
+const AI_MODEL_OPTIONS = Object.entries(AI_MODELS).map(([key, m]) => ({
+  value: key, label: m.label, cost: m.cost, tier: m.tier, desc: m.desc,
+}));
+
 // Dashboard widget configuration - defined at module level for consistent access
 const DEFAULT_DASHBOARD_WIDGETS = {
   widgets: [
@@ -23,4 +67,4 @@ const DEFAULT_DASHBOARD_WIDGETS = {
   layout: 'auto',
 };
 
-export { DEFAULT_DASHBOARD_WIDGETS };
+export { DEFAULT_DASHBOARD_WIDGETS, AI_MODELS, AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, AI_MODEL_OPTIONS, getModelTier, getModelLabel };

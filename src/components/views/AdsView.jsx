@@ -7,6 +7,7 @@ import {
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from '../../utils/ads';
 import { hasDailySalesData } from '../../utils/date';
+import { AI_MODEL_OPTIONS, getModelLabel } from '../../utils/config';
 import NavTabs from '../ui/NavTabs';
 
 // Simple markdown → HTML converter for export (no external deps)
@@ -581,9 +582,9 @@ const AdsView = ({
                 <p className="text-slate-400 text-sm mt-1">Generates a full cross-platform audit from ALL available data — search terms, placements, campaigns, daily performance, Brand Analytics.</p>
               </div>
               <select value={aiChatModel} onChange={e => setAiChatModel(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm">
-                <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5</option>
-                <option value="claude-opus-4-5-20250918">Claude Opus 4.5</option>
-                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fast)</option>
+                {AI_MODEL_OPTIONS.map(m => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
               </select>
             </div>
 
@@ -716,7 +717,7 @@ const AdsView = ({
                   {/* Download markdown */}
                   <button onClick={()=>{
                     const report = adsAiMessages.map(m=>m.role==='user'?`**PROMPT:** ${m.content}`:m.content).join('\n\n---\n\n');
-                    const header = `# Tallowbourn Advertising Audit Report\n**Generated:** ${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}\n**Model:** ${aiChatModel.includes('opus')?'Claude Opus 4.5':aiChatModel.includes('sonnet')?'Claude Sonnet 4.5':'Claude Haiku 4.5'}\n\n---\n\n`;
+                    const header = `# Tallowbourn Advertising Audit Report\n**Generated:** ${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}\n**Model:** ${getModelLabel(aiChatModel)}\n\n---\n\n`;
                     const blob = new Blob([header + report], {type:'text/markdown'});
                     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `tallowbourn-ads-audit-${new Date().toISOString().slice(0,10)}.md`; a.click(); URL.revokeObjectURL(url);
                     setToast({message:'Downloaded as markdown',type:'success'});
@@ -726,7 +727,7 @@ const AdsView = ({
                   <button onClick={()=>{
                     const report = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n');
                     const dateStr = new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
-                    const modelName = aiChatModel.includes('opus')?'Claude Opus 4.5':aiChatModel.includes('sonnet')?'Claude Sonnet 4.5':'Claude Haiku 4.5';
+                    const modelName = getModelLabel(aiChatModel);
                     const htmlBody = markdownToHtml(report);
                     const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tallowbourn Ads Audit - ${dateStr}</title>
 <style>
@@ -797,9 +798,9 @@ ${htmlBody}
                 </div>
                 <div className="flex items-center gap-2">
                   <select value={aiChatModel} onChange={e=>setAiChatModel(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-white text-xs">
-                    <option value="claude-sonnet-4-5-20250929">Sonnet</option>
-                    <option value="claude-opus-4-5-20250918">Opus</option>
-                    <option value="claude-haiku-4-5-20251001">Haiku</option>
+                    {AI_MODEL_OPTIONS.map(m => (
+                      <option key={m.value} value={m.value}>{m.label.replace('Claude ', '')}</option>
+                    ))}
                   </select>
                   <button onClick={()=>setAdsAiMessages([])} className="p-2 hover:bg-white/20 rounded-lg text-white/70 hover:text-white" title="Clear"><RefreshCw className="w-4 h-4"/></button>
                   <button onClick={()=>setShowAdsAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white"><X className="w-5 h-5"/></button>

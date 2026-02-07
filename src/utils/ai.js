@@ -1,10 +1,11 @@
 // AI utility functions
 // Handles API calls to Claude AI
+import { AI_DEFAULT_MODEL } from './config';
 
 // ============ UNIFIED AI CONFIGURATION (Pro Plan) ============
-// All AI features use these consistent settings for best results
+// Model string imported from config.js — edit ONLY there when models update
 const AI_CONFIG = {
-  model: 'claude-sonnet-4-20250514',
+  model: AI_DEFAULT_MODEL,
   maxTokens: 4000,  // Pro plan allows comprehensive responses
   maxDuration: 60,  // Pro plan 60-second timeout
   streaming: true,  // Use streaming to avoid 25s first-byte timeout
