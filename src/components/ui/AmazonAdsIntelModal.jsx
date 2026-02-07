@@ -134,14 +134,15 @@ const writeDailyToTracking = (rows, currentDays = {}, currentCampaigns = {}) => 
   const updatedDays = { ...currentDays };
   const updatedCampaigns = { ...currentCampaigns };
   
+  // Step 1: Pre-aggregate all rows by date (a single file may have multiple campaign rows per date)
+  const byDate = {};
+  const campaignAgg = {};
+  
   rows.forEach(row => {
     const date = normalizeDate(row['date'] || row['Date']);
     if (!date) return;
     
-    // Extract campaign name if present
     const campaign = row['Campaign Name'] || row['campaign'] || row['Campaign'] || '';
-    
-    // Parse metrics
     const spend = parseNum(row['Spend']);
     const revenue = parseNum(row['Revenue']);
     const adRevenue = parseNum(row['Ad Revenue'] || row['revenue']);
@@ -151,60 +152,61 @@ const writeDailyToTracking = (rows, currentDays = {}, currentCampaigns = {}) => 
     const totalRevenue = parseNum(row['Total Revenue']);
     const totalUnits = parseNum(row['Total Units Ordered'] || row['Total Units']);
     
-    // Skip rows with no meaningful data
     if (spend === 0 && revenue === 0 && orders === 0 && impressions === 0) return;
     
-    // Initialize day if not exists
-    if (!updatedDays[date]) {
-      updatedDays[date] = {
-        amazon: { sales: 0, units: 0, refunds: 0, adSpend: 0, adRevenue: 0, orders: 0 }
-      };
+    if (!byDate[date]) {
+      byDate[date] = { adSpend: 0, adRevenue: 0, adOrders: 0, adImpressions: 0, adClicks: 0, totalRevenue: 0, totalUnits: 0 };
     }
+    byDate[date].adSpend += spend;
+    byDate[date].adRevenue += (adRevenue || revenue);
+    byDate[date].adOrders += orders;
+    byDate[date].adImpressions += impressions;
+    byDate[date].adClicks += clicks;
+    byDate[date].totalRevenue = Math.max(byDate[date].totalRevenue, totalRevenue);
+    byDate[date].totalUnits = Math.max(byDate[date].totalUnits, totalUnits);
     
-    // Initialize amazon object if not exists
+    // Campaign aggregation
+    if (campaign) {
+      const campKey = campaign;
+      if (!campaignAgg[campKey]) campaignAgg[campKey] = { name: campaign, totalSpend: 0, totalRevenue: 0, totalOrders: 0, days: {} };
+      campaignAgg[campKey].totalSpend += spend;
+      campaignAgg[campKey].totalRevenue += (adRevenue || revenue);
+      campaignAgg[campKey].totalOrders += orders;
+      if (!campaignAgg[campKey].days[date]) campaignAgg[campKey].days[date] = { spend: 0, revenue: 0, orders: 0 };
+      campaignAgg[campKey].days[date].spend += spend;
+      campaignAgg[campKey].days[date].revenue += (adRevenue || revenue);
+      campaignAgg[campKey].days[date].orders += orders;
+    }
+  });
+  
+  // Step 2: REPLACE ad metrics per date (prevents double-counting on re-upload)
+  for (const [date, agg] of Object.entries(byDate)) {
+    if (!updatedDays[date]) {
+      updatedDays[date] = { amazon: { sales: 0, units: 0, refunds: 0, adSpend: 0, adRevenue: 0, orders: 0 } };
+    }
     if (!updatedDays[date].amazon) {
       updatedDays[date].amazon = { sales: 0, units: 0, refunds: 0, adSpend: 0, adRevenue: 0, orders: 0 };
     }
     
-    // Aggregate ad metrics into the day
-    updatedDays[date].amazon.adSpend = (updatedDays[date].amazon.adSpend || 0) + spend;
-    updatedDays[date].amazon.adRevenue = (updatedDays[date].amazon.adRevenue || 0) + (adRevenue || revenue);
-    updatedDays[date].amazon.adOrders = (updatedDays[date].amazon.adOrders || 0) + orders;
-    updatedDays[date].amazon.adImpressions = (updatedDays[date].amazon.adImpressions || 0) + impressions;
-    updatedDays[date].amazon.adClicks = (updatedDays[date].amazon.adClicks || 0) + clicks;
+    // REPLACE (not accumulate) ad metrics for this date
+    updatedDays[date].amazon.adSpend = agg.adSpend;
+    updatedDays[date].amazon.adRevenue = agg.adRevenue;
+    updatedDays[date].amazon.adOrders = agg.adOrders;
+    updatedDays[date].amazon.adImpressions = agg.adImpressions;
+    updatedDays[date].amazon.adClicks = agg.adClicks;
     
-    // If we have total revenue/units, use those for overall sales
-    if (totalRevenue > 0) {
-      updatedDays[date].amazon.sales = Math.max(updatedDays[date].amazon.sales || 0, totalRevenue);
+    if (agg.totalRevenue > 0) {
+      updatedDays[date].amazon.sales = Math.max(updatedDays[date].amazon.sales || 0, agg.totalRevenue);
     }
-    if (totalUnits > 0) {
-      updatedDays[date].amazon.units = Math.max(updatedDays[date].amazon.units || 0, totalUnits);
+    if (agg.totalUnits > 0) {
+      updatedDays[date].amazon.units = Math.max(updatedDays[date].amazon.units || 0, agg.totalUnits);
     }
-    
-    // Track campaign-level data if campaign name is present
-    if (campaign) {
-      if (!updatedCampaigns[campaign]) {
-        updatedCampaigns[campaign] = { 
-          name: campaign, 
-          totalSpend: 0, 
-          totalRevenue: 0, 
-          totalOrders: 0,
-          days: {}
-        };
-      }
-      
-      updatedCampaigns[campaign].totalSpend += spend;
-      updatedCampaigns[campaign].totalRevenue += (adRevenue || revenue);
-      updatedCampaigns[campaign].totalOrders += orders;
-      
-      if (!updatedCampaigns[campaign].days[date]) {
-        updatedCampaigns[campaign].days[date] = { spend: 0, revenue: 0, orders: 0 };
-      }
-      updatedCampaigns[campaign].days[date].spend += spend;
-      updatedCampaigns[campaign].days[date].revenue += (adRevenue || revenue);
-      updatedCampaigns[campaign].days[date].orders += orders;
-    }
-  });
+  }
+  
+  // Step 3: REPLACE campaign data (prevents double-counting on re-upload)
+  for (const [campName, campData] of Object.entries(campaignAgg)) {
+    updatedCampaigns[campName] = campData;
+  }
   
   return { updatedDays, updatedCampaigns };
 };

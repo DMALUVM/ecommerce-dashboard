@@ -1169,12 +1169,9 @@ const DtcAdsIntelModal = ({
             case 'shopifyLandingPages': summary = aggregateShopifyLandingPages(rows); break;
           }
 
-          // Merge arrays for types that may have multiple time periods
-          if (Array.isArray(summary) && Array.isArray(newIntel[det.type])) {
-            // Deduplicate by merging
-            const existing = newIntel[det.type] || [];
-            newIntel[det.type] = [...existing, ...summary];
-          } else if (det.type === 'googleSearchTerms' && newIntel[det.type]) {
+          // REPLACE per report type — re-uploading the same file overwrites, not appends.
+          // (A new export is the complete state for that report type.)
+          if (det.type === 'googleSearchTerms' && newIntel[det.type]) {
             // Merge search terms - keep the one with more data
             if (summary.totalTerms > (newIntel[det.type].totalTerms || 0)) {
               newIntel[det.type] = summary;

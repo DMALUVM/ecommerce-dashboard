@@ -943,9 +943,7 @@ export const mergeTier1IntoDailySales = (dailySales, tier1Results) => {
       if (result.reportType === 'google_daily') {
         // Merge Google metrics into shopify
         if (!day.shopify) day.shopify = {};
-        day.shopify.googleSpend = (day.shopify.googleSpend || 0) > 0 
-          ? day.shopify.googleSpend  // Keep existing if already has data
-          : record.shopify.googleSpend;
+        day.shopify.googleSpend = record.shopify.googleSpend;  // Replace with latest upload
         
         if (!day.shopify.adsMetrics) day.shopify.adsMetrics = {};
         // Overwrite with new data (more granular)
@@ -955,9 +953,7 @@ export const mergeTier1IntoDailySales = (dailySales, tier1Results) => {
       if (result.reportType === 'meta_daily') {
         // Merge Meta metrics into shopify
         if (!day.shopify) day.shopify = {};
-        day.shopify.metaSpend = (day.shopify.metaSpend || 0) > 0
-          ? day.shopify.metaSpend  // Keep existing if already has data
-          : record.shopify.metaSpend;
+        day.shopify.metaSpend = record.shopify.metaSpend;  // Replace with latest upload
         
         if (!day.shopify.adsMetrics) day.shopify.adsMetrics = {};
         Object.assign(day.shopify.adsMetrics, record.shopify.adsMetrics);
