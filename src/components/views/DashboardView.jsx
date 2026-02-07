@@ -413,7 +413,7 @@ const DashboardView = ({
       const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
       
       // Find the latest day with complete data
-      const sortedDays = Object.keys(allDaysData).filter(k => allDaysData[k]?.amazon?.revenue > 0).sort().reverse();
+      const sortedDays = Object.keys(allDaysData).filter(k => ((allDaysData[k]?.amazon?.revenue || 0) + (allDaysData[k]?.shopify?.revenue || 0)) > 0).sort().reverse();
       const latestDayKey = sortedDays[0];
       if (!latestDayKey) return null;
       
@@ -458,7 +458,7 @@ const DashboardView = ({
       
       // Helper to aggregate days in a range
       const aggregateDays = (startKey, endKey) => {
-        const days = Object.keys(allDaysData).filter(k => k >= startKey && k <= endKey && allDaysData[k]?.amazon?.revenue > 0);
+        const days = Object.keys(allDaysData).filter(k => k >= startKey && k <= endKey && ((allDaysData[k]?.amazon?.revenue || 0) + (allDaysData[k]?.shopify?.revenue || 0)) > 0);
         let revenue = 0, units = 0, netProfit = 0, adSpend = 0, amazonRev = 0, shopifyRev = 0, cogs = 0;
         
         days.forEach(k => {
