@@ -125,6 +125,8 @@ const detectReportType = (headers, rows, fileName) => {
   if (hSet.has('search term') && hSet.has('match type') && (hSet.has('avg. cpc') || hSet.has('cost'))) return 'googleSearchTerms';
   if (hSet.has('ad group') && hSet.has('campaign') && hSet.has('clicks') && !hSet.has('search term')) return 'googleAdGroup';
   if (hSet.has('campaign') && hSet.has('campaign state') && hSet.has('cost')) return 'googleCampaign';
+  // Google Ads daily export (Day + Campaign + Cost/Impressions/Clicks, no Campaign state)
+  if (hSet.has('day') && hSet.has('campaign') && (hSet.has('cost') || hSet.has('impressions')) && hSet.has('clicks')) return 'googleCampaign';
   
   return null;
 };
@@ -132,6 +134,81 @@ const detectReportType = (headers, rows, fileName) => {
 // ============ AGGREGATORS ============
 
 const aggregateGoogleCampaigns = (rows, dateRange) => {
+  // Detect if this is a daily-granularity export (has 'Day' column)
+  const hasDay = rows.length > 0 && ('Day' in rows[0] || 'day' in rows[0]);
+  
+  if (hasDay) {
+    // Daily per-campaign/ad rows: aggregate by campaign across all dates
+    const campMap = {};
+    const dailyData = {}; // Also track daily trends
+    
+    for (const r of rows) {
+      const campaign = r['Campaign'] || r['campaign'];
+      if (!campaign) continue;
+      
+      const cost = num(r['Cost'] || r['cost'] || 0);
+      const convValue = num(r['All conv. value'] || r['Conv. value'] || r['All conv. value'] || 0);
+      const conversions = num(r['Conversions'] || r['conversions'] || 0);
+      const impressions = num(r['Impressions'] || r['Impr.'] || r['impressions'] || 0);
+      const clicks = num(r['Clicks'] || r['clicks'] || 0);
+      const day = r['Day'] || r['day'] || '';
+      
+      if (!campMap[campaign]) {
+        campMap[campaign] = { cost: 0, convValue: 0, conversions: 0, impressions: 0, clicks: 0, days: new Set() };
+      }
+      campMap[campaign].cost += cost;
+      campMap[campaign].convValue += convValue;
+      campMap[campaign].conversions += conversions;
+      campMap[campaign].impressions += impressions;
+      campMap[campaign].clicks += clicks;
+      if (day) campMap[campaign].days.add(String(day));
+      
+      // Track daily totals for trend context
+      const dayKey = String(day);
+      if (dayKey) {
+        if (!dailyData[dayKey]) dailyData[dayKey] = { cost: 0, convValue: 0, conversions: 0, impressions: 0, clicks: 0 };
+        dailyData[dayKey].cost += cost;
+        dailyData[dayKey].convValue += convValue;
+        dailyData[dayKey].conversions += conversions;
+        dailyData[dayKey].impressions += impressions;
+        dailyData[dayKey].clicks += clicks;
+      }
+    }
+    
+    // Derive date range from data
+    const allDays = Object.keys(dailyData).sort();
+    const computedDateRange = allDays.length > 0 ? { from: allDays[0], to: allDays[allDays.length - 1] } : dateRange;
+    
+    const campaigns = Object.entries(campMap).map(([name, d]) => ({
+      campaign: name,
+      state: '',
+      type: name.toLowerCase().includes('shopping') ? 'Shopping' : name.toLowerCase().includes('search') ? 'Search' : name.toLowerCase().includes('pmax') ? 'Performance Max' : '',
+      clicks: d.clicks,
+      impressions: d.impressions,
+      ctr: d.impressions > 0 ? (d.clicks / d.impressions) * 100 : 0,
+      avgCPC: d.clicks > 0 ? d.cost / d.clicks : 0,
+      cost: d.cost,
+      conversions: d.conversions,
+      convValue: d.convValue,
+      roas: d.cost > 0 ? d.convValue / d.cost : 0,
+      convRate: d.clicks > 0 ? (d.conversions / d.clicks) * 100 : 0,
+      costPerConv: d.conversions > 0 ? d.cost / d.conversions : 0,
+      absTopImpr: 0,
+      topImpr: 0,
+      viewThrough: 0,
+      daysActive: d.days.size,
+      dateRange: computedDateRange,
+    })).sort((a, b) => b.cost - a.cost);
+    
+    // Attach daily trend data for AI context
+    campaigns._dailyTrend = dailyData;
+    campaigns._dateRange = computedDateRange;
+    campaigns._totalDays = allDays.length;
+    
+    return campaigns;
+  }
+  
+  // Original pre-aggregated format (Google Ads Editor / campaign summary exports)
   return rows.filter(r => r['Campaign']).map(r => ({
     campaign: r['Campaign'],
     state: r['Campaign state'] || '',
@@ -427,9 +504,46 @@ export const buildDtcIntelContext = (intelData) => {
   if (gc?.length > 0) {
     const totalCost = gc.reduce((s, c) => s + c.cost, 0);
     const totalConvVal = gc.reduce((s, c) => s + c.convValue, 0);
-    ctx += `\n--- GOOGLE CAMPAIGNS (${gc.length}) | Total Spend $${Math.round(totalCost)} | Conv Value $${Math.round(totalConvVal)} | ROAS ${totalCost > 0 ? (totalConvVal / totalCost).toFixed(2) : 'N/A'} ---
-${gc.filter(c => c.cost > 0).map(c => `  ${c.campaign} [${c.type}] ${c.state} | Spend $${c.cost.toFixed(2)} | Conv Val $${c.convValue.toFixed(2)} | ROAS ${c.roas.toFixed(2)} | Conv ${c.conversions} | CPC $${c.avgCPC.toFixed(2)} | CTR ${c.ctr}% | AbsTop ${c.absTopImpr}%`).join('\n')}
+    const totalConversions = gc.reduce((s, c) => s + c.conversions, 0);
+    const totalClicks = gc.reduce((s, c) => s + c.clicks, 0);
+    const totalImpr = gc.reduce((s, c) => s + c.impressions, 0);
+    
+    ctx += `\n--- GOOGLE CAMPAIGNS (${gc.length}) | Total Spend $${Math.round(totalCost)} | Conv Value $${Math.round(totalConvVal)} | ROAS ${totalCost > 0 ? (totalConvVal / totalCost).toFixed(2) : 'N/A'} | Conv ${totalConversions} | Clicks ${totalClicks} | Impr ${totalImpr.toLocaleString()}`;
+    
+    // Include date range if available from daily data
+    if (gc._dateRange) {
+      ctx += ` | Period: ${gc._dateRange.from || ''} to ${gc._dateRange.to || ''} (${gc._totalDays || '?'} days)`;
+    }
+    ctx += ` ---
+${gc.filter(c => c.cost > 0).map(c => `  ${c.campaign} [${c.type || '?'}] ${c.state || ''} | Spend $${c.cost.toFixed(2)} | Conv Val $${c.convValue.toFixed(2)} | ROAS ${c.roas.toFixed(2)} | Conv ${c.conversions} | CPC $${c.avgCPC.toFixed(2)} | CTR ${typeof c.ctr === 'number' ? c.ctr.toFixed(1) : c.ctr}% | CostPerConv $${c.costPerConv?.toFixed(2) || '0.00'}${c.daysActive ? ` | ${c.daysActive}d active` : ''}${c.absTopImpr ? ` | AbsTop ${c.absTopImpr}%` : ''}`).join('\n')}
 `;
+
+    // Campaign type breakdown
+    const byType = {};
+    gc.filter(c => c.cost > 0).forEach(c => {
+      const t = c.type || 'Unknown';
+      if (!byType[t]) byType[t] = { cost: 0, convValue: 0, conversions: 0, clicks: 0, impressions: 0 };
+      byType[t].cost += c.cost;
+      byType[t].convValue += c.convValue;
+      byType[t].conversions += c.conversions;
+      byType[t].clicks += c.clicks;
+      byType[t].impressions += c.impressions;
+    });
+    if (Object.keys(byType).length > 1) {
+      ctx += `CAMPAIGN TYPE BREAKDOWN:
+${Object.entries(byType).sort((a, b) => b[1].cost - a[1].cost).map(([t, d]) => `  ${t}: Spend $${d.cost.toFixed(2)} | Conv Val $${d.convValue.toFixed(2)} | ROAS ${d.cost > 0 ? (d.convValue / d.cost).toFixed(2) : 'N/A'} | Conv ${d.conversions} | CPC $${d.clicks > 0 ? (d.cost / d.clicks).toFixed(2) : '0.00'}`).join('\n')}
+`;
+    }
+
+    // Daily trend if available
+    if (gc._dailyTrend) {
+      const days = Object.entries(gc._dailyTrend).sort((a, b) => a[0].localeCompare(b[0]));
+      if (days.length > 0) {
+        ctx += `DAILY TREND (${days.length} days):
+${days.map(([d, v]) => `  ${d}: Spend $${v.cost.toFixed(2)} | Conv Val $${v.convValue.toFixed(2)} | ROAS ${v.cost > 0 ? (v.convValue / v.cost).toFixed(2) : '0'} | Conv ${v.conversions} | Clicks ${v.clicks}`).join('\n')}
+`;
+      }
+    }
   }
 
   // Google Ad Groups

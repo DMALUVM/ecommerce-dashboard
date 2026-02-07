@@ -665,7 +665,7 @@ const parseTier2Generic = (rows, headers, signature) => {
  * Returns { tier, reportType, data, meta } or null if unrecognized.
  */
 const parseSingleSheet = (allRows, fileName) => {
-  if (!allRows || allRows.length < 2) return null;
+  if (!allRows || allRows.length < 2) return [];
   
   // Find the header row (Google/Meta XLSX have metadata rows before headers)
   const headerRowIdx = findHeaderRow(allRows);
@@ -694,23 +694,25 @@ const parseSingleSheet = (allRows, fileName) => {
     if (sig2) {
       return parseSingleSheet_inner(sig2, headers, dataRows, fileName);
     }
-    return { 
+    return [{ 
       unrecognized: true, 
       fileName, 
       headers: actualHeaders.slice(0, 10),
       rowCount: actualDataRows.length 
-    };
+    }];
   }
   
   return parseSingleSheet_inner(signature, actualHeaders, actualDataRows, fileName);
 };
 
 const parseSingleSheet_inner = (signature, headers, dataRows, fileName) => {
+  const results = [];
+  
   if (signature.tier === 1) {
     const parser = TIER1_PARSERS[signature.id];
     if (parser) {
       const result = parser(dataRows, headers);
-      return {
+      results.push({
         tier: 1,
         reportType: signature.id,
         platform: signature.platform,
@@ -718,13 +720,34 @@ const parseSingleSheet_inner = (signature, headers, dataRows, fileName) => {
         data: result.dailyRecords,
         meta: result.reportMeta,
         fileName,
-      };
+      });
+      
+      // For google_daily and meta_daily, ALSO emit Tier 2 with campaign-level detail
+      // so the comprehensive AI prompt can analyze individual campaigns
+      if (signature.id === 'google_daily' || signature.id === 'meta_daily') {
+        const t2Label = signature.id === 'google_daily' ? 'Google Daily Campaign Detail' : 'Meta Daily Campaign Detail';
+        const t2Id = signature.id + '_detail';
+        const t2sig = { ...signature, id: t2Id, tier: 2, label: t2Label };
+        const t2result = parseTier2Generic(dataRows, headers, t2sig);
+        results.push({
+          tier: 2,
+          reportType: t2Id,
+          platform: signature.platform,
+          label: t2Label,
+          data: t2result.records,
+          headers: t2result.headers,
+          meta: t2result.reportMeta,
+          fileName,
+        });
+      }
+      
+      return results;
     }
   }
   
   // Tier 2 — generic parse
   const result = parseTier2Generic(dataRows, headers, signature);
-  return {
+  results.push({
     tier: 2,
     reportType: signature.id,
     platform: signature.platform,
@@ -733,7 +756,8 @@ const parseSingleSheet_inner = (signature, headers, dataRows, fileName) => {
     headers: result.headers,
     meta: result.reportMeta,
     fileName,
-  };
+  });
+  return results;
 };
 
 
@@ -791,8 +815,8 @@ export const parseFile = async (file) => {
   if (ext === 'csv' || ext === 'tsv') {
     const text = await file.text();
     const rows = parseCSVString(text);
-    const result = parseSingleSheet(rows, fileName);
-    if (result) results.push(result);
+    const sheetResults = parseSingleSheet(rows, fileName);
+    results.push(...sheetResults);
   } else if (ext === 'xlsx' || ext === 'xls') {
     const buffer = await file.arrayBuffer();
     const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
@@ -801,8 +825,8 @@ export const parseFile = async (file) => {
       const ws = wb.Sheets[sheetName];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
       if (rows.length > 1) {
-        const result = parseSingleSheet(rows, `${fileName} [${sheetName}]`);
-        if (result) results.push(result);
+        const sheetResults = parseSingleSheet(rows, `${fileName} [${sheetName}]`);
+        results.push(...sheetResults);
       }
     }
   }
@@ -837,8 +861,8 @@ export const parseZipFile = async (file, JSZip) => {
         if (ext === 'csv' || ext === 'tsv') {
           const text = await entry.async('string');
           const rows = parseCSVString(text);
-          const result = parseSingleSheet(rows, shortName);
-          if (result) results.push(result);
+          const sheetResults = parseSingleSheet(rows, shortName);
+          results.push(...sheetResults);
         } else {
           const buffer = await entry.async('arraybuffer');
           const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
@@ -847,8 +871,8 @@ export const parseZipFile = async (file, JSZip) => {
             const ws = wb.Sheets[sheetName];
             const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
             if (rows.length > 1) {
-              const result = parseSingleSheet(rows, `${shortName}`);
-              if (result) results.push(result);
+              const sheetResults = parseSingleSheet(rows, `${shortName}`);
+              results.push(...sheetResults);
             }
           }
         }
