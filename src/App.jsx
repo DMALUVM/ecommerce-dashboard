@@ -17367,13 +17367,19 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           total: derived.total,
           amazon: {
             ...stored.amazon,
-            revenue: derived.amazon?.revenue ?? stored.amazon?.revenue,
-            units: derived.amazon?.units ?? stored.amazon?.units,
+            ...derived.amazon,
+            skuData: stored.amazon?.skuData?.length > (derived.amazon?.skuData?.length || 0)
+              ? stored.amazon.skuData : (derived.amazon?.skuData || stored.amazon?.skuData || []),
           },
           shopify: {
             ...stored.shopify,
-            revenue: derived.shopify?.revenue ?? stored.shopify?.revenue,
-            units: derived.shopify?.units ?? stored.shopify?.units,
+            ...derived.shopify,
+            threeplCosts: stored.shopify?.threeplCosts || derived.shopify?.threeplCosts || 0,
+            threeplMetrics: stored.shopify?.threeplMetrics || derived.shopify?.threeplMetrics,
+            threeplBreakdown: stored.shopify?.threeplBreakdown || derived.shopify?.threeplBreakdown,
+            taxByState: stored.shopify?.taxByState || derived.shopify?.taxByState,
+            skuData: stored.shopify?.skuData?.length > (derived.shopify?.skuData?.length || 0)
+              ? stored.shopify.skuData : (derived.shopify?.skuData || stored.shopify?.skuData || []),
           },
         };
       }

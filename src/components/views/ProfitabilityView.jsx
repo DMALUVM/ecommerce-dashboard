@@ -62,21 +62,28 @@ const ProfitabilityView = ({
       const derivedHasData = (derived.total?.revenue || 0) > 0;
       
       if (derivedHasData) {
-        // Start with derived data (correct totals from daily)
-        // Then merge in SKU-level details from stored if not in derived
+        // Use derived numeric totals (summed from daily data = most accurate)
+        // Keep stored SKU-level detail, 3PL breakdowns, and tax data
         return {
           ...stored,
-          total: derived.total, // Use derived totals
+          total: derived.total,
           amazon: {
             ...stored.amazon,
-            revenue: derived.amazon?.revenue ?? stored.amazon?.revenue,
-            units: derived.amazon?.units ?? stored.amazon?.units,
-            // Keep SKU data and other details from stored
+            ...derived.amazon,
+            // Preserve stored SKU data (derived may have less detail)
+            skuData: stored.amazon?.skuData?.length > (derived.amazon?.skuData?.length || 0)
+              ? stored.amazon.skuData : (derived.amazon?.skuData || stored.amazon?.skuData || []),
           },
           shopify: {
             ...stored.shopify,
-            revenue: derived.shopify?.revenue ?? stored.shopify?.revenue,
-            units: derived.shopify?.units ?? stored.shopify?.units,
+            ...derived.shopify,
+            // Preserve stored 3PL and tax details (not in derived)
+            threeplCosts: stored.shopify?.threeplCosts || derived.shopify?.threeplCosts || 0,
+            threeplMetrics: stored.shopify?.threeplMetrics || derived.shopify?.threeplMetrics,
+            threeplBreakdown: stored.shopify?.threeplBreakdown || derived.shopify?.threeplBreakdown,
+            taxByState: stored.shopify?.taxByState || derived.shopify?.taxByState,
+            skuData: stored.shopify?.skuData?.length > (derived.shopify?.skuData?.length || 0)
+              ? stored.shopify.skuData : (derived.shopify?.skuData || stored.shopify?.skuData || []),
           },
         };
       }
@@ -456,12 +463,21 @@ const ProfitabilityView = ({
     const bestMarginSkus = [...skuWithMargins].sort((a, b) => b.margin - a.margin).slice(0, 5);
     
     // Waterfall segments
+    const runningAfterAds = totals.revenue - totals.cogs - totals.amazonFees - totals.threeplCosts - totals.adSpend;
+    const otherAdjustments = totals.profit - runningAfterAds; // Gap between known costs and actual profit
     const waterfall = [
       { label: 'Revenue', value: totals.revenue, color: 'bg-violet-500', running: totals.revenue },
       { label: 'COGS', value: -totals.cogs, color: 'bg-rose-500', running: totals.revenue - totals.cogs },
       { label: 'Amazon Fees', value: -totals.amazonFees, color: 'bg-orange-500', running: totals.revenue - totals.cogs - totals.amazonFees },
       { label: '3PL Costs', value: -totals.threeplCosts, color: 'bg-blue-500', running: totals.revenue - totals.cogs - totals.amazonFees - totals.threeplCosts },
-      { label: 'Ad Spend', value: -totals.adSpend, color: 'bg-purple-500', running: totals.revenue - totals.cogs - totals.amazonFees - totals.threeplCosts - totals.adSpend },
+      { label: 'Ad Spend', value: -totals.adSpend, color: 'bg-purple-500', running: runningAfterAds },
+      // Show adjustments bar if gap is material (>$10), accounts for Amazon settlement adjustments, refund costs, promos, etc.
+      ...(Math.abs(otherAdjustments) > 10 ? [{
+        label: otherAdjustments < 0 ? 'Other Costs' : 'Adjustments',
+        value: otherAdjustments,
+        color: otherAdjustments < 0 ? 'bg-amber-500' : 'bg-teal-500',
+        running: totals.profit
+      }] : []),
       { label: 'Net Profit', value: totals.profit, color: totals.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-500', running: totals.profit },
     ];
     
