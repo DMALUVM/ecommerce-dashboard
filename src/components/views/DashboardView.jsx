@@ -560,12 +560,6 @@ const DashboardView = ({
       e.dataTransfer.setData('text/plain', widgetId);
     };
     
-    const handleDashboardDragOver = (e, widgetId) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      setDragOverWidgetId(widgetId);
-    };
-    
     const handleDashboardDrop = (e, targetWidgetId) => {
       e.preventDefault();
       e.stopPropagation();
@@ -606,38 +600,6 @@ const DashboardView = ({
     const handleDashboardDragEnd = () => {
       setDraggedWidgetId(null);
       setDragOverWidgetId(null);
-    };
-    
-    // Unstack a widget from a group
-    const unstackWidget = (stackId, widgetId) => {
-      const stacks = { ...(widgetConfig?.stacks || {}) };
-      if (stacks[stackId]) {
-        stacks[stackId] = stacks[stackId].filter(id => id !== widgetId);
-        if (stacks[stackId].length <= 1) {
-          delete stacks[stackId];
-        }
-      }
-      setWidgetConfig({
-        ...widgetConfig,
-        stacks,
-      });
-    };
-    
-    // Check if widget is in a stack (but not the primary)
-    const isWidgetStacked = (widgetId) => {
-      const stacks = widgetConfig?.stacks || {};
-      for (const [stackId, stackWidgets] of Object.entries(stacks)) {
-        if (stackId !== widgetId && stackWidgets.includes(widgetId)) {
-          return true;
-        }
-      }
-      return false;
-    };
-    
-    // Get stack for a widget (if it's the primary)
-    const getWidgetStack = (widgetId) => {
-      const stacks = widgetConfig?.stacks || {};
-      return stacks[widgetId] || null;
     };
     
     // Data Health Check - detect discrepancies between stored weekly and derived daily data
@@ -689,7 +651,7 @@ const DashboardView = ({
     })();
     
     // DraggableWidget - minimal wrapper that just adds drag/drop to any widget
-    const DraggableWidget = ({ id, children, className = '', isStacked = false, stackId = null }) => {
+    const DraggableWidget = ({ id, children, className = '' }) => {
       const isDragging = draggedWidgetId === id;
       const isDragOver = dragOverWidgetId === id;
       
@@ -697,14 +659,17 @@ const DashboardView = ({
         <div
           draggable
           style={{ order: getWidgetOrder(id) }}
-          onDragStart={(e) => { e.stopPropagation(); handleDashboardDragStart(e, id); }}
-          onDragOver={(e) => { e.stopPropagation(); handleDashboardDragOver(e, id); }}
-          onDragLeave={(e) => { e.stopPropagation(); setDragOverWidgetId(null); }}
-          onDrop={(e) => { e.stopPropagation(); handleDashboardDrop(e, id); }}
-          onDragEnd={(e) => { e.stopPropagation(); handleDashboardDragEnd(); }}
+          onDragStart={(e) => { handleDashboardDragStart(e, id); }}
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverWidgetId(id); }}
+          onDragLeave={(e) => { 
+            // Only clear if we're actually leaving this element (not entering a child)
+            if (!e.currentTarget.contains(e.relatedTarget)) setDragOverWidgetId(null); 
+          }}
+          onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDashboardDrop(e, id); }}
+          onDragEnd={() => handleDashboardDragEnd()}
           className={`relative group transition-all duration-200 ${
-            isDragging ? 'opacity-50 scale-[0.98]' : 
-            isDragOver ? 'scale-[1.01] ring-2 ring-violet-500 ring-offset-2 ring-offset-slate-900 rounded-2xl' : ''
+            isDragging ? 'opacity-40 scale-[0.97]' : 
+            isDragOver ? 'ring-2 ring-violet-500 ring-offset-2 ring-offset-slate-900 rounded-2xl' : ''
           } ${className}`}
         >
           {/* Floating controls - visible on hover */}
@@ -712,16 +677,6 @@ const DashboardView = ({
             <div className="p-1.5 bg-slate-700 rounded-lg shadow-lg cursor-grab border border-slate-600" draggable="false">
               <Move className="w-3 h-3 text-slate-300" />
             </div>
-            {isStacked && stackId && (
-              <button
-                onClick={(e) => { e.stopPropagation(); e.preventDefault(); unstackWidget(stackId, id); }}
-                className="p-1.5 bg-slate-700 hover:bg-amber-600 rounded-lg shadow-lg transition-colors border border-slate-600"
-                title="Unstack widget"
-                draggable="false"
-              >
-                <Layers className="w-3 h-3 text-slate-300" />
-              </button>
-            )}
             <button
               onClick={(e) => { e.stopPropagation(); e.preventDefault(); hideWidget(id); }}
               className="p-1.5 bg-slate-700 hover:bg-rose-600 rounded-lg shadow-lg transition-colors border border-slate-600"
@@ -731,22 +686,13 @@ const DashboardView = ({
               <EyeOff className="w-3 h-3 text-slate-300" />
             </button>
           </div>
-          {/* Drop zone overlay - captures drop events when dragging over */}
+          {/* Drop indicator */}
           {isDragOver && (
-            <div 
-              className="absolute inset-0 border-2 border-violet-500 rounded-2xl z-30 bg-violet-500/10 flex items-center justify-center"
-              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-              onDrop={(e) => { e.stopPropagation(); handleDashboardDrop(e, id); }}
-            >
-              <div className="bg-violet-600 text-white text-xs px-2 py-1 rounded-lg font-medium">
-                Stack here
-              </div>
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-violet-600 text-white text-xs px-3 py-1 rounded-full font-medium z-20 pointer-events-none shadow-lg">
+              Drop to reorder
             </div>
           )}
-          {/* Widget content */}
-          <div className={isDragOver ? 'pointer-events-none' : ''}>
-            {children}
-          </div>
+          {children}
         </div>
       );
     };
@@ -979,7 +925,7 @@ const DashboardView = ({
               </div>
               {/* Quick action buttons */}
               <div className="flex items-center gap-1 bg-slate-800/50 rounded-lg p-1">
-                <button onClick={() => setEditingWidgets(true)} className="p-2 hover:bg-slate-700 rounded text-cyan-400" title="Customize Dashboard"><Layers className="w-4 h-4" /></button>
+                <button onClick={() => setEditingWidgets(true)} className="px-3 py-2 hover:bg-slate-700 rounded flex items-center gap-1.5 text-cyan-400 text-sm font-medium" title="Customize Dashboard"><Layers className="w-4 h-4" /><span className="hidden sm:inline">Customize</span></button>
                 {generateForecast ? (
                   <button onClick={() => setShowForecast(true)} className="p-2 hover:bg-slate-700 rounded text-emerald-400" title="View Forecast"><TrendingUp className="w-4 h-4" /></button>
                 ) : (
@@ -1670,54 +1616,13 @@ const DashboardView = ({
                     syncStatus: renderSyncStatus,
                   };
 
-                  // Get stacks config
-                  const stacks = widgetConfig?.stacks || {};
                   const gridWidgetIds = ['salesTax', 'aiForecast', 'billsDue', 'syncStatus'];
-                  
-                  // Find which widgets are stacked as secondary (not primary)
-                  const stackedAsSecondary = new Set();
-                  Object.values(stacks).forEach(stackArr => {
-                    if (stackArr.length > 1) {
-                      stackArr.slice(1).forEach(id => stackedAsSecondary.add(id));
-                    }
-                  });
 
-                  // Only render primary widgets (not stacked as secondary)
-                  const primaryWidgets = gridWidgetIds.filter(id => 
-                    isWidgetEnabled(id) && !stackedAsSecondary.has(id)
-                  );
-
-                  return primaryWidgets.map(primaryId => {
-                    const stack = stacks[primaryId];
-                    
-                    // If this widget has a stack, render all stacked widgets together
-                    if (stack && stack.length > 1) {
-                      return (
-                        <div key={primaryId} className="flex flex-col gap-2">
-                          {stack.map((stackedId, idx) => {
-                            if (!widgetRenderers[stackedId] || !isWidgetEnabled(stackedId)) return null;
-                            return (
-                              <DraggableWidget 
-                                key={stackedId} 
-                                id={stackedId}
-                                isStacked={idx > 0}
-                                stackId={primaryId}
-                              >
-                                {widgetRenderers[stackedId]()}
-                              </DraggableWidget>
-                            );
-                          })}
-                        </div>
-                      );
-                    }
-                    
-                    // Single widget (not stacked)
-                    return (
-                      <DraggableWidget key={primaryId} id={primaryId}>
-                        {widgetRenderers[primaryId]()}
-                      </DraggableWidget>
-                    );
-                  });
+                  return gridWidgetIds.filter(id => isWidgetEnabled(id)).map(id => (
+                    <DraggableWidget key={id} id={id}>
+                      {widgetRenderers[id]()}
+                    </DraggableWidget>
+                  ));
                 })()}
               </div>
               
