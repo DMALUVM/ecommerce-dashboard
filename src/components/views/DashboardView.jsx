@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertCircle, AlertTriangle, ArrowDown, ArrowDownRight, ArrowUp, ArrowUpRight, Award, BarChart3, Boxes, Brain, Calendar, CalendarRange, Check, CheckCircle, ChevronDown, ChevronRight, Clock, Database, DollarSign, Download, Eye, EyeOff, FileDown, FileText, Filter, Grid, HelpCircle, Layers, Link, Loader2, Move, Package, Plus, RefreshCw, Settings, Store, Sun, Target, TrendingDown, TrendingUp, Trophy, Upload, Zap
+  AlertCircle, AlertTriangle, ArrowDown, ArrowDownRight, ArrowUp, ArrowUpRight, Award, BarChart3, Boxes, Brain, Calendar, CalendarRange, Check, CheckCircle, ChevronDown, ChevronRight, Clock, Database, DollarSign, Download, Eye, EyeOff, FileDown, FileText, Filter, Grid, HelpCircle, Layers, Link, Loader2, Move, Package, Plus, RefreshCw, Settings, Store, Sun, Target, TrendingDown, TrendingUp, Upload, Zap
 } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../../utils/format';
-import { US_STATES_TAX_INFO } from '../../utils/taxData';
 import { formatDateKey } from '../../utils/date';
+import { deriveWeeksFromDays } from '../../utils/weekly';
 import { getNextDueDate } from '../../utils/salesTax';
-import { aggregateShopifyAdsForDays } from '../../utils/ads';
+import { US_STATES_TAX_INFO } from '../../utils/taxData';
 import NavTabs from '../ui/NavTabs';
-
 
 const DashboardView = ({
   activeStoreId,
@@ -20,13 +19,10 @@ const DashboardView = ({
   allPeriodsData,
   allWeeksData,
   amazonForecasts,
-  amazonCredentials,
   appSettings,
-  autoSyncStatus,
   bankingData,
   calendarMonth,
   comparisonLabel,
-  cogsLastUpdated,
   current,
   dashboardRange,
   dataStatus,
@@ -46,13 +42,10 @@ const DashboardView = ({
   invHistory,
   invoices,
   lastBackupDate,
-  leadTimeSettings,
   navDropdown,
-  packiyoCredentials,
   periodLabel,
   profitChange,
   revenueChange,
-  runAutoSync,
   salesTaxConfig,
   savedCogs,
   savedProductNames,
@@ -68,6 +61,7 @@ const DashboardView = ({
   setSelectedInvDate,
   setSelectedPeriod,
   setSelectedWeek,
+  setShowBenchmarks,
   setShowCogsManager,
   setShowExportModal,
   setShowForecast,
@@ -86,7 +80,6 @@ const DashboardView = ({
   setViewingDayDetails,
   setWeekEnding,
   setWidgetConfig,
-  shopifyCredentials,
   showStoreSelector,
   storeLogo,
   storeName,
@@ -98,9 +91,9 @@ const DashboardView = ({
   usingPeriodData,
   view,
   widgetConfig,
+  runAutoSync,
+  autoSyncStatus,
 }) => {
-    const [productPerfRange, setProductPerfRange] = useState('14d');
-    const [showStoreSettings, setShowStoreSettings] = useState(false);
     const hasData = Object.keys(allWeeksData).length > 0 || Object.keys(allPeriodsData).length > 0 || Object.keys(allDaysData).length > 0;
     const sortedWeeks = Object.keys(allWeeksData).filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0).sort();
 
@@ -109,8 +102,12 @@ const DashboardView = ({
     if (!hasCogs) alerts.push({ type: 'warning', text: 'Set up COGS to track profitability accurately' });
     // Weekly goal tracking is now handled by the progress bar widget instead of alerts
     
-    // Check inventory alerts (Reorder Alerts widget now shows per-SKU detail)
+    // Check inventory alerts
     const latestInv = Object.keys(invHistory).sort().reverse()[0];
+    const invAlerts = latestInv ? (invHistory[latestInv]?.items || []).filter(i => i.health === 'critical' || i.health === 'low') : [];
+    if (invAlerts.length > 0 && appSettings.alertInventoryEnabled) {
+      alerts.push({ type: 'critical', text: `${invAlerts.length} products need reorder attention` });
+    }
     
     // Check upcoming invoices/bills
     const upcomingBills = invoices.filter(i => !i.paid);
@@ -166,7 +163,26 @@ const DashboardView = ({
       alerts.push({ type: 'warning', text: a.message, link: 'forecast' });
     });
     
-    // QBO/Banking freshness now shown in Data Integrity widget
+    // QBO/Banking data stale alert
+    if (bankingData.transactions?.length > 0) {
+      const lastUpload = bankingData.lastUpload ? new Date(bankingData.lastUpload) : null;
+      const today = new Date();
+      const isStale = !lastUpload || 
+        (today.getTime() - lastUpload.getTime()) > 24 * 60 * 60 * 1000; // More than 24 hours old
+      
+      if (isStale) {
+        const daysSince = lastUpload 
+          ? Math.floor((today.getTime() - lastUpload.getTime()) / (24 * 60 * 60 * 1000))
+          : null;
+        alerts.push({ 
+          type: 'warning', 
+          text: daysSince 
+            ? `QBO data is ${daysSince} day${daysSince !== 1 ? 's' : ''} old - upload latest transactions`
+            : 'QBO data needs to be uploaded',
+          link: 'banking' 
+        });
+      }
+    }
     
     // Check for weeks with missing 3PL or Ads data - only PAST weeks in current year
     const today = new Date();
@@ -188,6 +204,28 @@ const DashboardView = ({
       return !weeklyHas3PL && !ledgerHas3PL;
     });
     
+    const weeksMissingAds = recentWeeks.filter(([key, data]) => {
+      // Check weekly data
+      const weeklyHasAds = (data.shopify?.metaSpend > 0) || (data.shopify?.googleSpend > 0);
+      if (weeklyHasAds) return false;
+      
+      // Also check if daily data has ads for this week
+      const weekEndDate = new Date(key + 'T12:00:00');
+      let dailyAdsTotal = 0;
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(weekEndDate);
+        d.setDate(weekEndDate.getDate() - i);
+        const dayKey = d.toISOString().split('T')[0];
+        const dayData = allDaysData[dayKey];
+        if (dayData) {
+          dailyAdsTotal += (dayData.metaSpend || dayData.shopify?.metaSpend || 0);
+          dailyAdsTotal += (dayData.googleSpend || dayData.shopify?.googleSpend || 0);
+        }
+      }
+      
+      return dailyAdsTotal === 0; // Only missing if BOTH weekly and daily have no ads
+    });
+    
     // Helper to format week dates
     const formatWeekDates = (weeks) => {
       return weeks.map(([key]) => {
@@ -205,6 +243,16 @@ const DashboardView = ({
         text: `Missing 3PL data: ${weekDates}`,
         link: '3pl',
         action: () => setView('3pl')
+      });
+    }
+    
+    if (weeksMissingAds.length > 0) {
+      const weekDates = formatWeekDates(weeksMissingAds);
+      alerts.push({ 
+        type: 'warning', 
+        text: `Missing Ads data: ${weekDates}`,
+        link: 'ads-upload',
+        action: () => { setUploadTab('bulk-ads'); setView('upload'); }
       });
     }
     
@@ -606,7 +654,53 @@ const DashboardView = ({
       return stacks[widgetId] || null;
     };
     
-    // Data health checks now handled by Data Integrity widget
+    // Data Health Check - detect discrepancies between stored weekly and derived daily data
+    // (computed inline, not as a hook, since we're inside a conditional)
+    const dataHealthCheck = (() => {
+      const issues = [];
+      const derivedWeeks = deriveWeeksFromDays(allDaysData || {});
+      
+      // Check last 4 weeks with data
+      const weeksToCheck = Object.keys(allWeeksData)
+        .filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0)
+        .sort()
+        .slice(-4);
+      
+      weeksToCheck.forEach(weekKey => {
+        const stored = allWeeksData[weekKey];
+        const derived = derivedWeeks[weekKey];
+        
+        if (stored && derived) {
+          const storedRev = stored.total?.revenue || 0;
+          const derivedRev = derived.total?.revenue || 0;
+          
+          // If both have revenue and they differ by more than 5%, flag it
+          if (storedRev > 0 && derivedRev > 0) {
+            const diff = Math.abs(storedRev - derivedRev);
+            const diffPct = (diff / Math.max(storedRev, derivedRev)) * 100;
+            
+            if (diffPct > 5) {
+              issues.push({
+                week: weekKey,
+                storedRev,
+                derivedRev,
+                diff,
+                diffPct,
+                message: `Week ${weekKey}: Stored ($${storedRev.toFixed(0)}) vs Daily ($${derivedRev.toFixed(0)}) differ by ${diffPct.toFixed(0)}%`
+              });
+            }
+          }
+        }
+      });
+      
+      return {
+        healthy: issues.length === 0,
+        issues,
+        message: issues.length === 0 
+          ? 'Data is consistent' 
+          : `${issues.length} week(s) have data discrepancies`
+      };
+    })();
     
     // DraggableWidget - minimal wrapper that just adds drag/drop to any widget
     const DraggableWidget = ({ id, children, className = '', isStacked = false, stackId = null }) => {
@@ -779,7 +873,33 @@ const DashboardView = ({
               )}
               <div>
                 <h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'E-Commerce Dashboard'}</h1>
-                <p className="text-slate-400">Business performance overview</p>
+                <div className="flex items-center gap-3">
+                  <p className="text-slate-400">Business performance overview</p>
+                  {/* Data Health Indicator */}
+                  {hasData && (
+                    <button 
+                      onClick={() => {
+                        if (!dataHealthCheck.healthy) {
+                          setToast({ 
+                            message: `Data discrepancies detected: ${dataHealthCheck.issues.map(i => i.message).join('; ')}. Using daily-derived totals for accuracy.`, 
+                            type: 'warning' 
+                          });
+                        } else {
+                          setToast({ message: 'All data is consistent ✓', type: 'success' });
+                        }
+                      }}
+                      className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                        dataHealthCheck.healthy 
+                          ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30' 
+                          : 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 animate-pulse'
+                      }`}
+                      title={dataHealthCheck.message}
+                    >
+                      {dataHealthCheck.healthy ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                      <span>{dataHealthCheck.healthy ? 'Data OK' : 'Check Data'}</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-3 flex-wrap">
@@ -858,56 +978,44 @@ const DashboardView = ({
                 </div>
               )}
               {/* Consolidated Store Settings Dropdown */}
-              <div className="relative">
+              <div className="relative" ref={el => el && (el.dataset.dropdown = 'store-settings')}>
                 <button 
-                  onClick={() => setShowStoreSettings(!showStoreSettings)}
+                  onClick={(e) => {
+                    const dropdown = document.getElementById('store-settings-dropdown');
+                    if (dropdown) dropdown.classList.toggle('hidden');
+                  }}
                   className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-1"
                 >
                   <Settings className="w-4 h-4" />
                   Store
-                  <ChevronDown className={`w-3 h-3 transition-transform ${showStoreSettings ? 'rotate-180' : ''}`} />
+                  <ChevronDown className="w-3 h-3" />
                 </button>
-                {showStoreSettings && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowStoreSettings(false)} />
-                    <div className="absolute right-0 top-full mt-1 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-50 py-1">
-                      <button onClick={() => { setShowGoalsModal(true); setShowStoreSettings(false); }} className="w-full px-4 py-2.5 text-left hover:bg-slate-700 flex items-center gap-2 text-sm">
-                        <Target className="w-4 h-4 text-amber-400" />
-                        <span className="text-white">Goals</span>
-                        {(goals.weeklyRevenue > 0 || goals.monthlyRevenue > 0) && <Check className="w-3 h-3 text-emerald-400 ml-auto" />}
-                      </button>
-                      <button onClick={() => { setShowCogsManager(true); setShowStoreSettings(false); }} className="w-full px-4 py-2.5 text-left hover:bg-slate-700 flex items-center gap-2 text-sm">
-                        <DollarSign className="w-4 h-4 text-emerald-400" />
-                        <span className="text-white">COGS</span>
-                        {Object.keys(savedCogs).length > 0 && <span className="text-emerald-400 text-xs ml-auto">{Object.keys(savedCogs).length} SKUs</span>}
-                      </button>
-                      <button onClick={() => { setShowProductCatalog(true); setShowStoreSettings(false); }} className="w-full px-4 py-2.5 text-left hover:bg-slate-700 flex items-center gap-2 text-sm">
-                        <Package className="w-4 h-4 text-violet-400" />
-                        <span className="text-white">Catalog</span>
-                        {Object.keys(savedProductNames).length > 0 && <Check className="w-3 h-3 text-emerald-400 ml-auto" />}
-                      </button>
-                      <div className="border-t border-slate-700 my-1" />
-                      <button onClick={() => { setShowInvoiceModal(true); setShowStoreSettings(false); }} className="w-full px-4 py-2.5 text-left hover:bg-slate-700 flex items-center gap-2 text-sm">
-                        <FileText className="w-4 h-4 text-slate-400" />
-                        <span className="text-white">Bills & Invoices</span>
-                        {upcomingBills.length > 0 && <span className="px-1.5 py-0.5 bg-amber-500/30 rounded text-xs text-amber-300 ml-auto">{upcomingBills.length}</span>}
-                      </button>
-                    </div>
-                  </>
-                )}
+                <div id="store-settings-dropdown" className="hidden absolute right-0 top-full mt-1 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-50 py-1">
+                  <button onClick={() => { setShowGoalsModal(true); document.getElementById('store-settings-dropdown')?.classList.add('hidden'); }} className="w-full px-4 py-2.5 text-left hover:bg-slate-700 flex items-center gap-2 text-sm">
+                    <Target className="w-4 h-4 text-amber-400" />
+                    <span className="text-white">Goals</span>
+                    {(goals.weeklyRevenue > 0 || goals.monthlyRevenue > 0) && <Check className="w-3 h-3 text-emerald-400 ml-auto" />}
+                  </button>
+                  <button onClick={() => { setShowCogsManager(true); document.getElementById('store-settings-dropdown')?.classList.add('hidden'); }} className="w-full px-4 py-2.5 text-left hover:bg-slate-700 flex items-center gap-2 text-sm">
+                    <DollarSign className="w-4 h-4 text-emerald-400" />
+                    <span className="text-white">COGS</span>
+                    {Object.keys(savedCogs).length > 0 && <span className="text-emerald-400 text-xs ml-auto">{Object.keys(savedCogs).length} SKUs</span>}
+                  </button>
+                  <button onClick={() => { setShowProductCatalog(true); document.getElementById('store-settings-dropdown')?.classList.add('hidden'); }} className="w-full px-4 py-2.5 text-left hover:bg-slate-700 flex items-center gap-2 text-sm">
+                    <Package className="w-4 h-4 text-violet-400" />
+                    <span className="text-white">Catalog</span>
+                    {Object.keys(savedProductNames).length > 0 && <Check className="w-3 h-3 text-emerald-400 ml-auto" />}
+                  </button>
+                  <div className="border-t border-slate-700 my-1" />
+                  <button onClick={() => { setShowInvoiceModal(true); document.getElementById('store-settings-dropdown')?.classList.add('hidden'); }} className="w-full px-4 py-2.5 text-left hover:bg-slate-700 flex items-center gap-2 text-sm">
+                    <FileText className="w-4 h-4 text-slate-400" />
+                    <span className="text-white">Bills & Invoices</span>
+                    {upcomingBills.length > 0 && <span className="px-1.5 py-0.5 bg-amber-500/30 rounded text-xs text-amber-300 ml-auto">{upcomingBills.length}</span>}
+                  </button>
+                </div>
               </div>
               {/* Quick action buttons */}
               <div className="flex items-center gap-1 bg-slate-800/50 rounded-lg p-1">
-                {runAutoSync && (
-                  <button 
-                    onClick={() => runAutoSync(true)} 
-                    disabled={autoSyncStatus?.running}
-                    className={`p-2 hover:bg-slate-700 rounded transition-colors ${autoSyncStatus?.running ? 'text-cyan-400' : 'text-emerald-400 hover:text-emerald-300'}`}
-                    title={autoSyncStatus?.running ? 'Syncing...' : 'Sync All Data'}
-                  >
-                    <RefreshCw className={`w-4 h-4 ${autoSyncStatus?.running ? 'animate-spin' : ''}`} />
-                  </button>
-                )}
                 <button onClick={() => setEditingWidgets(true)} className="p-2 hover:bg-slate-700 rounded text-cyan-400" title="Customize Dashboard"><Layers className="w-4 h-4" /></button>
                 {generateForecast ? (
                   <button onClick={() => setShowForecast(true)} className="p-2 hover:bg-slate-700 rounded text-emerald-400" title="View Forecast"><TrendingUp className="w-4 h-4" /></button>
@@ -916,6 +1024,7 @@ const DashboardView = ({
                 )}
                 <button onClick={() => setShowExportModal(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Export CSV"><FileDown className="w-4 h-4" /></button>
                 <button onClick={() => setShowPdfExport(true)} className="p-2 hover:bg-slate-700 rounded text-violet-400" title="Export PDF Report"><FileText className="w-4 h-4" /></button>
+                <button onClick={() => setShowBenchmarks(true)} className="p-2 hover:bg-slate-700 rounded text-amber-400" title="Industry Benchmarks"><BarChart3 className="w-4 h-4" /></button>
                 <button onClick={() => setShowUploadHelp(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Help"><HelpCircle className="w-4 h-4" /></button>
               </div>
             </div>
@@ -1139,11 +1248,11 @@ const DashboardView = ({
                             <p className="text-lg font-semibold text-white">{formatNumber(periodMetrics.wtd.units)}</p>
                           </div>
                           <div>
-                            <p className="text-slate-500 text-xs">COGS</p>
-                            <p className="text-lg font-semibold text-slate-300">{formatCurrency(periodMetrics.wtd.cogs)}</p>
-                            {periodMetrics.wtd.revenue > 0 && (
-                              <p className="text-xs text-slate-500">{((periodMetrics.wtd.cogs / periodMetrics.wtd.revenue) * 100).toFixed(0)}% of rev</p>
-                            )}
+                            <p className="text-slate-500 text-xs">Ad Spend</p>
+                            <p className="text-lg font-semibold text-violet-400">{formatCurrency(periodMetrics.wtd.adSpend)}</p>
+                            <p className={`text-xs ${periodMetrics.wtd.tacos <= 15 ? 'text-emerald-400' : periodMetrics.wtd.tacos <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {periodMetrics.wtd.tacos.toFixed(1)}% TACOS
+                            </p>
                           </div>
                         </div>
                       </div>
@@ -1180,11 +1289,11 @@ const DashboardView = ({
                             <p className="text-lg font-semibold text-white">{formatNumber(periodMetrics.mtd.units)}</p>
                           </div>
                           <div>
-                            <p className="text-slate-500 text-xs">COGS</p>
-                            <p className="text-lg font-semibold text-slate-300">{formatCurrency(periodMetrics.mtd.cogs)}</p>
-                            {periodMetrics.mtd.revenue > 0 && (
-                              <p className="text-xs text-slate-500">{((periodMetrics.mtd.cogs / periodMetrics.mtd.revenue) * 100).toFixed(0)}% of rev</p>
-                            )}
+                            <p className="text-slate-500 text-xs">Ad Spend</p>
+                            <p className="text-lg font-semibold text-violet-400">{formatCurrency(periodMetrics.mtd.adSpend)}</p>
+                            <p className={`text-xs ${periodMetrics.mtd.tacos <= 15 ? 'text-emerald-400' : periodMetrics.mtd.tacos <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {periodMetrics.mtd.tacos.toFixed(1)}% TACOS
+                            </p>
                           </div>
                         </div>
                       </div>
@@ -1297,85 +1406,111 @@ const DashboardView = ({
               )}
               
               {/* Top Sellers (14 Days) */}
-              {/* Product Performance - Consolidated Widget */}
-              {isWidgetEnabled('productPerformance') && (performance14d.top.length > 0 || performanceYTD.top.length > 0) && (() => {
-                const perf = productPerfRange === '14d' ? performance14d : performanceYTD;
-                const rangeLabel = productPerfRange === '14d' ? `${perf.daysAnalyzed} Days` : 'YTD';
-                return (
-                <DraggableWidget id="productPerformance" className="mb-6">
-                  <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                        <Trophy className="w-4 h-4 text-amber-400" />Product Performance
-                      </h3>
-                      <div className="flex items-center gap-1">
-                        {['14d', 'YTD'].map(r => (
-                          <button key={r} onClick={() => setProductPerfRange(r)}
-                            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${productPerfRange === r ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}>
-                            {r}
-                          </button>
-                        ))}
+              {isWidgetEnabled('topSellers14d') && performance14d.top.length > 0 && (
+                <DashboardWidget id="topSellers14d" title={`Top Sellers (${performance14d.daysAnalyzed} Days)`} icon={TrendingUp} className="mb-6">
+                  <div className="space-y-2">
+                    {performance14d.top.map((p, i) => (
+                      <div key={p.sku} className="flex items-center gap-3 bg-slate-900/50 rounded-lg p-3">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${
+                          i === 0 ? 'bg-amber-500/20 text-amber-400' : 
+                          i === 1 ? 'bg-slate-400/20 text-slate-300' : 
+                          i === 2 ? 'bg-orange-600/20 text-orange-400' : 
+                          'bg-slate-700/50 text-slate-400'
+                        }`}>
+                          #{i + 1}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white font-medium truncate text-sm">{p.name || p.sku}</p>
+                          <p className="text-slate-500 text-xs">{p.sku}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-emerald-400 font-semibold">{formatCurrency(p.revenue)}</p>
+                          <p className="text-slate-500 text-xs">{p.units} units</p>
+                        </div>
                       </div>
-                    </div>
-                    
-                    {perf.top.length > 0 && (
-                      <>
-                        <p className="text-emerald-400 text-xs font-medium mb-2 flex items-center gap-1">
-                          <TrendingUp className="w-3 h-3" />Top Sellers ({rangeLabel})
-                        </p>
-                        <div className="space-y-1.5 mb-4">
-                          {perf.top.map((p, i) => (
-                            <div key={p.sku} className="flex items-center gap-2.5 bg-slate-900/50 rounded-lg px-3 py-2">
-                              <span className={`w-6 h-6 rounded flex items-center justify-center font-bold text-xs ${
-                                i === 0 ? 'bg-amber-500/20 text-amber-400' : 
-                                i === 1 ? 'bg-slate-400/20 text-slate-300' : 
-                                i === 2 ? 'bg-orange-600/20 text-orange-400' : 
-                                'bg-slate-700/50 text-slate-400'
-                              }`}>
-                                {i + 1}
-                              </span>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-white text-sm font-medium truncate">{p.name || p.sku}</p>
-                              </div>
-                              <div className="text-right flex-shrink-0">
-                                <span className="text-emerald-400 text-sm font-semibold">{formatCurrency(p.revenue)}</span>
-                                <span className="text-slate-500 text-xs ml-1.5">{p.units}u</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                    
-                    {perf.worst.length > 0 && (
-                      <>
-                        <p className="text-rose-400 text-xs font-medium mb-2 flex items-center gap-1">
-                          <TrendingDown className="w-3 h-3" />Needs Attention ({rangeLabel})
-                        </p>
-                        <div className="space-y-1.5">
-                          {perf.worst.map((p, i) => (
-                            <div key={p.sku} className="flex items-center gap-2.5 bg-rose-900/15 rounded-lg px-3 py-2 border border-rose-500/15">
-                              <TrendingDown className="w-4 h-4 text-rose-400 flex-shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-white text-sm font-medium truncate">{p.name || p.sku}</p>
-                              </div>
-                              <div className="text-right flex-shrink-0">
-                                <span className="text-rose-400 text-sm font-semibold">{formatCurrency(p.revenue)}</span>
-                                <span className="text-slate-500 text-xs ml-1.5">{p.units}u</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                    
-                    <button onClick={() => setView('skus')} className="mt-3 w-full text-center text-sm text-cyan-400 hover:text-cyan-300 py-1.5">
-                      View All SKUs →
-                    </button>
+                    ))}
                   </div>
-                </DraggableWidget>
-                );
-              })()}
+                  <button onClick={() => setView('skus')} className="mt-3 w-full text-center text-sm text-cyan-400 hover:text-cyan-300 py-2">
+                    View All Products →
+                  </button>
+                </DashboardWidget>
+              )}
+              
+              {/* Worst Sellers / Needs Attention (14 Days) */}
+              {isWidgetEnabled('worstSellers14d') && performance14d.worst.length > 0 && (
+                <DashboardWidget id="worstSellers14d" title={`Needs Attention (${performance14d.daysAnalyzed} Days)`} icon={AlertTriangle} className="mb-6">
+                  <p className="text-slate-400 text-xs mb-3">Products with lowest revenue (min $100)</p>
+                  <div className="space-y-2">
+                    {performance14d.worst.map((p, i) => (
+                      <div key={p.sku} className="flex items-center gap-3 bg-rose-900/20 rounded-lg p-3 border border-rose-500/20">
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-rose-500/20">
+                          <TrendingDown className="w-4 h-4 text-rose-400" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white font-medium truncate text-sm">{p.name || p.sku}</p>
+                          <p className="text-slate-500 text-xs">{p.sku}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-rose-400 font-semibold">{formatCurrency(p.revenue)}</p>
+                          <p className="text-slate-500 text-xs">{p.units} units</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </DashboardWidget>
+              )}
+              
+              {/* Top Sellers YTD */}
+              {isWidgetEnabled('topSellersYTD') && performanceYTD.top.length > 0 && (
+                <DashboardWidget id="topSellersYTD" title="Top Sellers (YTD)" icon={Award} className="mb-6">
+                  <div className="space-y-2">
+                    {performanceYTD.top.map((p, i) => (
+                      <div key={p.sku} className="flex items-center gap-3 bg-slate-900/50 rounded-lg p-3">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${
+                          i === 0 ? 'bg-amber-500/20 text-amber-400' : 
+                          i === 1 ? 'bg-slate-400/20 text-slate-300' : 
+                          i === 2 ? 'bg-orange-600/20 text-orange-400' : 
+                          'bg-slate-700/50 text-slate-400'
+                        }`}>
+                          #{i + 1}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white font-medium truncate text-sm">{p.name || p.sku}</p>
+                          <p className="text-slate-500 text-xs">{p.sku}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-emerald-400 font-semibold">{formatCurrency(p.revenue)}</p>
+                          <p className="text-slate-500 text-xs">{p.units} units</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </DashboardWidget>
+              )}
+              
+              {/* Worst Sellers YTD */}
+              {isWidgetEnabled('worstSellersYTD') && performanceYTD.worst.length > 0 && (
+                <DashboardWidget id="worstSellersYTD" title="Needs Attention (YTD)" icon={AlertTriangle} className="mb-6">
+                  <p className="text-slate-400 text-xs mb-3">Lowest performing products year-to-date</p>
+                  <div className="space-y-2">
+                    {performanceYTD.worst.map((p, i) => (
+                      <div key={p.sku} className="flex items-center gap-3 bg-rose-900/20 rounded-lg p-3 border border-rose-500/20">
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-rose-500/20">
+                          <TrendingDown className="w-4 h-4 text-rose-400" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white font-medium truncate text-sm">{p.name || p.sku}</p>
+                          <p className="text-slate-500 text-xs">{p.sku}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-rose-400 font-semibold">{formatCurrency(p.revenue)}</p>
+                          <p className="text-slate-500 text-xs">{p.units} units</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </DashboardWidget>
+              )}
               
               {/* Quick Action Widgets - With Stacking Support */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -1512,315 +1647,46 @@ const DashboardView = ({
 
                   const renderSyncStatus = () => (
                     <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4 h-full">
-                      <h3 className="text-slate-300 text-sm font-semibold mb-2">📊 Sync Status</h3>
-                      <div className="space-y-1.5 text-xs">
-                        {shopifyCredentials?.connected && <p className="text-emerald-400">✓ Shopify connected</p>}
-                        {amazonCredentials?.connected && <p className="text-emerald-400">✓ Amazon SP-API connected</p>}
-                        {packiyoCredentials?.connected && <p className="text-emerald-400">✓ Packiyo connected</p>}
-                        {!shopifyCredentials?.connected && !amazonCredentials?.connected && !packiyoCredentials?.connected && (
-                          <p className="text-slate-500">No integrations connected. <button onClick={() => setView('settings')} className="text-violet-400 hover:text-violet-300">Set up →</button></p>
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
+                          <Database className="w-4 h-4" />Data Status
+                        </h3>
+                        {runAutoSync && (
+                          <button 
+                            onClick={() => runAutoSync(true)} 
+                            disabled={autoSyncStatus?.running}
+                            className="px-2 py-1 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-xs text-violet-300 flex items-center gap-1 disabled:opacity-50"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${autoSyncStatus?.running ? 'animate-spin' : ''}`} />
+                            {autoSyncStatus?.running ? 'Syncing...' : 'Sync All'}
+                          </button>
                         )}
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400 text-sm">Cloud</span>
+                          {!supabase ? (
+                            <span className="text-slate-500 text-xs">Off</span>
+                          ) : session ? (
+                            <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />On</span>
+                          ) : (
+                            <span className="text-amber-400 text-xs">Local</span>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400 text-sm">Backup</span>
+                          {lastBackupDate ? (
+                            <span className="text-slate-400 text-xs">{new Date(lastBackupDate).toLocaleDateString()}</span>
+                          ) : (
+                            <span className="text-slate-500 text-xs">Never</span>
+                          )}
+                        </div>
+                        <button onClick={exportAll} className="w-full mt-1 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-white flex items-center justify-center gap-1">
+                          <Download className="w-3 h-3" />Backup Now
+                        </button>
                       </div>
                     </div>
                   );
-
-                  // ─── Ads Overview Widget ───
-                  const renderAdsOverview = () => {
-                    // Aggregate MTD ads data from daily records
-                    const today = new Date();
-                    const monthStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
-                    const todayKey = today.toISOString().split('T')[0];
-                    
-                    const mtdDays = Object.entries(allDaysData || {})
-                      .filter(([d]) => d >= monthStart && d <= todayKey)
-                      .map(([, day]) => day);
-                    
-                    // DTC ads (Meta + Google)
-                    const dtcAds = aggregateShopifyAdsForDays(mtdDays);
-                    
-                    // Amazon ads
-                    const amzSpend = mtdDays.reduce((sum, d) => sum + (d.amazon?.adSpend || 0), 0);
-                    const amzSales = mtdDays.reduce((sum, d) => sum + (d.amazon?.revenue || 0), 0);
-                    const amzAcos = amzSales > 0 ? (amzSpend / amzSales) * 100 : 0;
-                    const amzRoas = amzSpend > 0 ? amzSales / amzSpend : 0;
-                    
-                    const totalSpend = amzSpend + dtcAds.metaSpend + dtcAds.googleSpend;
-                    const totalRevenue = mtdDays.reduce((sum, d) => 
-                      sum + (d.amazon?.revenue || 0) + (d.shopify?.revenue || 0), 0);
-                    const totalTacos = totalRevenue > 0 ? (totalSpend / totalRevenue) * 100 : 0;
-                    
-                    const hasAnyAds = totalSpend > 0;
-                    
-                    // Channel data
-                    const channels = [
-                      { 
-                        name: 'Amazon PPC', 
-                        spend: amzSpend, 
-                        roas: amzRoas,
-                        metric: amzAcos > 0 ? `${amzAcos.toFixed(1)}% ACoS` : null,
-                        color: 'text-orange-400',
-                        bg: 'bg-orange-400',
-                        barColor: 'bg-orange-500/60',
-                      },
-                      { 
-                        name: 'Meta', 
-                        spend: dtcAds.metaSpend, 
-                        roas: dtcAds.metaROAS,
-                        metric: dtcAds.metaPurchases > 0 ? `${dtcAds.metaPurchases} purchases` : null,
-                        color: 'text-purple-400',
-                        bg: 'bg-purple-400',
-                        barColor: 'bg-purple-500/60',
-                      },
-                      { 
-                        name: 'Google', 
-                        spend: dtcAds.googleSpend, 
-                        roas: dtcAds.googleSpend > 0 ? (dtcAds.googleConversions > 0 ? dtcAds.googleSpend / dtcAds.googleConversions : 0) : 0,
-                        metric: dtcAds.googleConversions > 0 ? `${dtcAds.googleConversions} conv` : null,
-                        color: 'text-blue-400',
-                        bg: 'bg-blue-400',
-                        barColor: 'bg-blue-500/60',
-                        isGoogle: true,
-                      },
-                    ].filter(c => c.spend > 0);
-                    
-                    const monthName = today.toLocaleDateString('en-US', { month: 'short' });
-                    
-                    return (
-                      <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-4 h-full">
-                        <div className="flex items-center justify-between mb-3">
-                          <h3 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
-                            <Zap className="w-4 h-4 text-violet-400" />Ads — {monthName} MTD
-                          </h3>
-                          <button 
-                            onClick={() => setView('ads')} 
-                            className="text-xs text-slate-500 hover:text-violet-400 transition-colors"
-                          >
-                            Details →
-                          </button>
-                        </div>
-                        
-                        {!hasAnyAds ? (
-                          <div className="text-center py-4">
-                            <p className="text-slate-500 text-sm">No ad spend data for {monthName}</p>
-                            <button 
-                              onClick={() => { setUploadTab('bulk-ads'); setView('upload'); }}
-                              className="text-xs text-violet-400 hover:text-violet-300 mt-1"
-                            >
-                              Upload ad reports →
-                            </button>
-                          </div>
-                        ) : (
-                          <>
-                            {/* Total spend + TACOS */}
-                            <div className="flex items-baseline justify-between mb-3">
-                              <div>
-                                <p className="text-xl font-bold text-white">{formatCurrency(totalSpend)}</p>
-                                <p className="text-slate-500 text-xs">total spend</p>
-                              </div>
-                              <div className="text-right">
-                                <p className={`text-lg font-bold ${
-                                  totalTacos <= 15 ? 'text-emerald-400' : 
-                                  totalTacos <= 25 ? 'text-amber-400' : 'text-rose-400'
-                                }`}>{totalTacos.toFixed(1)}%</p>
-                                <p className="text-slate-500 text-xs">TACOS</p>
-                              </div>
-                            </div>
-                            
-                            {/* Spend bar */}
-                            {channels.length > 1 && (
-                              <div className="flex rounded-full h-2 overflow-hidden mb-3 bg-slate-700">
-                                {channels.map((ch, i) => (
-                                  <div 
-                                    key={i}
-                                    className={`${ch.barColor} transition-all`}
-                                    style={{ width: `${(ch.spend / totalSpend) * 100}%` }}
-                                    title={`${ch.name}: ${formatCurrency(ch.spend)}`}
-                                  />
-                                ))}
-                              </div>
-                            )}
-                            
-                            {/* Channel breakdown */}
-                            <div className="space-y-2">
-                              {channels.map((ch, i) => (
-                                <div key={i} className="flex items-center justify-between">
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <span className={`w-2 h-2 rounded-full ${ch.bg} flex-shrink-0`} />
-                                    <span className="text-slate-300 text-xs truncate">{ch.name}</span>
-                                    <span className="text-slate-600 text-xs">{formatCurrency(ch.spend)}</span>
-                                  </div>
-                                  <div className="flex items-center gap-2 flex-shrink-0">
-                                    {ch.metric && (
-                                      <span className="text-slate-500 text-xs">{ch.metric}</span>
-                                    )}
-                                    {ch.isGoogle ? (
-                                      ch.roas > 0 && <span className="text-xs text-blue-400">{formatCurrency(ch.roas)} CPA</span>
-                                    ) : (
-                                      ch.roas > 0 && (
-                                        <span className={`text-xs font-medium ${
-                                          ch.roas >= 3 ? 'text-emerald-400' : 
-                                          ch.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'
-                                        }`}>{ch.roas.toFixed(1)}x</span>
-                                      )
-                                    )}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    );
-                  };
-
-                  // ─── Reorder Alerts Widget ───
-                  const renderReorderAlerts = () => {
-                    const latestInvKey = Object.keys(invHistory || {}).sort().reverse()[0];
-                    const latestSnapshot = latestInvKey ? invHistory[latestInvKey] : null;
-                    const rawItems = latestSnapshot?.items || [];
-                    
-                    if (rawItems.length === 0) {
-                      return (
-                        <div className="bg-slate-800/50 rounded-2xl border border-dashed border-slate-600 p-4 h-full">
-                          <h3 className="text-slate-400 text-sm font-semibold flex items-center gap-2 mb-2">
-                            <Package className="w-4 h-4" />Reorder Alerts
-                          </h3>
-                          <p className="text-slate-500 text-sm">No inventory data yet</p>
-                          <button onClick={() => setView('inventory')} className="text-xs text-violet-400 hover:text-violet-300 mt-1">
-                            Set up inventory →
-                          </button>
-                        </div>
-                      );
-                    }
-                    
-                    // Recalculate from today
-                    const now = new Date();
-                    const snapshotDate = new Date(latestInvKey + 'T12:00:00');
-                    const lastSync = latestSnapshot.sources?.lastPackiyoSync ? new Date(latestSnapshot.sources.lastPackiyoSync) : snapshotDate;
-                    const effectiveDate = lastSync > snapshotDate ? lastSync : snapshotDate;
-                    const daysElapsed = Math.max(0, Math.floor((now - effectiveDate) / 86400000));
-                    const defaultLead = leadTimeSettings?.defaultLeadTimeDays || 14;
-                    const buffer = leadTimeSettings?.reorderTriggerDays || 60;
-                    
-                    // Deduplicate SKUs - merge Shop suffix variants
-                    const skuMap = new Map();
-                    rawItems.forEach(item => {
-                      if (!item.sku) return;
-                      const dedupKey = item.sku.replace(/Shop$/i, '').toLowerCase();
-                      const existing = skuMap.get(dedupKey);
-                      if (!existing) { skuMap.set(dedupKey, { ...item }); }
-                      else {
-                        existing.totalQty = (existing.totalQty || 0) + (item.totalQty || 0);
-                        existing.amazonQty = (existing.amazonQty || 0) + (item.amazonQty || 0);
-                        existing.threeplQty = (existing.threeplQty || 0) + (item.threeplQty || 0);
-                        existing.homeQty = (existing.homeQty || 0) + (item.homeQty || 0);
-                        existing.weeklyVel = Math.max(existing.weeklyVel || 0, item.weeklyVel || 0);
-                        skuMap.set(dedupKey, existing);
-                      }
-                    });
-                    const dedupedItems = Array.from(skuMap.values());
-
-                    const urgentItems = dedupedItems
-                      .map(item => {
-                        const weeklyVel = item.weeklyVel || 0;
-                        const dailyVel = weeklyVel / 7;
-                        const adjustedQty = daysElapsed > 0 
-                          ? Math.max(0, (item.totalQty || 0) - Math.round(dailyVel * daysElapsed))
-                          : (item.totalQty || 0);
-                        const daysOfSupply = weeklyVel > 0 ? Math.round((adjustedQty / weeklyVel) * 7) : 999;
-                        const lead = item.leadTimeDays || defaultLead;
-                        const daysUntilMustOrder = daysOfSupply - buffer - lead;
-                        
-                        let stockoutDate = null;
-                        let reorderByDate = null;
-                        if (weeklyVel > 0 && daysOfSupply < 999) {
-                          const so = new Date(now); so.setDate(so.getDate() + daysOfSupply);
-                          stockoutDate = so.toISOString().split('T')[0];
-                          const ro = new Date(now); ro.setDate(ro.getDate() + Math.max(0, daysUntilMustOrder));
-                          reorderByDate = ro.toISOString().split('T')[0];
-                        }
-                        
-                        return {
-                          name: item.productName || item.sku || 'Unknown',
-                          sku: item.sku,
-                          qty: adjustedQty,
-                          daysOfSupply,
-                          daysUntilMustOrder,
-                          stockoutDate,
-                          reorderByDate,
-                          weeklyVel,
-                        };
-                      })
-                      .filter(i => i.weeklyVel > 0 && i.daysUntilMustOrder < 30) // Within 30 days of needing to order
-                      .sort((a, b) => a.daysUntilMustOrder - b.daysUntilMustOrder);
-                    
-                    const overdueCount = urgentItems.filter(i => i.daysUntilMustOrder < 0).length;
-                    const soonCount = urgentItems.filter(i => i.daysUntilMustOrder >= 0 && i.daysUntilMustOrder < 14).length;
-                    
-                    const formatShortDate = (iso) => {
-                      if (!iso) return '—';
-                      const d = new Date(iso);
-                      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                    };
-                    
-                    return (
-                      <div className={`bg-slate-800/50 rounded-2xl border ${
-                        overdueCount > 0 ? 'border-rose-500/40' : 
-                        soonCount > 0 ? 'border-amber-500/30' : 'border-slate-700'
-                      } p-4 h-full`}>
-                        <div className="flex items-center justify-between mb-3">
-                          <h3 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
-                            <Package className={`w-4 h-4 ${overdueCount > 0 ? 'text-rose-400' : soonCount > 0 ? 'text-amber-400' : 'text-emerald-400'}`} />
-                            Reorder Alerts
-                          </h3>
-                          <button onClick={() => setView('inventory')} className="text-xs text-slate-500 hover:text-violet-400 transition-colors">
-                            Inventory →
-                          </button>
-                        </div>
-                        
-                        {urgentItems.length === 0 ? (
-                          <div className="text-center py-2">
-                            <p className="text-emerald-400 text-sm flex items-center justify-center gap-1">
-                              <Check className="w-4 h-4" />All stocked up
-                            </p>
-                            <p className="text-slate-500 text-xs mt-1">No reorders needed in next 30 days</p>
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            {urgentItems.slice(0, 4).map((item, i) => (
-                              <div key={i} className={`rounded-lg px-2.5 py-2 border ${
-                                item.daysUntilMustOrder < 0 ? 'bg-rose-900/20 border-rose-500/30' :
-                                item.daysUntilMustOrder < 14 ? 'bg-amber-900/20 border-amber-500/30' :
-                                'bg-slate-700/30 border-slate-600/30'
-                              }`}>
-                                <div className="flex items-center justify-between">
-                                  <p className="text-xs text-white font-medium truncate max-w-[60%]">{item.name}</p>
-                                  <span className={`text-xs font-medium ${
-                                    item.daysUntilMustOrder < 0 ? 'text-rose-400' :
-                                    item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'
-                                  }`}>
-                                    {item.daysUntilMustOrder < 0 
-                                      ? `${Math.abs(item.daysUntilMustOrder)}d overdue`
-                                      : `Order by ${formatShortDate(item.reorderByDate)}`
-                                    }
-                                  </span>
-                                </div>
-                                <div className="flex items-center justify-between mt-0.5">
-                                  <span className="text-xs text-slate-500">{item.qty} units • {item.daysOfSupply}d supply</span>
-                                  {item.stockoutDate && (
-                                    <span className="text-xs text-slate-500">Stockout {formatShortDate(item.stockoutDate)}</span>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                            {urgentItems.length > 4 && (
-                              <p className="text-slate-500 text-xs text-center">+{urgentItems.length - 4} more items</p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  };
 
                   // Map widget IDs to their render functions
                   const widgetRenderers = {
@@ -1828,13 +1694,11 @@ const DashboardView = ({
                     aiForecast: renderAiForecast,
                     billsDue: renderBillsDue,
                     syncStatus: renderSyncStatus,
-                    adsOverview: renderAdsOverview,
-                    reorderAlerts: renderReorderAlerts,
                   };
 
                   // Get stacks config
                   const stacks = widgetConfig?.stacks || {};
-                  const gridWidgetIds = ['salesTax', 'aiForecast', 'billsDue', 'syncStatus', 'adsOverview', 'reorderAlerts'];
+                  const gridWidgetIds = ['salesTax', 'aiForecast', 'billsDue', 'syncStatus'];
                   
                   // Find which widgets are stacked as secondary (not primary)
                   const stackedAsSecondary = new Set();
@@ -2542,10 +2406,15 @@ const DashboardView = ({
                   <p className="text-2xl lg:text-3xl font-bold text-white">{formatNumber(current.units)}</p>
                 </div>
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">
-                  <p className="text-slate-400 text-sm font-medium mb-1">COGS</p>
-                  <p className="text-2xl lg:text-3xl font-bold text-white">{formatCurrency(current.cogs || 0)}</p>
-                  {current.revenue > 0 && (
-                    <p className="text-slate-500 text-sm mt-1">{((current.cogs || 0) / current.revenue * 100).toFixed(1)}% of revenue</p>
+                  <p className="text-slate-400 text-sm font-medium mb-1">Ad Spend</p>
+                  <p className="text-2xl lg:text-3xl font-bold text-white">{formatCurrency(current.adSpend)}</p>
+                  <p className="text-slate-500 text-sm mt-1">{current.revenue > 0 ? ((current.adSpend / current.revenue) * 100).toFixed(1) : 0}% TACOS</p>
+                  {(current.googleAds > 0 || current.metaAds > 0 || current.amazonAds > 0) && (
+                    <div className="mt-3 pt-3 border-t border-slate-700 space-y-1 text-xs">
+                      {current.googleAds > 0 && <div className="flex justify-between"><span className="text-red-400">● Google</span><span className="text-white">{formatCurrency(current.googleAds)}</span></div>}
+                      {current.metaAds > 0 && <div className="flex justify-between"><span className="text-blue-400">● Meta</span><span className="text-white">{formatCurrency(current.metaAds)}</span></div>}
+                      {current.amazonAds > 0 && <div className="flex justify-between"><span className="text-orange-400">● Amazon</span><span className="text-white">{formatCurrency(current.amazonAds)}</span></div>}
+                    </div>
                   )}
                 </div>
                 <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5">

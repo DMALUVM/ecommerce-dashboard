@@ -17911,6 +17911,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       usingPeriodData={usingPeriodData}
       view={view}
       widgetConfig={widgetConfig}
+      runAutoSync={runAutoSync}
+      autoSyncStatus={autoSyncStatus}
     />;
   }
   // ==================== UPLOAD VIEW (Combined) ====================
