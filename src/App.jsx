@@ -2094,7 +2094,7 @@ const handleLogout = async () => {
   const [adsQuarter, setAdsQuarter] = useState(Math.floor(new Date().getMonth() / 3) + 1); // 1-4
   const [adsSelectedWeek, setAdsSelectedWeek] = useState(null); // Selected week ending date for weekly comparison
   const [adsSelectedDay, setAdsSelectedDay] = useState(null); // Selected day for daily view
-  const [adsViewMode, setAdsViewMode] = useState('performance'); // 'performance' | 'campaigns' for ads tab
+  const [adsViewMode, setAdsViewMode] = useState('overview'); // 'overview' | 'upload' | 'analysis' | 'reports'
   
   // Forecast view state
   const [forecastSort, setForecastSort] = useState({ field: 'totalSales', dir: 'desc' });

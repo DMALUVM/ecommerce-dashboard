@@ -496,10 +496,20 @@ const SalesTaxView = ({
                   {/* NEXUS States Quick Actions - Your Filing Obligations */}
                   {(() => {
                     const nexusStatesWithData = taxData.byState.filter(s => nexusStates[s.stateCode]?.hasNexus);
-                    const totalNexusTaxOwed = nexusStatesWithData.reduce((s, st) => s + (st.taxOwed || st.tax || 0), 0);
+                    // Also include nexus states that have NO data this period (still need zero return)
+                    const nexusCodesInData = new Set(nexusStatesWithData.map(s => s.stateCode));
+                    const missingNexusStates = Object.entries(nexusStates || {})
+                      .filter(([code, config]) => config.hasNexus && !nexusCodesInData.has(code))
+                      .map(([code]) => ({
+                        stateCode: code,
+                        stateName: US_STATES_TAX_INFO[code]?.name || code,
+                        totalSales: 0, sales: 0, taxOwed: 0, tax: 0, totalOrders: 0, orders: 0,
+                      }));
+                    const allNexusStates = [...nexusStatesWithData, ...missingNexusStates];
+                    const totalNexusTaxOwed = allNexusStates.reduce((s, st) => s + (st.taxOwed || st.tax || 0), 0);
                     const periodKey = taxPeriodType === 'month' ? taxPeriodValue : `${taxPeriodValue.split('-')[0]}-Q${taxPeriodValue.split('-')[1]}`;
-                    const unfiledStates = nexusStatesWithData.filter(s => !salesTaxConfig.filingHistory?.[s.stateCode]?.[periodKey]?.filed);
-                    const filedStates = nexusStatesWithData.filter(s => salesTaxConfig.filingHistory?.[s.stateCode]?.[periodKey]?.filed);
+                    const unfiledStates = allNexusStates.filter(s => !salesTaxConfig.filingHistory?.[s.stateCode]?.[periodKey]?.filed);
+                    const filedStates = allNexusStates.filter(s => salesTaxConfig.filingHistory?.[s.stateCode]?.[periodKey]?.filed);
                     
                     // Helper: Check if filing is due for this period based on frequency
                     const isFilingDueForPeriod = (stateCode) => {
@@ -580,7 +590,7 @@ const SalesTaxView = ({
                       return nexusStates[stateCode]?.portalUrl || STATE_FILING_FORMATS[stateCode]?.website || null;
                     };
                     
-                    if (nexusStatesWithData.length === 0) return null;
+                    if (allNexusStates.length === 0) return null;
                     
                     return (
                       <div className="bg-gradient-to-r from-rose-900/30 to-violet-900/30 border border-rose-500/30 rounded-xl p-4 mb-6">
@@ -612,15 +622,25 @@ const SalesTaxView = ({
                                 const stateInfo = US_STATES_TAX_INFO[state.stateCode];
                                 const config = nexusStates[state.stateCode] || {};
                                 const portalUrl = getPortalUrl(state.stateCode);
+                                const taxAmount = state.taxOwed || state.tax || 0;
+                                const isZero = taxAmount === 0;
+                                const filingFormat = STATE_FILING_FORMATS[state.stateCode] || STATE_FILING_FORMATS.DEFAULT;
                                 return (
-                                  <div key={state.stateCode} className="bg-slate-800/80 rounded-lg p-3 border border-rose-500/50">
+                                  <div key={state.stateCode} className={`bg-slate-800/80 rounded-lg p-3 border ${isZero ? 'border-amber-500/50' : 'border-rose-500/50'}`}>
                                     <div className="flex justify-between items-center mb-1">
                                       <div>
                                         <span className="font-bold text-white">{state.stateName}</span>
                                         <span className="text-xs text-slate-500 ml-2">({config.frequency || 'monthly'})</span>
                                       </div>
-                                      <span className="text-rose-400 font-bold">{formatCurrency(state.taxOwed || state.tax || 0)}</span>
+                                      <span className={`font-bold ${isZero ? 'text-amber-400' : 'text-rose-400'}`}>
+                                        {formatCurrency(taxAmount)}{isZero ? ' — zero filing' : ''}
+                                      </span>
                                     </div>
+                                    {isZero && (
+                                      <p className="text-xs text-amber-400/70 mb-2">
+                                        ⚠ Zero return still required{filingFormat?.latePenalty ? ` • Penalty: ${filingFormat.latePenalty}` : ' • File to avoid penalties'}
+                                      </p>
+                                    )}
                                     <div className="flex gap-2 mt-2">
                                       <button
                                         onClick={() => downloadStateFiling(state)}
@@ -1100,10 +1120,16 @@ const SalesTaxView = ({
                               </div>
                               
                               {/* Mark as Paid Section */}
-                              {!alreadyFiled && (stateData.taxOwed > 0 || stateData.tax > 0) && (
+                              {!alreadyFiled && (() => {
+                                const isZeroFiling = (stateData.taxOwed || stateData.tax || 0) === 0;
+                                return (
                                 <div className="bg-slate-900 rounded-lg p-4 mb-4">
-                                  <h4 className="text-sm font-semibold text-slate-300 mb-3">✅ Mark as Filed & Paid</h4>
+                                  <h4 className="text-sm font-semibold text-slate-300 mb-3">{isZeroFiling ? '📋 Mark Zero Return as Filed' : '✅ Mark as Filed & Paid'}</h4>
+                                  {isZeroFiling && (
+                                    <p className="text-amber-400/80 text-xs mb-3">⚠️ Zero return still required — file to avoid penalties</p>
+                                  )}
                                   <div className="space-y-3">
+                                    {!isZeroFiling && (
                                     <div>
                                       <label className="block text-xs text-slate-400 mb-1">Amount Paid</label>
                                       <input
@@ -1114,6 +1140,7 @@ const SalesTaxView = ({
                                         className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white"
                                       />
                                     </div>
+                                    )}
                                     <div>
                                       <label className="block text-xs text-slate-400 mb-1">Confirmation # (optional)</label>
                                       <input
@@ -1125,28 +1152,30 @@ const SalesTaxView = ({
                                     </div>
                                     <button
                                       onClick={() => {
-                                        const amount = parseFloat(document.getElementById(`filing-amount-${stateCode}`).value) || 0;
+                                        const amount = isZeroFiling ? 0 : (parseFloat(document.getElementById(`filing-amount-${stateCode}`)?.value) || 0);
                                         const confirmNum = document.getElementById(`filing-confirm-${stateCode}`).value || '';
                                         markFilingComplete(stateCode, periodKey, {
                                           amount,
                                           confirmationNum: confirmNum,
+                                          zeroReturn: isZeroFiling,
                                           reportData: {
-                                            grossSales: stateData.totalSales || stateData.sales,
-                                            taxCollected: stateData.taxOwed || stateData.tax,
-                                            orders: stateData.totalOrders || stateData.orders,
+                                            grossSales: stateData.totalSales || stateData.sales || 0,
+                                            taxCollected: stateData.taxOwed || stateData.tax || 0,
+                                            orders: stateData.totalOrders || stateData.orders || 0,
                                             period: taxPeriodValue,
                                           }
                                         });
-                                        setToast({ message: `${stateInfo?.name} tax marked as filed for ${taxPeriodValue}`, type: 'success' });
+                                        setToast({ message: `${stateInfo?.name} ${isZeroFiling ? 'zero return' : 'tax'} marked as filed for ${taxPeriodValue}`, type: 'success' });
                                         setFilingDetailState(null);
                                       }}
-                                      className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white font-medium"
+                                      className={`w-full px-4 py-2 rounded-lg text-white font-medium ${isZeroFiling ? 'bg-amber-600 hover:bg-amber-500' : 'bg-emerald-600 hover:bg-emerald-500'}`}
                                     >
-                                      ✓ Mark as Filed & Paid
+                                      {isZeroFiling ? '📋 Mark Zero Return as Filed' : '✓ Mark as Filed & Paid'}
                                     </button>
                                   </div>
                                 </div>
-                              )}
+                                );
+                              })()}
                               
                               {/* Export button */}
                               <div className="flex gap-3">
