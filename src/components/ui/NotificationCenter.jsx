@@ -301,7 +301,7 @@ const NotificationCenter = ({
 
       {/* Panel */}
       {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-[360px] max-w-[calc(100vw-32px)] bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl shadow-black/40 z-50 overflow-hidden">
+        <div className="fixed top-12 right-4 w-[360px] max-w-[calc(100vw-32px)] bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl shadow-black/40 z-50 overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
             <h3 className="text-white font-semibold text-sm">Notifications</h3>
