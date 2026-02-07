@@ -1,1 +1,17 @@
 @import "tailwindcss";
+
+/* Hide scrollbar for horizontal nav */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Mobile touch improvements */
+@media (max-width: 640px) {
+  button, a, label {
+    -webkit-tap-highlight-color: transparent;
+  }
+}

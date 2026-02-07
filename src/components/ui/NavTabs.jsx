@@ -55,17 +55,17 @@ const NavTabs = ({
     const isOpen = navDropdown === dropdownKey;
     
     return (
-      <div className="relative">
+      <div className="relative flex-shrink-0">
         <button 
           onClick={() => setNavDropdown(isOpen ? null : dropdownKey)}
-          className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${isActive ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}
+          className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap ${isActive ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}
         >
           <Icon className="w-4 h-4" />
-          {label}
+          <span className="hidden sm:inline">{label}</span>
           <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
         </button>
         {isOpen && (
-          <div className="absolute top-full left-0 mt-2 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl py-1.5 z-50 min-w-[200px]">
+          <div className="absolute top-full left-0 sm:left-0 mt-2 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl py-1.5 z-50 min-w-[200px] max-w-[calc(100vw-32px)]">
             {items.map((item, index) => (
               <React.Fragment key={item.view}>
                 {item.divider && index > 0 && <div className="border-t border-slate-700 my-1.5" />}
@@ -172,12 +172,12 @@ const NavTabs = ({
   ];
   
   return (
-    <div ref={navRef} className="flex flex-wrap gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl relative">
+    <div ref={navRef} className="flex items-center gap-1 sm:gap-2 mb-4 sm:mb-6 p-1.5 bg-slate-800/50 rounded-xl relative overflow-x-auto scrollbar-hide">
       {/* Core Navigation - Always visible */}
-      <button onClick={() => setView('dashboard')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${view === 'dashboard' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><BarChart3 className="w-4 h-4" />Dashboard</button>
-      <button onClick={() => setView('upload')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Upload className="w-4 h-4" />Upload</button>
+      <button onClick={() => setView('dashboard')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'dashboard' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><BarChart3 className="w-4 h-4" /><span className="hidden sm:inline">Dashboard</span></button>
+      <button onClick={() => setView('upload')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Upload className="w-4 h-4" /><span className="hidden sm:inline">Upload</span></button>
       
-      <div className="w-px bg-slate-600 mx-1" />
+      <div className="w-px bg-slate-600 mx-0.5 sm:mx-1 h-6 flex-shrink-0" />
       
       {/* Data Views Dropdown */}
       {dataItems.length > 0 && (
@@ -212,13 +212,13 @@ const NavTabs = ({
         />
       )}
       
-      <div className="w-px bg-slate-600 mx-1" />
+      <div className="w-px bg-slate-600 mx-0.5 sm:mx-1 h-6 flex-shrink-0" />
       
-      {/* Reports & Actions - Top level */}
-      <button onClick={() => setView('reports')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${view === 'reports' ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg shadow-amber-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><CheckSquare className="w-4 h-4" />Actions</button>
+      {/* Reports & Actions */}
+      <button onClick={() => setView('reports')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'reports' ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg shadow-amber-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><CheckSquare className="w-4 h-4" /><span className="hidden sm:inline">Actions</span></button>
       
-      {/* Settings - Always visible */}
-      <button onClick={() => setView('settings')} className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all ${view === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-500 text-white shadow-lg shadow-slate-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Settings className="w-4 h-4" />Settings</button>
+      {/* Settings */}
+      <button onClick={() => setView('settings')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-500 text-white shadow-lg shadow-slate-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Settings className="w-4 h-4" /><span className="hidden sm:inline">Settings</span></button>
     </div>
   );
 };

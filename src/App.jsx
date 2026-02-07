@@ -18,6 +18,7 @@ import {
 } from './utils/storage';
 
 // Extracted UI components
+import NotificationCenter from './components/ui/NotificationCenter';
 import MetricCard from './components/ui/MetricCard';
 import HealthBadge from './components/ui/HealthBadge';
 import SettingSection from './components/ui/SettingSection';
@@ -1258,12 +1259,12 @@ export default function Dashboard() {
   
   // Settings tab state
   const [settingsTab, setSettingsTab] = useState(() => {
-    try { return safeLocalStorageGetString('ecommerce_settings_tab', 'general'); } catch { return 'general'; }
+    try { return safeLocalStorageGetString('ecommerce_settings_tab', 'general'); } catch (e) { console.warn("[init]", e?.message); return 'general'; }
   }); // 'general' | 'integrations' | 'thresholds' | 'display' | 'data' | 'account'
   
   // Persist settings tab selection
   useEffect(() => {
-    try { safeLocalStorageSet('ecommerce_settings_tab', settingsTab); } catch {}
+    try { safeLocalStorageSet('ecommerce_settings_tab', settingsTab); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
   }, [settingsTab]);
   
   // Undo deletion state - stores recently deleted items for 10-second undo window
@@ -1288,7 +1289,7 @@ export default function Dashboard() {
   // Amazon Campaign Data
   const [amazonCampaigns, setAmazonCampaigns] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_amazon_campaigns_v1', { campaigns: [], lastUpdated: null, history: [], historicalDaily: {} }); }
-    catch { return { campaigns: [], lastUpdated: null, history: [], historicalDaily: {} }; }
+    catch (e) { console.warn("[init]", e?.message); return { campaigns: [], lastUpdated: null, history: [], historicalDaily: {} }; }
   });
   const [amazonCampaignSort, setAmazonCampaignSort] = useState({ field: 'spend', dir: 'desc' });
   const [amazonCampaignFilter, setAmazonCampaignFilter] = useState({ status: 'all', type: 'all', search: '' });
@@ -1296,48 +1297,48 @@ export default function Dashboard() {
   // Amazon Ads Intelligence Data (search terms, placements, targeting, etc.)
   const [adsIntelData, setAdsIntelData] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_ads_intel_v1', {}); }
-    catch { return {}; }
+    catch (e) { console.warn("[init]", e?.message); return {}; }
   });
   const [showAdsIntelUpload, setShowAdsIntelUpload] = useState(false);
   
   // DTC Ads Intel (Meta/Google/Amazon SQP/Shopify)
   const [dtcIntelData, setDtcIntelData] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_dtc_intel_v1', {}); }
-    catch { return {}; }
+    catch (e) { console.warn("[init]", e?.message); return {}; }
   });
   const [showDtcIntelUpload, setShowDtcIntelUpload] = useState(false);
   
   // Persist adsIntelData
   useEffect(() => {
     if (adsIntelData?.lastUpdated) {
-      try { lsSet('ecommerce_ads_intel_v1', JSON.stringify(adsIntelData)); } catch(e) {}
+      try { lsSet('ecommerce_ads_intel_v1', JSON.stringify(adsIntelData)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
     }
   }, [adsIntelData]);
   
   // Persist dtcIntelData
   useEffect(() => {
     if (dtcIntelData?.lastUpdated) {
-      try { lsSet('ecommerce_dtc_intel_v1', JSON.stringify(dtcIntelData)); } catch(e) {}
+      try { lsSet('ecommerce_dtc_intel_v1', JSON.stringify(dtcIntelData)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
     }
   }, [dtcIntelData]);
 
   // Report History & Action Tracker (Features 2 & 6)
   const [reportHistory, setReportHistory] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_report_history_v1', []); } catch { return []; }
+    try { return safeLocalStorageGet('ecommerce_report_history_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
   });
   const [actionItems, setActionItems] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_action_items_v1', []); } catch { return []; }
+    try { return safeLocalStorageGet('ecommerce_action_items_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
   });
   
   // Persist report history & action items
   useEffect(() => {
     if (reportHistory?.length) {
-      try { lsSet('ecommerce_report_history_v1', JSON.stringify(reportHistory)); } catch(e) {}
+      try { lsSet('ecommerce_report_history_v1', JSON.stringify(reportHistory)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
     }
   }, [reportHistory]);
   useEffect(() => {
     if (actionItems?.length) {
-      try { lsSet('ecommerce_action_items_v1', JSON.stringify(actionItems)); } catch(e) {}
+      try { lsSet('ecommerce_action_items_v1', JSON.stringify(actionItems)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
     }
   }, [actionItems]);
 
@@ -1774,7 +1775,7 @@ const handleLogout = async () => {
   // AI Chatbot state
   const [showAIChat, setShowAIChat] = useState(false);
   const [aiMessages, setAiMessages] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_ai_chat_history_v1', []); } catch { return []; }
+    try { return safeLocalStorageGet('ecommerce_ai_chat_history_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
   });
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
@@ -1782,14 +1783,14 @@ const handleLogout = async () => {
   // AI Ads Insights Chat (separate from main AI chat)
   const [showAdsAIChat, setShowAdsAIChat] = useState(false);
   const [adsAiMessages, setAdsAiMessages] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_ads_ai_chat_v1', []); } catch { return []; }
+    try { return safeLocalStorageGet('ecommerce_ads_ai_chat_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
   });
   const [adsAiInput, setAdsAiInput] = useState('');
   const [adsAiLoading, setAdsAiLoading] = useState(false);
   const [aiChatModel, setAiChatModel] = useState('claude-sonnet-4-5-20250929');
   // Prior report summaries — persisted so AI remembers past analyses
   const [adsAiReportHistory, setAdsAiReportHistory] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_ads_report_history_v1', []); } catch { return []; }
+    try { return safeLocalStorageGet('ecommerce_ads_report_history_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
   });
   const pendingAdsAnalysisRef = useRef(false);
   
@@ -1802,7 +1803,7 @@ const handleLogout = async () => {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [onboardingComplete, setOnboardingComplete] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_onboarding_complete_v1', false); } catch { return false; }
+    try { return safeLocalStorageGet('ecommerce_onboarding_complete_v1', false); } catch (e) { console.warn("[init]", e?.message); return false; }
   });
   
   // 2. PDF Report Export
@@ -1884,7 +1885,7 @@ const handleLogout = async () => {
   // Production Pipeline
   const PRODUCTION_KEY = 'ecommerce_production_v1';
   const [productionPipeline, setProductionPipeline] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_production_v1', []); } catch { return []; }
+    try { return safeLocalStorageGet('ecommerce_production_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
   });
   const [showAddProduction, setShowAddProduction] = useState(false);
   const [editingProduction, setEditingProduction] = useState(null);
@@ -1987,7 +1988,7 @@ const handleLogout = async () => {
   // AI Learning Data - tracks all predictions vs actuals
   const [aiLearningHistory, setAiLearningHistory] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_ai_learning_v1', { predictions: [], accuracy: {} }); } 
-    catch { return { predictions: [], accuracy: {} }; }
+    catch (e) { console.warn("[init]", e?.message); return { predictions: [], accuracy: {} }; }
   });
   
   // ============ UNIFIED AI MODEL ============
@@ -2063,6 +2064,30 @@ const handleLogout = async () => {
   useEffect(() => {
     safeLocalStorageSet('ecommerce_notifications_v1', JSON.stringify(notificationSettings));
   }, [notificationSettings]);
+
+  // Backup reminder - prompt when data exists but no backup in 7+ days
+  useEffect(() => {
+    const hasData = Object.keys(allWeeksData).length > 0 || Object.keys(allDaysData).length > 0;
+    if (!hasData) return;
+    const daysSinceBackup = lastBackupDate ? Math.floor((Date.now() - new Date(lastBackupDate).getTime()) / (1000 * 60 * 60 * 24)) : 999;
+    if (daysSinceBackup >= 7) {
+      // Only show once per session
+      const sessionKey = 'ecommerce_backup_reminder_shown';
+      if (sessionStorage.getItem(sessionKey)) return;
+      sessionStorage.setItem(sessionKey, '1');
+      const timer = setTimeout(() => {
+        setToast({ 
+          message: lastBackupDate 
+            ? `Last backup was ${daysSinceBackup} days ago. Export a backup to protect your data.`
+            : 'You haven\'t backed up your data yet. Export a backup from the header bar.',
+          type: 'warning',
+          action: { label: 'Backup Now', onClick: exportAll }
+        });
+      }, 5000); // 5s delay so it doesn't flash on load
+      return () => clearTimeout(timer);
+    }
+  }, [lastBackupDate, allWeeksData, allDaysData]);
+
   
   // Check if new user needs onboarding (no data and not completed)
   useEffect(() => {
@@ -2090,14 +2115,14 @@ const handleLogout = async () => {
   
   // 8. Notes/Journal
   const [weekNotes, setWeekNotes] = useState(() => {
-    try { return safeLocalStorageGet(NOTES_KEY, {}); } catch { return {}; }
+    try { return safeLocalStorageGet(NOTES_KEY, {}); } catch (e) { console.warn("[init]", e?.message); return {}; }
   });
   const [editingNote, setEditingNote] = useState(null); // week key being edited
   const [noteText, setNoteText] = useState('');
   
   // 9. Theme Customization
   const [theme, setTheme] = useState(() => {
-    try { return safeLocalStorageGet(THEME_KEY, { mode: 'dark', accent: 'violet' }); } catch { return { mode: 'dark', accent: 'violet' }; }
+    try { return safeLocalStorageGet(THEME_KEY, { mode: 'dark', accent: 'violet' }); } catch (e) { console.warn("[init]", e?.message); return { mode: 'dark', accent: 'violet' }; }
   });
   
   // 10. CSV Export modal
@@ -2132,7 +2157,7 @@ const handleLogout = async () => {
   
   // Upcoming Invoices/Bills
   const [invoices, setInvoices] = useState(() => {
-    try { return safeLocalStorageGet(INVOICES_KEY, []); } catch { return []; }
+    try { return safeLocalStorageGet(INVOICES_KEY, []); } catch (e) { console.warn("[init]", e?.message); return []; }
   });
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
@@ -2933,7 +2958,7 @@ const handleLogout = async () => {
   
   // Amazon Forecasts (from Amazon's SKU Economics forecast reports)
   const [amazonForecasts, setAmazonForecasts] = useState(() => {
-    try { return safeLocalStorageGet(AMAZON_FORECAST_KEY, {}); } catch { return {}; }
+    try { return safeLocalStorageGet(AMAZON_FORECAST_KEY, {}); } catch (e) { console.warn("[init]", e?.message); return {}; }
   });
   
   // Forecast upload tracking - tracks when each type was last uploaded
@@ -2975,7 +3000,7 @@ const handleLogout = async () => {
   // AI-powered forecasting state
   const [aiForecasts, setAiForecasts] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_ai_forecasts_v1', null); }
-    catch { return null; }
+    catch (e) { console.warn("[init]", e?.message); return null; }
   });
   const [aiForecastLoading, setAiForecastLoading] = useState(false);
 
@@ -3501,6 +3526,31 @@ allWeekKeys.forEach((weekKey) => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
   
+  // Global Escape key handler - closes topmost modal
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key !== 'Escape') return;
+      // Close in priority order (topmost first)
+      if (showStoreSelector) { setShowStoreSelector(false); return; }
+      if (showGoalsModal) { setShowGoalsModal(false); return; }
+      if (showCogsManager) { setShowCogsManager(false); return; }
+      if (showProductCatalog) { setShowProductCatalog(false); return; }
+      if (showExportModal) { setShowExportModal(false); return; }
+      if (showInvoiceModal) { setShowInvoiceModal(false); return; }
+      if (showForecast) { setShowForecast(false); return; }
+      if (showBreakEven) { setShowBreakEven(false); return; }
+      if (showUploadHelp) { setShowUploadHelp(false); return; }
+      if (showAdsIntelUpload) { setShowAdsIntelUpload(false); return; }
+      if (showDtcIntelUpload) { setShowDtcIntelUpload(false); return; }
+      if (showTaxStateConfig) { setShowTaxStateConfig(false); return; }
+      if (selectedTaxState) { setSelectedTaxState(null); return; }
+      if (viewingDayDetails) { setViewingDayDetails(null); return; }
+      if (navDropdown) { setNavDropdown(null); return; }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  });
+
   // Request notification permission
   const requestNotifications = async () => {
     if ('Notification' in window) {
@@ -4186,7 +4236,7 @@ const loadFromLocal = useCallback(() => {
       }).sort().reverse();
       if (w.length) { setSelectedWeek(w[0]); }
     }
-  } catch {}
+  } catch (e) { console.error("[error]", e); }
 
   // Load daily data - check both keys for backwards compatibility
   try {
@@ -4251,7 +4301,7 @@ const loadFromLocal = useCallback(() => {
   try {
     const r = lsGet(INVENTORY_KEY);
     if (r) setInvHistory(JSON.parse(r));
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
 
   try {
     const r = lsGet(COGS_KEY);
@@ -4260,67 +4310,67 @@ const loadFromLocal = useCallback(() => {
       setSavedCogs(d.lookup || {});
       setCogsLastUpdated(d.updatedAt || null);
     }
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
 
   // Load product names
   try {
     const names = lsGet(PRODUCT_NAMES_KEY);
     if (names) setSavedProductNames(JSON.parse(names));
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
 
   try {
     const r = lsGet(PERIODS_KEY);
     if (r) setAllPeriodsData(JSON.parse(r));
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
 
   try {
     const r = lsGet(STORE_KEY);
     if (r) setStoreName(r);
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
 
   try {
     const r = lsGet(GOALS_KEY);
     if (r) setGoals(JSON.parse(r));
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
 
   try {
     const r = lsGet(SALES_TAX_KEY);
     if (r) setSalesTaxConfig(JSON.parse(r));
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
 
   try {
     const r = lsGet(SETTINGS_KEY);
     if (r) setAppSettings(prev => ({ ...prev, ...JSON.parse(r) }));
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
 
   try {
     const r = lsGet(THREEPL_LEDGER_KEY);
     if (r) setThreeplLedger(JSON.parse(r));
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
 
   // Load Shopify credentials from localStorage
   try {
     const r = lsGet('ecommerce_shopify_creds_v1');
     if (r) setShopifyCredentials(JSON.parse(r));
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
   
   // Load Packiyo credentials from localStorage
   try {
     const r = lsGet('ecommerce_packiyo_creds_v1');
     if (r) setPackiyoCredentials(JSON.parse(r));
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
   
   // Load Amazon credentials from localStorage
   try {
     const r = lsGet('ecommerce_amazon_creds_v1');
     if (r) setAmazonCredentials(JSON.parse(r));
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
   
   // Load QBO credentials from localStorage
   try {
     const r = lsGet('ecommerce_qbo_creds_v1');
     if (r) setQboCredentials(JSON.parse(r));
-  } catch {}
+  } catch (e) { if (e.message) console.warn("[init]", e.message); }
 }, []);
 
 // Sync 3PL ledger costs to weekly data when ledger changes
@@ -4518,7 +4568,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
     try {
       const { data: latest } = await supabase.from('app_data').select('updated_at').eq('user_id', session.user.id).maybeSingle();
       if (latest?.updated_at) setLoadedCloudVersion(latest.updated_at);
-    } catch {}
+    } catch (e) { console.error("[error]", e); }
     setCloudStatus('Save failed (retry soon)');
     setTimeout(() => setCloudStatus(''), 3000);
     saveInProgressRef.current = false;
@@ -4556,7 +4606,7 @@ const save3PLLedger = useCallback((newLedger) => {
 useEffect(() => {
   try {
     if (storeName !== undefined) writeToLocal(STORE_KEY, storeName || '');
-  } catch {}
+  } catch (e) { console.error("[error]", e); }
   queueCloudSave({ ...combinedData, storeName });
 }, [storeName]);
 
@@ -4592,7 +4642,7 @@ useEffect(() => {
   if (shopifyCredentials.storeUrl || shopifyCredentials.connected) {
     try {
       lsSet('ecommerce_shopify_creds_v1', JSON.stringify(shopifyCredentials));
-    } catch {}
+    } catch (e) { if (e.message) console.warn("[init]", e.message); }
   }
 }, [shopifyCredentials]);
 
@@ -4601,7 +4651,7 @@ useEffect(() => {
   if (packiyoCredentials.apiKey || packiyoCredentials.connected) {
     try {
       lsSet('ecommerce_packiyo_creds_v1', JSON.stringify(packiyoCredentials));
-    } catch {}
+    } catch (e) { if (e.message) console.warn("[init]", e.message); }
   }
 }, [packiyoCredentials]);
 
@@ -4610,7 +4660,7 @@ useEffect(() => {
   if (amazonCredentials.refreshToken || amazonCredentials.connected) {
     try {
       lsSet('ecommerce_amazon_creds_v1', JSON.stringify(amazonCredentials));
-    } catch {}
+    } catch (e) { if (e.message) console.warn("[init]", e.message); }
   }
 }, [amazonCredentials]);
 
@@ -4619,7 +4669,7 @@ useEffect(() => {
   if (qboCredentials.accessToken || qboCredentials.connected || qboCredentials.clientId) {
     try {
       lsSet('ecommerce_qbo_creds_v1', JSON.stringify(qboCredentials));
-    } catch {}
+    } catch (e) { if (e.message) console.warn("[init]", e.message); }
   }
 }, [qboCredentials]);
 
@@ -5290,7 +5340,7 @@ const save = async (d) => {
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, sales: d });
-  } catch {}
+  } catch (e) { console.error("[error]", e); }
 };
 
 const saveInv = async (d) => {
@@ -5299,7 +5349,7 @@ const saveInv = async (d) => {
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, inventory: d });
-  } catch {}
+  } catch (e) { console.error("[error]", e); }
 };
 
 const saveCogs = async (lookup) => {
@@ -5311,7 +5361,7 @@ const saveCogs = async (lookup) => {
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, cogs: { lookup, updatedAt } });
-  } catch {}
+  } catch (e) { console.error("[error]", e); }
 };
 
 // Save generated report to history (called by report modals)
@@ -5327,7 +5377,7 @@ const saveReportToHistory = useCallback((report) => {
   };
   const updated = [entry, ...(reportHistory || [])].slice(0, 50); // Keep last 50
   setReportHistory(updated);
-  try { lsSet('ecommerce_report_history_v1', JSON.stringify(updated)); } catch(e) {}
+  try { lsSet('ecommerce_report_history_v1', JSON.stringify(updated)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
   queueCloudSave({ ...combinedData, reportHistory: updated });
   return entry;
 }, [reportHistory, combinedData, queueCloudSave]);
@@ -5338,7 +5388,7 @@ const savePeriods = async (d) => {
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, periods: d });
-  } catch {}
+  } catch (e) { console.error("[error]", e); }
 };
 
   const handleFile = useCallback(async (type, file, isInv = false) => {
@@ -5726,7 +5776,7 @@ const savePeriods = async (d) => {
 
     saveCogs(lookup);
     setSavedProductNames(names);
-    try { safeLocalStorageSet(PRODUCT_NAMES_KEY, JSON.stringify(names)); } catch(e) {}
+    try { safeLocalStorageSet(PRODUCT_NAMES_KEY, JSON.stringify(names)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
     setFiles(p => ({ ...p, cogs: null }));
     setFileNames(p => ({ ...p, cogs: '' }));
     setShowCogsManager(false);
@@ -6710,7 +6760,7 @@ const savePeriods = async (d) => {
     
     if (needsUpdate) {
       setAllPeriodsData(updatedPeriods);
-      try { safeLocalStorageSet('ecommerce_periods_v1', JSON.stringify(updatedPeriods)); } catch {}
+      try { safeLocalStorageSet('ecommerce_periods_v1', JSON.stringify(updatedPeriods)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
     }
   }, [allWeeksData]); // Only depend on allWeeksData to avoid loops
 
@@ -7040,8 +7090,7 @@ const savePeriods = async (d) => {
               legacyDailyData[date] = legacyData[date];
             }
           });
-        } catch (e) {
-        }
+        } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
       }
       
       // Log data availability by channel
@@ -12864,8 +12913,7 @@ Respond with ONLY this JSON (no markdown):
         if (jsonMatch) {
           try {
             aiAnalysis = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-          }
+          } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
         }
         
         // GENERATE FORECAST LOCALLY using our calculated values
@@ -14013,7 +14061,7 @@ Analyze the data and respond with ONLY this JSON:
   // NavTabs extracted to separate component
 
   const dataBar = useMemo(() => (
-    <div className="flex flex-wrap items-center gap-3 mb-6 p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+    <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4 sm:mb-6 p-3 sm:p-4 bg-slate-800/50 rounded-xl border border-slate-700">
       {/* Store Selector */}
       {session && stores.length > 0 && (
         <button 
@@ -14025,7 +14073,7 @@ Analyze the data and respond with ONLY this JSON:
           <ChevronRight className="w-3 h-3" />
         </button>
       )}
-      <div className="flex items-center gap-2 text-slate-400 text-sm"><Database className="w-4 h-4" /><span>{Object.keys(allDaysData).length} days | {Object.keys(allWeeksData).length} weeks | {Object.keys(allPeriodsData).length} periods</span></div>
+      <div className="flex items-center gap-2 text-slate-400 text-xs sm:text-sm"><Database className="w-4 h-4" /><span>{Object.keys(allDaysData).length}d | {Object.keys(allWeeksData).length}w | {Object.keys(allPeriodsData).length}p</span></div>
       
       {/* Forecast Status Indicators */}
       <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-900/50 rounded-lg border border-slate-700">
@@ -14046,13 +14094,13 @@ Analyze the data and respond with ONLY this JSON:
         })}
       </div>
       
-      <div className="flex items-center gap-2">
+      <div className="hidden sm:flex items-center gap-2">
         {Object.keys(savedCogs).length > 0 ? <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />{Object.keys(savedCogs).length} SKUs</span> : <span className="text-amber-400 text-xs">No COGS</span>}
         <button onClick={() => setShowCogsManager(true)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white flex items-center gap-1"><Settings className="w-3 h-3" />COGS</button>
         <button onClick={() => setShowProductCatalog(true)} className="px-2 py-1 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded text-xs text-violet-300 flex items-center gap-1"><Package className="w-3 h-3" />Catalog{Object.keys(savedProductNames).length > 0 && <span className="text-violet-400">✓</span>}</button>
       </div>
-      <button onClick={() => setShowGoalsModal(true)} className="px-2 py-1 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded text-xs text-amber-300 flex items-center gap-1"><Target className="w-3 h-3" />Goals</button>
-      <div className="flex items-center gap-2">
+      <button onClick={() => setShowGoalsModal(true)} className="hidden sm:flex px-2 py-1 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 rounded text-xs text-amber-300 items-center gap-1"><Target className="w-3 h-3" />Goals</button>
+      <div className="hidden md:flex items-center gap-2">
         <span className="text-slate-400 text-sm">Store:</span>
         <input 
           key={`store-name-${activeStoreId || 'default'}`}
@@ -14071,10 +14119,11 @@ Analyze the data and respond with ONLY this JSON:
           className="bg-slate-900 border border-slate-600 rounded-lg px-2 py-1 text-sm text-white w-44" />
       </div>
       <div className="flex-1" />
-      <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" />Export</button>
-      <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" />Import<input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
+      <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" /><span className="hidden sm:inline">Export</span></button>
+      <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" /><span className="hidden sm:inline">Import</span><input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
+      <NotificationCenter salesTaxConfig={salesTaxConfig} inventoryData={invHistory?.[Object.keys(invHistory || {}).sort().pop()]?.products || []} allDaysData={allDaysData} appSettings={appSettings} lastBackupDate={lastBackupDate} setView={setView} setToast={setToast} />
     </div>
-  ), [allWeeksData, allDaysData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session, stores, activeStoreId, dataStatus]);
+  ), [allWeeksData, allDaysData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session, stores, activeStoreId, dataStatus, salesTaxConfig, invHistory, appSettings, lastBackupDate]);
 
   // Day Details Modal - shows detailed breakdown for a specific day
   const [editingDayAdSpend, setEditingDayAdSpend] = useState(false);
@@ -17974,8 +18023,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
 
   if (view === 'bulk') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto">{globalModals}
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-3 sm:p-4 lg:p-6">
+        <div className="max-w-3xl mx-auto px-1 sm:px-0">{globalModals}
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
@@ -17992,8 +18041,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
 
   if (view === 'custom-select') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-        <div className="max-w-3xl mx-auto">{globalModals}
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-3 sm:p-4 lg:p-6">
+        <div className="max-w-3xl mx-auto px-1 sm:px-0">{globalModals}
           <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4"><CalendarRange className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Custom Period</h1></div>
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
           <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
