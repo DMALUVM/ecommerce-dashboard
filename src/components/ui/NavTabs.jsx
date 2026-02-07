@@ -172,7 +172,7 @@ const NavTabs = ({
   ];
   
   return (
-    <div ref={navRef} className="flex items-center gap-1 sm:gap-2 mb-4 sm:mb-6 p-1.5 bg-slate-800/50 rounded-xl relative overflow-x-auto scrollbar-hide">
+    <div ref={navRef} className={`flex items-center gap-1 sm:gap-2 mb-4 sm:mb-6 p-1.5 bg-slate-800/50 rounded-xl relative ${navDropdown ? '' : 'overflow-x-auto scrollbar-hide'}`}>
       {/* Core Navigation - Always visible */}
       <button onClick={() => setView('dashboard')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'dashboard' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><BarChart3 className="w-4 h-4" /><span className="hidden sm:inline">Dashboard</span></button>
       <button onClick={() => setView('upload')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Upload className="w-4 h-4" /><span className="hidden sm:inline">Upload</span></button>
