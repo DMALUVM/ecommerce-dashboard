@@ -5,6 +5,7 @@ import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, Ba
 import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
 import { formatCurrency, formatPercent, formatNumber } from './utils/format';
+import { devWarn, devError, audit, getAuditLog } from './utils/logger';
 import { hasDailySalesData, formatDateKey, getSunday } from './utils/date';
 import { deriveWeeksFromDays, mergeWeekData } from './utils/weekly';
 import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from './utils/ads';
@@ -20,6 +21,8 @@ import {
 // Extracted UI components
 import NotificationCenter from './components/ui/NotificationCenter';
 import EmptyState from './components/ui/EmptyState';
+import KeyboardShortcuts from './components/ui/KeyboardShortcuts';
+import AuditLog from './components/ui/AuditLog';
 import { PrintButton, printProfitability, printInventory, printSalesTax, printDailySummary } from './components/ui/PrintView';
 import MetricCard from './components/ui/MetricCard';
 import HealthBadge from './components/ui/HealthBadge';
@@ -636,7 +639,7 @@ const safeLocalStorageSet = (key, value) => {
     const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
     lsSet(key, stringValue);
   } catch (e) {
-    console.warn(`Failed to save to localStorage: ${key}`, e);
+    devWarn(`Failed to save to localStorage: ${key}`, e);
   }
 };
 
@@ -972,7 +975,7 @@ const parse3PLExcel = async (file) => {
         
         resolve(result);
       } catch (err) {
-        console.error('Error parsing 3PL file:', err);
+        devError('Error parsing 3PL file:', err);
         reject(err);
       }
     };
@@ -1261,12 +1264,12 @@ export default function Dashboard() {
   
   // Settings tab state
   const [settingsTab, setSettingsTab] = useState(() => {
-    try { return safeLocalStorageGetString('ecommerce_settings_tab', 'general'); } catch (e) { console.warn("[init]", e?.message); return 'general'; }
+    try { return safeLocalStorageGetString('ecommerce_settings_tab', 'general'); } catch (e) { devWarn("[init]", e?.message); return 'general'; }
   }); // 'general' | 'integrations' | 'thresholds' | 'display' | 'data' | 'account'
   
   // Persist settings tab selection
   useEffect(() => {
-    try { safeLocalStorageSet('ecommerce_settings_tab', settingsTab); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
+    try { safeLocalStorageSet('ecommerce_settings_tab', settingsTab); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
   }, [settingsTab]);
   
   // Undo deletion state - stores recently deleted items for 10-second undo window
@@ -1291,7 +1294,7 @@ export default function Dashboard() {
   // Amazon Campaign Data
   const [amazonCampaigns, setAmazonCampaigns] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_amazon_campaigns_v1', { campaigns: [], lastUpdated: null, history: [], historicalDaily: {} }); }
-    catch (e) { console.warn("[init]", e?.message); return { campaigns: [], lastUpdated: null, history: [], historicalDaily: {} }; }
+    catch (e) { devWarn("[init]", e?.message); return { campaigns: [], lastUpdated: null, history: [], historicalDaily: {} }; }
   });
   const [amazonCampaignSort, setAmazonCampaignSort] = useState({ field: 'spend', dir: 'desc' });
   const [amazonCampaignFilter, setAmazonCampaignFilter] = useState({ status: 'all', type: 'all', search: '' });
@@ -1299,48 +1302,48 @@ export default function Dashboard() {
   // Amazon Ads Intelligence Data (search terms, placements, targeting, etc.)
   const [adsIntelData, setAdsIntelData] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_ads_intel_v1', {}); }
-    catch (e) { console.warn("[init]", e?.message); return {}; }
+    catch (e) { devWarn("[init]", e?.message); return {}; }
   });
   const [showAdsIntelUpload, setShowAdsIntelUpload] = useState(false);
   
   // DTC Ads Intel (Meta/Google/Amazon SQP/Shopify)
   const [dtcIntelData, setDtcIntelData] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_dtc_intel_v1', {}); }
-    catch (e) { console.warn("[init]", e?.message); return {}; }
+    catch (e) { devWarn("[init]", e?.message); return {}; }
   });
   const [showDtcIntelUpload, setShowDtcIntelUpload] = useState(false);
   
   // Persist adsIntelData
   useEffect(() => {
     if (adsIntelData?.lastUpdated) {
-      try { lsSet('ecommerce_ads_intel_v1', JSON.stringify(adsIntelData)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
+      try { lsSet('ecommerce_ads_intel_v1', JSON.stringify(adsIntelData)); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
     }
   }, [adsIntelData]);
   
   // Persist dtcIntelData
   useEffect(() => {
     if (dtcIntelData?.lastUpdated) {
-      try { lsSet('ecommerce_dtc_intel_v1', JSON.stringify(dtcIntelData)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
+      try { lsSet('ecommerce_dtc_intel_v1', JSON.stringify(dtcIntelData)); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
     }
   }, [dtcIntelData]);
 
   // Report History & Action Tracker (Features 2 & 6)
   const [reportHistory, setReportHistory] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_report_history_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
+    try { return safeLocalStorageGet('ecommerce_report_history_v1', []); } catch (e) { devWarn("[init]", e?.message); return []; }
   });
   const [actionItems, setActionItems] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_action_items_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
+    try { return safeLocalStorageGet('ecommerce_action_items_v1', []); } catch (e) { devWarn("[init]", e?.message); return []; }
   });
   
   // Persist report history & action items
   useEffect(() => {
     if (reportHistory?.length) {
-      try { lsSet('ecommerce_report_history_v1', JSON.stringify(reportHistory)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
+      try { lsSet('ecommerce_report_history_v1', JSON.stringify(reportHistory)); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
     }
   }, [reportHistory]);
   useEffect(() => {
     if (actionItems?.length) {
-      try { lsSet('ecommerce_action_items_v1', JSON.stringify(actionItems)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
+      try { lsSet('ecommerce_action_items_v1', JSON.stringify(actionItems)); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
     }
   }, [actionItems]);
 
@@ -1452,6 +1455,7 @@ const [isAuthReady, setIsAuthReady] = useState(false);
 const lastSavedRef = useRef(0);
 const saveTimerRef = useRef(null);
 const isLoadingDataRef = useRef(false);
+  const [dataLoading, setDataLoading] = useState(true); // Shows skeletons during initial load
 const skuDemandStatsRef = useRef({}); // Safety stock, seasonality, CV per SKU
 
 // Conflict detection for multi-device sync
@@ -1602,7 +1606,7 @@ const handleLogout = async () => {
   conflictCheckRef.current = false;
   
   // Re-enable data loading for next login (after all state is reset)
-  isLoadingDataRef.current = false;
+  isLoadingDataRef.current = false; setDataLoading(false);
 };
 
   
@@ -1777,22 +1781,23 @@ const handleLogout = async () => {
   // AI Chatbot state
   const [showAIChat, setShowAIChat] = useState(false);
   const [aiMessages, setAiMessages] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_ai_chat_history_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
+    try { return safeLocalStorageGet('ecommerce_ai_chat_history_v1', []); } catch (e) { devWarn("[init]", e?.message); return []; }
   });
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   
   // AI Ads Insights Chat (separate from main AI chat)
   const [showAdsAIChat, setShowAdsAIChat] = useState(false);
+  const [showAuditLog, setShowAuditLog] = useState(false);
   const [adsAiMessages, setAdsAiMessages] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_ads_ai_chat_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
+    try { return safeLocalStorageGet('ecommerce_ads_ai_chat_v1', []); } catch (e) { devWarn("[init]", e?.message); return []; }
   });
   const [adsAiInput, setAdsAiInput] = useState('');
   const [adsAiLoading, setAdsAiLoading] = useState(false);
   const [aiChatModel, setAiChatModel] = useState('claude-sonnet-4-5-20250929');
   // Prior report summaries — persisted so AI remembers past analyses
   const [adsAiReportHistory, setAdsAiReportHistory] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_ads_report_history_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
+    try { return safeLocalStorageGet('ecommerce_ads_report_history_v1', []); } catch (e) { devWarn("[init]", e?.message); return []; }
   });
   const pendingAdsAnalysisRef = useRef(false);
   
@@ -1805,7 +1810,7 @@ const handleLogout = async () => {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [onboardingComplete, setOnboardingComplete] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_onboarding_complete_v1', false); } catch (e) { console.warn("[init]", e?.message); return false; }
+    try { return safeLocalStorageGet('ecommerce_onboarding_complete_v1', false); } catch (e) { devWarn("[init]", e?.message); return false; }
   });
   
   // 2. PDF Report Export
@@ -1887,7 +1892,7 @@ const handleLogout = async () => {
   // Production Pipeline
   const PRODUCTION_KEY = 'ecommerce_production_v1';
   const [productionPipeline, setProductionPipeline] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_production_v1', []); } catch (e) { console.warn("[init]", e?.message); return []; }
+    try { return safeLocalStorageGet('ecommerce_production_v1', []); } catch (e) { devWarn("[init]", e?.message); return []; }
   });
   const [showAddProduction, setShowAddProduction] = useState(false);
   const [editingProduction, setEditingProduction] = useState(null);
@@ -1990,7 +1995,7 @@ const handleLogout = async () => {
   // AI Learning Data - tracks all predictions vs actuals
   const [aiLearningHistory, setAiLearningHistory] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_ai_learning_v1', { predictions: [], accuracy: {} }); } 
-    catch (e) { console.warn("[init]", e?.message); return { predictions: [], accuracy: {} }; }
+    catch (e) { devWarn("[init]", e?.message); return { predictions: [], accuracy: {} }; }
   });
   
   // ============ UNIFIED AI MODEL ============
@@ -2117,14 +2122,14 @@ const handleLogout = async () => {
   
   // 8. Notes/Journal
   const [weekNotes, setWeekNotes] = useState(() => {
-    try { return safeLocalStorageGet(NOTES_KEY, {}); } catch (e) { console.warn("[init]", e?.message); return {}; }
+    try { return safeLocalStorageGet(NOTES_KEY, {}); } catch (e) { devWarn("[init]", e?.message); return {}; }
   });
   const [editingNote, setEditingNote] = useState(null); // week key being edited
   const [noteText, setNoteText] = useState('');
   
   // 9. Theme Customization
   const [theme, setTheme] = useState(() => {
-    try { return safeLocalStorageGet(THEME_KEY, { mode: 'dark', accent: 'violet' }); } catch (e) { console.warn("[init]", e?.message); return { mode: 'dark', accent: 'violet' }; }
+    try { return safeLocalStorageGet(THEME_KEY, { mode: 'dark', accent: 'violet' }); } catch (e) { devWarn("[init]", e?.message); return { mode: 'dark', accent: 'violet' }; }
   });
   
   // 10. CSV Export modal
@@ -2159,7 +2164,7 @@ const handleLogout = async () => {
   
   // Upcoming Invoices/Bills
   const [invoices, setInvoices] = useState(() => {
-    try { return safeLocalStorageGet(INVOICES_KEY, []); } catch (e) { console.warn("[init]", e?.message); return []; }
+    try { return safeLocalStorageGet(INVOICES_KEY, []); } catch (e) { devWarn("[init]", e?.message); return []; }
   });
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
@@ -2960,7 +2965,7 @@ const handleLogout = async () => {
   
   // Amazon Forecasts (from Amazon's SKU Economics forecast reports)
   const [amazonForecasts, setAmazonForecasts] = useState(() => {
-    try { return safeLocalStorageGet(AMAZON_FORECAST_KEY, {}); } catch (e) { console.warn("[init]", e?.message); return {}; }
+    try { return safeLocalStorageGet(AMAZON_FORECAST_KEY, {}); } catch (e) { devWarn("[init]", e?.message); return {}; }
   });
   
   // Forecast upload tracking - tracks when each type was last uploaded
@@ -3002,7 +3007,7 @@ const handleLogout = async () => {
   // AI-powered forecasting state
   const [aiForecasts, setAiForecasts] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_ai_forecasts_v1', null); }
-    catch (e) { console.warn("[init]", e?.message); return null; }
+    catch (e) { devWarn("[init]", e?.message); return null; }
   });
   const [aiForecastLoading, setAiForecastLoading] = useState(false);
 
@@ -4238,7 +4243,7 @@ const loadFromLocal = useCallback(() => {
       }).sort().reverse();
       if (w.length) { setSelectedWeek(w[0]); }
     }
-  } catch (e) { console.error("[error]", e); }
+  } catch (e) { devError("[error]", e); }
 
   // Load daily data - check both keys for backwards compatibility
   try {
@@ -4248,7 +4253,7 @@ const loadFromLocal = useCallback(() => {
       try {
         dailyData = JSON.parse(r);
       } catch (parseErr) {
-        console.error('Failed to parse ecommerce_daily_sales_v1:', parseErr.message);
+        devError('Failed to parse ecommerce_daily_sales_v1:', parseErr.message);
       }
     }
     
@@ -4278,7 +4283,7 @@ const loadFromLocal = useCallback(() => {
           });
         }
       } catch (legacyErr) {
-        console.error('Failed to parse legacy dailySales:', legacyErr.message);
+        devError('Failed to parse legacy dailySales:', legacyErr.message);
       }
     }
     
@@ -4297,13 +4302,13 @@ const loadFromLocal = useCallback(() => {
       setAllDaysData(dailyData);
     }
   } catch (err) {
-    console.error('Error loading daily data:', err);
+    devError('Error loading daily data:', err);
   }
 
   try {
     const r = lsGet(INVENTORY_KEY);
     if (r) setInvHistory(JSON.parse(r));
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
 
   try {
     const r = lsGet(COGS_KEY);
@@ -4312,67 +4317,67 @@ const loadFromLocal = useCallback(() => {
       setSavedCogs(d.lookup || {});
       setCogsLastUpdated(d.updatedAt || null);
     }
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
 
   // Load product names
   try {
     const names = lsGet(PRODUCT_NAMES_KEY);
     if (names) setSavedProductNames(JSON.parse(names));
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
 
   try {
     const r = lsGet(PERIODS_KEY);
     if (r) setAllPeriodsData(JSON.parse(r));
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
 
   try {
     const r = lsGet(STORE_KEY);
     if (r) setStoreName(r);
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
 
   try {
     const r = lsGet(GOALS_KEY);
     if (r) setGoals(JSON.parse(r));
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
 
   try {
     const r = lsGet(SALES_TAX_KEY);
     if (r) setSalesTaxConfig(JSON.parse(r));
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
 
   try {
     const r = lsGet(SETTINGS_KEY);
     if (r) setAppSettings(prev => ({ ...prev, ...JSON.parse(r) }));
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
 
   try {
     const r = lsGet(THREEPL_LEDGER_KEY);
     if (r) setThreeplLedger(JSON.parse(r));
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
 
   // Load Shopify credentials from localStorage
   try {
     const r = lsGet('ecommerce_shopify_creds_v1');
     if (r) setShopifyCredentials(JSON.parse(r));
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
   
   // Load Packiyo credentials from localStorage
   try {
     const r = lsGet('ecommerce_packiyo_creds_v1');
     if (r) setPackiyoCredentials(JSON.parse(r));
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
   
   // Load Amazon credentials from localStorage
   try {
     const r = lsGet('ecommerce_amazon_creds_v1');
     if (r) setAmazonCredentials(JSON.parse(r));
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
   
   // Load QBO credentials from localStorage
   try {
     const r = lsGet('ecommerce_qbo_creds_v1');
     if (r) setQboCredentials(JSON.parse(r));
-  } catch (e) { if (e.message) console.warn("[init]", e.message); }
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
 }, []);
 
 // Sync 3PL ledger costs to weekly data when ledger changes
@@ -4477,7 +4482,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
     
     // If cloud has significant data but local is empty/minimal, BLOCK the save
     if (cloudDataSize > 5 && localDataSize === 0 && !forceOverwrite) {
-      console.error('BLOCKED: Attempted to overwrite', cloudDataSize, 'records with empty data. Use forceOverwrite=true to override.');
+      devError('BLOCKED: Attempted to overwrite', cloudDataSize, 'records with empty data. Use forceOverwrite=true to override.');
       setCloudStatus('Save blocked - would delete data');
       setTimeout(() => setCloudStatus(''), 3000);
       saveInProgressRef.current = false;
@@ -4486,7 +4491,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
     
     // Warn if losing significant data (but still allow if not empty)
     if (cloudDataSize > localDataSize + 10 && !forceOverwrite) {
-      console.warn('WARNING: Saving will reduce data count from', cloudDataSize, 'to', localDataSize);
+      devWarn('WARNING: Saving will reduce data count from', cloudDataSize, 'to', localDataSize);
     }
   }
   
@@ -4565,12 +4570,12 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   
   const { error } = await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
   if (error) {
-    console.warn('Cloud save failed:', error.message || error);
+    devWarn('Cloud save failed:', error.message || error);
     // Update loadedCloudVersion to current cloud timestamp to prevent conflict loop
     try {
       const { data: latest } = await supabase.from('app_data').select('updated_at').eq('user_id', session.user.id).maybeSingle();
       if (latest?.updated_at) setLoadedCloudVersion(latest.updated_at);
-    } catch (e) { console.error("[error]", e); }
+    } catch (e) { devError("[error]", e); }
     setCloudStatus('Save failed (retry soon)');
     setTimeout(() => setCloudStatus(''), 3000);
     saveInProgressRef.current = false;
@@ -4608,7 +4613,7 @@ const save3PLLedger = useCallback((newLedger) => {
 useEffect(() => {
   try {
     if (storeName !== undefined) writeToLocal(STORE_KEY, storeName || '');
-  } catch (e) { console.error("[error]", e); }
+  } catch (e) { devError("[error]", e); }
   queueCloudSave({ ...combinedData, storeName });
 }, [storeName]);
 
@@ -4624,7 +4629,7 @@ const processAdsUpload = useCallback(async (fileList) => {
   let JSZipLib = null;
   const hasZip = fileList.some(f => f.name.toLowerCase().endsWith('.zip'));
   if (hasZip) {
-    try { const mod = await import('jszip'); JSZipLib = mod.default || mod; } catch(e) { console.warn('JSZip not available, ZIP files will be skipped'); }
+    try { const mod = await import('jszip'); JSZipLib = mod.default || mod; } catch(e) { devWarn('JSZip not available, ZIP files will be skipped'); }
   }
   const result = await processUploadedFiles(fileList, JSZipLib);
   if (result.tier1Results.length > 0) {
@@ -4644,7 +4649,7 @@ useEffect(() => {
   if (shopifyCredentials.storeUrl || shopifyCredentials.connected) {
     try {
       lsSet('ecommerce_shopify_creds_v1', JSON.stringify(shopifyCredentials));
-    } catch (e) { if (e.message) console.warn("[init]", e.message); }
+    } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
 }, [shopifyCredentials]);
 
@@ -4653,7 +4658,7 @@ useEffect(() => {
   if (packiyoCredentials.apiKey || packiyoCredentials.connected) {
     try {
       lsSet('ecommerce_packiyo_creds_v1', JSON.stringify(packiyoCredentials));
-    } catch (e) { if (e.message) console.warn("[init]", e.message); }
+    } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
 }, [packiyoCredentials]);
 
@@ -4662,7 +4667,7 @@ useEffect(() => {
   if (amazonCredentials.refreshToken || amazonCredentials.connected) {
     try {
       lsSet('ecommerce_amazon_creds_v1', JSON.stringify(amazonCredentials));
-    } catch (e) { if (e.message) console.warn("[init]", e.message); }
+    } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
 }, [amazonCredentials]);
 
@@ -4671,7 +4676,7 @@ useEffect(() => {
   if (qboCredentials.accessToken || qboCredentials.connected || qboCredentials.clientId) {
     try {
       lsSet('ecommerce_qbo_creds_v1', JSON.stringify(qboCredentials));
-    } catch (e) { if (e.message) console.warn("[init]", e.message); }
+    } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
 }, [qboCredentials]);
 
@@ -4687,7 +4692,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
       .maybeSingle();
 
     if (error) {
-      console.error('Cloud load error:', error);
+      devError('Cloud load error:', error);
       setCloudStatus('');
       return { ok: false, reason: 'error', stores: [] }; // Error - do NOT overwrite
     }
@@ -4837,11 +4842,11 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     setCloudStatus('');
     return { ok: true, reason: 'success', stores: loadedStores };
   } catch (err) {
-    console.error('Cloud load unexpected error:', err);
+    devError('Cloud load unexpected error:', err);
     setCloudStatus('');
     return { ok: false, reason: 'error', stores: [] };
   } finally {
-    isLoadingDataRef.current = false;
+    isLoadingDataRef.current = false; setDataLoading(false);
   }
 }, [session, writeToLocal]);
 
@@ -4935,7 +4940,7 @@ const createStore = useCallback(async (name) => {
       setCloudStatus('Store created');
       setTimeout(() => setCloudStatus(''), 1500);
     } catch (err) {
-      console.error('Failed to save new store:', err);
+      devError('Failed to save new store:', err);
       setCloudStatus('Save failed');
     }
   }
@@ -5077,7 +5082,7 @@ const deleteStore = useCallback(async (storeId) => {
       
       await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
     } catch (err) {
-      console.error('Failed to delete store from cloud:', err);
+      devError('Failed to delete store from cloud:', err);
       setToast({ message: 'Deleted locally but cloud sync failed', type: 'warning' });
       return;
     }
@@ -5088,7 +5093,7 @@ const deleteStore = useCallback(async (storeId) => {
     await loadFromCloud(newActiveId);
   }
   
-  setToast({ message: `Deleted store "${store.name}"`, type: 'success' });
+  audit('store_delete', store.name); setToast({ message: `Deleted store "${store.name}"`, type: 'success' });
 }, [stores, activeStoreId, loadFromCloud, session]);
 
 // Store Selector Modal - Now extracted to StoreSelectorModal component
@@ -5305,7 +5310,7 @@ useEffect(() => {
             });
           } else {
             // ERROR loading data - do NOT overwrite cloud! Just show error and retry
-            console.error('Error loading cloud data - NOT overwriting. Reason:', result.reason);
+            devError('Error loading cloud data - NOT overwriting. Reason:', result.reason);
             setCloudStatus('Load failed - please refresh');
             // Try loading from localStorage as fallback for display only
             loadFromLocal();
@@ -5328,7 +5333,7 @@ useEffect(() => {
         loadFromLocal();
       }
     } finally {
-      isLoadingDataRef.current = false;
+      isLoadingDataRef.current = false; setDataLoading(false);
     }
   };
 
@@ -5342,7 +5347,7 @@ const save = async (d) => {
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, sales: d });
-  } catch (e) { console.error("[error]", e); }
+  } catch (e) { devError("[error]", e); }
 };
 
 const saveInv = async (d) => {
@@ -5351,7 +5356,7 @@ const saveInv = async (d) => {
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, inventory: d });
-  } catch (e) { console.error("[error]", e); }
+  } catch (e) { devError("[error]", e); }
 };
 
 const saveCogs = async (lookup) => {
@@ -5363,7 +5368,7 @@ const saveCogs = async (lookup) => {
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, cogs: { lookup, updatedAt } });
-  } catch (e) { console.error("[error]", e); }
+  } catch (e) { devError("[error]", e); }
 };
 
 // Save generated report to history (called by report modals)
@@ -5379,7 +5384,7 @@ const saveReportToHistory = useCallback((report) => {
   };
   const updated = [entry, ...(reportHistory || [])].slice(0, 50); // Keep last 50
   setReportHistory(updated);
-  try { lsSet('ecommerce_report_history_v1', JSON.stringify(updated)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
+  try { lsSet('ecommerce_report_history_v1', JSON.stringify(updated)); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
   queueCloudSave({ ...combinedData, reportHistory: updated });
   return entry;
 }, [reportHistory, combinedData, queueCloudSave]);
@@ -5390,7 +5395,7 @@ const savePeriods = async (d) => {
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, periods: d });
-  } catch (e) { console.error("[error]", e); }
+  } catch (e) { devError("[error]", e); }
 };
 
   const handleFile = useCallback(async (type, file, isInv = false) => {
@@ -5425,13 +5430,13 @@ const savePeriods = async (d) => {
               setToast({ message: `Loaded ${rows.length} rows from 3PL Excel`, type: 'success' });
             }
           } catch (err) {
-            console.error('Error parsing 3PL Excel:', err);
+            devError('Error parsing 3PL Excel:', err);
             setToast({ message: 'Error parsing 3PL Excel file', type: 'error' });
           }
         };
         reader.readAsArrayBuffer(file);
       } catch (err) {
-        console.error('Error loading SheetJS:', err);
+        devError('Error loading SheetJS:', err);
         setToast({ message: 'Error loading Excel parser', type: 'error' });
       }
       return;
@@ -5486,13 +5491,13 @@ const savePeriods = async (d) => {
               setToast({ message: `Loaded ${rows.length} rows from 3PL Excel`, type: 'success' });
             }
           } catch (err) {
-            console.error('Error parsing 3PL Excel:', err);
+            devError('Error parsing 3PL Excel:', err);
             setToast({ message: 'Error parsing 3PL Excel file', type: 'error' });
           }
         };
         reader.readAsArrayBuffer(file);
       } catch (err) {
-        console.error('Error loading SheetJS:', err);
+        devError('Error loading SheetJS:', err);
       }
       return;
     }
@@ -5541,13 +5546,13 @@ const savePeriods = async (d) => {
               setToast({ message: `Loaded ${rows.length} rows from 3PL Excel`, type: 'success' });
             }
           } catch (err) {
-            console.error('Error parsing 3PL Excel:', err);
+            devError('Error parsing 3PL Excel:', err);
             setToast({ message: 'Error parsing 3PL Excel file', type: 'error' });
           }
         };
         reader.readAsArrayBuffer(file);
       } catch (err) {
-        console.error('Error loading SheetJS:', err);
+        devError('Error loading SheetJS:', err);
       }
       return;
     }
@@ -5682,7 +5687,7 @@ const savePeriods = async (d) => {
     setReprocessFileNames({ amazon: '', shopify: '', threepl: '' });
     setReprocessAdSpend({ meta: '', google: '' });
     } catch (err) {
-      console.error('Reprocess error:', err);
+      devError('Reprocess error:', err);
       setToast({ message: 'Error reprocessing: ' + err.message, type: 'error' });
     }
   }, [reprocessFiles, reprocessAdSpend, allWeeksData, savedCogs]);
@@ -5778,7 +5783,7 @@ const savePeriods = async (d) => {
 
     saveCogs(lookup);
     setSavedProductNames(names);
-    try { safeLocalStorageSet(PRODUCT_NAMES_KEY, JSON.stringify(names)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
+    try { safeLocalStorageSet(PRODUCT_NAMES_KEY, JSON.stringify(names)); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
     setFiles(p => ({ ...p, cogs: null }));
     setFileNames(p => ({ ...p, cogs: '' }));
     setShowCogsManager(false);
@@ -6069,7 +6074,7 @@ const savePeriods = async (d) => {
     const updated = { ...allWeeksData, [weekEnding]: weekData };
     setAllWeeksData(updated); save(updated); setSelectedWeek(weekEnding); setView('weekly'); setIsProcessing(false);
     setFiles({ amazon: null, shopify: null, cogs: null, threepl: [] }); setFileNames({ amazon: '', shopify: '', cogs: '', threepl: [] }); setAdSpend({ meta: '', google: '' }); setWeekEnding('');
-    setToast({ message: 'Week data saved successfully!', type: 'success' });
+    audit('weekly_save', weekEnding); setToast({ message: 'Week data saved successfully!', type: 'success' });
   }, [files, adSpend, weekEnding, allWeeksData, getCogsLookup, save]);
 
   // Process daily upload
@@ -6263,10 +6268,10 @@ const savePeriods = async (d) => {
       setDailyAdSpend({ meta: '', google: '' });
       setSelectedDay(null);
       setIsProcessing(false);
-      setToast({ message: `Daily data for ${new Date(selectedDay + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} saved!`, type: 'success' });
+      audit('daily_save', selectedDay); setToast({ message: `Daily data for ${new Date(selectedDay + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} saved!`, type: 'success' });
       
     } catch (err) {
-      console.error('Daily upload error:', err);
+      devError('Daily upload error:', err);
       setIsProcessing(false);
       setToast({ message: 'Error processing daily data', type: 'error' });
     }
@@ -6762,7 +6767,7 @@ const savePeriods = async (d) => {
     
     if (needsUpdate) {
       setAllPeriodsData(updatedPeriods);
-      try { safeLocalStorageSet('ecommerce_periods_v1', JSON.stringify(updatedPeriods)); } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
+      try { safeLocalStorageSet('ecommerce_periods_v1', JSON.stringify(updatedPeriods)); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
     }
   }, [allWeeksData]); // Only depend on allWeeksData to avoid loops
 
@@ -7022,7 +7027,7 @@ const savePeriods = async (d) => {
     const updated = { ...allPeriodsData, [periodKey]: periodData };
     setAllPeriodsData(updated); savePeriods(updated); setSelectedPeriod(periodKey); setView('period-view'); setIsProcessing(false);
     setPeriodFiles({ amazon: null, shopify: null, threepl: [] }); setPeriodFileNames({ amazon: '', shopify: '', threepl: [] }); setPeriodAdSpend({ meta: '', google: '' }); setPeriodLabel('');
-    setToast({ message: 'Period data saved successfully!', type: 'success' });
+    audit('period_save', selectedPeriod); setToast({ message: 'Period data saved successfully!', type: 'success' });
   }, [periodFiles, periodAdSpend, periodLabel, allPeriodsData, savedCogs, savePeriods]);
 
   const deletePeriod = (k) => { 
@@ -7092,7 +7097,7 @@ const savePeriods = async (d) => {
               legacyDailyData[date] = legacyData[date];
             }
           });
-        } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
+        } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
       }
       
       // Log data availability by channel
@@ -7112,7 +7117,7 @@ const savePeriods = async (d) => {
         const firstSku = Array.isArray(sampleSkuData) ? sampleSkuData[0] : Object.values(sampleSkuData || {})[0];
       }
     } catch (e) {
-      console.error('Failed to read daily data from localStorage:', e);
+      devError('Failed to read daily data from localStorage:', e);
     }
     
     // File is optional if Amazon SP-API is connected
@@ -7612,7 +7617,7 @@ const savePeriods = async (d) => {
         const s = skuDemandStats[sampleSku];
       }
     } catch (statsErr) {
-      console.warn('Demand stats calculation error:', statsErr);
+      devWarn('Demand stats calculation error:', statsErr);
     }
     
     // Store to ref so Packiyo sync can access it
@@ -7699,7 +7704,7 @@ const savePeriods = async (d) => {
           setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
         }
       } catch (err) {
-        console.error('Amazon SP-API sync failed, falling back to file:', err);
+        devError('Amazon SP-API sync failed, falling back to file:', err);
         // Fall through to file-based processing
       }
     }
@@ -7792,7 +7797,7 @@ const savePeriods = async (d) => {
           setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
         }
       } catch (err) {
-        console.error('Packiyo sync failed, falling back to file:', err);
+        devError('Packiyo sync failed, falling back to file:', err);
         // Fall through to file-based processing
       }
     }
@@ -7867,7 +7872,7 @@ const savePeriods = async (d) => {
           });
         }
       } catch (err) {
-        console.error('Shopify inventory sync failed:', err);
+        devError('Shopify inventory sync failed:', err);
       }
     }
 
@@ -9273,7 +9278,7 @@ const savePeriods = async (d) => {
         
         // Validate dateRange before using
         if (!dateRange || !dateRange.endDate) {
-          console.error('Missing dateRange or endDate for file:', fileData.name);
+          devError('Missing dateRange or endDate for file:', fileData.name);
           continue;
         }
         
@@ -9382,7 +9387,7 @@ const savePeriods = async (d) => {
           };
           monthlyImported++;
         } else {
-          console.warn('Unknown report type:', reportType, 'for file:', fileData.name);
+          devWarn('Unknown report type:', reportType, 'for file:', fileData.name);
         }
       }
       
@@ -9400,7 +9405,7 @@ const savePeriods = async (d) => {
         try { 
           safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(trimmedDailyData)); 
         } catch(e) {
-          console.error('Failed to save daily data to localStorage:', e.message);
+          devError('Failed to save daily data to localStorage:', e.message);
           // Try with even fewer days
           try {
             const last30 = sortedDays.slice(-30);
@@ -9408,7 +9413,7 @@ const savePeriods = async (d) => {
             last30.forEach(d => { minimal[d] = updatedDailyData[d]; });
             safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(minimal));
           } catch(e2) {
-            console.error('Also failed with 30 days:', e2.message);
+            devError('Also failed with 30 days:', e2.message);
             // Last resort - just save without skuData to reduce size
             try {
               const last30 = sortedDays.slice(-30);
@@ -9423,7 +9428,7 @@ const savePeriods = async (d) => {
               });
               safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(compact));
             } catch(e3) {
-              console.error('Cannot save daily data - localStorage full');
+              devError('Cannot save daily data - localStorage full');
             }
           }
         }
@@ -9435,7 +9440,7 @@ const savePeriods = async (d) => {
       if (monthlyImported > 0) {
         setAllPeriodsData(updatedPeriodsData);
         try { safeLocalStorageSet('ecommerce_periods_data_v1', JSON.stringify(updatedPeriodsData)); } catch(e) {
-          console.error('Failed to save periods data:', e.message);
+          devError('Failed to save periods data:', e.message);
         }
       }
       
@@ -9479,8 +9484,8 @@ const savePeriods = async (d) => {
         setView('periods');
       }
     } catch (err) {
-      console.error('Bulk upload error:', err);
-      console.error('Error stack:', err.stack);
+      devError('Bulk upload error:', err);
+      devError('Error stack:', err.stack);
       setToast({ message: 'Error processing files: ' + err.message, type: 'error' });
     } finally {
       setAmazonBulkProcessing(false);
@@ -10161,7 +10166,7 @@ const savePeriods = async (d) => {
     const backupTimestamp = new Date().toISOString();
     safeLocalStorageSet('ecommerce_last_backup', backupTimestamp);
     setLastBackupDate(backupTimestamp);
-    setToast({ message: 'Complete backup downloaded (v3.0)', type: 'success' });
+    audit('backup_export', 'Complete backup v3.0'); setToast({ message: 'Complete backup downloaded (v3.0)', type: 'success' });
   };
   
   // COMPLETE RESTORE - restores ALL dashboard data
@@ -10410,9 +10415,9 @@ const savePeriods = async (d) => {
           queueCloudSave(mergedData);
         }
         
-        setToast({ message: `Restored: ${restored.join(', ')}. Syncing to cloud...`, type: 'success' });
+        audit('data_restore', `Restored: ${restored.join(', ')}`); setToast({ message: `Restored: ${restored.join(', ')}. Syncing to cloud...`, type: 'success' });
       } catch (err) { 
-        console.error('Import error:', err);
+        devError('Import error:', err);
         setToast({ message: 'Invalid backup file: ' + err.message, type: 'error' });
       }
     }; 
@@ -11326,11 +11331,11 @@ const savePeriods = async (d) => {
               results.push({ service: 'Amazon', success: true, message: 'Synced successfully' });
             } else {
               results.push({ service: 'Amazon', success: false, error: data.error || `HTTP ${res.status}` });
-              console.warn('Amazon auto-sync failed:', data.error || res.status);
+              devWarn('Amazon auto-sync failed:', data.error || res.status);
             }
           } catch (err) {
             results.push({ service: 'Amazon', success: false, error: err.message });
-            console.warn('Amazon auto-sync error:', err.message);
+            devWarn('Amazon auto-sync error:', err.message);
           }
         }
       }
@@ -11364,11 +11369,11 @@ const savePeriods = async (d) => {
               results.push({ service: 'Shopify', success: true, orders: data.orderCount || 0 });
             } else {
               results.push({ service: 'Shopify', success: false, error: data.error || `HTTP ${res.status}` });
-              console.warn('Shopify auto-sync failed:', data.error || res.status);
+              devWarn('Shopify auto-sync failed:', data.error || res.status);
             }
           } catch (err) {
             results.push({ service: 'Shopify', success: false, error: err.message });
-            console.warn('Shopify auto-sync error:', err.message);
+            devWarn('Shopify auto-sync error:', err.message);
           }
         }
       }
@@ -11732,16 +11737,16 @@ const savePeriods = async (d) => {
                   }
                 }
               } catch (procErr) {
-                console.warn('Auto-sync inventory processing error:', procErr);
+                devWarn('Auto-sync inventory processing error:', procErr);
                 // Non-fatal - the API sync still succeeded
               }
             } else {
               results.push({ service: 'Packiyo', success: false, error: data.error || `HTTP ${res.status}` });
-              console.warn('Packiyo auto-sync failed:', data.error || res.status);
+              devWarn('Packiyo auto-sync failed:', data.error || res.status);
             }
           } catch (err) {
             results.push({ service: 'Packiyo', success: false, error: err.message });
-            console.warn('Packiyo auto-sync error:', err.message);
+            devWarn('Packiyo auto-sync error:', err.message);
           }
         }
       }
@@ -11764,7 +11769,7 @@ const savePeriods = async (d) => {
       }
       
       if (failed.length > 0) {
-        console.warn('Auto-sync failures:', failed);
+        devWarn('Auto-sync failures:', failed);
         // Only show error toast if ALL failed
         if (successful.length === 0 && failed.length > 0) {
           setToast({
@@ -11778,8 +11783,9 @@ const savePeriods = async (d) => {
       }
       
     } catch (err) {
-      console.error('Auto-sync error:', err);
+      devError('Auto-sync error:', err);
     } finally {
+      audit('auto_sync', `${results.length} services: ${results.map(r => `${r.service}:${r.success ? 'ok' : 'fail'}`).join(', ')}`);
       setAutoSyncStatus(prev => ({ ...prev, running: false, results }));
     }
   }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs]);
@@ -12442,7 +12448,7 @@ Keep insights brief and actionable. Format as numbered list.`;
         dataPoints: weekData.length + accuracyData.length,
       });
     } catch (err) {
-      console.error('AI insights error:', err);
+      devError('AI insights error:', err);
       setAiInsights({
         content: 'Error generating insights: ' + err.message,
         generatedAt: new Date().toISOString(),
@@ -12801,7 +12807,7 @@ Keep insights brief and actionable. Format as numbered list.`;
         
         if (!response.ok) {
           const errorText = await response.text();
-          console.error('API error:', response.status, errorText);
+          devError('API error:', response.status, errorText);
           throw new Error(`API error: ${response.status}`);
         }
         
@@ -12915,7 +12921,7 @@ Respond with ONLY this JSON (no markdown):
         if (jsonMatch) {
           try {
             aiAnalysis = JSON.parse(jsonMatch[0]);
-          } catch (e) { if (e?.message) console.warn("[catch]", e.message); }
+          } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
         }
         
         // GENERATE FORECAST LOCALLY using our calculated values
@@ -13039,12 +13045,12 @@ Respond with ONLY this JSON (no markdown):
         
         
       } catch (aiError) {
-        console.error('AI forecast error:', aiError);
+        devError('AI forecast error:', aiError);
         throw aiError; // Re-throw to be caught by outer catch
       }
       
     } catch (error) {
-      console.error('Forecast error:', error);
+      devError('Forecast error:', error);
       setAiForecasts({ error: error.message || 'Failed to generate forecast', generatedAt: new Date().toISOString() });
     } finally {
       setAiForecastLoading(false);
@@ -13268,7 +13274,7 @@ Respond with ONLY this JSON:
         }));
       }
     } catch (error) {
-      console.error('Sales Forecast AI error:', error);
+      devError('Sales Forecast AI error:', error);
       setAiForecastModule(prev => ({ ...prev, loading: null }));
     }
   }, [allWeeksData, allDaysData, forecastCorrections, aiLearningHistory]);
@@ -13569,11 +13575,11 @@ Respond with ONLY this JSON:
         
         setToast({ message: 'Inventory analysis complete & synced', type: 'success' });
       } else {
-        console.error('No JSON found in response:', responseText);
+        devError('No JSON found in response:', responseText);
         throw new Error('Invalid response from AI');
       }
     } catch (error) {
-      console.error('Inventory AI error:', error);
+      devError('Inventory AI error:', error);
       setAiForecastModule(prev => ({ ...prev, loading: null }));
       if (error.name === 'AbortError') {
         setToast({ message: 'Analysis timed out. Try again.', type: 'error' });
@@ -13677,7 +13683,7 @@ Respond with ONLY this JSON:
         }));
       }
     } catch (error) {
-      console.error(`${channel} Forecast AI error:`, error);
+      devError(`${channel} Forecast AI error:`, error);
       setAiForecastModule(prev => ({ ...prev, loading: null }));
     }
   }, [allWeeksData, allDaysData, amazonForecasts]);
@@ -13781,7 +13787,7 @@ Analyze the data and respond with ONLY this JSON:
         }));
       }
     } catch (error) {
-      console.error('Forecast Comparison AI error:', error);
+      devError('Forecast Comparison AI error:', error);
       setAiForecastModule(prev => ({ ...prev, loading: null }));
     }
   }, [amazonForecasts, allWeeksData, aiLearningHistory, forecastCorrections]);
@@ -14132,6 +14138,7 @@ Analyze the data and respond with ONLY this JSON:
       }} />
       <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" /><span className="hidden sm:inline">Export</span></button>
       <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" /><span className="hidden sm:inline">Import</span><input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
+      <button onClick={() => setShowAuditLog(true)} className="flex items-center gap-2 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-400 hover:text-white transition-colors" title="Activity Log"><Clock className="w-4 h-4" /></button>
       <NotificationCenter salesTaxConfig={salesTaxConfig} inventoryData={invHistory?.[Object.keys(invHistory || {}).sort().pop()]?.products || []} allDaysData={allDaysData} appSettings={appSettings} lastBackupDate={lastBackupDate} setView={setView} setToast={setToast} />
     </div>
   ), [allWeeksData, allDaysData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session, stores, activeStoreId, dataStatus, salesTaxConfig, invHistory, appSettings, lastBackupDate]);
@@ -16649,7 +16656,7 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
       
       setAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
     } catch (error) {
-      console.error('AI Chat error:', error);
+      devError('AI Chat error:', error);
       setAiMessages(prev => [...prev, { role: 'assistant', content: 'Error processing request. Check /api/chat endpoint.' }]);
     } finally {
       setAiLoading(false);
@@ -16828,7 +16835,7 @@ Reference the full data from the prior analysis. Be concise but still specific w
         }]);
       }
     } catch (error) {
-      console.error('Ads AI Chat error:', error);
+      devError('Ads AI Chat error:', error);
       setAdsAiMessages(prev => [...prev, { role: 'assistant', content: `Error: ${error.message}. Try a simpler question.` }]);
     } finally {
       setAdsAiLoading(false);
@@ -17160,7 +17167,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setToast({ message: `${type.charAt(0).toUpperCase() + type.slice(1)} Report generated!`, type: 'success' });
 
     } catch (error) {
-      console.error('Report generation error:', error);
+      devError('Report generation error:', error);
       setReportError(error.message || 'Failed to generate report');
     } finally {
       setGeneratingReport(false);
@@ -17837,7 +17844,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   // ==================== DASHBOARD VIEW ====================
 
   // ==================== GLOBAL MODALS (rendered once, not per-view) ====================
-  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><BenchmarksModal /></>);
+  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><BenchmarksModal /><KeyboardShortcuts setView={setView} exportAll={exportAll} setShowAdsAIChat={setShowAdsAIChat} setToast={setToast} /><AuditLog isOpen={showAuditLog} onClose={() => setShowAuditLog(false)} auditLog={getAuditLog()} /></>);
 
   if (view === 'dashboard') {
     return <DashboardView
@@ -17924,6 +17931,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       widgetConfig={widgetConfig}
       runAutoSync={runAutoSync}
       autoSyncStatus={autoSyncStatus}
+      dataLoading={dataLoading}
     />;
   }
   // ==================== UPLOAD VIEW (Combined) ====================

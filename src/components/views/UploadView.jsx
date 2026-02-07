@@ -1,3 +1,4 @@
+import { devWarn, devError } from '../../utils/logger';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   AlertCircle, AlertTriangle, Bell, Boxes, Brain, Calendar, CalendarRange, Check, ChevronDown, Clock, Database, DollarSign, Download, Edit, Eye, FileSpreadsheet, FileText, Globe, HelpCircle, Info, LineChart, Link, List, Loader2, MoreHorizontal, Package, RefreshCw, Save, Search, Settings, ShoppingBag, ShoppingCart, Store, Trash2, TrendingUp, Truck, Upload, Zap
@@ -2434,7 +2435,7 @@ const UploadView = ({
                                 });
                               }
                             } catch (learningErr) {
-                              console.error('Auto-learning error (non-fatal):', learningErr);
+                              devError('Auto-learning error (non-fatal):', learningErr);
                             }
                             // ========== END AUTO-LEARNING ==========
                             

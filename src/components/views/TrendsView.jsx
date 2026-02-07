@@ -1,10 +1,10 @@
+import { devWarn, devError } from '../../utils/logger';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   ArrowDownRight, ArrowUpRight, Check, Database, Filter, Minus, Table, Target, TrendingDown, TrendingUp, Upload
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import NavTabs from '../ui/NavTabs';
-import { deriveWeeksFromDays } from '../../utils/weekly';
 
 const TrendsView = ({
   adSpend,
@@ -57,51 +57,8 @@ const TrendsView = ({
       return true;
     };
     
-    // Derive weekly data from daily records for accuracy
-    const derivedWeeks = deriveWeeksFromDays(allDaysData || {});
-    
-    // Merge stored + derived: prefer derived numeric fields when available
-    const getMergedWeek = (weekKey) => {
-      const stored = allWeeksData[weekKey];
-      const derived = derivedWeeks[weekKey];
-      if (!stored && !derived) return null;
-      if (!stored) return derived;
-      if (!derived) return stored;
-      const derivedHasData = (derived.total?.revenue || 0) > 0;
-      if (derivedHasData) {
-        return {
-          ...stored,
-          total: derived.total,
-          amazon: { ...stored.amazon, ...derived.amazon,
-            skuData: stored.amazon?.skuData?.length > (derived.amazon?.skuData?.length || 0)
-              ? stored.amazon.skuData : (derived.amazon?.skuData || stored.amazon?.skuData || []),
-          },
-          shopify: { ...stored.shopify, ...derived.shopify,
-            threeplCosts: stored.shopify?.threeplCosts || derived.shopify?.threeplCosts || 0,
-            threeplMetrics: stored.shopify?.threeplMetrics || derived.shopify?.threeplMetrics,
-            taxByState: stored.shopify?.taxByState || derived.shopify?.taxByState,
-            skuData: stored.shopify?.skuData?.length > (derived.shopify?.skuData?.length || 0)
-              ? stored.shopify.skuData : (derived.shopify?.skuData || stored.shopify?.skuData || []),
-          },
-        };
-      }
-      return stored;
-    };
-    
-    // Build merged week keys
-    const allWeekKeys = new Set([
-      ...Object.keys(allWeeksData || {}),
-      ...Object.keys(derivedWeeks || {}),
-    ]);
-    
     // Get all available data with date filtering
-    const sortedWeeks = Array.from(allWeekKeys)
-      .filter(w => {
-        if (!filterByDateRange(w)) return false;
-        const merged = getMergedWeek(w);
-        return (merged?.total?.revenue || 0) > 0;
-      })
-      .sort();
+    const sortedWeeks = Object.keys(allWeeksData).filter(filterByDateRange).sort();
     const sortedPeriods = Object.keys(allPeriodsData).sort();
     
     // Categorize periods by type
@@ -244,7 +201,7 @@ const TrendsView = ({
           };
         }
         if (monthData[monthKey].source === 'weekly') {
-          const week = getMergedWeek(w);
+          const week = allWeeksData[w];
           
           // Calculate profit using COGS lookup for weekly aggregation
           const wkAmazonProfit = week.amazon?.netProfit || 0;
@@ -377,7 +334,7 @@ const TrendsView = ({
                         sortedWeeks.length;
     
     const weeklyData = sortedWeeks.slice(-weeksToShow).map(w => {
-      const week = getMergedWeek(w);
+      const week = allWeeksData[w];
       
       // Find forecast for this week from various sources
       let forecastRevenue = null;
@@ -407,7 +364,7 @@ const TrendsView = ({
         const forecastRatio = forecastRevenue / actualRevenue;
         if (forecastRatio > 5 || forecastRatio < 0.2) {
           // Bad forecast data - ignore for accuracy calculation
-          console.warn(`Ignoring suspicious forecast for ${w}: forecast $${forecastRevenue} vs actual $${actualRevenue}`);
+          devWarn(`Ignoring suspicious forecast for ${w}: forecast $${forecastRevenue} vs actual $${actualRevenue}`);
           forecastRevenue = null;
           forecastSource = null;
         } else {
@@ -506,7 +463,7 @@ const TrendsView = ({
       // Sanity check: if Amazon forecast is wildly off, ignore it
       if (amazonRevenue && avgWeeklyRevenue > 0) {
         if (amazonRevenue > maxReasonableForecast || amazonRevenue < minReasonableForecast) {
-          console.warn(`Ignoring suspicious Amazon forecast for ${weekKey}: $${amazonRevenue} (avg: $${avgWeeklyRevenue})`);
+          devWarn(`Ignoring suspicious Amazon forecast for ${weekKey}: $${amazonRevenue} (avg: $${avgWeeklyRevenue})`);
           amazonRevenue = null; // Ignore bad data
         }
       }

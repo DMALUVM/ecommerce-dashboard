@@ -96,6 +96,7 @@ const DashboardView = ({
   widgetConfig,
   runAutoSync,
   autoSyncStatus,
+  dataLoading,
 }) => {
     const hasData = Object.keys(allWeeksData).length > 0 || Object.keys(allPeriodsData).length > 0 || Object.keys(allDaysData).length > 0;
     const sortedWeeks = Object.keys(allWeeksData).filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0).sort();
@@ -104,13 +105,7 @@ const DashboardView = ({
     const alerts = [];
     if (!hasCogs) alerts.push({ type: 'warning', text: 'Set up COGS to track profitability accurately' });
     // Weekly goal tracking is now handled by the progress bar widget instead of alerts
-    
-    // Check inventory alerts
-    const latestInv = Object.keys(invHistory).sort().reverse()[0];
-    const invAlerts = latestInv ? (invHistory[latestInv]?.items || []).filter(i => i.health === 'critical' || i.health === 'low') : [];
-    if (invAlerts.length > 0 && appSettings.alertInventoryEnabled) {
-      alerts.push({ type: 'critical', text: `${invAlerts.length} products need reorder attention` });
-    }
+    // Inventory alerts are handled by NotificationCenter with proper logic
     
     // Check upcoming invoices/bills
     const upcomingBills = invoices.filter(i => !i.paid);
@@ -1036,7 +1031,13 @@ const DashboardView = ({
           <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
           
           {/* No Data State */}
-          {!hasData ? (
+          {!hasData && dataLoading ? (
+            <div className="space-y-6 animate-in fade-in">
+              <SkeletonKPIRow count={4} />
+              <SkeletonChart height="h-48" />
+              <SkeletonChart height="h-32" />
+            </div>
+          ) : !hasData ? (
             <div className="text-center py-12">
               <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-6">
                 <BarChart3 className="w-10 h-10 text-white" />
@@ -1204,7 +1205,12 @@ const DashboardView = ({
                           <h3 className="text-lg font-bold text-white">Performance Overview</h3>
                           <p className="text-slate-400 text-sm flex items-center gap-2">
                             Data through {periodMetrics.latestDay ? new Date(periodMetrics.latestDay + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'N/A'}
-                            {periodMetrics.dataFreshness > 0 && (
+                            {autoSyncStatus?.running && (
+                              <span className="text-xs px-2 py-0.5 rounded bg-violet-500/20 text-violet-400 animate-pulse flex items-center gap-1">
+                                <RefreshCw className="w-3 h-3 animate-spin" /> Syncing...
+                              </span>
+                            )}
+                            {!autoSyncStatus?.running && periodMetrics.dataFreshness > 0 && (
                               <span className={`text-xs px-1.5 py-0.5 rounded ${periodMetrics.dataFreshness <= 2 ? 'bg-cyan-500/20 text-cyan-400' : 'bg-amber-500/20 text-amber-400'}`}>
                                 {periodMetrics.dataFreshness === 1 ? '1 day ago' : `${periodMetrics.dataFreshness} days ago`}
                               </span>

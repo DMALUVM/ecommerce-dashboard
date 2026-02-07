@@ -1,3 +1,4 @@
+import { devWarn, devError } from '../../utils/logger';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   AlertTriangle, BarChart3, Bell, Boxes, Check, Cloud, Copy, Database, Download, Eye, FileText, Filter, Globe, HelpCircle, Home, Info, Landmark, Loader2, Moon, Package, Plus, Receipt, RefreshCw, Save, Send, Settings, ShoppingBag, ShoppingCart, Sparkles, Store, Sun, Target, Trash2, TrendingUp, Truck, Upload, User, Users, X
@@ -1095,7 +1096,7 @@ const SettingsView = ({
                           
                         }
                       } catch (e) {
-                        console.error('Error calculating velocity:', e);
+                        devError('Error calculating velocity:', e);
                       }
                       
                       // Helper to get velocities for a SKU with forecast corrections applied
