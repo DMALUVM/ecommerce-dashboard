@@ -3,11 +3,9 @@ import {
   AlertCircle, AlertTriangle, ArrowUpRight, Check, CheckCircle, Clock, Code, DollarSign, Download, Edit, Eye, FileText, Filter, Grid, Home, List, Save, Settings, ShoppingBag, Upload, X
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
-import { US_STATES_TAX_INFO, STATE_FILING_FORMATS, ZERO_FILING_PENALTIES } from '../../utils/taxData';
-import { parseShopifyTaxReport, getNextDueDate } from '../../utils/salesTax';
 import { parseCSV } from '../../utils/csv';
 import { hasDailySalesData } from '../../utils/date';
-import { lsSet } from '../../utils/storage';
+// storage import removed — URL save now via saveSalesTax prop
 import NavTabs from '../ui/NavTabs';
 
 const SalesTaxView = ({
@@ -25,6 +23,7 @@ const SalesTaxView = ({
   navDropdown,
   periodLabel,
   salesTaxConfig,
+  saveSalesTax,
   setEditPortalUrlValue,
   setEditingPortalUrl,
   setFilingDetailState,
@@ -310,39 +309,29 @@ const SalesTaxView = ({
                   const stateInfo = US_STATES_TAX_INFO[code];
                   const shippingTaxable = stateInfo?.shippingTaxable || false;
                   
-                  // Calculate sales for what YOU owe (non-Shop Pay only)
-                  // Shop Pay orders have tax remitted by Shopify automatically
-                  const yourItemSales = data.sales;
-                  const yourShipping = data.shipping;
-                  const yourTaxableSales = shippingTaxable ? (yourItemSales + yourShipping) : yourItemSales;
-                  
-                  // All-inclusive totals (for reference/visibility only)
-                  const allItemSales = data.sales + data.shopPaySales;
-                  const allShipping = data.shipping + data.shopPayShipping;
+                  // Calculate taxable sales based on whether state taxes shipping
+                  const itemSales = data.sales + data.shopPaySales;
+                  const totalShipping = data.shipping + data.shopPayShipping;
+                  const taxableSales = shippingTaxable ? (itemSales + totalShipping) : itemSales;
                   
                   return { 
                     stateCode: code, 
                     stateName: stateInfo?.name || code,
                     shippingTaxable,
-                    // PRIMARY: Non-Shop Pay only (what you file/owe)
-                    itemSales: yourItemSales,
-                    shipping: yourShipping,
-                    totalSales: yourTaxableSales,
-                    totalOrders: data.orders,
-                    totalTax: data.tax,
+                    // Sales breakdown
+                    itemSales: itemSales,
+                    shipping: totalShipping,
+                    // Total taxable sales (includes shipping if state taxes it)
+                    totalSales: taxableSales,
+                    totalOrders: data.orders + data.shopPayOrders,
+                    totalTax: data.tax + data.shopPayTax,
+                    // What YOU owe (non-Shop Pay only)
                     taxOwed: data.tax,
-                    salesYouOwe: yourTaxableSales,
+                    salesYouOwe: shippingTaxable ? (data.sales + data.shipping) : data.sales,
                     ordersYouOwe: data.orders,
-                    // REFERENCE: All-inclusive (Shop Pay + non-Shop Pay)
-                    allItemSales: allItemSales,
-                    allShipping: allShipping,
-                    allTaxableSales: shippingTaxable ? (allItemSales + allShipping) : allItemSales,
-                    allOrders: data.orders + data.shopPayOrders,
-                    allTax: data.tax + data.shopPayTax,
-                    // Shop Pay breakdown (Shopify remits this)
+                    // Shop Pay (Shopify remits this)
                     shopPayTax: data.shopPayTax,
                     shopPaySales: data.shopPaySales,
-                    shopPayShipping: data.shopPayShipping,
                     shopPayOrders: data.shopPayOrders,
                     // Jurisdiction breakdown for county/city level reporting
                     jurisdictions: Object.entries(data.jurisdictions || {})
@@ -453,53 +442,24 @@ const SalesTaxView = ({
                 </div>
               </div>
               
-              {hasShopifyTaxData ? (() => {
-                // Build lookup of states that have actual sales data
-                const stateDataLookup = {};
-                taxData.byState.forEach(s => { stateDataLookup[s.stateCode] = s; });
-                
-                // Helper: Check if filing is due for this period based on frequency
-                const isFilingDueForPeriodHeader = (stateCode) => {
-                  const config = nexusStates[stateCode] || {};
-                  const frequency = config.frequency || 'monthly';
-                  const [year, period] = taxPeriodValue.split('-');
-                  const periodMonth = parseInt(period);
-                  if (taxPeriodType === 'month') {
-                    if (frequency === 'monthly') return true;
-                    if (frequency === 'quarterly') return [3, 6, 9, 12].includes(periodMonth);
-                    if (frequency === 'semi-annual') return [6, 12].includes(periodMonth);
-                    if (frequency === 'annual') return periodMonth === 12;
-                  }
-                  return true;
-                };
-                
-                // Calculate: only tax from nexus states where filing is due this period
-                const nexusStatesDue = Object.entries(nexusStates || {})
-                  .filter(([code, config]) => config.hasNexus && isFilingDueForPeriodHeader(code))
-                  .map(([code]) => stateDataLookup[code])
-                  .filter(Boolean);
-                const nexusTaxOwed = nexusStatesDue.reduce((sum, s) => sum + (s.taxOwed || s.tax || 0), 0);
-                const nexusDueCount = nexusStatesDue.length;
-                const nexusTotalCount = Object.values(nexusStates || {}).filter(s => s.hasNexus).length;
-                
-                return (
+              {hasShopifyTaxData ? (
                 <>
                   {/* Main Summary Cards */}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                     <div className="bg-gradient-to-br from-rose-600/30 to-rose-900/30 border-2 border-rose-500/50 rounded-xl p-4 text-center">
                       <p className="text-xs text-rose-300 font-semibold uppercase tracking-wide mb-1">💰 YOU OWE</p>
-                      <p className="text-3xl font-bold text-rose-400">{formatCurrency(nexusTaxOwed)}</p>
-                      <p className="text-rose-300/70 text-xs mt-1">{nexusDueCount} of {nexusTotalCount} nexus states due</p>
+                      <p className="text-3xl font-bold text-rose-400">{formatCurrency(taxData.totalTax)}</p>
+                      <p className="text-rose-300/70 text-xs mt-1">Tax to remit this period</p>
                     </div>
                     <div className="bg-slate-800/50 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Total Collected</p>
-                      <p className="text-2xl font-bold text-white">{formatCurrency(taxData.totalTax)}</p>
-                      <p className="text-slate-500 text-xs mt-1">across all {taxData.byState.length} states</p>
+                      <p className="text-2xl font-bold text-white">{formatCurrency(taxData.totalTax + taxData.shopPayExcluded)}</p>
+                      <p className="text-slate-500 text-xs mt-1">from all orders</p>
                     </div>
                     <div className="bg-slate-800/50 rounded-xl p-4 text-center">
-                      <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Shop Pay (Excluded)</p>
-                      <p className="text-2xl font-bold text-slate-400">{formatCurrency(taxData.shopPayExcluded)}</p>
-                      <p className="text-slate-500 text-xs mt-1">Shopify remits this</p>
+                      <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">States</p>
+                      <p className="text-2xl font-bold text-white">{taxData.byState.length}</p>
+                      <p className="text-slate-500 text-xs mt-1">with sales this period</p>
                     </div>
                     <div className="bg-slate-800/50 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">Days Synced</p>
@@ -535,37 +495,11 @@ const SalesTaxView = ({
                   
                   {/* NEXUS States Quick Actions - Your Filing Obligations */}
                   {(() => {
-                    // Build lookup of states that have actual sales data
-                    const stateDataMap = {};
-                    taxData.byState.forEach(s => { stateDataMap[s.stateCode] = s; });
-                    
-                    // Include ALL nexus states — even those with $0 sales
-                    // Every state with a sales tax permit requires filing, even zero returns
-                    const allNexusStates = Object.entries(nexusStates || {})
-                      .filter(([code, config]) => config.hasNexus)
-                      .map(([code, config]) => {
-                        if (stateDataMap[code]) {
-                          return stateDataMap[code]; // Has real data
-                        }
-                        // Create $0 entry for nexus states with no sales this period
-                        const stateInfo = US_STATES_TAX_INFO[code];
-                        return {
-                          stateCode: code,
-                          stateName: stateInfo?.name || code,
-                          shippingTaxable: stateInfo?.shippingTaxable || false,
-                          itemSales: 0, shipping: 0, totalSales: 0,
-                          totalOrders: 0, totalTax: 0, taxOwed: 0,
-                          salesYouOwe: 0, ordersYouOwe: 0,
-                          shopPayTax: 0, shopPaySales: 0, shopPayOrders: 0,
-                          tax: 0, sales: 0, orders: 0,
-                          isZeroFiling: true, // Flag for UI
-                        };
-                      });
-                    
-                    const totalNexusTaxOwed = allNexusStates.reduce((s, st) => s + (st.taxOwed || st.tax || 0), 0);
+                    const nexusStatesWithData = taxData.byState.filter(s => nexusStates[s.stateCode]?.hasNexus);
+                    const totalNexusTaxOwed = nexusStatesWithData.reduce((s, st) => s + (st.taxOwed || st.tax || 0), 0);
                     const periodKey = taxPeriodType === 'month' ? taxPeriodValue : `${taxPeriodValue.split('-')[0]}-Q${taxPeriodValue.split('-')[1]}`;
-                    const unfiledStates = allNexusStates.filter(s => !salesTaxConfig.filingHistory?.[s.stateCode]?.[periodKey]?.filed);
-                    const filedStates = allNexusStates.filter(s => salesTaxConfig.filingHistory?.[s.stateCode]?.[periodKey]?.filed);
+                    const unfiledStates = nexusStatesWithData.filter(s => !salesTaxConfig.filingHistory?.[s.stateCode]?.[periodKey]?.filed);
+                    const filedStates = nexusStatesWithData.filter(s => salesTaxConfig.filingHistory?.[s.stateCode]?.[periodKey]?.filed);
                     
                     // Helper: Check if filing is due for this period based on frequency
                     const isFilingDueForPeriod = (stateCode) => {
@@ -627,14 +561,6 @@ const SalesTaxView = ({
                       csv += `\nState Tax Rate,${((stateInfo?.stateRate || 0) * 100).toFixed(2)}%\n`;
                       csv += `Orders,${state.totalOrders || state.orders || 0}\n`;
                       
-                      // Shop Pay reference (Shopify remits this — NOT included in above numbers)
-                      if (state.shopPayTax > 0 || state.shopPayOrders > 0) {
-                        csv += `\n"Shop Pay (excluded — Shopify remits)"\n`;
-                        csv += `"Shop Pay Tax",${(state.shopPayTax || 0).toFixed(2)},"Shopify remits this automatically"\n`;
-                        csv += `"Shop Pay Sales",${(state.shopPaySales || 0).toFixed(2)}\n`;
-                        csv += `"Shop Pay Orders",${state.shopPayOrders || 0}\n`;
-                      }
-                      
                       if (filingFormat.note) csv += `\nNote:,"${filingFormat.note}"\n`;
                       
                       const portalUrl = nexusStates[state.stateCode]?.portalUrl || STATE_FILING_FORMATS[state.stateCode]?.website;
@@ -654,7 +580,7 @@ const SalesTaxView = ({
                       return nexusStates[stateCode]?.portalUrl || STATE_FILING_FORMATS[stateCode]?.website || null;
                     };
                     
-                    if (allNexusStates.length === 0) return null;
+                    if (nexusStatesWithData.length === 0) return null;
                     
                     return (
                       <div className="bg-gradient-to-r from-rose-900/30 to-violet-900/30 border border-rose-500/30 rounded-xl p-4 mb-6">
@@ -665,7 +591,7 @@ const SalesTaxView = ({
                             </h4>
                             <p className="text-slate-400 text-sm">
                               {statesDueThisPeriod.length > 0 
-                                ? `${statesDueThisPeriod.length} state${statesDueThisPeriod.length > 1 ? 's' : ''} due for ${taxPeriodValue}${statesDueThisPeriod.filter(s => (s.taxOwed || s.tax || 0) === 0).length > 0 ? ` (${statesDueThisPeriod.filter(s => (s.taxOwed || s.tax || 0) === 0).length} zero filing${statesDueThisPeriod.filter(s => (s.taxOwed || s.tax || 0) === 0).length > 1 ? 's' : ''})` : ''}`
+                                ? `${statesDueThisPeriod.length} state${statesDueThisPeriod.length > 1 ? 's' : ''} due for ${taxPeriodValue}`
                                 : unfiledStates.length > 0 
                                   ? 'No filings due this period'
                                   : 'All filings complete! ✓'}
@@ -686,26 +612,15 @@ const SalesTaxView = ({
                                 const stateInfo = US_STATES_TAX_INFO[state.stateCode];
                                 const config = nexusStates[state.stateCode] || {};
                                 const portalUrl = getPortalUrl(state.stateCode);
-                                const isZero = (state.taxOwed || state.tax || 0) === 0;
-                                const zeroFilingInfo = ZERO_FILING_PENALTIES[state.stateCode];
                                 return (
-                                  <div key={state.stateCode} className={`bg-slate-800/80 rounded-lg p-3 border ${isZero ? 'border-amber-500/50' : 'border-rose-500/50'}`}>
+                                  <div key={state.stateCode} className="bg-slate-800/80 rounded-lg p-3 border border-rose-500/50">
                                     <div className="flex justify-between items-center mb-1">
                                       <div>
                                         <span className="font-bold text-white">{state.stateName}</span>
                                         <span className="text-xs text-slate-500 ml-2">({config.frequency || 'monthly'})</span>
                                       </div>
-                                      {isZero ? (
-                                        <span className="text-amber-400 font-bold text-sm">$0.00 — zero filing</span>
-                                      ) : (
-                                        <span className="text-rose-400 font-bold">{formatCurrency(state.taxOwed || state.tax || 0)}</span>
-                                      )}
+                                      <span className="text-rose-400 font-bold">{formatCurrency(state.taxOwed || state.tax || 0)}</span>
                                     </div>
-                                    {isZero && (
-                                      <p className="text-amber-400/80 text-xs mb-1">
-                                        ⚠️ Zero return still required{zeroFilingInfo ? ` • Penalty: ${zeroFilingInfo.penalty}` : ''}
-                                      </p>
-                                    )}
                                     <div className="flex gap-2 mt-2">
                                       <button
                                         onClick={() => downloadStateFiling(state)}
@@ -744,10 +659,9 @@ const SalesTaxView = ({
                             <div className="flex flex-wrap gap-2">
                               {statesNotDueYet.map(state => {
                                 const config = nexusStates[state.stateCode] || {};
-                                const isZero = (state.taxOwed || state.tax || 0) === 0;
                                 return (
-                                  <div key={state.stateCode} className={`text-xs ${isZero ? 'bg-amber-900/20 text-amber-400/80 border-amber-600/30' : 'bg-amber-900/30 text-amber-300 border-amber-500/30'} px-2 py-1 rounded border flex items-center gap-2`}>
-                                    <span>{state.stateCode}: {isZero ? '$0 (zero filing)' : formatCurrency(state.taxOwed || state.tax || 0)}</span>
+                                  <div key={state.stateCode} className="text-xs bg-amber-900/30 text-amber-300 px-2 py-1 rounded border border-amber-500/30 flex items-center gap-2">
+                                    <span>{state.stateCode}: {formatCurrency(state.taxOwed || state.tax || 0)}</span>
                                     <span className="text-amber-500">({config.frequency || 'monthly'})</span>
                                     <button
                                       onClick={() => downloadStateFiling(state)}
@@ -820,33 +734,27 @@ const SalesTaxView = ({
                             }
                             
                             // Create CSV with all fields states typically need
-                            // NOTE: All amounts EXCLUDE Shop Pay orders (Shopify remits that tax automatically)
-                            let csv = 'State,State Code,Item Sales,Shipping,Taxable Sales,Tax You Owe,Orders,Shipping Taxable,Has Nexus,Shop Pay Tax (Shopify Remits),Shop Pay Sales,Shop Pay Orders,Period,Start Date,End Date\n';
+                            let csv = 'State,State Code,Item Sales,Shipping,Taxable Sales,Total Tax,Tax You Owe,Shipping Taxable,Total Orders,Has Nexus,Period,Start Date,End Date\n';
                             taxData.byState.forEach(state => {
                               const hasNexus = nexusStates[state.stateCode]?.hasNexus ? 'Yes' : 'No';
                               const itemSales = state.itemSales || state.sales || 0;
                               const shipping = state.shipping || 0;
                               const taxableSales = state.totalSales || state.sales || 0;
+                              const totalTax = state.totalTax || state.tax || 0;
                               const taxOwed = state.taxOwed || state.tax || 0;
                               const shippingTaxable = state.shippingTaxable ? 'Yes' : 'No';
                               const totalOrders = state.totalOrders || state.orders || 0;
-                              const shopPayTax = state.shopPayTax || 0;
-                              const shopPaySales = state.shopPaySales || 0;
-                              const shopPayOrders = state.shopPayOrders || 0;
-                              csv += `"${state.stateName}",${state.stateCode},${itemSales.toFixed(2)},${shipping.toFixed(2)},${taxableSales.toFixed(2)},${taxOwed.toFixed(2)},${totalOrders},${shippingTaxable},${hasNexus},${shopPayTax.toFixed(2)},${shopPaySales.toFixed(2)},${shopPayOrders},"${periodLabel}",${start},${end}\n`;
+                              csv += `"${state.stateName}",${state.stateCode},${itemSales.toFixed(2)},${shipping.toFixed(2)},${taxableSales.toFixed(2)},${totalTax.toFixed(2)},${taxOwed.toFixed(2)},${shippingTaxable},${totalOrders},${hasNexus},"${periodLabel}",${start},${end}\n`;
                             });
                             const grandTotalItemSales = taxData.byState.reduce((s, st) => s + (st.itemSales || st.sales || 0), 0);
                             const grandTotalShipping = taxData.byState.reduce((s, st) => s + (st.shipping || 0), 0);
                             const grandTotalTaxableSales = taxData.byState.reduce((s, st) => s + (st.totalSales || st.sales || 0), 0);
-                            const grandTotalTax = taxData.byState.reduce((s, st) => s + (st.taxOwed || st.tax || 0), 0);
+                            const grandTotalTax = taxData.byState.reduce((s, st) => s + (st.totalTax || st.tax || 0), 0);
                             const grandTotalOrders = taxData.byState.reduce((s, st) => s + (st.totalOrders || st.orders || 0), 0);
-                            const grandShopPayTax = taxData.byState.reduce((s, st) => s + (st.shopPayTax || 0), 0);
-                            const grandShopPaySales = taxData.byState.reduce((s, st) => s + (st.shopPaySales || 0), 0);
-                            const grandShopPayOrders = taxData.byState.reduce((s, st) => s + (st.shopPayOrders || 0), 0);
-                            csv += `"TOTAL",,${grandTotalItemSales.toFixed(2)},${grandTotalShipping.toFixed(2)},${grandTotalTaxableSales.toFixed(2)},${grandTotalTax.toFixed(2)},${grandTotalOrders},,,${grandShopPayTax.toFixed(2)},${grandShopPaySales.toFixed(2)},${grandShopPayOrders},"${periodLabel}",${start},${end}\n`;
-                            csv += '\n"All amounts EXCLUDE Shop Pay orders — Shopify automatically remits tax for those."\n';
-                            csv += '"Shop Pay columns shown for reference only (you do NOT file these)."\n';
+                            csv += `"TOTAL",,${grandTotalItemSales.toFixed(2)},${grandTotalShipping.toFixed(2)},${grandTotalTaxableSales.toFixed(2)},${grandTotalTax.toFixed(2)},${taxData.totalTax.toFixed(2)},,${grandTotalOrders},,"${periodLabel}",${start},${end}\n`;
+                            csv += '\n"Item Sales = Product sales only (excludes shipping)"\n';
                             csv += '"Taxable Sales = Item Sales + Shipping (if shipping is taxable in that state)"\n';
+                            csv += '"Tax You Owe = What you need to file and pay yourself"\n';
                             
                             const blob = new Blob([csv], { type: 'text/csv' });
                             const url = URL.createObjectURL(blob);
@@ -1033,16 +941,20 @@ const SalesTaxView = ({
                                           />
                                           <button
                                             onClick={() => {
-                                              // Save custom URL to nexusStates
-                                              const updated = {
+                                              // Save custom URL via saveSalesTax
+                                              const updatedNexus = {
                                                 ...nexusStates,
                                                 [stateCode]: {
                                                   ...nexusStates[stateCode],
                                                   portalUrl: editPortalUrlValue || null
                                                 }
                                               };
-                                              setNexusStates(updated);
-                                              lsSet('nexusStates', JSON.stringify(updated));
+                                              if (saveSalesTax) {
+                                                saveSalesTax({
+                                                  ...salesTaxConfig,
+                                                  nexusStates: updatedNexus
+                                                });
+                                              }
                                               setEditingPortalUrl(null);
                                             }}
                                             className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm"
@@ -1278,7 +1190,7 @@ const SalesTaxView = ({
                     </>
                   )}
                 </>
-              ); })() : (
+              ) : (
                 <div className="text-center py-6">
                   <ShoppingBag className="w-12 h-12 text-slate-600 mx-auto mb-3" />
                   <p className="text-slate-400">No Shopify tax data for this period</p>

@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart, Sparkles, Keyboard, Globe, Printer, Table } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart, Sparkles, Keyboard, Globe } from 'lucide-react';
 // Extracted utilities (keep App.jsx lean)
 import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
@@ -8,8 +8,8 @@ import { formatCurrency, formatPercent, formatNumber } from './utils/format';
 import { hasDailySalesData, formatDateKey, getSunday } from './utils/date';
 import { deriveWeeksFromDays, mergeWeekData } from './utils/weekly';
 import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from './utils/ads';
+import { processUploadedFiles, mergeTier1IntoDailySales, mergeTier2IntoIntelData } from './utils/adsReportParser';
 import { withShippingSkuRow, sumSkuRows } from './utils/reconcile';
-import { shareToSlack, exportToPDF, pushToSheets } from './utils/reportSharing';
 import {
   STORAGE_KEY, INVENTORY_KEY, COGS_KEY, STORE_KEY, GOALS_KEY, PERIODS_KEY, SALES_TAX_KEY, PRODUCT_NAMES_KEY,
   SETTINGS_KEY, NOTES_KEY, WIDGET_KEY, THEME_KEY, INVOICES_KEY, AMAZON_FORECAST_KEY, THREEPL_LEDGER_KEY,
@@ -75,17 +75,18 @@ const DEFAULT_DASHBOARD_WIDGETS = {
     { id: 'alerts', name: 'Alerts & Notifications', enabled: true, order: 0 },
     { id: 'todayPerformance', name: 'Last Week & MTD Performance', enabled: true, order: 1 },
     { id: 'weekProgress', name: 'This Week\'s Goal', enabled: true, order: 2 },
-    { id: 'productPerformance', name: 'Product Performance', enabled: true, order: 3 },
-    { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 4 },
-    { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 5 },
-    { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 6 },
-    { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 7 },
-    { id: 'summaryMetrics', name: 'Summary Metrics (Time Range)', enabled: false, order: 8 },
-    { id: 'syncStatus', name: 'Data Integrity', enabled: true, order: 9 },
-    { id: 'adsOverview', name: 'Ads Overview', enabled: true, order: 10 },
-    { id: 'reorderAlerts', name: 'Reorder Alerts', enabled: true, order: 11 },
-    { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 12 },
-    { id: 'dataHub', name: 'Data Hub', enabled: false, order: 13 },
+    { id: 'topSellers14d', name: 'Top Sellers (14 Days)', enabled: true, order: 3 },
+    { id: 'worstSellers14d', name: 'Needs Attention (14 Days)', enabled: true, order: 4 },
+    { id: 'topSellersYTD', name: 'Top Sellers (YTD)', enabled: false, order: 5 },
+    { id: 'worstSellersYTD', name: 'Needs Attention (YTD)', enabled: false, order: 6 },
+    { id: 'salesTax', name: 'Sales Tax Due', enabled: true, order: 7 },
+    { id: 'aiForecast', name: 'AI Forecast', enabled: true, order: 8 },
+    { id: 'billsDue', name: 'Bills & Invoices', enabled: true, order: 9 },
+    { id: 'calendar', name: 'Daily Calendar', enabled: true, order: 10 },
+    { id: 'summaryMetrics', name: 'Summary Metrics (Time Range)', enabled: false, order: 11 },
+    { id: 'syncStatus', name: 'Sync & Backup Status', enabled: false, order: 12 },
+    { id: 'quickUpload', name: 'Quick Upload', enabled: false, order: 13 },
+    { id: 'dataHub', name: 'Data Hub', enabled: false, order: 14 },
   ],
   stacks: {}, // { 'salesTax': ['salesTax', 'billsDue'] } - widget stacks
   layout: 'auto',
@@ -471,13 +472,13 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
 // ============ UNIFIED AI CONFIGURATION (Pro Plan) ============
 // All AI features use these consistent settings for best results
 const AI_MODELS = {
-  'claude-haiku-4-5-20251001': { label: 'Haiku 4.5', cost: '~$0.01', tier: 'Fast', desc: 'Cheapest — quick answers, shorter analysis', short: '⚡ Haiku' },
-  'claude-sonnet-4-5-20250929': { label: 'Sonnet 4.5', cost: '~$0.04', tier: 'Balanced', desc: 'Best value — detailed analysis, fast', short: '🎯 Sonnet' },
-  'claude-opus-4-6': { label: 'Opus 4.6', cost: '~$0.20', tier: 'Premium', desc: 'Deepest reasoning — quarterly deep-dives', short: '🧠 Opus' },
+  'claude-sonnet-4-20250514': { label: 'Claude Sonnet 4', cost: '~$0.04/report', tier: 'Balanced', desc: 'Best value — fast, smart, cheap' },
+  'claude-opus-4-20250514': { label: 'Claude Opus 4', cost: '~$0.20/report', tier: 'Premium', desc: 'Deepest analysis, 5x cost' },
+  'claude-haiku-4-5-20251001': { label: 'Claude Haiku 4.5', cost: '~$0.01/report', tier: 'Fast', desc: 'Cheapest, shorter reports' },
 };
 
 const AI_CONFIG = {
-  model: 'claude-sonnet-4-5-20250929',
+  model: 'claude-sonnet-4-20250514',
   maxTokens: 12000,  // Reports need 8K-12K tokens for full output
   maxDuration: 60,  // Pro plan 60-second timeout
   streaming: true,  // Use streaming to avoid 25s first-byte timeout
@@ -1248,6 +1249,8 @@ export default function Dashboard() {
   const [selectedWeek, setSelectedWeek] = useState(null);
   const [selectedDay, setSelectedDay] = useState(null); // For daily upload
   const [viewingDayDetails, setViewingDayDetails] = useState(null); // For viewing day data details (date string)
+  const [selectedMonth, setSelectedMonth] = useState(null);
+  const [selectedYear, setSelectedYear] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [toast, setToast] = useState(null); // { message: string, type: 'success' | 'error' }
@@ -1607,6 +1610,7 @@ const handleLogout = async () => {
   const [productCatalogFile, setProductCatalogFile] = useState(null);
   const [productCatalogFileName, setProductCatalogFileName] = useState('');
   
+  const [bulkImportResult, setBulkImportResult] = useState(null);
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [customPeriodData, setCustomPeriodData] = useState(null);
@@ -1772,7 +1776,6 @@ const handleLogout = async () => {
     try { return safeLocalStorageGet('ecommerce_ai_chat_history_v1', []); } catch { return []; }
   });
   const [aiInput, setAiInput] = useState('');
-  const [aiChatModel, setAiChatModel] = useState('claude-haiku-4-5-20251001');
   const [aiLoading, setAiLoading] = useState(false);
   
   // AI Ads Insights Chat (separate from main AI chat)
@@ -1815,7 +1818,19 @@ const handleLogout = async () => {
   });
   const [pdfGenerating, setPdfGenerating] = useState(false);
   
-  // 3. Push Notifications for inventory/alerts
+  // 3. Industry Benchmarks
+  const [showBenchmarks, setShowBenchmarks] = useState(false);
+  const [benchmarkCategory, setBenchmarkCategory] = useState('beauty'); // beauty, supplements, home, electronics, apparel, general
+  const INDUSTRY_BENCHMARKS = {
+    beauty: { name: 'Beauty & Personal Care', avgMargin: 42, avgTacos: 18, avgAov: 38, avgReturnRate: 8 },
+    supplements: { name: 'Supplements & Health', avgMargin: 55, avgTacos: 22, avgAov: 45, avgReturnRate: 5 },
+    home: { name: 'Home & Kitchen', avgMargin: 35, avgTacos: 15, avgAov: 52, avgReturnRate: 12 },
+    electronics: { name: 'Electronics & Accessories', avgMargin: 28, avgTacos: 20, avgAov: 75, avgReturnRate: 15 },
+    apparel: { name: 'Apparel & Fashion', avgMargin: 48, avgTacos: 25, avgAov: 42, avgReturnRate: 22 },
+    general: { name: 'General Merchandise', avgMargin: 38, avgTacos: 18, avgAov: 35, avgReturnRate: 10 },
+  };
+  
+  // 4. Push Notifications for inventory/alerts
   const [notificationSettings, setNotificationSettings] = useState(() => {
     try { 
       return safeLocalStorageGet('ecommerce_notifications_v1', {
@@ -1846,32 +1861,7 @@ const handleLogout = async () => {
       if (stored && Array.isArray(stored.widgets) && stored.widgets.length > 0) {
         // Validate structure
         const isValid = stored.widgets.every(w => w.id && typeof w.enabled === 'boolean');
-        if (isValid) {
-          // Migration: rename & enable syncStatus → Data Integrity
-          const syncWidget = stored.widgets.find(w => w.id === 'syncStatus');
-          if (syncWidget && syncWidget.name !== 'Data Integrity') {
-            syncWidget.name = 'Data Integrity';
-            syncWidget.enabled = true;
-          } else if (!syncWidget) {
-            stored.widgets.push({ id: 'syncStatus', name: 'Data Integrity', enabled: true, order: 12 });
-          }
-          // Migration: add adsOverview if missing
-          if (!stored.widgets.find(w => w.id === 'adsOverview')) {
-            stored.widgets.push({ id: 'adsOverview', name: 'Ads Overview', enabled: true, order: 13 });
-          }
-          // Migration: add reorderAlerts if missing
-          if (!stored.widgets.find(w => w.id === 'reorderAlerts')) {
-            stored.widgets.push({ id: 'reorderAlerts', name: 'Reorder Alerts', enabled: true, order: 14 });
-          }
-          // Migration: consolidate 4 product widgets → 1
-          const oldProductIds = ['topSellers14d', 'worstSellers14d', 'topSellersYTD', 'worstSellersYTD'];
-          const hadAnyProductWidget = stored.widgets.some(w => oldProductIds.includes(w.id) && w.enabled);
-          stored.widgets = stored.widgets.filter(w => !oldProductIds.includes(w.id));
-          if (!stored.widgets.find(w => w.id === 'productPerformance')) {
-            stored.widgets.push({ id: 'productPerformance', name: 'Product Performance', enabled: hadAnyProductWidget !== false, order: 3 });
-          }
-          return stored;
-        }
+        if (isValid) return stored;
       }
       // Invalid or missing - use defaults
       return JSON.parse(JSON.stringify(DEFAULT_DASHBOARD_WIDGETS));
@@ -2777,6 +2767,147 @@ const handleLogout = async () => {
     );
   };
   
+  // ========== INDUSTRY BENCHMARKS MODAL ==========
+  const BenchmarksModal = () => {
+    if (!showBenchmarks) return null;
+    
+    // Calculate user's current metrics
+    const sortedWeeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
+    let totalRevenue = 0, totalProfit = 0, totalOrders = 0, totalAdSpend = 0, totalReturns = 0;
+    
+    sortedWeeks.forEach(week => {
+      const data = allWeeksData[week];
+      if (data?.total) {
+        totalRevenue += data.total.revenue || 0;
+        totalProfit += data.total.profit || 0;
+        totalOrders += data.total.orders || 0;
+        totalAdSpend += data.total.adSpend || 0;
+      }
+    });
+    
+    const userMetrics = {
+      margin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
+      tacos: totalRevenue > 0 ? (totalAdSpend / totalRevenue) * 100 : 0,
+      aov: totalOrders > 0 ? totalRevenue / totalOrders : 0,
+      returnRate: 0, // Would need return data
+    };
+    
+    const benchmark = INDUSTRY_BENCHMARKS[benchmarkCategory];
+    
+    const compareMetric = (user, industry, higherIsBetter = true) => {
+      const diff = user - industry;
+      const pct = industry > 0 ? (diff / industry) * 100 : 0;
+      const isGood = higherIsBetter ? diff >= 0 : diff <= 0;
+      return { diff, pct, isGood };
+    };
+    
+    return (
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => setShowBenchmarks(false)}>
+        <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl border border-slate-700 w-full max-w-2xl shadow-2xl" onClick={e => e.stopPropagation()}>
+          <div className="p-6 border-b border-slate-700">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-amber-500/20 rounded-xl flex items-center justify-center">
+                  <BarChart3 className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Industry Benchmarks</h3>
+                  <p className="text-slate-400 text-sm">Compare your performance to industry averages</p>
+                </div>
+              </div>
+              <button onClick={() => setShowBenchmarks(false)} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+          </div>
+          
+          <div className="p-6">
+            {/* Category Selector */}
+            <div className="mb-6">
+              <label className="block text-sm text-slate-400 mb-2">Your Industry</label>
+              <div className="grid grid-cols-3 gap-2">
+                {Object.entries(INDUSTRY_BENCHMARKS).map(([key, val]) => (
+                  <button
+                    key={key}
+                    onClick={() => setBenchmarkCategory(key)}
+                    className={`py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
+                      benchmarkCategory === key
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                    }`}
+                  >
+                    {val.name.split(' ')[0]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            {/* Comparison Grid */}
+            <div className="space-y-4">
+              {[
+                { label: 'Profit Margin', user: userMetrics.margin, industry: benchmark.avgMargin, suffix: '%', higherIsBetter: true },
+                { label: 'TACOS (Ad Spend %)', user: userMetrics.tacos, industry: benchmark.avgTacos, suffix: '%', higherIsBetter: false },
+                { label: 'Avg Order Value', user: userMetrics.aov, industry: benchmark.avgAov, prefix: '$', higherIsBetter: true },
+              ].map(metric => {
+                const comparison = compareMetric(metric.user, metric.industry, metric.higherIsBetter);
+                return (
+                  <div key={metric.label} className="bg-slate-800/50 rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-slate-300 font-medium">{metric.label}</span>
+                      <span className={`text-sm px-2 py-1 rounded-full ${
+                        comparison.isGood ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+                      }`}>
+                        {comparison.isGood ? '↑' : '↓'} {Math.abs(comparison.pct).toFixed(0)}% {comparison.isGood ? 'above' : 'below'} avg
+                      </span>
+                    </div>
+                    <div className="flex items-end gap-4">
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between text-sm mb-1">
+                          <span className="text-slate-500">You</span>
+                          <span className="text-white font-semibold">
+                            {metric.prefix || ''}{metric.user.toFixed(1)}{metric.suffix || ''}
+                          </span>
+                        </div>
+                        <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full ${comparison.isGood ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                            style={{ width: `${Math.min(100, (metric.user / Math.max(metric.user, metric.industry)) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between text-sm mb-1">
+                          <span className="text-slate-500">Industry Avg</span>
+                          <span className="text-slate-400 font-medium">
+                            {metric.prefix || ''}{metric.industry.toFixed(1)}{metric.suffix || ''}
+                          </span>
+                        </div>
+                        <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-slate-500 rounded-full"
+                            style={{ width: `${Math.min(100, (metric.industry / Math.max(metric.user, metric.industry)) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            
+            {/* Industry Info */}
+            <div className="mt-6 p-4 bg-slate-800/30 rounded-xl">
+              <p className="text-slate-400 text-sm">
+                <strong className="text-white">{benchmark.name}</strong> benchmarks are based on aggregated industry data. 
+                Your actual performance may vary based on specific product categories, pricing strategy, and market conditions.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  
   // Amazon Forecasts (from Amazon's SKU Economics forecast reports)
   const [amazonForecasts, setAmazonForecasts] = useState(() => {
     try { return safeLocalStorageGet(AMAZON_FORECAST_KEY, {}); } catch { return {}; }
@@ -3420,7 +3551,7 @@ allWeekKeys.forEach((weekKey) => {
     },
 
     // AI model selection
-    aiModel: 'claude-sonnet-4-5-20250929',
+    aiModel: 'claude-sonnet-4-20250514',
   });
   
   // Sync AI model selection to window global so outer-scope callAI can read it
@@ -4412,6 +4543,26 @@ useEffect(() => {
   if (isLoadingDataRef.current) return; // Don't sync during initial load
   queueCloudSave(combinedData);
 }, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials, qboCredentials]);
+
+// ── Process ads file uploads (Tier 1 daily KPIs + Tier 2 deep analysis) ──
+const processAdsUpload = useCallback(async (fileList) => {
+  let JSZipLib = null;
+  const hasZip = fileList.some(f => f.name.toLowerCase().endsWith('.zip'));
+  if (hasZip) {
+    try { const mod = await import('jszip'); JSZipLib = mod.default || mod; } catch(e) { console.warn('JSZip not available, ZIP files will be skipped'); }
+  }
+  const result = await processUploadedFiles(fileList, JSZipLib);
+  if (result.tier1Results.length > 0) {
+    setAllDaysData(prev => mergeTier1IntoDailySales(prev, result.tier1Results));
+  }
+  if (result.tier2Results.length > 0) {
+    setAdsIntelData(prev => mergeTier2IntoIntelData(prev || {}, result.tier2Results));
+  }
+  if (result.tier1Results.length > 0 || result.tier2Results.length > 0) {
+    queueCloudSave();
+  }
+  return result;
+}, [queueCloudSave]);
 
 // Persist Shopify credentials to localStorage for offline backup
 useEffect(() => {
@@ -6540,6 +6691,109 @@ const savePeriods = async (d) => {
     }
   }, [allWeeksData]); // Only depend on allWeeksData to avoid loops
 
+  const processBulkImport = useCallback(() => {
+    const cogsLookup = getCogsLookup();
+    if (!files.amazon || !files.shopify) { setToast({ message: 'Upload Amazon & Shopify files', type: 'error' }); return; }
+    if (Object.keys(cogsLookup).length === 0) { setToast({ message: 'Set up COGS first via Store → COGS', type: 'error' }); return; }
+    setIsProcessing(true); setBulkImportResult(null);
+
+    const amazonByWeek = {};
+    files.amazon.forEach(row => {
+      const endDate = row['End date'] || '';
+      if (!endDate) return;
+      let dateObj;
+      if (endDate.includes('/')) { const [m, d, y] = endDate.split('/'); dateObj = new Date(y, m - 1, d); }
+      else { dateObj = new Date(endDate); }
+      const sunday = getSunday(dateObj);
+      if (!amazonByWeek[sunday]) amazonByWeek[sunday] = [];
+      amazonByWeek[sunday].push(row);
+    });
+
+    const amazonWeeks = Object.keys(amazonByWeek).sort();
+    const newWeeksData = { ...allWeeksData };
+    let weeksCreated = 0;
+
+    amazonWeeks.forEach(weekEnd => {
+      const rows = amazonByWeek[weekEnd];
+      let amzRev = 0, amzUnits = 0, amzRet = 0, amzProfit = 0, amzCogs = 0, amzFees = 0, amzAds = 0;
+      const amazonSkuData = {};
+      rows.forEach(r => {
+        const net = parseInt(r['Net units sold'] || 0), sold = parseInt(r['Units sold'] || 0), ret = parseInt(r['Units returned'] || 0);
+        const sales = parseFloat(r['Net sales'] || 0), proceeds = parseFloat(r['Net proceeds total'] || 0), sku = r['MSKU'] || '';
+        const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
+        const ads = parseFloat(r['Sponsored Products charge total'] || 0);
+        const name = r['Product title'] || r['product-name'] || sku;
+        if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
+          amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += (cogsLookup[sku] || 0) * net;
+          if (sku) {
+            if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+            amazonSkuData[sku].unitsSold += sold;
+            amazonSkuData[sku].returns += ret;
+            amazonSkuData[sku].netSales += sales;
+            amazonSkuData[sku].netProceeds += proceeds;
+            amazonSkuData[sku].adSpend += ads;
+            amazonSkuData[sku].cogs += (cogsLookup[sku] || 0) * net;
+          }
+        }
+      });
+      const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
+      if (amzRev > 0 || amzUnits > 0) {
+        newWeeksData[weekEnd] = {
+          weekEnding: weekEnd, createdAt: new Date().toISOString(),
+          amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, netProfit: amzProfit, 
+            margin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
+            returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
+          shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, netMargin: 0, aov: 0, roas: 0, skuData: [] },
+          total: { revenue: amzRev, units: amzUnits, cogs: amzCogs, adSpend: amzAds, netProfit: amzProfit, netMargin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, roas: amzAds > 0 ? amzRev/amzAds : 0, amazonShare: 100, shopifyShare: 0 }
+        };
+        weeksCreated++;
+      }
+    });
+
+    // Distribute Shopify - also capture SKU data
+    let shopRev = 0, shopUnits = 0, shopCogs = 0, shopDisc = 0;
+    const shopifySkuData = {};
+    files.shopify.forEach(r => { 
+      const u = parseInt(r['Net items sold'] || r['Net quantity'] || 0);
+      const grossSales = parseFloat(r['Gross sales'] || 0);
+      const netSales = parseFloat(r['Net sales'] || 0);
+      const s = grossSales > 0 ? grossSales : netSales;
+      const sku = r['Product variant SKU'] || ''; 
+      const name = r['Product title'] || r['Product'] || sku;
+      const disc = Math.abs(parseFloat(r['Discounts'] || 0));
+      const returns = Math.abs(parseFloat(r['Returns'] || 0));
+      shopRev += s; shopUnits += u; shopCogs += (cogsLookup[sku] || 0) * u; shopDisc += disc;
+      if (sku && (u > 0 || s !== 0)) {
+        if (!shopifySkuData[sku]) shopifySkuData[sku] = { sku, name, unitsSold: 0, netSales: 0, grossSales: 0, discounts: 0, returns: 0, cogs: 0 };
+        shopifySkuData[sku].unitsSold += u;
+        shopifySkuData[sku].netSales += netSales;
+        shopifySkuData[sku].grossSales += s;
+        shopifySkuData[sku].discounts += disc;
+        shopifySkuData[sku].returns += returns;
+        shopifySkuData[sku].cogs += (cogsLookup[sku] || 0) * u;
+      }
+    });
+    const shopifySkus = Object.values(shopifySkuData).sort((a, b) => b.netSales - a.netSales);
+    const totalAmzRev = Object.values(newWeeksData).reduce((sum, w) => sum + (w.amazon?.revenue || 0), 0);
+    if (totalAmzRev > 0 && shopRev > 0) {
+      Object.keys(newWeeksData).forEach(weekEnd => {
+        const week = newWeeksData[weekEnd];
+        const prop = week.amazon.revenue / totalAmzRev;
+        const wRev = shopRev * prop, wUnits = Math.round(shopUnits * prop), wCogs = shopCogs * prop, wDisc = shopDisc * prop;
+        // shopRev is Gross sales, so subtract discounts for profit
+        const wProfit = wRev - wDisc - wCogs;
+        // Proportionally distribute SKU data
+        const wShopifySkus = shopifySkus.map(s => ({ ...s, unitsSold: Math.round(s.unitsSold * prop), netSales: s.netSales * prop, grossSales: s.grossSales * prop, discounts: s.discounts * prop, cogs: s.cogs * prop }));
+        week.shopify = { revenue: wRev, units: wUnits, cogs: wCogs, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: wDisc, netProfit: wProfit, netMargin: wRev > 0 ? (wProfit/wRev)*100 : 0, aov: wUnits > 0 ? wRev/wUnits : 0, roas: 0, skuData: wShopifySkus };
+        const tRev = week.amazon.revenue + wRev, tProfit = week.amazon.netProfit + wProfit;
+        week.total = { revenue: tRev, units: week.amazon.units + wUnits, cogs: week.amazon.cogs + wCogs, adSpend: week.amazon.adSpend, netProfit: tProfit, netMargin: tRev > 0 ? (tProfit/tRev)*100 : 0, roas: week.amazon.adSpend > 0 ? tRev/week.amazon.adSpend : 0, amazonShare: tRev > 0 ? (week.amazon.revenue/tRev)*100 : 0, shopifyShare: tRev > 0 ? (wRev/tRev)*100 : 0 };
+      });
+    }
+
+    setAllWeeksData(newWeeksData); save(newWeeksData);
+    setBulkImportResult({ weeksCreated, dateRange: amazonWeeks.length > 0 ? `${amazonWeeks[0]} to ${amazonWeeks[amazonWeeks.length-1]}` : '' });
+    setIsProcessing(false); setFiles({ amazon: null, shopify: null, cogs: null, threepl: null }); setFileNames({ amazon: '', shopify: '', cogs: '', threepl: '' });
+  }, [files, allWeeksData, getCogsLookup]);
 
   const processCustomPeriod = useCallback(() => {
     if (!customStartDate || !customEndDate) { setToast({ message: 'Select start and end dates', type: 'error' }); return; }
@@ -6847,78 +7101,59 @@ const savePeriods = async (d) => {
     if (datesWithSkuData.length > 0) {
       
       const last28 = datesWithSkuData.slice(0, 28);
-      
-      // TRIMMED MEAN VELOCITY: collect per-SKU per-day unit counts, then trim outliers
-      // This prevents a single big day (or zero day from stockout) from skewing velocity
-      const dailyUnitsAmz = {}; // { normalizedSku: [day1units, day2units, ...] }
-      const dailyUnitsShop = {};
-      const skuOriginals = {}; // Track original SKU strings for variant storage
+      const weeksEquiv = last28.length / 7;
       
       last28.forEach(d => {
         const dayData = legacyDailyData[d];
-        
-        // Collect Amazon daily units per SKU
+        // Amazon SKU data - store under multiple key variants for flexible matching
         const amazonSkuData = dayData?.amazon?.skuData;
         const amazonSkuList = Array.isArray(amazonSkuData) ? amazonSkuData : Object.values(amazonSkuData || {});
         amazonSkuList.forEach(item => {
           if (!item.sku) return;
-          const normalized = item.sku.replace(/shop$/i, '').toUpperCase();
-          if (!dailyUnitsAmz[normalized]) dailyUnitsAmz[normalized] = [];
-          if (!skuOriginals[normalized]) skuOriginals[normalized] = item.sku;
-          dailyUnitsAmz[normalized].push(item.unitsSold || item.units || 0);
+          const units = item.unitsSold || item.units || 0;
+          const velocity = units / weeksEquiv;
+          
+          // Store under original SKU
+          if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
+          amazonSkuVelocity[item.sku] += velocity;
+          
+          // Also store under normalized variants
+          const baseSku = item.sku.replace(/shop$/i, '').toUpperCase();
+          const skuLower = item.sku.toLowerCase();
+          const baseSkuLower = baseSku.toLowerCase();
+          if (!amazonSkuVelocity[baseSku]) amazonSkuVelocity[baseSku] = 0;
+          if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = 0;
+          if (!amazonSkuVelocity[baseSkuLower]) amazonSkuVelocity[baseSkuLower] = 0;
+          amazonSkuVelocity[baseSku] += velocity;
+          amazonSkuVelocity[skuLower] += velocity;
+          amazonSkuVelocity[baseSkuLower] += velocity;
         });
-        
-        // Collect Shopify daily units per SKU
+        // Shopify SKU data - store under multiple key variants for flexible matching
         const shopifySkuData = dayData?.shopify?.skuData;
         const shopifySkuList = Array.isArray(shopifySkuData) ? shopifySkuData : Object.values(shopifySkuData || {});
         shopifySkuList.forEach(item => {
           if (!item.sku) return;
-          const normalized = item.sku.replace(/shop$/i, '').toUpperCase();
-          if (!dailyUnitsShop[normalized]) dailyUnitsShop[normalized] = [];
-          if (!skuOriginals[normalized]) skuOriginals[normalized] = item.sku;
-          dailyUnitsShop[normalized].push(item.unitsSold || item.units || 0);
+          const units = item.unitsSold || item.units || 0;
+          const velocity = units / weeksEquiv;
+          
+          // Store under original SKU
+          if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
+          shopifySkuVelocity[item.sku] += velocity;
+          
+          // Also store under normalized variants (without Shop suffix, uppercase, lowercase)
+          const baseSku = item.sku.replace(/shop$/i, '').toUpperCase();
+          const skuLower = item.sku.toLowerCase();
+          const baseSkuLower = baseSku.toLowerCase();
+          if (!shopifySkuVelocity[baseSku]) shopifySkuVelocity[baseSku] = 0;
+          if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = 0;
+          if (!shopifySkuVelocity[baseSkuLower]) shopifySkuVelocity[baseSkuLower] = 0;
+          shopifySkuVelocity[baseSku] += velocity;
+          shopifySkuVelocity[skuLower] += velocity;
+          shopifySkuVelocity[baseSkuLower] += velocity;
         });
       });
       
-      // Trimmed mean helper: sort values, drop top & bottom ~10%, average the rest
-      const trimmedMeanWeekly = (dailyValues, totalDays) => {
-        if (!dailyValues || dailyValues.length === 0) return 0;
-        // Pad with zeros for days the SKU wasn't present (no sales = 0 units)
-        const padded = [...dailyValues];
-        while (padded.length < totalDays) padded.push(0);
-        padded.sort((a, b) => a - b);
-        // Trim ~10% from each end (min 1 if enough data)
-        const trimCount = padded.length >= 10 ? Math.floor(padded.length * 0.1) : 0;
-        const trimmed = padded.slice(trimCount, padded.length - trimCount);
-        const avgDaily = trimmed.reduce((s, v) => s + v, 0) / trimmed.length;
-        return avgDaily * 7; // Convert daily average to weekly velocity
-      };
-      
-      const totalDays = last28.length;
-      
-      // Store velocity under all SKU variants for flexible matching
-      const storeVelocityVariants = (lookup, originalSku, normalized, velocity) => {
-        const baseLower = normalized.toLowerCase();
-        [originalSku, originalSku.toLowerCase(), originalSku.toUpperCase(), 
-         normalized, baseLower, normalized + 'Shop', baseLower + 'shop', normalized + 'SHOP'
-        ].forEach(key => {
-          if (!lookup[key]) lookup[key] = 0;
-          lookup[key] = Math.max(lookup[key], velocity);
-        });
-      };
-      
-      // Compute trimmed mean velocities
-      Object.entries(dailyUnitsAmz).forEach(([normalized, dailyValues]) => {
-        const weeklyVel = trimmedMeanWeekly(dailyValues, totalDays);
-        storeVelocityVariants(amazonSkuVelocity, skuOriginals[normalized] || normalized, normalized, weeklyVel);
-      });
-      
-      Object.entries(dailyUnitsShop).forEach(([normalized, dailyValues]) => {
-        const weeklyVel = trimmedMeanWeekly(dailyValues, totalDays);
-        storeVelocityVariants(shopifySkuVelocity, skuOriginals[normalized] || normalized, normalized, weeklyVel);
-      });
-      
-      velocityDataSource = 'trimmed-mean-28d';
+      velocityDataSource = 'direct-localStorage';
     }
     
     // DEBUG: Log data availability
@@ -6926,7 +7161,7 @@ const savePeriods = async (d) => {
     // ALWAYS process weekly data - either as primary source or supplement for slow-moving SKUs
     // Daily data (from localStorage) covers last 28 days - great for fast sellers
     // Weekly data covers ALL weeks - catches slow-moving products that may not sell in any 28-day window
-    const useWeeklyAsPrimary = velocityDataSource === 'none';
+    const useWeeklyAsPrimary = velocityDataSource !== 'direct-localStorage';
     if (true) { // Always run - supplement slow movers even if daily data exists
     // SOURCE 1: Weekly sales data
     if (weeksCount > 0) {
@@ -7634,13 +7869,10 @@ const savePeriods = async (d) => {
     physicalSkus.forEach(sku => {
       const skuLower = sku.toLowerCase();
       
-      // Case-insensitive lookups for all inventory sources (try with and without Shop suffix)
-      const skuBase = sku.replace(/shop$/i, '');
-      const skuBaseLower = skuBase.toLowerCase();
-      const skuBaseUpper = skuBase.toUpperCase();
-      const a = amzInv[sku] || amzInvLower[skuLower] || amzInv[skuBase] || amzInv[skuBaseUpper] || amzInvLower[skuBaseLower] || {};
-      const t = tplInv[sku] || tplInvLower[skuLower] || tplInv[skuBase] || tplInv[skuBaseUpper] || tplInvLower[skuBaseLower] || {};
-      const h = homeInv[sku] || homeInvLower[skuLower] || homeInv[skuBase] || homeInv[skuBaseUpper] || homeInvLower[skuBaseLower] || {};
+      // Case-insensitive lookups for all inventory sources
+      const a = amzInv[sku] || amzInvLower[skuLower] || {};
+      const t = tplInv[sku] || tplInvLower[skuLower] || {};
+      const h = homeInv[sku] || homeInvLower[skuLower] || {};
       
       const aQty = a.total || 0;
       const tQty = t.total || 0;
@@ -8323,13 +8555,13 @@ const savePeriods = async (d) => {
       const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase());
       
       // Date column detection
-      const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h === 'month' || h === 'hour' || h === 'quarter' || h === 'reporting starts' || h.includes('date'));
+      const dateCol = headers.findIndex(h => h === 'date' || h === 'day' || h === 'month' || h === 'hour' || h === 'quarter' || h.includes('date'));
       
       // Cost/Spend column
-      const costCol = headers.findIndex(h => h === 'cost' || h === 'spend' || h === 'amount spent' || h.includes('amount spent') || (h.includes('cost') && !h.includes('/') && !h.includes('per')));
+      const costCol = headers.findIndex(h => h === 'cost' || h === 'spend' || h === 'amount spent' || (h.includes('cost') && !h.includes('/') && !h.includes('per')));
       
       // Impressions
-      const impressionsCol = headers.findIndex(h => h === 'impressions' || h === 'impr' || h === 'impr.' || h.includes('impression'));
+      const impressionsCol = headers.findIndex(h => h === 'impressions' || h === 'impr' || h.includes('impression'));
       
       // Clicks
       const clicksCol = headers.findIndex(h => h === 'clicks' || h === 'link clicks' || h.includes('click'));
@@ -8347,7 +8579,7 @@ const savePeriods = async (d) => {
       const conversionsCol = headers.findIndex(h => h === 'conversions' || h === 'purchases (all)' || h === 'purchases' || (h.includes('conv') && !h.includes('value') && !h.includes('cost')));
       
       // Conversion Value / Revenue
-      const convValueCol = headers.findIndex(h => h === 'all conv. value' || h === 'purchases value (all)' || h === 'purchases value' || h === 'conv. value' || h === 'purchase value' || (h.includes('value') && (h.includes('conv') || h.includes('purchase'))));
+      const convValueCol = headers.findIndex(h => h === 'all conv. value' || h === 'purchases value (all)' || h === 'conv. value' || h === 'purchase value' || (h.includes('value') && (h.includes('conv') || h.includes('purchase'))));
       
       // ROAS
       const roasCol = headers.findIndex(h => h === 'conv. value / cost' || h === 'purchase (roas) (all)' || h === 'roas' || h.includes('roas'));
@@ -8515,16 +8747,6 @@ const savePeriods = async (d) => {
           // Try ISO format
           if (!parsedDate && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
             parsedDate = new Date(dateStr + 'T00:00:00');
-          }
-          
-          // Try ISO with time "2026-01-27 00:00:00" (from XLSX)
-          if (!parsedDate && /^\d{4}-\d{2}-\d{2}\s/.test(dateStr)) {
-            parsedDate = new Date(dateStr.split(/\s/)[0] + 'T00:00:00');
-          }
-          
-          // Try Excel serial number (e.g., 45951)
-          if (!parsedDate && /^\d{5}$/.test(dateStr)) {
-            parsedDate = new Date((parseInt(dateStr) - 25569) * 86400 * 1000);
           }
           
           // Try US format
@@ -9180,9 +9402,7 @@ const savePeriods = async (d) => {
         if (latestDay) setSelectedDay(latestDay);
         setView('daily');
       } else if (monthlyImported > 0) {
-        const latestPeriod = Object.keys(allPeriodsData).sort().reverse()[0];
-        if (latestPeriod) setSelectedPeriod(latestPeriod);
-        setView('period-view');
+        setView('periods');
       }
     } catch (err) {
       console.error('Bulk upload error:', err);
@@ -9667,6 +9887,9 @@ const savePeriods = async (d) => {
     }
   }, [allWeeksData, allDaysData, allPeriodsData, save, combinedData]);
 
+  const getMonths = () => { const m = new Set(); Object.keys(allWeeksData).forEach(w => { const d = new Date(w+'T00:00:00'); m.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`); }); return Array.from(m).sort().reverse(); };
+  const getYears = () => { const y = new Set(); Object.keys(allWeeksData).forEach(w => { y.add(new Date(w+'T00:00:00').getFullYear()); }); return Array.from(y).sort().reverse(); };
+  const months = getMonths();
   const now = new Date();
   // Safe defaults for vars that original view components expect as props
   const response = null;
@@ -9700,6 +9923,113 @@ const savePeriods = async (d) => {
   const transactions = null;
   const unpaid = null;
   const uploads = null;
+
+  const getMonthlyData = (ym) => {
+    const [y, m] = ym.split('-').map(Number);
+    const weeks = Object.entries(allWeeksData).filter(([w]) => { const d = new Date(w+'T00:00:00'); return d.getFullYear() === y && d.getMonth()+1 === m; });
+    if (!weeks.length) return null;
+    const agg = { weeks: weeks.map(([w]) => w), 
+      amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0 }, 
+      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, threeplBreakdown: { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 }, threeplMetrics: { orderCount: 0, totalUnits: 0 } }, 
+      total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 }};
+    weeks.forEach(([w, d]) => {
+      // Get ledger 3PL for this week
+      const ledger3PL = get3PLForWeek(threeplLedger, w);
+      const weekThreeplCost = ledger3PL?.metrics?.totalCost || d.shopify?.threeplCosts || 0;
+      const weekThreeplBreakdown = ledger3PL?.breakdown || d.shopify?.threeplBreakdown || {};
+      const weekThreeplMetrics = ledger3PL?.metrics || d.shopify?.threeplMetrics || {};
+      
+      agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.returns += d.amazon?.returns || 0;
+      agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += getProfit(d.amazon);
+      agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0;
+      agg.shopify.threeplCosts += weekThreeplCost; agg.shopify.adSpend += d.shopify?.adSpend || 0; 
+      agg.shopify.metaSpend += d.shopify?.metaSpend || 0; agg.shopify.googleSpend += d.shopify?.googleSpend || 0;
+      agg.shopify.discounts += d.shopify?.discounts || 0;
+      // Recalculate shopify profit with ledger 3PL
+      const shopProfit = (d.shopify?.revenue || 0) - (d.shopify?.cogs || 0) - weekThreeplCost - (d.shopify?.adSpend || 0);
+      agg.shopify.netProfit += shopProfit;
+      // Aggregate 3PL breakdown
+      agg.shopify.threeplBreakdown.storage += weekThreeplBreakdown.storage || 0;
+      agg.shopify.threeplBreakdown.shipping += weekThreeplBreakdown.shipping || 0;
+      agg.shopify.threeplBreakdown.pickFees += weekThreeplBreakdown.pickFees || 0;
+      agg.shopify.threeplBreakdown.boxCharges += weekThreeplBreakdown.boxCharges || 0;
+      agg.shopify.threeplBreakdown.receiving += weekThreeplBreakdown.receiving || 0;
+      agg.shopify.threeplBreakdown.other += weekThreeplBreakdown.other || 0;
+      agg.shopify.threeplMetrics.orderCount += weekThreeplMetrics.orderCount || 0;
+      agg.shopify.threeplMetrics.totalUnits += weekThreeplMetrics.totalUnits || 0;
+      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0; 
+      agg.total.netProfit += (getProfit(d.amazon)) + shopProfit;
+    });
+    // Calculate metrics
+    agg.shopify.threeplMetrics.avgCostPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? (agg.shopify.threeplCosts - agg.shopify.threeplBreakdown.storage) / agg.shopify.threeplMetrics.orderCount : 0;
+    agg.shopify.threeplMetrics.avgUnitsPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? agg.shopify.threeplMetrics.totalUnits / agg.shopify.threeplMetrics.orderCount : 0;
+    agg.amazon.margin = agg.amazon.revenue > 0 ? (agg.amazon.netProfit/agg.amazon.revenue)*100 : 0;
+    agg.amazon.aov = agg.amazon.units > 0 ? agg.amazon.revenue/agg.amazon.units : 0;
+    agg.amazon.roas = agg.amazon.adSpend > 0 ? agg.amazon.revenue/agg.amazon.adSpend : 0;
+    agg.amazon.returnRate = agg.amazon.units > 0 ? (agg.amazon.returns/agg.amazon.units)*100 : 0;
+    agg.shopify.netMargin = agg.shopify.revenue > 0 ? (agg.shopify.netProfit/agg.shopify.revenue)*100 : 0;
+    agg.shopify.aov = agg.shopify.units > 0 ? agg.shopify.revenue/agg.shopify.units : 0;
+    agg.shopify.roas = agg.shopify.adSpend > 0 ? agg.shopify.revenue/agg.shopify.adSpend : 0;
+    agg.total.netMargin = agg.total.revenue > 0 ? (agg.total.netProfit/agg.total.revenue)*100 : 0;
+    agg.total.amazonShare = agg.total.revenue > 0 ? (agg.amazon.revenue/agg.total.revenue)*100 : 0;
+    agg.total.shopifyShare = agg.total.revenue > 0 ? (agg.shopify.revenue/agg.total.revenue)*100 : 0;
+    return agg;
+  };
+
+  const getYearlyData = (year) => {
+    const weeks = Object.entries(allWeeksData).filter(([w]) => new Date(w+'T00:00:00').getFullYear() === year);
+    if (!weeks.length) return null;
+    const agg = { weeks: weeks.map(([w]) => w), 
+      amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0 }, 
+      shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, threeplBreakdown: { storage: 0, shipping: 0, pickFees: 0, boxCharges: 0, receiving: 0, other: 0 }, threeplMetrics: { orderCount: 0, totalUnits: 0 } }, 
+      total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 }, monthlyBreakdown: {}};
+    weeks.forEach(([w, d]) => {
+      const dt = new Date(w+'T00:00:00'); const mk = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
+      if (!agg.monthlyBreakdown[mk]) agg.monthlyBreakdown[mk] = { revenue: 0, netProfit: 0 };
+      
+      // Get ledger 3PL for this week
+      const ledger3PL = get3PLForWeek(threeplLedger, w);
+      const weekThreeplCost = ledger3PL?.metrics?.totalCost || d.shopify?.threeplCosts || 0;
+      const weekThreeplBreakdown = ledger3PL?.breakdown || d.shopify?.threeplBreakdown || {};
+      const weekThreeplMetrics = ledger3PL?.metrics || d.shopify?.threeplMetrics || {};
+      
+      agg.amazon.revenue += d.amazon?.revenue || 0; agg.amazon.units += d.amazon?.units || 0; agg.amazon.returns += d.amazon?.returns || 0;
+      agg.amazon.cogs += d.amazon?.cogs || 0; agg.amazon.fees += d.amazon?.fees || 0; agg.amazon.adSpend += d.amazon?.adSpend || 0; agg.amazon.netProfit += getProfit(d.amazon);
+      agg.shopify.revenue += d.shopify?.revenue || 0; agg.shopify.units += d.shopify?.units || 0; agg.shopify.cogs += d.shopify?.cogs || 0;
+      agg.shopify.threeplCosts += weekThreeplCost; agg.shopify.adSpend += d.shopify?.adSpend || 0;
+      agg.shopify.metaSpend += d.shopify?.metaSpend || 0; agg.shopify.googleSpend += d.shopify?.googleSpend || 0;
+      agg.shopify.discounts += d.shopify?.discounts || 0;
+      // Recalculate shopify profit with ledger 3PL
+      const shopProfit = (d.shopify?.revenue || 0) - (d.shopify?.cogs || 0) - weekThreeplCost - (d.shopify?.adSpend || 0);
+      agg.shopify.netProfit += shopProfit;
+      // Aggregate 3PL breakdown
+      agg.shopify.threeplBreakdown.storage += weekThreeplBreakdown.storage || 0;
+      agg.shopify.threeplBreakdown.shipping += weekThreeplBreakdown.shipping || 0;
+      agg.shopify.threeplBreakdown.pickFees += weekThreeplBreakdown.pickFees || 0;
+      agg.shopify.threeplBreakdown.boxCharges += weekThreeplBreakdown.boxCharges || 0;
+      agg.shopify.threeplBreakdown.receiving += weekThreeplBreakdown.receiving || 0;
+      agg.shopify.threeplBreakdown.other += weekThreeplBreakdown.other || 0;
+      agg.shopify.threeplMetrics.orderCount += weekThreeplMetrics.orderCount || 0;
+      agg.shopify.threeplMetrics.totalUnits += weekThreeplMetrics.totalUnits || 0;
+      agg.total.revenue += d.total?.revenue || 0; agg.total.units += d.total?.units || 0; agg.total.cogs += d.total?.cogs || 0; agg.total.adSpend += d.total?.adSpend || 0;
+      agg.total.netProfit += (getProfit(d.amazon)) + shopProfit;
+      agg.monthlyBreakdown[mk].revenue += d.total?.revenue || 0; agg.monthlyBreakdown[mk].netProfit += (getProfit(d.amazon)) + shopProfit;
+    });
+    // Calculate metrics
+    agg.shopify.threeplMetrics.avgCostPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? (agg.shopify.threeplCosts - agg.shopify.threeplBreakdown.storage) / agg.shopify.threeplMetrics.orderCount : 0;
+    agg.shopify.threeplMetrics.avgUnitsPerOrder = agg.shopify.threeplMetrics.orderCount > 0 ? agg.shopify.threeplMetrics.totalUnits / agg.shopify.threeplMetrics.orderCount : 0;
+    agg.amazon.margin = agg.amazon.revenue > 0 ? (agg.amazon.netProfit/agg.amazon.revenue)*100 : 0;
+    agg.amazon.aov = agg.amazon.units > 0 ? agg.amazon.revenue/agg.amazon.units : 0;
+    agg.amazon.roas = agg.amazon.adSpend > 0 ? agg.amazon.revenue/agg.amazon.adSpend : 0;
+    agg.amazon.returnRate = agg.amazon.units > 0 ? (agg.amazon.returns/agg.amazon.units)*100 : 0;
+    agg.shopify.netMargin = agg.shopify.revenue > 0 ? (agg.shopify.netProfit/agg.shopify.revenue)*100 : 0;
+    agg.shopify.aov = agg.shopify.units > 0 ? agg.shopify.revenue/agg.shopify.units : 0;
+    agg.shopify.roas = agg.shopify.adSpend > 0 ? agg.shopify.revenue/agg.shopify.adSpend : 0;
+    agg.total.netMargin = agg.total.revenue > 0 ? (agg.total.netProfit/agg.total.revenue)*100 : 0;
+    agg.total.amazonShare = agg.total.revenue > 0 ? (agg.amazon.revenue/agg.total.revenue)*100 : 0;
+    agg.total.shopifyShare = agg.total.revenue > 0 ? (agg.shopify.revenue/agg.total.revenue)*100 : 0;
+    return agg;
+  };
 
   // COMPLETE BACKUP - includes ALL dashboard data
   const exportAll = () => { 
@@ -10998,7 +11328,7 @@ const savePeriods = async (d) => {
               // DOS/stockout dates are recalculated on auto-sync too
               try {
                 
-                // Build velocity lookups from daily data (trimmed mean - outlier resistant)
+                // Build velocity lookups from daily data (weighted moving average)
                 const autoAmazonVelLookup = {};
                 const autoShopifyVelLookup = {};
                 const autoVelocityTrends = {};
@@ -11012,28 +11342,10 @@ const savePeriods = async (d) => {
                   });
                 };
                 
-                // Trimmed mean: sort daily values, drop top & bottom ~10%, average rest
-                const autoTrimmedMeanWeekly = (dailyValues, totalDays) => {
-                  if (!dailyValues || dailyValues.length === 0) return 0;
-                  const padded = [...dailyValues];
-                  while (padded.length < totalDays) padded.push(0);
-                  padded.sort((a, b) => a - b);
-                  const trimCount = padded.length >= 10 ? Math.floor(padded.length * 0.1) : 0;
-                  const trimmed = padded.slice(trimCount, padded.length - trimCount);
-                  const avgDaily = trimmed.reduce((s, v) => s + v, 0) / trimmed.length;
-                  return avgDaily * 7;
-                };
-                
                 if (Object.keys(allDaysData).length > 0) {
                   const allDates = Object.keys(allDaysData).sort().reverse();
                   const last28Days = allDates.slice(0, 28);
-                  const totalDays = last28Days.length;
-                  
-                  // Collect per-SKU per-day units
-                  const dailyShopUnits = {}; // { sku: [units, units, ...] }
-                  const dailyAmzUnits = {};
-                  // Also track recent vs prior for trend calculation
-                  const skuTrendData = {};
+                  const skuDailyUnits = {};
                   
                   last28Days.forEach((date, dayIndex) => {
                     const day = allDaysData[date];
@@ -11046,11 +11358,11 @@ const savePeriods = async (d) => {
                       if (!item.sku) return;
                       const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
                       const units = item.unitsSold || item.units || 0;
-                      if (!dailyShopUnits[normalizedSku]) dailyShopUnits[normalizedSku] = [];
-                      dailyShopUnits[normalizedSku].push(units);
-                      if (!skuTrendData[normalizedSku]) skuTrendData[normalizedSku] = { recentShop: 0, priorShop: 0, recentAmz: 0, priorAmz: 0 };
-                      if (isRecent) skuTrendData[normalizedSku].recentShop += units;
-                      else skuTrendData[normalizedSku].priorShop += units;
+                      if (!skuDailyUnits[normalizedSku]) {
+                        skuDailyUnits[normalizedSku] = { recentShopify: 0, priorShopify: 0, recentAmazon: 0, priorAmazon: 0 };
+                      }
+                      if (isRecent) skuDailyUnits[normalizedSku].recentShopify += units;
+                      else skuDailyUnits[normalizedSku].priorShopify += units;
                     });
                     
                     // Amazon SKU data
@@ -11060,33 +11372,29 @@ const savePeriods = async (d) => {
                       if (!item.sku) return;
                       const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
                       const units = item.unitsSold || item.units || 0;
-                      if (!dailyAmzUnits[normalizedSku]) dailyAmzUnits[normalizedSku] = [];
-                      dailyAmzUnits[normalizedSku].push(units);
-                      if (!skuTrendData[normalizedSku]) skuTrendData[normalizedSku] = { recentShop: 0, priorShop: 0, recentAmz: 0, priorAmz: 0 };
-                      if (isRecent) skuTrendData[normalizedSku].recentAmz += units;
-                      else skuTrendData[normalizedSku].priorAmz += units;
+                      if (!skuDailyUnits[normalizedSku]) {
+                        skuDailyUnits[normalizedSku] = { recentShopify: 0, priorShopify: 0, recentAmazon: 0, priorAmazon: 0 };
+                      }
+                      if (isRecent) skuDailyUnits[normalizedSku].recentAmazon += units;
+                      else skuDailyUnits[normalizedSku].priorAmazon += units;
                     });
                   });
                   
-                  // Calculate trimmed mean velocities + trends
-                  const allSkus = new Set([...Object.keys(dailyShopUnits), ...Object.keys(dailyAmzUnits)]);
-                  allSkus.forEach(sku => {
-                    const shopVel = autoTrimmedMeanWeekly(dailyShopUnits[sku], totalDays);
-                    const amzVel = autoTrimmedMeanWeekly(dailyAmzUnits[sku], totalDays);
+                  // Calculate weighted velocity (recent 2x weight)
+                  const weeksEquiv = 6; // 3 periods × 2 weeks
+                  Object.entries(skuDailyUnits).forEach(([sku, d]) => {
+                    const shopVel = ((d.recentShopify * 2) + d.priorShopify) / weeksEquiv;
+                    const amzVel = ((d.recentAmazon * 2) + d.priorAmazon) / weeksEquiv;
                     storeAutoVelocity(autoShopifyVelLookup, sku, shopVel);
                     storeAutoVelocity(autoAmazonVelLookup, sku, amzVel);
                     
-                    // Trend: compare recent 14d vs prior 14d
-                    const td = skuTrendData[sku];
-                    if (td) {
-                      const recentWeeklyShop = td.recentShop / 2;
-                      const priorWeeklyShop = td.priorShop / 2;
-                      const recentWeeklyAmz = td.recentAmz / 2;
-                      const priorWeeklyAmz = td.priorAmz / 2;
-                      const shopTrend = priorWeeklyShop > 0 ? ((recentWeeklyShop - priorWeeklyShop) / priorWeeklyShop) : 0;
-                      const amzTrend = priorWeeklyAmz > 0 ? ((recentWeeklyAmz - priorWeeklyAmz) / priorWeeklyAmz) : 0;
-                      autoVelocityTrends[sku] = { totalTrend: Math.round(((shopTrend + amzTrend) / 2) * 100) };
-                    }
+                    const recentWeeklyShop = d.recentShopify / 2;
+                    const priorWeeklyShop = d.priorShopify / 2;
+                    const recentWeeklyAmz = d.recentAmazon / 2;
+                    const priorWeeklyAmz = d.priorAmazon / 2;
+                    const shopTrend = priorWeeklyShop > 0 ? ((recentWeeklyShop - priorWeeklyShop) / priorWeeklyShop) : 0;
+                    const amzTrend = priorWeeklyAmz > 0 ? ((recentWeeklyAmz - priorWeeklyAmz) / priorWeeklyAmz) : 0;
+                    autoVelocityTrends[sku] = { totalTrend: Math.round(((shopTrend + amzTrend) / 2) * 100) };
                   });
                   
                 }
@@ -11364,148 +11672,6 @@ const savePeriods = async (d) => {
         }
       }
       
-      // Check QuickBooks Online - use /api/qbo/sync endpoint
-      if (appSettings.autoSync?.qbo !== false && qboCredentials.connected) {
-        const qboStale = isServiceStale(qboCredentials.lastSync, threshold);
-        
-        if (qboStale || force) {
-          try {
-            let currentAccessToken = qboCredentials.accessToken;
-            
-            let res = await fetch('/api/qbo/sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                realmId: qboCredentials.realmId,
-                accessToken: currentAccessToken,
-                refreshToken: qboCredentials.refreshToken,
-              }),
-            });
-            
-            // Token refresh if expired
-            if (res.status === 401) {
-              const refreshRes = await fetch('/api/qbo/refresh', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ refreshToken: qboCredentials.refreshToken }),
-              });
-              if (refreshRes.ok) {
-                const refreshData = await refreshRes.json();
-                currentAccessToken = refreshData.accessToken;
-                setQboCredentials(p => ({
-                  ...p,
-                  accessToken: refreshData.accessToken,
-                  refreshToken: refreshData.refreshToken || p.refreshToken,
-                }));
-                res = await fetch('/api/qbo/sync', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    realmId: qboCredentials.realmId,
-                    accessToken: currentAccessToken,
-                    refreshToken: refreshData.refreshToken || qboCredentials.refreshToken,
-                  }),
-                });
-              } else {
-                throw new Error('QBO token refresh failed');
-              }
-            }
-            
-            if (res.ok) {
-              const data = await res.json();
-              
-              // Full-replace QBO transactions: QBO is source of truth, so remove
-              // all existing QBO-sourced transactions and replace with fresh data.
-              // Non-QBO transactions (manual CSV uploads) are preserved.
-              setBankingData(prev => {
-                // Keep only non-QBO transactions (manual uploads, etc.)
-                const nonQboTransactions = (prev?.transactions || []).filter(t => 
-                  !t.qboId && !t.id?.startsWith('qbo-')
-                );
-                
-                // Transform fresh QBO transactions
-                const qboTransactions = (data.transactions || []).map(t => {
-                    const isIncome = t.type === 'income' || (t.type === 'transfer' && t.amount > 0);
-                    const isExpense = t.type === 'expense' || t.type === 'bill' || (t.type === 'transfer' && t.amount < 0);
-                    const displayType = t.qboType === 'Deposit' ? 'Deposit'
-                      : t.qboType === 'Purchase' ? 'Expense'
-                      : t.qboType === 'Transfer' ? 'Transfer'
-                      : t.qboType === 'Bill' ? 'Bill'
-                      : t.type;
-                    return {
-                      ...t,
-                      type: displayType,
-                      isIncome, isExpense,
-                      amount: Math.abs(t.amount),
-                      originalAmount: t.amount,
-                      topCategory: t.category || t.account || 'Uncategorized',
-                      subCategory: t.memo || t.description || '',
-                      date: t.date || new Date().toISOString().split('T')[0],
-                    };
-                  });
-                
-                const allTxns = [...nonQboTransactions, ...qboTransactions];
-                
-                // Update account balances
-                const updatedAccounts = { ...(prev?.accounts || {}) };
-                if (data.bankAccounts) {
-                  data.bankAccounts.forEach(acc => {
-                    updatedAccounts[acc.name] = {
-                      ...updatedAccounts[acc.name],
-                      name: acc.name, type: 'checking',
-                      balance: acc.currentBalance, qboId: acc.id,
-                      lastSynced: new Date().toISOString(),
-                    };
-                  });
-                }
-                if (data.creditCards) {
-                  data.creditCards.forEach(acc => {
-                    updatedAccounts[acc.name] = {
-                      ...updatedAccounts[acc.name],
-                      name: acc.name, type: 'credit_card',
-                      balance: Math.abs(acc.currentBalance), qboId: acc.id,
-                      lastSynced: new Date().toISOString(),
-                    };
-                  });
-                }
-                
-                // Recalculate categories from merged transactions
-                const updatedCategories = {};
-                allTxns.forEach(txn => {
-                  const cat = txn.topCategory || 'Uncategorized';
-                  if (!updatedCategories[cat]) updatedCategories[cat] = { totalIn: 0, totalOut: 0, transactions: 0 };
-                  if (txn.isIncome) updatedCategories[cat].totalIn += txn.amount;
-                  if (txn.isExpense) updatedCategories[cat].totalOut += txn.amount;
-                  updatedCategories[cat].transactions += 1;
-                });
-                
-                return {
-                  ...prev,
-                  transactions: allTxns,
-                  accounts: updatedAccounts,
-                  categories: updatedCategories,
-                  lastUpdated: new Date().toISOString(),
-                  qboSummary: data.summary,
-                  vendors: data.vendors || prev?.vendors || [],
-                  profitAndLoss: data.profitAndLoss || prev?.profitAndLoss || null,
-                  revenueByChannel: data.revenueByChannel || prev?.revenueByChannel || null,
-                };
-              });
-              
-              setQboCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-              const txnCount = data.transactions?.length || 0;
-              results.push({ service: 'QuickBooks', success: true, transactions: txnCount });
-            } else {
-              const errData = await res.json().catch(() => ({}));
-              results.push({ service: 'QuickBooks', success: false, error: errData.error || `HTTP ${res.status}` });
-            }
-          } catch (err) {
-            results.push({ service: 'QuickBooks', success: false, error: err.message });
-            console.warn('QBO auto-sync error:', err.message);
-          }
-        }
-      }
-      
       // Show results
       const successful = results.filter(r => r.success);
       const failed = results.filter(r => !r.success);
@@ -11515,7 +11681,6 @@ const savePeriods = async (d) => {
           if (r.service === 'Amazon') return 'Amazon';
           if (r.service === 'Shopify') return `Shopify (${r.orders} orders)`;
           if (r.service === 'Packiyo') return `Packiyo (${r.skus} SKUs)`;
-          if (r.service === 'QuickBooks') return `QuickBooks (${r.transactions} txns)`;
           return r.service;
         });
         setToast({
@@ -12555,7 +12720,7 @@ Keep insights brief and actionable. Format as numbered list.`;
           body: JSON.stringify({
             system: systemPrompt,
             messages: [{ role: 'user', content: prompt }],
-            model: window.__aiModelOverride || 'claude-sonnet-4-5-20250929',
+            model: 'claude-sonnet-4-20250514',
             max_tokens: 4000,
           }),
         });
@@ -12755,7 +12920,7 @@ Respond with ONLY this JSON (no markdown):
           ...forecast,
           generatedAt: new Date().toISOString(),
           source: 'claude-ai-pro',
-          model: window.__aiModelOverride || 'claude-sonnet-4-5-20250929',
+          model: 'claude-sonnet-4-20250514',
           calculatedSignals: {
             dailyAvg7: avg7Day,
             dailyAvg14: avg14Day,
@@ -15302,7 +15467,6 @@ Analyze the data and respond with ONLY this JSON:
     
     try {
       const ctx = prepareDataContext();
-      const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
       
       // Build alerts summary for AI
       const alertsSummary = [];
@@ -15310,9 +15474,7 @@ Analyze the data and respond with ONLY this JSON:
         alertsSummary.push(`LOW STOCK ALERT: ${ctx.inventory.lowStockItems.length} products need reorder (${ctx.inventory.lowStockItems.map(i => i.sku).join(', ')})`);
       }
       // Add critical reorder deadline alerts
-      const latestInvDate = Object.keys(invHistory).sort().reverse()[0];
-      const latestInvItems = latestInvDate ? (invHistory[latestInvDate]?.items || []) : [];
-      const criticalReorders = latestInvItems.filter(i => 
+      const criticalReorders = inventoryItems.filter(i => 
         i.daysUntilMustOrder !== null && i.daysUntilMustOrder !== undefined && 
         i.daysUntilMustOrder <= 14 && i.weeklyVelocity > 0
       );
@@ -16400,7 +16562,7 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
       const aiResponse = await callAI({
         system: systemPrompt,
         messages: [...aiMessages.slice(-10).map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
-      }, '', aiChatModel);
+      }, '', 'claude-haiku-4-5-20251001');
       
       setAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
     } catch (error) {
@@ -16638,7 +16800,7 @@ HARD RULES — VIOLATING THESE MAKES THE PLAN USELESS:
       const aiResponse = await callAI({
         system: systemPrompt,
         messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
-      }, '', aiChatModel);
+      }, '', 'claude-haiku-4-5-20251001');
       
       setAdsAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
     } catch (error) {
@@ -17011,44 +17173,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {currentReport && (<>
+            {currentReport && (
               <button onClick={() => downloadReport(currentReport)} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-white text-sm flex items-center gap-2">
                 <Download className="w-4 h-4" />Download
               </button>
-              <button onClick={() => {
-                try {
-                  const title = `${reportType.charAt(0).toUpperCase() + reportType.slice(1)} Intelligence Report`;
-                  exportToPDF({ title, content: currentReport.content, storeName });
-                  setToast({ message: '📄 PDF opened — use Print → Save as PDF', type: 'success' });
-                } catch (e) { setToast({ message: e.message, type: 'error' }); }
-              }} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-white text-sm flex items-center gap-2">
-                <Printer className="w-4 h-4" />PDF
-              </button>
-              {appSettings?.slackWebhookUrl && (
-                <button onClick={async () => {
-                  try {
-                    setToast({ message: 'Sending to Slack...', type: 'info' });
-                    const title = `${reportType.charAt(0).toUpperCase() + reportType.slice(1)} Report`;
-                    await shareToSlack(appSettings.slackWebhookUrl, { title, content: currentReport.content, storeName });
-                    setToast({ message: '✅ Report sent to Slack!', type: 'success' });
-                  } catch (e) { setToast({ message: e.message, type: 'error' }); }
-                }} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-white text-sm flex items-center gap-2">
-                  <Send className="w-4 h-4" />Slack
-                </button>
-              )}
-              {appSettings?.googleSheetId && (
-                <button onClick={async () => {
-                  try {
-                    setToast({ message: 'Pushing to Sheets...', type: 'info' });
-                    const title = `${reportType.charAt(0).toUpperCase() + reportType.slice(1)} Report`;
-                    await pushToSheets(appSettings.googleSheetId, { title, content: currentReport.content, storeName });
-                    setToast({ message: '✅ Pushed to Google Sheets!', type: 'success' });
-                  } catch (e) { setToast({ message: e.message, type: 'error' }); }
-                }} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-white text-sm flex items-center gap-2">
-                  <Table className="w-4 h-4" />Sheets
-                </button>
-              )}
-            </>)}
+            )}
             <button onClick={() => { setShowWeeklyReport(false); setCurrentReport(null); setReportError(null); }} className="p-2 hover:bg-white/20 rounded-lg text-white">
               <X className="w-5 h-5" />
             </button>
@@ -17253,16 +17382,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <select
-              value={aiChatModel}
-              onChange={(e) => setAiChatModel(e.target.value)}
-              className="bg-white/10 border border-white/20 rounded-lg px-2 py-1.5 text-white text-xs focus:outline-none focus:ring-1 focus:ring-white/40 cursor-pointer"
-              title="Select AI model"
-            >
-              {Object.entries(AI_MODELS).map(([key, m]) => (
-                <option key={key} value={key} className="bg-slate-800 text-white">{m.short} ({m.cost})</option>
-              ))}
-            </select>
             {aiMessages.length > 0 && (
               <button 
                 onClick={() => { if (confirm('Clear chat history?')) setAiMessages([]); }} 
@@ -17321,7 +17440,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
               className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-500"
               autoComplete="off"
             />
-            <button onClick={() => sendAIMessage()} disabled={!aiInput.trim() || aiLoading} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl text-white">
+            <button onClick={sendAIMessage} disabled={!aiInput.trim() || aiLoading} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl text-white">
               <Send className="w-4 h-4" />
             </button>
           </div>
@@ -17367,19 +17486,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           total: derived.total,
           amazon: {
             ...stored.amazon,
-            ...derived.amazon,
-            skuData: stored.amazon?.skuData?.length > (derived.amazon?.skuData?.length || 0)
-              ? stored.amazon.skuData : (derived.amazon?.skuData || stored.amazon?.skuData || []),
+            revenue: derived.amazon?.revenue ?? stored.amazon?.revenue,
+            units: derived.amazon?.units ?? stored.amazon?.units,
           },
           shopify: {
             ...stored.shopify,
-            ...derived.shopify,
-            threeplCosts: stored.shopify?.threeplCosts || derived.shopify?.threeplCosts || 0,
-            threeplMetrics: stored.shopify?.threeplMetrics || derived.shopify?.threeplMetrics,
-            threeplBreakdown: stored.shopify?.threeplBreakdown || derived.shopify?.threeplBreakdown,
-            taxByState: stored.shopify?.taxByState || derived.shopify?.taxByState,
-            skuData: stored.shopify?.skuData?.length > (derived.shopify?.skuData?.length || 0)
-              ? stored.shopify.skuData : (derived.shopify?.skuData || stored.shopify?.skuData || []),
+            revenue: derived.shopify?.revenue ?? stored.shopify?.revenue,
+            units: derived.shopify?.units ?? stored.shopify?.units,
           },
         };
       }
@@ -17683,6 +17796,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     <>
       <OnboardingWizard />
       <PdfExportModal />
+      <BenchmarksModal />
       <ConfirmDialog />
     </>
   );
@@ -17699,7 +17813,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   // ==================== DASHBOARD VIEW ====================
 
   // ==================== GLOBAL MODALS (rendered once, not per-view) ====================
-  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} appSettings={appSettings} storeName={storeName} allDaysData={allDaysData} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} appSettings={appSettings} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /></>);
+  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><BenchmarksModal /></>);
 
   if (view === 'dashboard') {
     return <DashboardView
@@ -17713,11 +17827,9 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       allWeeksData={allWeeksData}
       amazonForecasts={amazonForecasts}
       appSettings={appSettings}
-      autoSyncStatus={autoSyncStatus}
       bankingData={bankingData}
       calendarMonth={calendarMonth}
       comparisonLabel={comparisonLabel}
-      cogsLastUpdated={cogsLastUpdated}
       current={current}
       dashboardRange={dashboardRange}
       dataStatus={dataStatus}
@@ -17737,13 +17849,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       invHistory={invHistory}
       invoices={invoices}
       lastBackupDate={lastBackupDate}
-      leadTimeSettings={leadTimeSettings}
       navDropdown={navDropdown}
-      packiyoCredentials={packiyoCredentials}
       periodLabel={periodLabel}
       profitChange={profitChange}
       revenueChange={revenueChange}
-      runAutoSync={runAutoSync}
       salesTaxConfig={salesTaxConfig}
       savedCogs={savedCogs}
       savedProductNames={savedProductNames}
@@ -17759,6 +17868,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setSelectedInvDate={setSelectedInvDate}
       setSelectedPeriod={setSelectedPeriod}
       setSelectedWeek={setSelectedWeek}
+      setShowBenchmarks={setShowBenchmarks}
       setShowCogsManager={setShowCogsManager}
       setShowExportModal={setShowExportModal}
       setShowForecast={setShowForecast}
@@ -17801,7 +17911,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       amazonBulkFiles={amazonBulkFiles}
       amazonBulkParsed={amazonBulkParsed}
       amazonBulkProcessing={amazonBulkProcessing}
-      amazonCampaigns={amazonCampaigns}
       amazonCredentials={amazonCredentials}
       amazonForecasts={amazonForecasts}
       appSettings={appSettings}
@@ -17897,6 +18006,24 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       view={view}
       weekEnding={weekEnding}
     />;
+  }
+
+  if (view === 'bulk') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
+        <div className="max-w-3xl mx-auto">{globalModals}
+          <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 mb-4"><Layers className="w-8 h-8 text-white" /></div><h1 className="text-3xl font-bold text-white mb-2">Bulk Import</h1><p className="text-slate-400">Auto-splits into weeks</p></div>
+          <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />{dataBar}
+          <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-5 mb-6"><h3 className="text-amber-400 font-semibold mb-2">How It Works</h3><ul className="text-slate-300 text-sm space-y-1"><li>• Upload Amazon with "End date" column</li><li>• Auto-groups by week ending Sunday</li><li>• Shopify distributed proportionally</li></ul></div>
+          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><FileBox type="amazon" label="Amazon Report" desc="Multi-week CSV" req /><FileBox type="shopify" label="Shopify Sales" desc="Matching period" req /></div>
+          </div>
+          {!hasCogs && <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6"><p className="text-amber-400 font-semibold">COGS Required</p><p className="text-slate-300 text-sm">Click "COGS" button above first.</p></div>}
+          {bulkImportResult && <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-2xl p-5 mb-6"><h3 className="text-emerald-400 font-semibold mb-2">Import Complete!</h3><p className="text-slate-300">Created <span className="text-white font-bold">{bulkImportResult.weeksCreated}</span> weeks</p><p className="text-slate-400 text-sm">{bulkImportResult.dateRange}</p></div>}
+          <button onClick={processBulkImport} disabled={isProcessing || !files.amazon || !files.shopify || !hasCogs} className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 rounded-xl flex items-center justify-center gap-2">{isProcessing ? <><Loader2 className="w-5 h-5 animate-spin" />Processing...</> : 'Import & Split'}</button>
+        </div>
+      </div>
+    );
   }
 
   if (view === 'custom-select') {
@@ -18061,6 +18188,69 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     />;
   }
 
+  if (view === 'monthly') {
+    const data = selectedMonth ? getMonthlyData(selectedMonth) : null, idx = months.indexOf(selectedMonth);
+    if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto">{globalModals}
+          <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Monthly Performance</h1><p className="text-slate-400">{new Date(selectedMonth+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} ({data.weeks.length} weeks)</p></div>
+          <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
+          <div className="flex items-center gap-4 mb-6">
+            <button onClick={() => idx < months.length - 1 && setSelectedMonth(months[idx + 1])} disabled={idx >= months.length - 1} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
+            <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">{months.map(m => <option key={m} value={m}>{new Date(m+'-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</option>)}</select>
+            <button onClick={() => idx > 0 && setSelectedMonth(months[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+            <MetricCard label="Total Revenue" value={formatCurrency(data.total.revenue)} icon={DollarSign} color="emerald" />
+            <MetricCard label="Total Units" value={formatNumber(data.total.units)} icon={Package} color="blue" />
+            <MetricCard label="Net Profit" value={formatCurrency(data.total.netProfit)} sub={`${formatPercent(data.total.netMargin)} margin`} icon={TrendingUp} color={data.total.netProfit >= 0 ? 'emerald' : 'rose'} />
+            <MetricCard label="Ad Spend" value={formatCurrency(data.total.adSpend)} icon={BarChart3} color="violet" />
+            <MetricCard label="COGS" value={formatCurrency(data.total.cogs)} icon={ShoppingCart} color="amber" />
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz /><ChannelCard title="Shopify" color="blue" data={data.shopify} /></div>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'yearly') {
+    const years = getYears(), data = selectedYear ? getYearlyData(selectedYear) : null, idx = years.indexOf(selectedYear);
+    if (!data) return <div className="min-h-screen bg-slate-950 text-white p-6 flex items-center justify-center">No data</div>;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto">{globalModals}
+          <div className="mb-6"><h1 className="text-2xl lg:text-3xl font-bold text-white">Yearly Performance</h1><p className="text-slate-400">{selectedYear} ({data.weeks.length} weeks)</p></div>
+          <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
+          <div className="flex items-center gap-4 mb-6">
+            <button onClick={() => idx < years.length - 1 && setSelectedYear(years[idx + 1])} disabled={idx >= years.length - 1} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
+            <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white">{years.map(y => <option key={y} value={y}>{y}</option>)}</select>
+            <button onClick={() => idx > 0 && setSelectedYear(years[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+            <MetricCard label="Total Revenue" value={formatCurrency(data.total.revenue)} icon={DollarSign} color="emerald" />
+            <MetricCard label="Total Units" value={formatNumber(data.total.units)} icon={Package} color="blue" />
+            <MetricCard label="Net Profit" value={formatCurrency(data.total.netProfit)} sub={`${formatPercent(data.total.netMargin)} margin`} icon={TrendingUp} color={data.total.netProfit >= 0 ? 'emerald' : 'rose'} />
+            <MetricCard label="Ad Spend" value={formatCurrency(data.total.adSpend)} icon={BarChart3} color="violet" />
+            <MetricCard label="COGS" value={formatCurrency(data.total.cogs)} icon={ShoppingCart} color="amber" />
+          </div>
+          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-5 mb-8"><h3 className="text-sm font-semibold text-slate-400 uppercase mb-4">Monthly Breakdown</h3>
+            <div className="space-y-3">{Object.entries(data.monthlyBreakdown).sort().map(([m, md]) => { const max = Math.max(...Object.values(data.monthlyBreakdown).map(x => x.revenue)) || 1; return (
+              <div key={m} className="flex items-center gap-4">
+                <span className="w-12 text-sm text-slate-400">{new Date(m+'-01T00:00:00').toLocaleDateString('en-US', { month: 'short' })}</span>
+                <div className="flex-1 h-8 bg-slate-700 rounded-lg overflow-hidden relative">
+                  <div className={`h-full ${md.netProfit >= 0 ? 'bg-emerald-600' : 'bg-rose-600'}`} style={{ width: `${(md.revenue/max)*100}%` }} />
+                  <div className="absolute inset-0 flex items-center justify-between px-3"><span className="text-white text-sm font-medium">{formatCurrency(md.revenue)}</span><span className={`text-sm font-medium ${md.netProfit >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{formatCurrency(md.netProfit)}</span></div>
+                </div>
+              </div>
+            );})}</div>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><ChannelCard title="Amazon" color="orange" data={data.amazon} isAmz /><ChannelCard title="Shopify" color="blue" data={data.shopify} /></div>
+        </div>
+      </div>
+    );
+  }
+
   // Period View
   if (view === 'period-view' && selectedPeriod && allPeriodsData[selectedPeriod]) {
     return <PeriodDetailView
@@ -18125,6 +18315,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       invSortColumn={invSortColumn}
       invSortDirection={invSortDirection}
       leadTimeSettings={leadTimeSettings}
+      months={months}
       navDropdown={navDropdown}
       now={now}
       productionFile={productionFile}
@@ -18433,8 +18624,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
 
   if (view === 'ads') {
     return <AdsView
-      aiChatModel={aiChatModel}
-      setAiChatModel={setAiChatModel}
       adSpend={adSpend}
       adsAiInput={adsAiInput}
       adsAiLoading={adsAiLoading}
@@ -18460,8 +18649,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       files={files}
       globalModals={globalModals}
       invHistory={invHistory}
+      months={months}
       navDropdown={navDropdown}
       parseAmazonCampaignCSV={parseAmazonCampaignCSV}
+      processAdsUpload={processAdsUpload}
       saveAmazonCampaigns={saveAmazonCampaigns}
       sendAdsAIMessage={sendAdsAIMessage}
       setAdsAiInput={setAdsAiInput}
@@ -18516,6 +18707,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       navDropdown={navDropdown}
       periodLabel={periodLabel}
       salesTaxConfig={salesTaxConfig}
+      saveSalesTax={saveSalesTax}
       setEditPortalUrlValue={setEditPortalUrlValue}
       setEditingPortalUrl={setEditingPortalUrl}
       setFilingDetailState={setFilingDetailState}
@@ -18556,7 +18748,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   if (view === 'banking') {
     return <BankingView
       allDaysData={allDaysData}
-      parseQBOTransactions={parseQBOTransactions}
       allPeriodsData={allPeriodsData}
       allWeeksData={allWeeksData}
       appSettings={appSettings}
@@ -18649,13 +18840,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       getCogsLookup={getCogsLookup}
       globalModals={globalModals}
       goals={goals}
-      handleLogout={handleLogout}
       importData={importData}
       invHistory={invHistory}
       invoices={invoices}
       isMobile={isMobile}
       leadTimeSettings={leadTimeSettings}
       localSettings={localSettings}
+      months={months}
       navDropdown={navDropdown}
       notificationSettings={notificationSettings}
       now={now}
@@ -18698,8 +18889,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setSelectedWeek={setSelectedWeek}
       setSettingsTab={setSettingsTab}
       setShopifyCredentials={setShopifyCredentials}
-      setShow3PLBulkUpload={setShow3PLBulkUpload}
       setShowAdsBulkUpload={setShowAdsBulkUpload}
+      setShowBenchmarks={setShowBenchmarks}
       setShowOnboarding={setShowOnboarding}
       setShowPdfExport={setShowPdfExport}
       setShowResetConfirm={setShowResetConfirm}
@@ -18718,13 +18909,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       storeLogo={storeLogo}
       storeName={storeName}
       stores={stores}
-      switchStore={switchStore}
       theme={theme}
       toast={toast}
       setView={setView}
       view={view}
       save={save}
-      saveInv={saveInv}
       queueCloudSave={queueCloudSave}
       pushToCloudNow={pushToCloudNow}
       supabase={supabase}
@@ -18754,6 +18943,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     <>
       <OnboardingWizard />
       <PdfExportModal />
+      <BenchmarksModal />
       <ConfirmDialog />
     </>
   );
