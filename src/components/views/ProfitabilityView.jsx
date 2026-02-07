@@ -175,7 +175,7 @@ const ProfitabilityView = ({
     const currentMonth = new Date().getMonth(); // 0-indexed
     const currentQuarter = Math.floor(currentMonth / 3) + 1;
     
-    if (profitPeriod === 'monthly' && monthlyPeriods.length > 0) {
+    if (trendsTab === 'monthly' && monthlyPeriods.length > 0) {
       // Selected month (default to most recent if -1)
       const idx = profitPeriodIndex === -1 ? monthlyPeriods.length - 1 : Math.min(profitPeriodIndex, monthlyPeriods.length - 1);
       currentPeriodKey = monthlyPeriods[idx];
@@ -184,7 +184,7 @@ const ProfitabilityView = ({
       priorPeriodLabel = priorPeriodKey;
       trendPeriods = monthlyPeriods.slice(-8);
       trendPeriodType = 'month';
-    } else if (profitPeriod === 'quarterly' && quarterlyPeriods.length > 0) {
+    } else if (trendsTab === 'quarterly' && quarterlyPeriods.length > 0) {
       // Selected quarter
       const idx = profitPeriodIndex === -1 ? quarterlyPeriods.length - 1 : Math.min(profitPeriodIndex, quarterlyPeriods.length - 1);
       currentPeriodKey = quarterlyPeriods[idx];
@@ -193,7 +193,7 @@ const ProfitabilityView = ({
       priorPeriodLabel = priorPeriodKey;
       trendPeriods = quarterlyPeriods.slice(-4);
       trendPeriodType = 'quarter';
-    } else if (profitPeriod === 'yearly') {
+    } else if (trendsTab === 'yearly') {
       // YTD - aggregate all weeks from current year
       const ytdWeeks = sortedWeeks.filter(w => w.startsWith(String(currentYear)));
       currentPeriodKey = 'ytd';
@@ -233,7 +233,7 @@ const ProfitabilityView = ({
     // Get totals for current period
     const totals = { revenue: 0, cogs: 0, amazonFees: 0, threeplCosts: 0, adSpend: 0, profit: 0, units: 0, returns: 0 };
     
-    if (profitPeriod === 'yearly') {
+    if (trendsTab === 'yearly') {
       // YTD aggregation - use merged data for accuracy
       const ytdWeeks = sortedWeeks.filter(w => w.startsWith(String(currentYear)));
       ytdWeeks.forEach(w => {
@@ -266,7 +266,7 @@ const ProfitabilityView = ({
         totals.returns = data.amazon?.returns || 0;
         
         // Add 3PL costs from ledger for weekly periods if not in weekly data
-        if (profitPeriod === 'weekly' && currentPeriodKey) {
+        if (trendsTab === 'weekly' && currentPeriodKey) {
           const ledgerThreepl = getWeek3PLCosts(currentPeriodKey);
           // Use ledger data if it's higher (meaning we have ledger data)
           if (ledgerThreepl > totals.threeplCosts) {
@@ -275,7 +275,7 @@ const ProfitabilityView = ({
         }
         
         // For monthly periods, sum up weekly ledger data
-        if (profitPeriod === 'monthly' && currentPeriodKey) {
+        if (trendsTab === 'monthly' && currentPeriodKey) {
           // Find weeks that fall in this month
           const monthMatch = currentPeriodKey.toLowerCase().match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/);
           const yearMatch = currentPeriodKey.match(/(20\d{2})/);
@@ -301,7 +301,7 @@ const ProfitabilityView = ({
     
     // Get prior period totals for comparison
     const priorTotals = { revenue: 0, cogs: 0, amazonFees: 0, threeplCosts: 0, adSpend: 0, profit: 0, units: 0, returns: 0 };
-    if (profitPeriod === 'yearly') {
+    if (trendsTab === 'yearly') {
       // Prior YTD - use merged data for accuracy
       const currentDayOfYear = Math.floor((new Date() - new Date(currentYear, 0, 0)) / (1000 * 60 * 60 * 24));
       const priorYtdEnd = new Date(currentYear - 1, 0, currentDayOfYear);
@@ -333,7 +333,7 @@ const ProfitabilityView = ({
         priorTotals.profit = priorData.total?.netProfit || 0;
         
         // Add ledger data for prior week if needed
-        if (profitPeriod === 'weekly') {
+        if (trendsTab === 'weekly') {
           const ledgerThreepl = getWeek3PLCosts(priorPeriodKey);
           if (ledgerThreepl > priorTotals.threeplCosts) {
             priorTotals.threeplCosts = ledgerThreepl;
@@ -423,7 +423,7 @@ const ProfitabilityView = ({
         const revenue = s.netSales || 0;
         skuProfitability.push({ sku: s.sku, name: s.name || '', revenue, profit, units: s.unitsSold || 0 });
       });
-    } else if (profitPeriod === 'yearly') {
+    } else if (trendsTab === 'yearly') {
       // For YTD, aggregate all SKUs from current year - use merged data
       const ytdWeeks = sortedWeeks.filter(w => w.startsWith(String(currentYear)));
       ytdWeeks.forEach(w => {
@@ -507,7 +507,7 @@ const ProfitabilityView = ({
           <div className="mb-6">
             <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">💰 Profitability Deep Dive</h1>
             <p className="text-slate-400">
-              {profitPeriod === 'yearly' 
+              {trendsTab === 'yearly' 
                 ? currentPeriodLabel 
                 : `${currentPeriodLabel}${priorPeriodLabel ? ` vs ${priorPeriodLabel}` : ''}`}
             </p>
@@ -517,49 +517,49 @@ const ProfitabilityView = ({
           <div className="flex flex-wrap gap-2 mb-4">
             <button 
               onClick={() => { setTrendsTab('weekly'); setProfitPeriodIndex(-1); }}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'weekly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'weekly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
             >
               📅 Weekly
             </button>
             <button 
               onClick={() => { setTrendsTab('monthly'); setProfitPeriodIndex(-1); }}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'monthly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'monthly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
               disabled={monthlyPeriods.length === 0}
             >
               📊 Monthly {monthlyPeriods.length === 0 && '(No data)'}
             </button>
             <button 
               onClick={() => { setTrendsTab('quarterly'); setProfitPeriodIndex(-1); }}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'quarterly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'quarterly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
               disabled={quarterlyPeriods.length === 0}
             >
               📈 Quarterly {quarterlyPeriods.length === 0 && '(No data)'}
             </button>
             <button 
               onClick={() => { setTrendsTab('yearly'); setProfitPeriodIndex(-1); }}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${profitPeriod === 'yearly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${trendsTab === 'yearly' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
             >
               📆 YTD
             </button>
           </div>
           
           {/* Period Selector */}
-          {profitPeriod !== 'yearly' && (
+          {trendsTab !== 'yearly' && (
             <div className="flex flex-wrap gap-2 mb-6 items-center bg-slate-800/50 rounded-lg p-3 border border-slate-700">
               <span className="text-slate-400 text-sm mr-2">📅 Select Period:</span>
               <select
                 value={(() => {
-                  const periods = profitPeriod === 'weekly' ? sortedWeeks : profitPeriod === 'monthly' ? monthlyPeriods : quarterlyPeriods;
+                  const periods = trendsTab === 'weekly' ? sortedWeeks : trendsTab === 'monthly' ? monthlyPeriods : quarterlyPeriods;
                   return profitPeriodIndex === -1 ? periods.length - 1 : profitPeriodIndex;
                 })()}
                 onChange={(e) => {
-                  const periods = profitPeriod === 'weekly' ? sortedWeeks : profitPeriod === 'monthly' ? monthlyPeriods : quarterlyPeriods;
+                  const periods = trendsTab === 'weekly' ? sortedWeeks : trendsTab === 'monthly' ? monthlyPeriods : quarterlyPeriods;
                   const idx = parseInt(e.target.value);
                   setProfitPeriodIndex(idx === periods.length - 1 ? -1 : idx);
                 }}
                 className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm min-w-[200px]"
               >
-                {profitPeriod === 'weekly' && [...sortedWeeks].reverse().map((w, reverseIdx) => {
+                {trendsTab === 'weekly' && [...sortedWeeks].reverse().map((w, reverseIdx) => {
                   const idx = sortedWeeks.length - 1 - reverseIdx;
                   return (
                     <option key={w} value={idx}>
@@ -567,11 +567,11 @@ const ProfitabilityView = ({
                     </option>
                   );
                 })}
-                {profitPeriod === 'monthly' && [...monthlyPeriods].reverse().map((p, reverseIdx) => {
+                {trendsTab === 'monthly' && [...monthlyPeriods].reverse().map((p, reverseIdx) => {
                   const idx = monthlyPeriods.length - 1 - reverseIdx;
                   return <option key={p} value={idx}>{p}</option>;
                 })}
-                {profitPeriod === 'quarterly' && [...quarterlyPeriods].reverse().map((p, reverseIdx) => {
+                {trendsTab === 'quarterly' && [...quarterlyPeriods].reverse().map((p, reverseIdx) => {
                   const idx = quarterlyPeriods.length - 1 - reverseIdx;
                   return <option key={p} value={idx}>{p}</option>;
                 })}
@@ -581,7 +581,7 @@ const ProfitabilityView = ({
               <div className="flex gap-1 ml-2">
                 <button
                   onClick={() => {
-                    const periods = profitPeriod === 'weekly' ? sortedWeeks : profitPeriod === 'monthly' ? monthlyPeriods : quarterlyPeriods;
+                    const periods = trendsTab === 'weekly' ? sortedWeeks : trendsTab === 'monthly' ? monthlyPeriods : quarterlyPeriods;
                     const currentIdx = profitPeriodIndex === -1 ? periods.length - 1 : profitPeriodIndex;
                     if (currentIdx > 0) setProfitPeriodIndex(currentIdx - 1);
                   }}
@@ -592,7 +592,7 @@ const ProfitabilityView = ({
                 </button>
                 <button
                   onClick={() => {
-                    const periods = profitPeriod === 'weekly' ? sortedWeeks : profitPeriod === 'monthly' ? monthlyPeriods : quarterlyPeriods;
+                    const periods = trendsTab === 'weekly' ? sortedWeeks : trendsTab === 'monthly' ? monthlyPeriods : quarterlyPeriods;
                     const currentIdx = profitPeriodIndex === -1 ? periods.length - 1 : profitPeriodIndex;
                     if (currentIdx < periods.length - 1) setProfitPeriodIndex(currentIdx + 1);
                     else setProfitPeriodIndex(-1); // Go to latest
@@ -614,7 +614,7 @@ const ProfitabilityView = ({
           )}
           
           {/* Period Comparison Summary - Clear side-by-side view */}
-          {profitPeriod !== 'yearly' && (
+          {trendsTab !== 'yearly' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
               <div className="bg-gradient-to-br from-emerald-900/30 to-slate-800/50 rounded-xl border border-emerald-500/30 p-4">
                 <p className="text-emerald-400 text-xs font-medium uppercase mb-1">Selected Period</p>

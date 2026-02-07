@@ -28,7 +28,6 @@ const InventoryView = ({
   invSortColumn,
   invSortDirection,
   leadTimeSettings,
-  months,
   navDropdown,
   now,
   productionFile,
@@ -697,7 +696,7 @@ const InventoryView = ({
   
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-      <div className="max-w-7xl mx-auto">{globalModals}
+      <div className="max-w-7xl mx-auto">{globalModals}{SkuSettingsModalJSX}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
           <div><h1 className="text-2xl lg:text-3xl font-bold text-white">📦 Inventory Management</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} • {items.length} active SKUs</p></div>
           <div className="flex gap-2">
