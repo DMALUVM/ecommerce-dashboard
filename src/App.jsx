@@ -15,7 +15,7 @@ import {
   STORAGE_KEY, INVENTORY_KEY, COGS_KEY, STORE_KEY, GOALS_KEY, PERIODS_KEY, SALES_TAX_KEY, PRODUCT_NAMES_KEY,
   SETTINGS_KEY, NOTES_KEY, WIDGET_KEY, THEME_KEY, INVOICES_KEY, AMAZON_FORECAST_KEY, THREEPL_LEDGER_KEY,
   WEEKLY_REPORTS_KEY, FORECAST_ACCURACY_KEY, FORECAST_CORRECTIONS_KEY,
-  LZCompress, COMPRESSED_KEYS, lsGet, lsSet
+  LZCompress, COMPRESSED_KEYS, lsGet, lsSet, trimIntelData
 } from './utils/storage';
 import { AI_MODELS, AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, AI_MODEL_OPTIONS, getModelTier, getModelLabel } from './utils/config';
 
@@ -1297,14 +1297,22 @@ export default function Dashboard() {
   
   // Amazon Ads Intelligence Data (search terms, placements, targeting, etc.)
   const [adsIntelData, setAdsIntelData] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_ads_intel_v1', {}); }
+    if (!shouldUseLocalStorage) return {};
+    try { 
+      const raw = lsGet('ecommerce_ads_intel_v1');
+      return raw ? JSON.parse(raw) : {};
+    }
     catch (e) { devWarn("[init]", e?.message); return {}; }
   });
   const [showAdsIntelUpload, setShowAdsIntelUpload] = useState(false);
   
   // DTC Ads Intel (Meta/Google/Amazon SQP/Shopify)
   const [dtcIntelData, setDtcIntelData] = useState(() => {
-    try { return safeLocalStorageGet('ecommerce_dtc_intel_v1', {}); }
+    if (!shouldUseLocalStorage) return {};
+    try { 
+      const raw = lsGet('ecommerce_dtc_intel_v1');
+      return raw ? JSON.parse(raw) : {};
+    }
     catch (e) { devWarn("[init]", e?.message); return {}; }
   });
   const [showDtcIntelUpload, setShowDtcIntelUpload] = useState(false);
@@ -4538,13 +4546,18 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
     }
   }
   
+  // Trim large ads intel data before cloud save to stay within Supabase row limits
+  const cloudDataObj = { ...dataObj };
+  if (cloudDataObj.adsIntelData) cloudDataObj.adsIntelData = trimIntelData(cloudDataObj.adsIntelData, 150);
+  if (cloudDataObj.dtcIntelData) cloudDataObj.dtcIntelData = trimIntelData(cloudDataObj.dtcIntelData, 150);
+  
   const payload = {
     user_id: session.user.id,
     data: { 
       stores: stores,
       activeStoreId: activeStoreId,
       storeData: {
-        [activeStoreId || 'default']: dataObj
+        [activeStoreId || 'default']: cloudDataObj
       }
     },
     updated_at: new Date().toISOString(),
@@ -4560,7 +4573,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   if (existingData?.data?.storeData) {
     payload.data.storeData = {
       ...existingData.data.storeData,
-      [activeStoreId || 'default']: dataObj
+      [activeStoreId || 'default']: cloudDataObj
     };
     payload.data.stores = existingData.data.stores || stores;
   }

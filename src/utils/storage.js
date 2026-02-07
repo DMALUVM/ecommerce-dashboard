@@ -92,6 +92,8 @@ export const COMPRESSED_KEYS = [
   'ecommerce_3pl_ledger_v1',
   'ecommerce_banking_v1',
   'ecommerce_ai_chat_history_v1',
+  'ecommerce_ads_intel_v1',
+  'ecommerce_dtc_intel_v1',
 ];
 
 export const lsGet = (key) => {
@@ -113,8 +115,8 @@ export const lsSet = (key, value) => {
     // Handle quota exceeded
     if (e.name === 'QuotaExceededError') {
       console.warn(`localStorage quota exceeded for ${key}. Attempting cleanup...`);
-      // Try to clear old chat history to make room
       try {
+        // Strategy 1: Trim chat history
         const chatKey = 'ecommerce_ai_chat_history_v1';
         const chat = localStorage.getItem(chatKey);
         if (chat) {
@@ -123,6 +125,16 @@ export const lsSet = (key, value) => {
             localStorage.setItem(chatKey, LZCompress.compress(JSON.stringify(messages.slice(-50))));
           }
         }
+        
+        // Strategy 2: If the problem IS an intel key, trim its arrays before saving
+        if (key === 'ecommerce_ads_intel_v1' || key === 'ecommerce_dtc_intel_v1') {
+          const parsed = JSON.parse(value);
+          const trimmed = trimIntelData(parsed);
+          const trimmedStr = JSON.stringify(trimmed);
+          localStorage.setItem(key, LZCompress.compress(trimmedStr));
+          return;
+        }
+        
         // Retry the save
         const toStore = COMPRESSED_KEYS.includes(key) ? LZCompress.compress(value) : value;
         localStorage.setItem(key, toStore);
@@ -131,4 +143,44 @@ export const lsSet = (key, value) => {
       }
     }
   }
+};
+
+// Trim ads intel data arrays to top N records by spend/impressions to fit storage limits
+export const trimIntelData = (data, maxRows = 200) => {
+  if (!data || typeof data !== 'object') return data;
+  const trimmed = { ...data };
+  
+  for (const [key, val] of Object.entries(trimmed)) {
+    // Skip metadata fields
+    if (key === 'lastUpdated' || key === 'reportCount') continue;
+    
+    // Nested platform objects (e.g. { amazon: { spSearchTerms: { records: [...] } } })
+    if (val && typeof val === 'object' && !Array.isArray(val) && val.records === undefined) {
+      trimmed[key] = trimIntelData(val, maxRows);
+      continue;
+    }
+    
+    // Direct arrays (DTC intel stores arrays directly)
+    if (Array.isArray(val) && val.length > maxRows) {
+      // Sort by spend/cost descending, keep top N
+      const sorted = [...val].sort((a, b) => {
+        const aSpend = a.spend || a.cost || a.amount || a.impressions || 0;
+        const bSpend = b.spend || b.cost || b.amount || b.impressions || 0;
+        return bSpend - aSpend;
+      });
+      trimmed[key] = sorted.slice(0, maxRows);
+    }
+    
+    // Tier 2 report objects with records array
+    if (val && val.records && Array.isArray(val.records) && val.records.length > maxRows) {
+      const sorted = [...val.records].sort((a, b) => {
+        const aSpend = a.spend || a.cost || a.amount || a.impressions || 0;
+        const bSpend = b.spend || b.cost || b.amount || b.impressions || 0;
+        return bSpend - aSpend;
+      });
+      trimmed[key] = { ...val, records: sorted.slice(0, maxRows), _trimmed: true, _originalCount: val.records.length };
+    }
+  }
+  
+  return trimmed;
 };
