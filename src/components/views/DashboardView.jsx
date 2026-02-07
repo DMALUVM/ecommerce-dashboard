@@ -530,6 +530,13 @@ const DashboardView = ({
       const defaultWidget = DEFAULT_DASHBOARD_WIDGETS.widgets.find(w => w.id === widgetId);
       return defaultWidget?.enabled ?? true;
     };
+
+    // Get CSS order for a widget (used for drag-and-drop reordering)
+    const getWidgetOrder = (widgetId) => {
+      const widgets = widgetConfig?.widgets || DEFAULT_DASHBOARD_WIDGETS.widgets;
+      const widget = widgets.find(w => w.id === widgetId);
+      return widget?.order ?? 99;
+    };
     
     // Get sorted widgets for dashboard rendering
     const getSortedWidgets = () => {
@@ -563,7 +570,6 @@ const DashboardView = ({
       e.preventDefault();
       e.stopPropagation();
       
-      // Get dragged widget ID from dataTransfer (avoids stale closure issues)
       const draggedId = e.dataTransfer.getData('text/plain') || draggedWidgetId;
       
       if (!draggedId || draggedId === targetWidgetId) {
@@ -572,44 +578,26 @@ const DashboardView = ({
         return;
       }
       
-      // Stack the widgets together
-      const stacks = { ...(widgetConfig?.stacks || {}) };
+      // Reorder: swap the order values of dragged and target widgets
       const widgets = [...(widgetConfig?.widgets || DEFAULT_DASHBOARD_WIDGETS.widgets)];
+      const draggedIdx = widgets.findIndex(w => w.id === draggedId);
+      const targetIdx = widgets.findIndex(w => w.id === targetWidgetId);
       
-      // Find if either widget is already in a stack
-      let targetStack = null;
-      let draggedStack = null;
-      
-      for (const [stackId, stackWidgets] of Object.entries(stacks)) {
-        if (stackWidgets.includes(targetWidgetId)) targetStack = stackId;
-        if (stackWidgets.includes(draggedId)) draggedStack = stackId;
+      if (draggedIdx !== -1 && targetIdx !== -1) {
+        // Remove dragged and insert at target position
+        const sorted = [...widgets].sort((a, b) => (a.order || 0) - (b.order || 0));
+        const fromIdx = sorted.findIndex(w => w.id === draggedId);
+        const toIdx = sorted.findIndex(w => w.id === targetWidgetId);
+        const [removed] = sorted.splice(fromIdx, 1);
+        sorted.splice(toIdx, 0, removed);
+        // Reassign order values
+        const reordered = sorted.map((w, i) => ({ ...w, order: i }));
+        setWidgetConfig({ 
+          ...widgetConfig,
+          widgets: reordered, 
+          layout: 'auto' 
+        });
       }
-      
-      // Remove dragged widget from its current stack if any
-      if (draggedStack) {
-        stacks[draggedStack] = stacks[draggedStack].filter(id => id !== draggedId);
-        if (stacks[draggedStack].length <= 1) {
-          delete stacks[draggedStack]; // Remove stack if only 1 item left
-        }
-      }
-      
-      // Add to target stack or create new stack
-      if (targetStack) {
-        // Add to existing stack
-        if (!stacks[targetStack].includes(draggedId)) {
-          stacks[targetStack].push(draggedId);
-        }
-      } else {
-        // Create new stack with target as the stack ID
-        stacks[targetWidgetId] = [targetWidgetId, draggedId];
-      }
-      
-      
-      setWidgetConfig({ 
-        widgets, 
-        stacks,
-        layout: 'auto' 
-      });
       
       setDraggedWidgetId(null);
       setDragOverWidgetId(null);
@@ -708,6 +696,7 @@ const DashboardView = ({
       return (
         <div
           draggable
+          style={{ order: getWidgetOrder(id) }}
           onDragStart={(e) => { e.stopPropagation(); handleDashboardDragStart(e, id); }}
           onDragOver={(e) => { e.stopPropagation(); handleDashboardDragOver(e, id); }}
           onDragLeave={(e) => { e.stopPropagation(); setDragOverWidgetId(null); }}
@@ -715,7 +704,7 @@ const DashboardView = ({
           onDragEnd={(e) => { e.stopPropagation(); handleDashboardDragEnd(); }}
           className={`relative group transition-all duration-200 ${
             isDragging ? 'opacity-50 scale-[0.98]' : 
-            isDragOver ? 'scale-[1.01]' : ''
+            isDragOver ? 'scale-[1.01] ring-2 ring-violet-500 ring-offset-2 ring-offset-slate-900 rounded-2xl' : ''
           } ${className}`}
         >
           {/* Floating controls - visible on hover */}
@@ -873,30 +862,6 @@ const DashboardView = ({
                 <h1 className="text-2xl lg:text-3xl font-bold text-white">{storeName ? storeName + ' Dashboard' : 'E-Commerce Dashboard'}</h1>
                 <div className="flex items-center gap-3">
                   <p className="text-slate-400">Business performance overview</p>
-                  {/* Data Health Indicator */}
-                  {hasData && (
-                    <button 
-                      onClick={() => {
-                        if (!dataHealthCheck.healthy) {
-                          setToast({ 
-                            message: `Data discrepancies detected: ${dataHealthCheck.issues.map(i => i.message).join('; ')}. Using daily-derived totals for accuracy.`, 
-                            type: 'warning' 
-                          });
-                        } else {
-                          setToast({ message: 'All data is consistent ✓', type: 'success' });
-                        }
-                      }}
-                      className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
-                        dataHealthCheck.healthy 
-                          ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30' 
-                          : 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 animate-pulse'
-                      }`}
-                      title={dataHealthCheck.message}
-                    >
-                      {dataHealthCheck.healthy ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
-                      <span>{dataHealthCheck.healthy ? 'Data OK' : 'Check Data'}</span>
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
@@ -1152,7 +1117,7 @@ const DashboardView = ({
               </div>
             </div>
           ) : (
-            <>
+            <div className="flex flex-col">
               {/* Alerts */}
               {isWidgetEnabled('alerts') && alerts.length > 0 && (
                 <DashboardWidget id="alerts" title="Alerts" icon={AlertTriangle} className="mb-6" noPadding>
@@ -2438,7 +2403,7 @@ const DashboardView = ({
               </DraggableWidget>
               )}
               {/* End Summary Metrics Widget */}
-            </>
+            </div>
           )}
         </div>
       </div>

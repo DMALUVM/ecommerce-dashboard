@@ -137,84 +137,11 @@ const NotificationCenter = ({
       });
     }
 
-    // 3. AD SPEND ANOMALIES
+    // 3. AD SPEND & REVENUE ANOMALIES
+    // Disabled — computed comparisons across periods produce false positives 
+    // when daily data comes from different upload sources (weekly vs daily vs API).
+    // Tax deadlines, inventory, freshness, and backup alerts are reliable.
     const sortedDays = Object.keys(allDaysData || {}).sort();
-    if (sortedDays.length >= 7) {
-      const last7 = sortedDays.slice(-7);
-      const prev7 = sortedDays.slice(-14, -7);
-
-      if (prev7.length >= 5) {
-        let recentSpend = 0, prevSpend = 0, recentRev = 0, prevRev = 0;
-        last7.forEach(d => {
-          const day = allDaysData[d];
-          recentSpend += (day?.amazon?.adSpend || 0) + (day?.shopify?.googleSpend || 0) + (day?.shopify?.metaSpend || 0);
-          recentRev += (day?.amazon?.revenue || 0) + (day?.shopify?.revenue || 0);
-        });
-        prev7.forEach(d => {
-          const day = allDaysData[d];
-          prevSpend += (day?.amazon?.adSpend || 0) + (day?.shopify?.googleSpend || 0) + (day?.shopify?.metaSpend || 0);
-          prevRev += (day?.amazon?.revenue || 0) + (day?.shopify?.revenue || 0);
-        });
-
-        const avgDailyPrev = prevSpend / prev7.length;
-        const avgDailyRecent = recentSpend / last7.length;
-
-        // Spend spike: >30% increase week over week
-        if (avgDailyPrev > 5 && avgDailyRecent > avgDailyPrev * 1.3) {
-          const pctIncrease = ((avgDailyRecent - avgDailyPrev) / avgDailyPrev * 100).toFixed(0);
-          notifs.push({
-            id: `ads-spike-${today}`,
-            type: 'warning',
-            category: 'ads',
-            icon: TrendingDown,
-            title: `Ad spend up ${pctIncrease}% this week`,
-            body: `$${avgDailyRecent.toFixed(0)}/day vs $${avgDailyPrev.toFixed(0)}/day prior week. Check campaigns.`,
-            action: () => setView('ads'),
-            actionLabel: 'View Ads',
-            timestamp: now,
-          });
-        }
-
-        // ROAS collapse: revenue down while spend same/up
-        if (prevSpend > 20 && recentSpend > 20) {
-          const prevROAS = prevRev / prevSpend;
-          const recentROAS = recentRev / recentSpend;
-          if (prevROAS > 0 && recentROAS < prevROAS * 0.7) {
-            notifs.push({
-              id: `ads-roas-${today}`,
-              type: 'critical',
-              category: 'ads',
-              icon: TrendingDown,
-              title: `ROAS dropped ${((1 - recentROAS / prevROAS) * 100).toFixed(0)}%`,
-              body: `${recentROAS.toFixed(1)}x this week vs ${prevROAS.toFixed(1)}x prior week.`,
-              action: () => setView('ads'),
-              actionLabel: 'Investigate',
-              timestamp: now,
-            });
-          }
-        }
-      }
-
-      // Zero-revenue day check (yesterday)
-      if (sortedDays.length > 1) {
-        const yesterday = sortedDays[sortedDays.length - 1];
-        const dayData = allDaysData[yesterday];
-        const totalRev = (dayData?.amazon?.revenue || 0) + (dayData?.shopify?.revenue || 0);
-        if (totalRev === 0 && sortedDays.length > 7) {
-          notifs.push({
-            id: `rev-zero-${yesterday}`,
-            type: 'warning',
-            category: 'revenue',
-            icon: AlertTriangle,
-            title: `$0 revenue on ${yesterday}`,
-            body: 'No sales recorded. Check store status and data sync.',
-            action: () => setView('daily'),
-            actionLabel: 'View Day',
-            timestamp: now,
-          });
-        }
-      }
-    }
 
     // 4. DATA FRESHNESS
     if (sortedDays.length > 0) {
