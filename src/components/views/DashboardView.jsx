@@ -554,53 +554,8 @@ const DashboardView = ({
     };
     
     // Dashboard drag handlers with stacking support
-    const handleDashboardDragStart = (e, widgetId) => {
-      setDraggedWidgetId(widgetId);
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', widgetId);
-    };
-    
-    const handleDashboardDrop = (e, targetWidgetId) => {
-      e.preventDefault();
-      e.stopPropagation();
-      
-      const draggedId = e.dataTransfer.getData('text/plain') || draggedWidgetId;
-      
-      if (!draggedId || draggedId === targetWidgetId) {
-        setDraggedWidgetId(null);
-        setDragOverWidgetId(null);
-        return;
-      }
-      
-      // Reorder: swap the order values of dragged and target widgets
-      const widgets = [...(widgetConfig?.widgets || DEFAULT_DASHBOARD_WIDGETS.widgets)];
-      const draggedIdx = widgets.findIndex(w => w.id === draggedId);
-      const targetIdx = widgets.findIndex(w => w.id === targetWidgetId);
-      
-      if (draggedIdx !== -1 && targetIdx !== -1) {
-        // Remove dragged and insert at target position
-        const sorted = [...widgets].sort((a, b) => (a.order || 0) - (b.order || 0));
-        const fromIdx = sorted.findIndex(w => w.id === draggedId);
-        const toIdx = sorted.findIndex(w => w.id === targetWidgetId);
-        const [removed] = sorted.splice(fromIdx, 1);
-        sorted.splice(toIdx, 0, removed);
-        // Reassign order values
-        const reordered = sorted.map((w, i) => ({ ...w, order: i }));
-        setWidgetConfig({ 
-          ...widgetConfig,
-          widgets: reordered, 
-          layout: 'auto' 
-        });
-      }
-      
-      setDraggedWidgetId(null);
-      setDragOverWidgetId(null);
-    };
-    
-    const handleDashboardDragEnd = () => {
-      setDraggedWidgetId(null);
-      setDragOverWidgetId(null);
-    };
+    // Widget reordering is handled by the Customize modal (WidgetConfigModal)
+    // CSS order on DraggableWidget reflects the saved order
     
     // Data Health Check - detect discrepancies between stored weekly and derived daily data
     // (computed inline, not as a hook, since we're inside a conditional)
@@ -650,48 +605,23 @@ const DashboardView = ({
       };
     })();
     
-    // DraggableWidget - minimal wrapper that just adds drag/drop to any widget
+    // DraggableWidget - applies CSS order from widget config + hover hide button
     const DraggableWidget = ({ id, children, className = '' }) => {
-      const isDragging = draggedWidgetId === id;
-      const isDragOver = dragOverWidgetId === id;
-      
       return (
         <div
-          draggable
           style={{ order: getWidgetOrder(id) }}
-          onDragStart={(e) => { handleDashboardDragStart(e, id); }}
-          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverWidgetId(id); }}
-          onDragLeave={(e) => { 
-            // Only clear if we're actually leaving this element (not entering a child)
-            if (!e.currentTarget.contains(e.relatedTarget)) setDragOverWidgetId(null); 
-          }}
-          onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDashboardDrop(e, id); }}
-          onDragEnd={() => handleDashboardDragEnd()}
-          className={`relative group transition-all duration-200 ${
-            isDragging ? 'opacity-40 scale-[0.97]' : 
-            isDragOver ? 'ring-2 ring-violet-500 ring-offset-2 ring-offset-slate-900 rounded-2xl' : ''
-          } ${className}`}
+          className={`relative group ${className}`}
         >
-          {/* Floating controls - visible on hover */}
+          {/* Hide button - visible on hover */}
           <div className="absolute -top-2 -right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
-            <div className="p-1.5 bg-slate-700 rounded-lg shadow-lg cursor-grab border border-slate-600" draggable="false">
-              <Move className="w-3 h-3 text-slate-300" />
-            </div>
             <button
               onClick={(e) => { e.stopPropagation(); e.preventDefault(); hideWidget(id); }}
               className="p-1.5 bg-slate-700 hover:bg-rose-600 rounded-lg shadow-lg transition-colors border border-slate-600"
               title="Hide widget"
-              draggable="false"
             >
               <EyeOff className="w-3 h-3 text-slate-300" />
             </button>
           </div>
-          {/* Drop indicator */}
-          {isDragOver && (
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-violet-600 text-white text-xs px-3 py-1 rounded-full font-medium z-20 pointer-events-none shadow-lg">
-              Drop to reorder
-            </div>
-          )}
           {children}
         </div>
       );
@@ -1432,8 +1362,9 @@ const DashboardView = ({
                 </DashboardWidget>
               )}
               
-              {/* Quick Action Widgets - With Stacking Support */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+              {/* Quick Action Widgets */}
+              <div style={{ order: Math.min(getWidgetOrder('salesTax'), getWidgetOrder('aiForecast'), getWidgetOrder('billsDue'), getWidgetOrder('syncStatus')) }} className="mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {(() => {
                   // Widget content renderers (just the content, no wrapper)
                   const renderSalesTax = () => (
@@ -1625,8 +1556,10 @@ const DashboardView = ({
                   ));
                 })()}
               </div>
+              </div>
               
               {/* Quick Upload Alert - Show if most recent week is missing */}
+              <div style={{ order: 50 }}>
               {(() => {
                 const today = new Date();
                 const sortedWeeks = Object.keys(allWeeksData).sort();
@@ -1666,6 +1599,7 @@ const DashboardView = ({
                 }
                 return null;
               })()}
+              </div>
               
               {/* ============ DATA HUB - Complete Data Status ============ */}
               {isWidgetEnabled('dataHub') && (
