@@ -11,18 +11,6 @@ import SettingRow from '../ui/SettingRow';
 import SettingSection from '../ui/SettingSection';
 import Toggle from '../ui/Toggle';
 
-
-// Helper: normalize SKU keys for comparison
-
-// AI model options
-const AI_MODELS = {
-  'claude-sonnet-4-20250514': { label: 'Claude Sonnet 4', cost: '~$0.04/report', tier: 'Balanced', desc: 'Best value — fast, smart, cheap' },
-  'claude-opus-4-20250514': { label: 'Claude Opus 4', cost: '~$0.20/report', tier: 'Premium', desc: 'Deepest analysis, 5x cost' },
-  'claude-haiku-4-5-20251001': { label: 'Claude Haiku 4.5', cost: '~$0.01/report', tier: 'Fast', desc: 'Cheapest, shorter reports' },
-};
-
-const normalizeSkuKey = (sku) => (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
-
 const SettingsView = ({
   actionItems,
   activeStoreId,
@@ -91,7 +79,6 @@ const SettingsView = ({
   setSelectedPeriod,
   setSelectedWeek,
   setSettingsTab,
-  setShow3PLBulkUpload,
   setShopifyCredentials,
   setShowAdsBulkUpload,
   setShowBenchmarks,
@@ -113,13 +100,11 @@ const SettingsView = ({
   storeLogo,
   storeName,
   stores,
-  switchStore,
   theme,
   toast,
   setView,
   view,
   save,
-  saveInv,
   queueCloudSave,
   pushToCloudNow,
   supabase
@@ -198,7 +183,7 @@ const SettingsView = ({
 
     return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-      <div className="max-w-4xl mx-auto">{globalModals}
+      <div className="max-w-7xl mx-auto">{globalModals}
         
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -2754,7 +2739,7 @@ const SettingsView = ({
 
         {/* AI Model Selection */}
         <SettingSection title="🧠 AI Model">
-          <SettingRow label="AI Model" desc="Controls Action Reports, Forecasts & Analytics">
+          <SettingRow label="Report Generation Model" desc="Controls Amazon PPC & DTC Action Reports only">
             <select
               value={currentLocalSettings.aiModel || 'claude-sonnet-4-20250514'}
               onChange={(e) => updateSetting('aiModel', e.target.value)}
@@ -2767,9 +2752,9 @@ const SettingsView = ({
           </SettingRow>
           <div className="bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400 space-y-1">
             <p><strong className="text-white">How models are routed:</strong></p>
-            <p>🟣 <strong className="text-violet-300">Action Reports</strong> (Amazon PPC + DTC) → <strong className="text-white">Your selection above</strong></p>
-            <p>📈 <strong className="text-emerald-300">Forecasts & Analytics</strong> → <strong className="text-white">Your selection above</strong></p>
-            <p>💬 <strong className="text-cyan-300">AI Chat</strong> → Selectable in chat header (default: Haiku 4.5)</p>
+            <p>🟣 <strong className="text-violet-300">Action Reports</strong> (Amazon PPC + DTC) → <strong className="text-white">Your selection above</strong> (default: Sonnet 4)</p>
+            <p>💬 <strong className="text-cyan-300">AI Chat</strong> → Haiku 4.5 (fast, cheap — ~$0.01/message)</p>
+            <p>📈 <strong className="text-emerald-300">Forecasts & Analytics</strong> → Sonnet 4 (always, needs precision)</p>
             <p className="text-slate-500 mt-2">Sonnet = best value for reports. Switch to Opus for quarterly deep-dives (~5x cost, deepest reasoning).</p>
           </div>
         </SettingSection>

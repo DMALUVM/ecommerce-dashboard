@@ -16,7 +16,6 @@ const UploadView = ({
   amazonBulkFiles,
   amazonBulkParsed,
   amazonBulkProcessing,
-  amazonCampaigns,
   amazonCredentials,
   amazonForecasts,
   appSettings,
@@ -131,7 +130,7 @@ const UploadView = ({
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto">{globalModals}
+        <div className="max-w-7xl mx-auto">{globalModals}
           
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 mb-4">
@@ -836,11 +835,6 @@ const UploadView = ({
                   🔬 Generate Action Report from Existing Data
                 </button>
               )}
-              {!adsIntelData?.lastUpdated && (amazonCampaigns?.analytics?.totals || amazonCampaigns?.historicalDaily) && (
-                <button onClick={() => setShowAdsIntelUpload(true)} className="w-full mt-2 px-6 py-3 bg-gradient-to-r from-rose-600/80 to-orange-600/80 hover:from-rose-500 hover:to-orange-500 rounded-xl text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-rose-500/20">
-                  🔬 Generate Action Report from Dashboard Data
-                </button>
-              )}
               </div>
               
               {/* What data goes where - helpful guide */}
@@ -913,11 +907,6 @@ const UploadView = ({
                 {dtcIntelData?.lastUpdated && (
                   <button onClick={() => setShowDtcIntelUpload(true)} className="w-full mt-2 px-6 py-3 bg-gradient-to-r from-blue-700/60 to-teal-700/60 hover:from-blue-600 hover:to-teal-600 rounded-xl text-white font-medium flex items-center justify-center gap-2">
                     🔬 Generate DTC Action Report
-                  </button>
-                )}
-                {!dtcIntelData?.lastUpdated && allDaysData && Object.keys(allDaysData).some(d => (allDaysData[d]?.shopify?.googleAds || 0) > 0 || (allDaysData[d]?.shopify?.metaAds || 0) > 0) && (
-                  <button onClick={() => setShowDtcIntelUpload(true)} className="w-full mt-2 px-6 py-3 bg-gradient-to-r from-blue-700/60 to-teal-700/60 hover:from-blue-600 hover:to-teal-600 rounded-xl text-white font-medium flex items-center justify-center gap-2">
-                    🔬 Generate DTC Action Report from Dashboard Data
                   </button>
                 )}
               </div>
@@ -2168,10 +2157,8 @@ const UploadView = ({
                               const existingGoogleSpend = existing.googleSpend || existing.shopify?.googleSpend || 0;
                               
                               // Merge ad data into shopify object for consistency
-                              // IMPORTANT: Use API's taxByState directly (not merged) to prevent ghost state entries
                               const mergedShopifyData = {
                                 ...shopifyData,
-                                taxByState: shopifyData.taxByState || {}, // Explicitly replace, don't merge with old
                                 cogs: calculatedCogs,
                                 metaSpend: existingMetaSpend,
                                 metaAds: existingMetaSpend,
@@ -2224,30 +2211,6 @@ const UploadView = ({
                                 notes: existing.notes,
                               };
                             });
-                            
-                            // Clean stale Shopify tax data for days in the sync range
-                            // that were NOT returned by the API (e.g. cancelled orders, timezone shifts).
-                            // Without this, old taxByState entries from buggy syncs persist forever.
-                            const syncedDates = new Set(Object.keys(data.dailyData || {}));
-                            const rangeStart = shopifySyncRange.start;
-                            const rangeEnd = shopifySyncRange.end;
-                            Object.keys(updatedDays).forEach(dateKey => {
-                              if (dateKey >= rangeStart && dateKey <= rangeEnd && !syncedDates.has(dateKey)) {
-                                // This day is in the sync range but API returned no orders for it
-                                // Clear Shopify tax data to prevent ghost entries
-                                if (updatedDays[dateKey]?.shopify?.taxByState) {
-                                  const hadTax = Object.keys(updatedDays[dateKey].shopify.taxByState).length > 0;
-                                  if (hadTax) {
-                                    console.log(`Clearing stale Shopify taxByState for ${dateKey}`);
-                                    updatedDays[dateKey].shopify.taxByState = {};
-                                    updatedDays[dateKey].shopify.taxTotal = 0;
-                                    updatedDays[dateKey].shopify.taxTotalAll = 0;
-                                    updatedDays[dateKey].shopify.shopPayTaxExcluded = 0;
-                                  }
-                                }
-                              }
-                            });
-                            
                             setAllDaysData(updatedDays);
                             // Save daily data to localStorage
                             try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
