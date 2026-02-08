@@ -6509,33 +6509,68 @@ const savePeriods = async (d) => {
           monthKey,
           monthName,
           weeks: [],
-          amazon: { revenue: 0, units: 0, profit: 0, adSpend: 0 },
-          shopify: { revenue: 0, units: 0, profit: 0, adSpend: 0, metaSpend: 0, googleSpend: 0 },
-          total: { revenue: 0, units: 0, profit: 0, adSpend: 0 },
+          amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, skuData: {} },
+          shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, threeplCosts: 0, skuData: {} },
+          total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
         };
       }
       
       monthlyAgg[monthKey].weeks.push(weekKey);
       
-      // Aggregate Amazon
+      // Aggregate Amazon (all fields)
       monthlyAgg[monthKey].amazon.revenue += weekData.amazon?.revenue || 0;
       monthlyAgg[monthKey].amazon.units += weekData.amazon?.units || 0;
-      monthlyAgg[monthKey].amazon.profit += getProfit(weekData.amazon);
+      monthlyAgg[monthKey].amazon.returns += weekData.amazon?.returns || 0;
+      monthlyAgg[monthKey].amazon.cogs += weekData.amazon?.cogs || 0;
+      monthlyAgg[monthKey].amazon.fees += weekData.amazon?.fees || 0;
       monthlyAgg[monthKey].amazon.adSpend += weekData.amazon?.adSpend || 0;
+      monthlyAgg[monthKey].amazon.netProfit += weekData.amazon?.netProfit || getProfit(weekData.amazon) || 0;
       
-      // Aggregate Shopify
+      // Aggregate Amazon SKU data
+      (weekData.amazon?.skuData || []).forEach(sku => {
+        const skuKey = sku.sku || sku.msku;
+        if (!skuKey) return;
+        if (!monthlyAgg[monthKey].amazon.skuData[skuKey]) {
+          monthlyAgg[monthKey].amazon.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+        }
+        monthlyAgg[monthKey].amazon.skuData[skuKey].unitsSold += sku.unitsSold || sku.units || 0;
+        monthlyAgg[monthKey].amazon.skuData[skuKey].returns += sku.returns || 0;
+        monthlyAgg[monthKey].amazon.skuData[skuKey].netSales += sku.netSales || sku.revenue || 0;
+        monthlyAgg[monthKey].amazon.skuData[skuKey].netProceeds += sku.netProceeds || 0;
+        monthlyAgg[monthKey].amazon.skuData[skuKey].adSpend += sku.adSpend || 0;
+        monthlyAgg[monthKey].amazon.skuData[skuKey].cogs += sku.cogs || 0;
+      });
+      
+      // Aggregate Shopify (all fields)
       monthlyAgg[monthKey].shopify.revenue += weekData.shopify?.revenue || 0;
       monthlyAgg[monthKey].shopify.units += weekData.shopify?.units || 0;
-      monthlyAgg[monthKey].shopify.profit += getProfit(weekData.shopify);
+      monthlyAgg[monthKey].shopify.cogs += weekData.shopify?.cogs || 0;
       monthlyAgg[monthKey].shopify.adSpend += weekData.shopify?.adSpend || 0;
       monthlyAgg[monthKey].shopify.metaSpend += weekData.shopify?.metaSpend || 0;
       monthlyAgg[monthKey].shopify.googleSpend += weekData.shopify?.googleSpend || 0;
+      monthlyAgg[monthKey].shopify.discounts += weekData.shopify?.discounts || 0;
+      monthlyAgg[monthKey].shopify.netProfit += weekData.shopify?.netProfit || getProfit(weekData.shopify) || 0;
+      monthlyAgg[monthKey].shopify.threeplCosts += weekData.shopify?.threeplCosts || 0;
+      
+      // Aggregate Shopify SKU data
+      (weekData.shopify?.skuData || []).forEach(sku => {
+        const skuKey = sku.sku;
+        if (!skuKey) return;
+        if (!monthlyAgg[monthKey].shopify.skuData[skuKey]) {
+          monthlyAgg[monthKey].shopify.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
+        }
+        monthlyAgg[monthKey].shopify.skuData[skuKey].unitsSold += sku.unitsSold || sku.units || 0;
+        monthlyAgg[monthKey].shopify.skuData[skuKey].netSales += sku.netSales || sku.revenue || 0;
+        monthlyAgg[monthKey].shopify.skuData[skuKey].discounts += sku.discounts || 0;
+        monthlyAgg[monthKey].shopify.skuData[skuKey].cogs += sku.cogs || 0;
+      });
       
       // Aggregate totals
       monthlyAgg[monthKey].total.revenue += weekData.total?.revenue || 0;
       monthlyAgg[monthKey].total.units += weekData.total?.units || 0;
-      monthlyAgg[monthKey].total.profit += getProfit(weekData.total);
+      monthlyAgg[monthKey].total.cogs += weekData.total?.cogs || (weekData.amazon?.cogs || 0) + (weekData.shopify?.cogs || 0);
       monthlyAgg[monthKey].total.adSpend += weekData.total?.adSpend || 0;
+      monthlyAgg[monthKey].total.netProfit += weekData.total?.netProfit || getProfit(weekData.total) || 0;
     });
     
     // Check if any monthly periods need updating
@@ -6553,12 +6588,23 @@ const savePeriods = async (d) => {
       
       const existingPeriod = updatedPeriods[periodKey];
       
-      // Update if weekly aggregates have more data than existing period
+      // Update if: more data, no existing period, or existing period is missing critical fields
       const weeklyTotal = monthData.total.revenue;
       const existingTotal = existingPeriod?.total?.revenue || 0;
+      const missingFields = existingPeriod && (
+        !existingPeriod.total?.netProfit && !existingPeriod.total?.profit ||
+        !existingPeriod.amazon?.cogs && monthData.amazon.cogs > 0 ||
+        !existingPeriod.amazon?.fees && monthData.amazon.fees > 0 ||
+        !existingPeriod.amazon?.skuData?.length && Object.keys(monthData.amazon.skuData).length > 0
+      );
       
-      if (weeklyTotal > existingTotal * 1.01 || !existingPeriod) { // Allow 1% variance
+      if (weeklyTotal > existingTotal * 1.01 || !existingPeriod || missingFields) { // Allow 1% variance
         needsUpdate = true;
+        
+        const amz = monthData.amazon;
+        const shop = monthData.shopify;
+        const tot = monthData.total;
+        const totalRev = tot.revenue;
         
         updatedPeriods[periodKey] = {
           ...existingPeriod,
@@ -6567,25 +6613,45 @@ const savePeriods = async (d) => {
           displayName: monthData.monthName,
           weeksIncluded: monthData.weeks,
           amazon: {
-            revenue: monthData.amazon.revenue,
-            units: monthData.amazon.units,
-            profit: monthData.amazon.profit,
-            adSpend: monthData.amazon.adSpend,
+            revenue: amz.revenue,
+            units: amz.units,
+            returns: amz.returns,
+            cogs: amz.cogs,
+            fees: amz.fees,
+            adSpend: amz.adSpend,
+            netProfit: amz.netProfit,
+            margin: amz.revenue > 0 ? (amz.netProfit / amz.revenue * 100) : 0,
+            aov: amz.units > 0 ? amz.revenue / amz.units : 0,
+            roas: amz.adSpend > 0 ? amz.revenue / amz.adSpend : 0,
+            returnRate: (amz.units + amz.returns) > 0 ? (amz.returns / (amz.units + amz.returns) * 100) : 0,
+            skuData: Object.values(amz.skuData).sort((a, b) => (b.netSales || 0) - (a.netSales || 0)),
           },
           shopify: {
-            revenue: monthData.shopify.revenue,
-            units: monthData.shopify.units,
-            profit: monthData.shopify.profit,
-            adSpend: monthData.shopify.adSpend,
-            metaSpend: monthData.shopify.metaSpend,
-            googleSpend: monthData.shopify.googleSpend,
+            revenue: shop.revenue,
+            units: shop.units,
+            cogs: shop.cogs,
+            adSpend: shop.adSpend,
+            metaSpend: shop.metaSpend,
+            googleSpend: shop.googleSpend,
+            discounts: shop.discounts,
+            netProfit: shop.netProfit,
+            threeplCosts: shop.threeplCosts,
+            netMargin: shop.revenue > 0 ? (shop.netProfit / shop.revenue * 100) : 0,
+            aov: shop.units > 0 ? shop.revenue / shop.units : 0,
+            roas: shop.adSpend > 0 ? shop.revenue / shop.adSpend : 0,
+            skuData: Object.values(shop.skuData).sort((a, b) => (b.netSales || 0) - (a.netSales || 0)),
           },
           total: {
-            revenue: monthData.total.revenue,
-            units: monthData.total.units,
-            profit: monthData.total.profit,
-            adSpend: monthData.total.adSpend,
-            margin: monthData.total.revenue > 0 ? (monthData.total.profit / monthData.total.revenue * 100) : 0,
+            revenue: totalRev,
+            units: tot.units,
+            cogs: tot.cogs,
+            adSpend: tot.adSpend,
+            netProfit: tot.netProfit,
+            netMargin: totalRev > 0 ? (tot.netProfit / totalRev * 100) : 0,
+            margin: totalRev > 0 ? (tot.netProfit / totalRev * 100) : 0,
+            roas: tot.adSpend > 0 ? totalRev / tot.adSpend : 0,
+            amazonShare: totalRev > 0 ? (amz.revenue / totalRev * 100) : 0,
+            shopifyShare: totalRev > 0 ? (shop.revenue / totalRev * 100) : 0,
           },
           aggregatedFromWeekly: true,
           lastUpdated: new Date().toISOString(),
