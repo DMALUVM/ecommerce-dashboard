@@ -86,12 +86,12 @@ const InventoryView = ({
   const idx = dates.indexOf(selectedInvDate);
   
   // Defensive defaults for summary
-  const summary = data.summary || {
+  const summary = (data && data.summary) || {
     totalUnits: 0, totalValue: 0, amazonUnits: 0, amazonValue: 0, 
     amazonInbound: 0, threeplUnits: 0, threeplValue: 0, threeplInbound: 0,
     critical: 0, low: 0, healthy: 0, overstock: 0, skuCount: 0
   };
-  const rawItems = data.items || [];
+  const rawItems = (data && data.items) || [];
   
   // LIVE VELOCITY: Compute from current allDaysData + allWeeksData reactively
   // This ensures velocity updates in real-time when sync brings new sales data
@@ -268,8 +268,8 @@ const InventoryView = ({
   const today = new Date();
   
   // Check if we have recent API sync data
-  const lastPackiyoSync = data.sources?.lastPackiyoSync ? new Date(data.sources.lastPackiyoSync) : null;
-  const lastAmazonSync = data.sources?.lastAmazonSync ? new Date(data.sources.lastAmazonSync) : null;
+  const lastPackiyoSync = data?.sources?.lastPackiyoSync ? new Date(data.sources.lastPackiyoSync) : null;
+  const lastAmazonSync = data?.sources?.lastAmazonSync ? new Date(data.sources.lastAmazonSync) : null;
   
   // Use the most recent sync date (Packiyo or Amazon), falling back to snapshot date
   let effectiveDataDate = new Date(selectedInvDate + 'T12:00:00');
@@ -884,10 +884,10 @@ const InventoryView = ({
           <MetricCard label="Amazon FBA" value={formatNumber(filteredSummary.amazonUnits)} sub={formatCurrency(filteredSummary.amazonValue)} icon={ShoppingCart} color="orange" />
           <MetricCard label="3PL" value={formatNumber(filteredSummary.threeplUnits)} sub={formatCurrency(filteredSummary.threeplValue)} icon={Boxes} color="violet" />
         </div>
-        {data.velocitySource && <div className="bg-cyan-900/20 border border-cyan-500/30 rounded-xl p-3 mb-6"><p className="text-cyan-400 text-sm"><span className="font-semibold">Velocity:</span> {data.velocitySource}</p></div>}
+        {data?.velocitySource && <div className="bg-cyan-900/20 border border-cyan-500/30 rounded-xl p-3 mb-6"><p className="text-cyan-400 text-sm"><span className="font-semibold">Velocity:</span> {data?.velocitySource}</p></div>}
         
         {/* Warning when no velocity data */}
-        {(!data.velocitySource || data.velocitySource.includes('no weekly data')) && (
+        {(!data?.velocitySource || data?.velocitySource.includes('no weekly data')) && (
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-3 mb-6 flex items-center gap-3">
             <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" />
             <div className="flex-1">
@@ -901,13 +901,13 @@ const InventoryView = ({
         )}
         
         {/* Learning Status Banner */}
-        {data.learningStatus?.correctionsApplied && (
+        {data?.learningStatus?.correctionsApplied && (
           <div className="bg-purple-900/20 border border-purple-500/30 rounded-xl p-3 mb-6 flex items-center gap-3">
             <Brain className="w-5 h-5 text-purple-400" />
             <div className="flex-1">
               <p className="text-purple-300 text-sm font-medium">AI-Enhanced Predictions Active</p>
               <p className="text-slate-400 text-xs">
-                Velocity calculations adjusted using {data.learningStatus.samplesUsed} weeks of learned data ({data.learningStatus.confidence.toFixed(0)}% confidence)
+                Velocity calculations adjusted using {data?.learningStatus.samplesUsed} weeks of learned data ({data?.learningStatus.confidence.toFixed(0)}% confidence)
               </p>
             </div>
             <div className="text-right">
@@ -916,7 +916,7 @@ const InventoryView = ({
             </div>
           </div>
         )}
-        {!data.learningStatus?.correctionsApplied && forecastCorrections.samplesUsed > 0 && (
+        {!data?.learningStatus?.correctionsApplied && forecastCorrections.samplesUsed > 0 && (
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-3 mb-6 flex items-center gap-3">
             <Brain className="w-5 h-5 text-amber-400" />
             <div className="flex-1">
