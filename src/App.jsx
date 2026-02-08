@@ -11266,6 +11266,85 @@ const savePeriods = async (d) => {
               const units = data.summary?.totalUnits || 0;
               const days = data.summary?.daysWithData || 0;
               results.push({ service: 'Amazon', success: true, message: `${units} units across ${days} days` });
+              
+              // Lightweight velocity refresh: update existing inventory snapshot
+              // with new Amazon sales data without re-running full processInventory
+              if (selectedInvDate && invHistory[selectedInvDate]) {
+                try {
+                  console.log('[AutoSync] Refreshing inventory velocity with new sales data...');
+                  
+                  // Read updated daily data from localStorage (just saved above)
+                  const freshDaily = JSON.parse(lsGet('ecommerce_daily_sales_v1') || '{}');
+                  const freshDates = Object.keys(freshDaily).sort().reverse();
+                  const datesWithAmzSku = freshDates.filter(d => {
+                    const s = freshDaily[d]?.amazon?.skuData;
+                    return (Array.isArray(s) && s.length > 0) || (s && typeof s === 'object' && Object.keys(s).length > 0);
+                  });
+                  
+                  if (datesWithAmzSku.length > 0) {
+                    // Build velocity from last 28 days of daily data
+                    const last28 = datesWithAmzSku.slice(0, 28);
+                    const weeksEquiv = last28.length / 7;
+                    const amzVel = {};
+                    
+                    last28.forEach(d => {
+                      const skuArr = freshDaily[d]?.amazon?.skuData;
+                      const skuList = Array.isArray(skuArr) ? skuArr : Object.values(skuArr || {});
+                      skuList.forEach(item => {
+                        if (!item.sku) return;
+                        const u = item.unitsSold || item.units || 0;
+                        const vel = u / weeksEquiv;
+                        const key = item.sku.toUpperCase();
+                        amzVel[key] = (amzVel[key] || 0) + vel;
+                        amzVel[item.sku] = (amzVel[item.sku] || 0) + vel;
+                        amzVel[item.sku.toLowerCase()] = (amzVel[item.sku.toLowerCase()] || 0) + vel;
+                      });
+                    });
+                    
+                    // Check if SKU Economics weekly data should override (same logic as processInventory)
+                    const sortedWeeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
+                    const hasSkuEcon = sortedWeeks.some(w => {
+                      const s = allWeeksData[w]?.amazon?.skuData;
+                      return Array.isArray(s) && s.length > 0;
+                    });
+                    
+                    if (!hasSkuEcon && Object.keys(amzVel).length > 0) {
+                      // Update snapshot items with fresh velocity
+                      const snapshot = { ...invHistory[selectedInvDate] };
+                      const updatedItems = (snapshot.items || []).map(item => {
+                        const sku = item.sku;
+                        const newAmzVel = amzVel[sku] || amzVel[sku?.toUpperCase()] || amzVel[sku?.toLowerCase()] || 0;
+                        if (newAmzVel > 0 || item.amzWeeklyVel > 0) {
+                          const updatedAmzVel = newAmzVel > 0 ? newAmzVel : item.amzWeeklyVel;
+                          const weeklyVel = updatedAmzVel + (item.shopWeeklyVel || 0);
+                          const dailyVel = weeklyVel / 7;
+                          const totalQty = item.totalQty || 0;
+                          const daysOfSupply = weeklyVel > 0 ? Math.round((totalQty / weeklyVel) * 7) : 999;
+                          return {
+                            ...item,
+                            amzWeeklyVel: Math.round(updatedAmzVel * 10) / 10,
+                            weeklyVel: Math.round(weeklyVel * 10) / 10,
+                            daysOfSupply,
+                          };
+                        }
+                        return item;
+                      });
+                      
+                      snapshot.items = updatedItems;
+                      snapshot.velocitySource = `Velocity from: ${last28.length} days Amazon API (${Object.keys(amzVel).length / 3} SKUs)`;
+                      
+                      const updatedHistory = { ...invHistory, [selectedInvDate]: snapshot };
+                      setInvHistory(updatedHistory);
+                      saveInv(updatedHistory);
+                      console.log(`[AutoSync] Velocity refreshed: ${last28.length} days, ${Object.keys(amzVel).length / 3} SKUs updated`);
+                    } else if (hasSkuEcon) {
+                      console.log('[AutoSync] SKU Economics data exists — skipping API velocity override');
+                    }
+                  }
+                } catch (velErr) {
+                  devWarn('Velocity refresh failed (non-critical):', velErr?.message);
+                }
+              }
             } else if (!data.error && res.ok && data.source === 'amazon-report-pending') {
               // Report still generating — don't update lastSync so it retries next time
               results.push({ service: 'Amazon', success: true, message: 'Sales report generating — will complete on next sync' });
