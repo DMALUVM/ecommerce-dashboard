@@ -6337,10 +6337,17 @@ const savePeriods = async (d) => {
     setToast({ message, type: 'success' });
   }, [allDaysData, allWeeksData, save]);
 
+  // Ref to always access the latest allWeeksData (avoids stale closure in useEffect below)
+  const allWeeksDataRef = useRef(allWeeksData);
+  allWeeksDataRef.current = allWeeksData;
+
   // Auto-sync daily data into weekly summaries - COMPREHENSIVE aggregation
   // This ensures weekly data always reflects the latest daily uploads
   useEffect(() => {
     if (Object.keys(allDaysData).length === 0) return;
+    
+    // Read latest weekly data from ref (not closure) to avoid stale state
+    const currentWeeksData = allWeeksDataRef.current;
     
     // Group ALL daily data by week
     const dailyByWeek = {};
@@ -6423,28 +6430,20 @@ const savePeriods = async (d) => {
     
     // Merge with existing weekly data - daily aggregates fill gaps in weekly data
     let needsUpdate = false;
-    const updatedWeeks = { ...allWeeksData };
+    const updatedWeeks = { ...currentWeeksData };
     
     Object.entries(dailyByWeek).forEach(([weekKey, dailyAgg]) => {
       const existingWeek = updatedWeeks[weekKey];
       
-      // BULLETPROOF GUARD: If a week exists and was NOT created by auto-aggregation,
-      // it came from a manual upload (SKU Economics). NEVER overwrite it.
-      // Only auto-aggregated weeks have 'aggregatedFrom' set.
-      if (existingWeek && !existingWeek.aggregatedFrom) return;
+      // SIMPLE RULE: If a week already has Amazon revenue data, NEVER overwrite it.
+      // Auto-aggregation only creates NEW weeks for Amazon data.
+      // SKU Economics uploads are authoritative and handled separately (they bypass this effect).
+      // Note: We only check Amazon revenue because Shopify syncs daily and always has revenue.
+      if (existingWeek && (existingWeek.amazon?.revenue || 0) > 0) {
+        return; // Week has Amazon data — don't touch
+      }
       
-      // If no existing week or existing week is missing data, update it
-      const shouldUpdate = !existingWeek || 
-        // Update if daily has ads but weekly doesn't
-        ((dailyAgg.shopify.metaSpend > 0 || dailyAgg.shopify.googleSpend > 0) && 
-         !(existingWeek?.shopify?.metaSpend > 0 || existingWeek?.shopify?.googleSpend > 0)) ||
-        // Update if daily has Amazon SKU data but weekly doesn't
-        (Object.keys(dailyAgg.amazon.skuData).length > 0 && 
-         !(existingWeek?.amazon?.skuData?.length > 0)) ||
-        // Update if daily has more days than what was aggregated before
-        (dailyAgg.days.length > (existingWeek?.aggregatedFrom?.length || 0));
-      
-      if (shouldUpdate) {
+      if (!existingWeek) {
         needsUpdate = true;
         
         // Merge - prefer daily aggregates for fields that are populated
