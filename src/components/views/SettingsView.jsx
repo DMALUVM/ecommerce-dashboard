@@ -1954,9 +1954,9 @@ const SettingsView = ({
                   <p>1. Go to <strong>Seller Central → Apps & Services → Develop Apps</strong></p>
                   <p>2. Create or select your app and authorize it</p>
                   <p>3. Copy your LWA Client ID, Client Secret, and Refresh Token</p>
-                  <p>4. Required permissions: <code className="bg-slate-800 px-1 rounded">Inventory</code></p>
+                  <p>4. Required permissions: <code className="bg-slate-800 px-1 rounded">Inventory</code>, <code className="bg-slate-800 px-1 rounded">Orders</code></p>
                 </div>
-                <p className="text-slate-500 text-xs mt-3">This syncs FBA and AWD inventory only. 3PL (Packiyo) and Wormans Mill (Shopify) inventory are preserved separately.</p>
+                <p className="text-slate-500 text-xs mt-3">Syncs FBA/AWD inventory and recent order data for velocity. SKU Economics uploads override API velocity when available. 3PL (Packiyo) and Wormans Mill (Shopify) inventory are preserved separately.</p>
               </div>
             </div>
           )}

@@ -548,7 +548,182 @@ export default async function handler(req, res) {
     }
   }
 
+  // ============ SALES DATA SYNC (from Orders API) ============
+  // Fetches recent FBA orders with per-SKU daily breakdowns for velocity calculation.
+  // This gives near-real-time sales data without waiting for SKU Economics reports.
+  // SKU Economics uploads override this data on the client (more accurate fee/profit data).
+  if (syncType === 'sales') {
+    const syncStartTime = Date.now();
+    try {
+      const daysBack = parseInt(req.body.daysBack) || 14;
+      const createdAfter = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+      
+      console.log(`Fetching Amazon orders since ${createdAfter} (${daysBack} days back)`);
+
+      // Step 1: Fetch all orders (FBA/Shipped) from the last N days
+      const allOrders = [];
+      let nextToken = null;
+      
+      do {
+        let endpoint = `/orders/v0/orders?MarketplaceIds=${marketplaceId}&CreatedAfter=${encodeURIComponent(createdAfter)}&FulfillmentChannels=AFN&OrderStatuses=Shipped`;
+        if (nextToken) {
+          endpoint += `&NextToken=${encodeURIComponent(nextToken)}`;
+        }
+        
+        const ordersData = await spApiRequest(accessToken, endpoint);
+        
+        if (ordersData.payload?.Orders) {
+          allOrders.push(...ordersData.payload.Orders);
+        }
+        
+        nextToken = ordersData.payload?.NextToken;
+        await new Promise(r => setTimeout(r, 300));
+        
+        // Safety limit
+        if (allOrders.length > 500) {
+          console.log('Hit 500 order safety limit');
+          break;
+        }
+      } while (nextToken);
+
+      console.log(`Found ${allOrders.length} orders, fetching line items...`);
+
+      // Step 2: Fetch order items for each order
+      // Rate limits: burst of 30 at 300ms, then 2100ms between calls
+      const dailyData = {};
+      const skuTotals = {};
+      let processedOrders = 0;
+      let burstRemaining = 28; // Leave a small buffer from the 30 burst limit
+
+      for (const order of allOrders) {
+        // Timeout protection for serverless (50s max to leave room for response)
+        if (Date.now() - syncStartTime > 50000) {
+          console.log(`Timeout approaching at ${processedOrders}/${allOrders.length} orders`);
+          break;
+        }
+
+        try {
+          const itemsData = await spApiRequest(
+            accessToken,
+            `/orders/v0/orders/${order.AmazonOrderId}/orderItems`
+          );
+          
+          const orderDate = (order.PurchaseDate || order.CreatedDate || '').split('T')[0];
+          if (!orderDate) continue;
+          
+          // Initialize daily bucket
+          if (!dailyData[orderDate]) {
+            dailyData[orderDate] = {
+              amazon: {
+                revenue: 0,
+                units: 0,
+                orders: 0,
+                returns: 0,
+                skuData: {},
+                source: 'api',
+              },
+            };
+          }
+          
+          dailyData[orderDate].amazon.orders++;
+          
+          const items = itemsData.payload?.OrderItems || [];
+          for (const item of items) {
+            const sku = item.SellerSKU;
+            if (!sku) continue;
+            
+            const qty = item.QuantityOrdered || 0;
+            const price = parseFloat(item.ItemPrice?.Amount || 0);
+            const itemTax = parseFloat(item.ItemTax?.Amount || 0);
+            
+            dailyData[orderDate].amazon.revenue += price;
+            dailyData[orderDate].amazon.units += qty;
+            
+            // Per-SKU accumulation
+            if (!dailyData[orderDate].amazon.skuData[sku]) {
+              dailyData[orderDate].amazon.skuData[sku] = {
+                sku,
+                name: item.Title || sku,
+                asin: item.ASIN || '',
+                unitsSold: 0,
+                revenue: 0,
+              };
+            }
+            dailyData[orderDate].amazon.skuData[sku].unitsSold += qty;
+            dailyData[orderDate].amazon.skuData[sku].revenue += price;
+            
+            // Running totals across all days
+            if (!skuTotals[sku]) skuTotals[sku] = { sku, name: item.Title || sku, asin: item.ASIN || '', unitsSold: 0, revenue: 0 };
+            skuTotals[sku].unitsSold += qty;
+            skuTotals[sku].revenue += price;
+          }
+          
+          processedOrders++;
+          
+          // Rate limiting: use burst capacity first, then slow down
+          if (burstRemaining > 0) {
+            burstRemaining--;
+            await new Promise(r => setTimeout(r, 300));
+          } else {
+            await new Promise(r => setTimeout(r, 2100));
+          }
+
+        } catch (itemErr) {
+          console.error(`Failed to get items for order ${order.AmazonOrderId}:`, itemErr.message);
+          // If we get a throttle error, slow down significantly
+          if (itemErr.message?.includes('429') || itemErr.message?.includes('QuotaExceeded')) {
+            burstRemaining = 0;
+            await new Promise(r => setTimeout(r, 5000));
+          }
+          continue;
+        }
+      }
+
+      // Convert skuData from objects to sorted arrays for client compatibility
+      Object.values(dailyData).forEach(day => {
+        if (day.amazon?.skuData) {
+          const skuArr = Object.values(day.amazon.skuData).sort((a, b) => b.unitsSold - a.unitsSold);
+          day.amazon.skuData = skuArr;
+        }
+        // Add total summary per day
+        day.total = {
+          revenue: day.amazon?.revenue || 0,
+          units: day.amazon?.units || 0,
+          orders: day.amazon?.orders || 0,
+        };
+      });
+
+      const totalUnits = Object.values(skuTotals).reduce((s, i) => s + i.unitsSold, 0);
+      const totalRevenue = Object.values(skuTotals).reduce((s, i) => s + i.revenue, 0);
+
+      console.log(`Sales sync complete: ${processedOrders}/${allOrders.length} orders, ${totalUnits} units, ${Object.keys(dailyData).length} days`);
+
+      return res.status(200).json({
+        success: true,
+        syncType: 'sales',
+        source: 'amazon-orders-api',
+        summary: {
+          totalOrders: processedOrders,
+          totalOrdersFound: allOrders.length,
+          incomplete: processedOrders < allOrders.length,
+          daysWithData: Object.keys(dailyData).length,
+          totalUnits,
+          totalRevenue: Math.round(totalRevenue * 100) / 100,
+          skuCount: Object.keys(skuTotals).length,
+          daysBack,
+          processingTimeMs: Date.now() - syncStartTime,
+        },
+        dailyData,
+        skuTotals: Object.values(skuTotals).sort((a, b) => b.unitsSold - a.unitsSold),
+      });
+
+    } catch (err) {
+      console.error('Sales sync error:', err);
+      return res.status(500).json({ error: `Sales sync failed: ${err.message}` });
+    }
+  }
+
   return res.status(400).json({ 
-    error: 'Invalid syncType. Use: test, fba, awd, inventory, all, ads, velocity' 
+    error: 'Invalid syncType. Use: test, fba, awd, inventory, all, ads, velocity, sales' 
   });
 }

@@ -37,7 +37,7 @@ export default async function handler(req, res) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            syncType: 'velocity', // Use velocity for cron sync (gets sales data)
+            syncType: 'sales', // Use sales for cron sync (gets per-SKU daily order data)
             refreshToken: amazonCredentials?.refreshToken || process.env.AMAZON_REFRESH_TOKEN,
             clientId: amazonCredentials?.clientId || process.env.AMAZON_CLIENT_ID,
             clientSecret: amazonCredentials?.clientSecret || process.env.AMAZON_CLIENT_SECRET,

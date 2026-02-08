@@ -7101,6 +7101,7 @@ const savePeriods = async (d) => {
     // Daily data (from localStorage) covers last 28 days - great for fast sellers
     // Weekly data covers ALL weeks - catches slow-moving products that may not sell in any 28-day window
     const useWeeklyAsPrimary = velocityDataSource !== 'direct-localStorage';
+    let weeklyHasSkuEconomics = false; // Track if SKU Economics has been uploaded (set in weekly block)
     if (true) { // Always run - supplement slow movers even if daily data exists
     // SOURCE 1: Weekly sales data
     if (weeksCount > 0) {
@@ -7170,7 +7171,16 @@ const savePeriods = async (d) => {
       // Merge strategy: weekly data fills in gaps for slow-movers
       // If daily data already has velocity for a SKU, keep it (more recent/accurate)
       // If daily data has 0 velocity for a SKU, use weekly average (longer window catches slow sellers)
+      // EXCEPTION: If SKU Economics has been uploaded (weekly Amazon skuData exists),
+      // it OVERRIDES API-sourced daily data since SKU Economics is more accurate
       let weeklySupplementCount = 0;
+      
+      // Detect if weekly data includes SKU Economics uploads (has Amazon skuData arrays)
+      weeklyHasSkuEconomics = sortedWeeks.some(w => {
+        const amzSku = allWeeksData[w]?.amazon?.skuData;
+        return Array.isArray(amzSku) && amzSku.length > 0;
+      });
+      
       Object.keys(weeklyShopVel).forEach(sku => {
         if (!shopifySkuVelocity[sku] || shopifySkuVelocity[sku] === 0) {
           shopifySkuVelocity[sku] = weeklyShopVel[sku];
@@ -7185,14 +7195,17 @@ const savePeriods = async (d) => {
         }
       });
       Object.keys(weeklyAmzVel).forEach(sku => {
-        if (!amazonSkuVelocity[sku] || amazonSkuVelocity[sku] === 0) {
+        // When SKU Economics is uploaded, its velocity overrides API daily data
+        // (SKU Economics has accurate fee-adjusted data; API orders are unit counts only)
+        if (weeklyHasSkuEconomics || !amazonSkuVelocity[sku] || amazonSkuVelocity[sku] === 0) {
           amazonSkuVelocity[sku] = weeklyAmzVel[sku];
           const baseSku = sku.replace(/shop$/i, '').toUpperCase();
           const skuLower = sku.toLowerCase();
           const baseSkuLower = baseSku.toLowerCase();
-          if (!amazonSkuVelocity[baseSku]) amazonSkuVelocity[baseSku] = weeklyAmzVel[sku];
-          if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = weeklyAmzVel[sku];
-          if (!amazonSkuVelocity[baseSkuLower]) amazonSkuVelocity[baseSkuLower] = weeklyAmzVel[sku];
+          amazonSkuVelocity[baseSku] = weeklyAmzVel[sku];
+          amazonSkuVelocity[skuLower] = weeklyAmzVel[sku];
+          amazonSkuVelocity[baseSkuLower] = weeklyAmzVel[sku];
+          if (weeklyHasSkuEconomics) weeklySupplementCount++;
         }
       });
       
@@ -8099,7 +8112,17 @@ const savePeriods = async (d) => {
       }
     } else {
       const sources = [];
-      if (velocityDataSource.includes('weekly')) sources.push(`${weeksCount} weeks`);
+      if (velocityDataSource.includes('weekly') && weeklyHasSkuEconomics) sources.push(`${weeksCount} weeks (SKU Economics — authoritative)`);
+      else if (velocityDataSource.includes('weekly')) sources.push(`${weeksCount} weeks`);
+      if (velocityDataSource.includes('direct-localStorage')) {
+        // Check if daily Amazon data is from API sync
+        const apiDayCount = Object.values(legacyDailyData).filter(d => d?.amazon?.source === 'api').length;
+        if (apiDayCount > 0 && !weeklyHasSkuEconomics) {
+          sources.push(`${apiDayCount} days Amazon API${weeklyHasSkuEconomics ? ' (overridden by SKU Economics)' : ''}`);
+        } else if (apiDayCount > 0 && weeklyHasSkuEconomics) {
+          // API data present but SKU Economics is authoritative — don't confuse user
+        }
+      }
       if (velocityDataSource.includes('daily')) sources.push(`${dailyDaysCount} days`);
       if (velocityDataSource.includes('monthly')) sources.push(`${periodsCount} months`);
       velNote = `Velocity from: ${sources.join(' + ')} (${Object.keys(amazonSkuVelocity).length} Amazon SKUs, ${Object.keys(shopifySkuVelocity).length} Shopify SKUs)`;
@@ -11167,7 +11190,7 @@ const savePeriods = async (d) => {
     setAutoSyncStatus(prev => ({ ...prev, running: true, lastCheck: new Date().toISOString() }));
     
     try {
-      // Check Amazon - use /api/amazon/sync endpoint
+      // Check Amazon - use /api/amazon/sync endpoint for sales data
       if (appSettings.autoSync?.amazon !== false && amazonCredentials.connected) {
         const amazonStale = isServiceStale(amazonCredentials.lastSync, threshold);
         
@@ -11177,7 +11200,8 @@ const savePeriods = async (d) => {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                syncType: 'velocity', // Use velocity for auto-sync (gets sales data)
+                syncType: 'sales', // Fetch per-SKU daily order data for velocity
+                daysBack: 14,
                 refreshToken: amazonCredentials.refreshToken,
                 clientId: amazonCredentials.clientId,
                 clientSecret: amazonCredentials.clientSecret,
@@ -11186,9 +11210,61 @@ const savePeriods = async (d) => {
               }),
             });
             const data = await res.json();
-            if (!data.error && res.ok) {
+            if (!data.error && res.ok && data.dailyData) {
               setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-              results.push({ service: 'Amazon', success: true, message: 'Synced successfully' });
+              
+              // Merge API sales data into allDaysData
+              // IMPORTANT: SKU Economics uploads (source: 'sku-economics') are never overwritten
+              setAllDaysData(prev => {
+                const updated = { ...prev };
+                let mergedDays = 0;
+                let skippedDays = 0;
+                
+                Object.entries(data.dailyData).forEach(([dateKey, dayData]) => {
+                  const existing = updated[dateKey] || {};
+                  
+                  // Never overwrite days that have SKU Economics data (more accurate)
+                  if (existing.amazon?.source === 'sku-economics') {
+                    skippedDays++;
+                    return;
+                  }
+                  
+                  // Merge: preserve existing Shopify data, update Amazon with API data
+                  const apiAmazon = dayData.amazon || {};
+                  apiAmazon.source = 'api'; // Tag so SKU Economics can override later
+                  
+                  updated[dateKey] = {
+                    ...existing,
+                    amazon: apiAmazon,
+                    // Preserve existing Shopify data
+                    shopify: existing.shopify || dayData.shopify || undefined,
+                    // Recalculate totals
+                    total: {
+                      revenue: (apiAmazon.revenue || 0) + (existing.shopify?.revenue || 0),
+                      units: (apiAmazon.units || 0) + (existing.shopify?.units || 0),
+                      orders: (apiAmazon.orders || 0) + (existing.shopify?.orders || 0),
+                    },
+                  };
+                  mergedDays++;
+                });
+                
+                // Persist to localStorage
+                try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('Failed to save API sales data:', e?.message); }
+                
+                // Queue cloud save
+                try { queueCloudSave({ ...combinedData, dailySales: updated }); } catch (e) { /* non-critical */ }
+                
+                devLog(`Amazon sales sync: merged ${mergedDays} days, skipped ${skippedDays} (SKU Economics)`);
+                return updated;
+              });
+              
+              const units = data.summary?.totalUnits || 0;
+              const days = data.summary?.daysWithData || 0;
+              results.push({ service: 'Amazon', success: true, message: `${units} units across ${days} days` });
+            } else if (!data.error && res.ok) {
+              // Successful but no daily data (e.g. no recent orders)
+              setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+              results.push({ service: 'Amazon', success: true, message: 'No recent orders found' });
             } else {
               results.push({ service: 'Amazon', success: false, error: data.error || `HTTP ${res.status}` });
               devWarn('Amazon auto-sync failed:', data.error || res.status);
