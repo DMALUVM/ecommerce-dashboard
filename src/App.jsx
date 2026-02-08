@@ -6341,186 +6341,14 @@ const savePeriods = async (d) => {
   const allWeeksDataRef = useRef(allWeeksData);
   allWeeksDataRef.current = allWeeksData;
 
-  // Auto-sync daily data into weekly summaries - COMPREHENSIVE aggregation
-  // This ensures weekly data always reflects the latest daily uploads
+  // Auto-sync daily data into weekly summaries - DISABLED
+  // This was causing overwrites of SKU Economics data due to stale closures and timing issues.
+  // Weekly data is now created: (1) by SKU Economics uploads via processSalesCore, 
+  // (2) by the manual aggregateDailyToWeekly button, or (3) directly in the sync handler.
+  // The daily data in allDaysData is still used for velocity calculations and daily views.
   useEffect(() => {
-    if (Object.keys(allDaysData).length === 0) return;
-    
-    // Read latest weekly data from ref (not closure) to avoid stale state
-    const currentWeeksData = allWeeksDataRef.current;
-    
-    // Group ALL daily data by week
-    const dailyByWeek = {};
-    Object.entries(allDaysData).forEach(([dayKey, dayData]) => {
-      if (!dayData) return;
-      // Validate date key format (YYYY-MM-DD)
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return;
-      const date = new Date(dayKey + 'T12:00:00');
-      if (isNaN(date.getTime())) return; // Skip invalid dates
-      const dayOfWeek = date.getDay();
-      const weekEnd = new Date(date);
-      weekEnd.setDate(date.getDate() + (dayOfWeek === 0 ? 0 : 7 - dayOfWeek));
-      const weekKey = weekEnd.toISOString().split('T')[0];
-      
-      if (!dailyByWeek[weekKey]) {
-        dailyByWeek[weekKey] = {
-          days: [],
-          amazon: { revenue: 0, units: 0, returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0, skuData: {} },
-          shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, threeplCosts: 0, skuData: {} },
-        };
-      }
-      dailyByWeek[weekKey].days.push(dayKey);
-      
-      // Aggregate Amazon
-      if (dayData.amazon) {
-        dailyByWeek[weekKey].amazon.revenue += dayData.amazon.revenue || 0;
-        dailyByWeek[weekKey].amazon.units += dayData.amazon.units || 0;
-        dailyByWeek[weekKey].amazon.returns += dayData.amazon.returns || 0;
-        dailyByWeek[weekKey].amazon.cogs += dayData.amazon.cogs || 0;
-        dailyByWeek[weekKey].amazon.fees += dayData.amazon.fees || 0;
-        dailyByWeek[weekKey].amazon.adSpend += dayData.amazon.adSpend || 0;
-        dailyByWeek[weekKey].amazon.netProfit += dayData.amazon.netProfit || 0;
-        
-        // Aggregate SKU data
-        (dayData.amazon.skuData || []).forEach(sku => {
-          const skuKey = sku.sku || sku.msku;
-          if (!skuKey) return;
-          if (!dailyByWeek[weekKey].amazon.skuData[skuKey]) {
-            dailyByWeek[weekKey].amazon.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
-          }
-          dailyByWeek[weekKey].amazon.skuData[skuKey].unitsSold += sku.unitsSold || sku.units || 0;
-          dailyByWeek[weekKey].amazon.skuData[skuKey].returns += sku.returns || 0;
-          dailyByWeek[weekKey].amazon.skuData[skuKey].netSales += sku.netSales || sku.revenue || 0;
-          dailyByWeek[weekKey].amazon.skuData[skuKey].netProceeds += sku.netProceeds || 0;
-          dailyByWeek[weekKey].amazon.skuData[skuKey].adSpend += sku.adSpend || 0;
-          dailyByWeek[weekKey].amazon.skuData[skuKey].cogs += sku.cogs || 0;
-        });
-      }
-      
-      // Aggregate Shopify
-      if (dayData.shopify) {
-        dailyByWeek[weekKey].shopify.revenue += dayData.shopify.revenue || 0;
-        dailyByWeek[weekKey].shopify.units += dayData.shopify.units || 0;
-        dailyByWeek[weekKey].shopify.cogs += dayData.shopify.cogs || 0;
-        dailyByWeek[weekKey].shopify.discounts += dayData.shopify.discounts || 0;
-        dailyByWeek[weekKey].shopify.netProfit += dayData.shopify.netProfit || 0;
-        dailyByWeek[weekKey].shopify.threeplCosts += dayData.shopify.threeplCosts || 0;
-        
-        // Aggregate SKU data  
-        (dayData.shopify.skuData || []).forEach(sku => {
-          const skuKey = sku.sku;
-          if (!skuKey) return;
-          if (!dailyByWeek[weekKey].shopify.skuData[skuKey]) {
-            dailyByWeek[weekKey].shopify.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, netSales: 0, discounts: 0, cogs: 0 };
-          }
-          dailyByWeek[weekKey].shopify.skuData[skuKey].unitsSold += sku.unitsSold || sku.units || 0;
-          dailyByWeek[weekKey].shopify.skuData[skuKey].netSales += sku.netSales || sku.revenue || 0;
-          dailyByWeek[weekKey].shopify.skuData[skuKey].discounts += sku.discounts || 0;
-          dailyByWeek[weekKey].shopify.skuData[skuKey].cogs += sku.cogs || 0;
-        });
-      }
-      
-      // Aggregate ads from both top-level and shopify object
-      const metaSpend = dayData.metaSpend || dayData.shopify?.metaSpend || 0;
-      const googleSpend = dayData.googleSpend || dayData.shopify?.googleSpend || 0;
-      dailyByWeek[weekKey].shopify.metaSpend += metaSpend;
-      dailyByWeek[weekKey].shopify.googleSpend += googleSpend;
-      dailyByWeek[weekKey].shopify.adSpend += metaSpend + googleSpend;
-    });
-    
-    // Merge with existing weekly data - daily aggregates fill gaps in weekly data
-    let needsUpdate = false;
-    const updatedWeeks = { ...currentWeeksData };
-    
-    Object.entries(dailyByWeek).forEach(([weekKey, dailyAgg]) => {
-      const existingWeek = updatedWeeks[weekKey];
-      
-      // SIMPLE RULE: If a week already has Amazon revenue data, NEVER overwrite it.
-      // Auto-aggregation only creates NEW weeks for Amazon data.
-      // SKU Economics uploads are authoritative and handled separately (they bypass this effect).
-      // Note: We only check Amazon revenue because Shopify syncs daily and always has revenue.
-      if (existingWeek && (existingWeek.amazon?.revenue || 0) > 0) {
-        return; // Week has Amazon data — don't touch
-      }
-      
-      if (!existingWeek) {
-        needsUpdate = true;
-        
-        // Merge - prefer daily aggregates for fields that are populated
-        const amz = dailyAgg.amazon;
-        const shop = dailyAgg.shopify;
-        const existAmz = existingWeek?.amazon || {};
-        const existShop = existingWeek?.shopify || {};
-        
-        // Use daily data if it has values, otherwise use existing
-        const mergedAmz = {
-          revenue: amz.revenue > 0 ? amz.revenue : (existAmz.revenue || 0),
-          units: amz.units > 0 ? amz.units : (existAmz.units || 0),
-          returns: amz.returns > 0 ? amz.returns : (existAmz.returns || 0),
-          cogs: amz.cogs > 0 ? amz.cogs : (existAmz.cogs || 0),
-          fees: amz.fees > 0 ? amz.fees : (existAmz.fees || 0),
-          adSpend: amz.adSpend > 0 ? amz.adSpend : (existAmz.adSpend || 0),
-          netProfit: amz.netProfit !== 0 ? amz.netProfit : (existAmz.netProfit || 0),
-          skuData: Object.keys(amz.skuData).length > 0 
-            ? Object.values(amz.skuData).sort((a, b) => (b.netSales || 0) - (a.netSales || 0))
-            : (existAmz.skuData || []),
-        };
-        
-        const mergedShop = {
-          revenue: shop.revenue > 0 ? shop.revenue : (existShop.revenue || 0),
-          units: shop.units > 0 ? shop.units : (existShop.units || 0),
-          cogs: shop.cogs > 0 ? shop.cogs : (existShop.cogs || 0),
-          adSpend: shop.adSpend > 0 ? shop.adSpend : (existShop.adSpend || 0),
-          metaSpend: shop.metaSpend > 0 ? shop.metaSpend : (existShop.metaSpend || 0),
-          googleSpend: shop.googleSpend > 0 ? shop.googleSpend : (existShop.googleSpend || 0),
-          discounts: shop.discounts > 0 ? shop.discounts : (existShop.discounts || 0),
-          netProfit: shop.netProfit !== 0 ? shop.netProfit : (existShop.netProfit || 0),
-          threeplCosts: shop.threeplCosts > 0 ? shop.threeplCosts : (existShop.threeplCosts || 0),
-          skuData: Object.keys(shop.skuData).length > 0
-            ? Object.values(shop.skuData).sort((a, b) => (b.netSales || 0) - (a.netSales || 0))
-            : (existShop.skuData || []),
-        };
-        
-        const totalRev = mergedAmz.revenue + mergedShop.revenue;
-        const totalProfit = mergedAmz.netProfit + mergedShop.netProfit;
-        const totalAds = mergedAmz.adSpend + mergedShop.adSpend;
-        
-        updatedWeeks[weekKey] = {
-          weekEnding: weekKey,
-          createdAt: existingWeek?.createdAt || new Date().toISOString(),
-          aggregatedFrom: dailyAgg.days,
-          amazon: {
-            ...mergedAmz,
-            margin: mergedAmz.revenue > 0 ? (mergedAmz.netProfit / mergedAmz.revenue * 100) : 0,
-            aov: mergedAmz.units > 0 ? mergedAmz.revenue / mergedAmz.units : 0,
-            roas: mergedAmz.adSpend > 0 ? mergedAmz.revenue / mergedAmz.adSpend : 0,
-          },
-          shopify: {
-            ...mergedShop,
-            netMargin: mergedShop.revenue > 0 ? (mergedShop.netProfit / mergedShop.revenue * 100) : 0,
-            aov: mergedShop.units > 0 ? mergedShop.revenue / mergedShop.units : 0,
-            roas: mergedShop.adSpend > 0 ? mergedShop.revenue / mergedShop.adSpend : 0,
-          },
-          total: {
-            revenue: totalRev,
-            units: mergedAmz.units + mergedShop.units,
-            cogs: mergedAmz.cogs + mergedShop.cogs,
-            adSpend: totalAds,
-            netProfit: totalProfit,
-            netMargin: totalRev > 0 ? (totalProfit / totalRev * 100) : 0,
-            roas: totalAds > 0 ? totalRev / totalAds : 0,
-            amazonShare: totalRev > 0 ? (mergedAmz.revenue / totalRev * 100) : 0,
-            shopifyShare: totalRev > 0 ? (mergedShop.revenue / totalRev * 100) : 0,
-          },
-        };
-      }
-    });
-    
-    if (needsUpdate) {
-      setAllWeeksData(updatedWeeks);
-      save(updatedWeeks);
-    }
-  }, [allDaysData]); // Only depend on allDaysData to avoid loops
+    // Intentionally disabled - do not auto-aggregate daily→weekly
+  }, [allDaysData]);
 
   // Auto-aggregate weekly data into monthly periods
   // This ensures period data is always up-to-date for AI queries
@@ -11259,9 +11087,6 @@ const savePeriods = async (d) => {
                 
                 // Persist to localStorage
                 try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('Failed to save API sales data:', e?.message); }
-                
-                // Queue cloud save
-                try { queueCloudSave({ ...combinedData, dailySales: updated }); } catch (e) { /* non-critical */ }
                 
                 devWarn(`Amazon sales sync: merged ${mergedDays} days, skipped ${skippedDays} (SKU Economics)`);
                 return updated;
