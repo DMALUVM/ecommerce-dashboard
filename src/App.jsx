@@ -11808,6 +11808,20 @@ const savePeriods = async (d) => {
     } finally {
       audit('auto_sync', `${results.length} services: ${results.map(r => `${r.service}:${r.success ? 'ok' : 'fail'}`).join(', ')}`);
       setAutoSyncStatus(prev => ({ ...prev, running: false, results }));
+      
+      // Show toast with sync results
+      if (results.length > 0) {
+        const successes = results.filter(r => r.success);
+        const failures = results.filter(r => !r.success);
+        if (failures.length > 0 && successes.length === 0) {
+          setToast({ message: `Sync failed: ${failures.map(f => `${f.service}: ${f.error}`).join(', ')}`, type: 'error' });
+        } else if (failures.length > 0) {
+          setToast({ message: `Synced ${successes.map(s => s.service).join(', ')} | Failed: ${failures.map(f => f.service).join(', ')}`, type: 'warning' });
+        } else {
+          const details = successes.map(s => `${s.service}${s.message ? `: ${s.message}` : ''}`).join(', ');
+          setToast({ message: `Auto-sync complete — ${details}`, type: 'success' });
+        }
+      }
     }
   }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, qboCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs]);
   
