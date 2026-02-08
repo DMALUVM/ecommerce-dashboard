@@ -1,8 +1,9 @@
 import { devWarn, devError } from '../../utils/logger';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertCircle, AlertTriangle, Bell, Boxes, Brain, Check, CheckCircle, ChevronLeft, ChevronRight, Clock, DollarSign, Edit, Filter, Flag, HelpCircle, Info, List, Loader2, Package, Plus, RefreshCw, Save, Search, Settings, ShoppingCart, Target, Trash2, TrendingUp, Truck, Upload, X, Zap
+  AlertCircle, AlertTriangle, Bell, Boxes, Brain, Check, CheckCircle, ChevronLeft, ChevronRight, Clock, DollarSign, Download, Edit, Filter, Flag, HelpCircle, Info, List, Loader2, Package, Plus, RefreshCw, Save, Search, Settings, ShoppingCart, Target, Trash2, TrendingUp, Truck, Upload, X, Zap
 } from 'lucide-react';
+import { loadXLSX } from '../../utils/xlsx';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import { hasDailySalesData } from '../../utils/date';
 import NavTabs from '../ui/NavTabs';
@@ -358,6 +359,49 @@ const InventoryView = ({
     return invSortDirection === 'asc' ? aVal - bVal : bVal - aVal;
   });
   
+  // Export inventory to Excel
+  const [exportingXlsx, setExportingXlsx] = useState(false);
+  const exportInventoryExcel = async () => {
+    if (exportingXlsx || items.length === 0) return;
+    setExportingXlsx(true);
+    try {
+      const XLSX = await loadXLSX();
+      const rows = items.map(item => ({
+        'Product': item.name || item.sku,
+        'SKU': item.sku,
+        'ABC': item.abcClass || '',
+        'Amazon': item.amazonQty || 0,
+        '3PL': item.threeplQty || 0,
+        'Total Units': item.totalQty || 0,
+        'Value': Math.round((item.totalValue || 0) * 100) / 100,
+        'AMZ Velocity': Math.round((item.amzWeeklyVel || 0) * 10) / 10,
+        'Shop Velocity': Math.round((item.shopWeeklyVel || 0) * 10) / 10,
+        'Total Velocity': Math.round((item.weeklyVel || 0) * 10) / 10,
+        'Days of Supply': item.daysOfSupply || 0,
+        'Turnover': Math.round((item.turnoverRate || 0) * 10) / 10,
+        'Stockout Date': item.stockoutDate || '',
+        'Order By': item.reorderByDate || '',
+        'Status': item.health || '',
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      // Set column widths
+      ws['!cols'] = [
+        { wch: 35 }, { wch: 20 }, { wch: 5 }, { wch: 10 }, { wch: 10 },
+        { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+        { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
+      XLSX.writeFile(wb, `inventory_${selectedInvDate || new Date().toISOString().split('T')[0]}.xlsx`);
+      if (setToast) setToast({ message: `Exported ${rows.length} products to Excel`, type: 'success' });
+    } catch (err) {
+      console.error('Excel export failed:', err);
+      if (setToast) setToast({ message: 'Excel export failed: ' + err.message, type: 'error' });
+    } finally {
+      setExportingXlsx(false);
+    }
+  };
+
   // Recalculate summary based on filtered items
   // Use item-level calculations, but fall back to snapshot summary for 3PL if items don't have data
   const itemThreeplUnits = items.reduce((s, i) => s + (i.threeplQty || 0), 0);
@@ -977,6 +1021,14 @@ const InventoryView = ({
                 />
                 Show zero stock
               </label>
+              <button 
+                onClick={exportInventoryExcel} 
+                disabled={exportingXlsx || items.length === 0}
+                className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg text-white text-sm flex items-center gap-1"
+                title="Export to Excel"
+              >
+                <Download className="w-4 h-4" />{exportingXlsx ? 'Exporting...' : 'Export'}
+              </button>
               <button onClick={() => setShowSkuSettings(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-1">
                 <Settings className="w-4 h-4" />Settings
               </button>

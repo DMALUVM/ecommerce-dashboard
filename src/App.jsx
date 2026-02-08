@@ -1838,17 +1838,7 @@ const handleLogout = async () => {
   });
   const [pdfGenerating, setPdfGenerating] = useState(false);
   
-  // 3. Industry Benchmarks
-  const [showBenchmarks, setShowBenchmarks] = useState(false);
-  const [benchmarkCategory, setBenchmarkCategory] = useState('beauty'); // beauty, supplements, home, electronics, apparel, general
-  const INDUSTRY_BENCHMARKS = {
-    beauty: { name: 'Beauty & Personal Care', avgMargin: 42, avgTacos: 18, avgAov: 38, avgReturnRate: 8 },
-    supplements: { name: 'Supplements & Health', avgMargin: 55, avgTacos: 22, avgAov: 45, avgReturnRate: 5 },
-    home: { name: 'Home & Kitchen', avgMargin: 35, avgTacos: 15, avgAov: 52, avgReturnRate: 12 },
-    electronics: { name: 'Electronics & Accessories', avgMargin: 28, avgTacos: 20, avgAov: 75, avgReturnRate: 15 },
-    apparel: { name: 'Apparel & Fashion', avgMargin: 48, avgTacos: 25, avgAov: 42, avgReturnRate: 22 },
-    general: { name: 'General Merchandise', avgMargin: 38, avgTacos: 18, avgAov: 35, avgReturnRate: 10 },
-  };
+  // 3. (Industry Benchmarks removed)
   
   // 4. Push Notifications for inventory/alerts
   const [notificationSettings, setNotificationSettings] = useState(() => {
@@ -2827,146 +2817,6 @@ const handleLogout = async () => {
   };
   
   // ========== INDUSTRY BENCHMARKS MODAL ==========
-  const BenchmarksModal = () => {
-    if (!showBenchmarks) return null;
-    
-    // Calculate user's current metrics
-    const sortedWeeks = Object.keys(allWeeksData).sort().reverse().slice(0, 4);
-    let totalRevenue = 0, totalProfit = 0, totalOrders = 0, totalAdSpend = 0, totalReturns = 0;
-    
-    sortedWeeks.forEach(week => {
-      const data = allWeeksData[week];
-      if (data?.total) {
-        totalRevenue += data.total.revenue || 0;
-        totalProfit += data.total.profit || 0;
-        totalOrders += data.total.orders || 0;
-        totalAdSpend += data.total.adSpend || 0;
-      }
-    });
-    
-    const userMetrics = {
-      margin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
-      tacos: totalRevenue > 0 ? (totalAdSpend / totalRevenue) * 100 : 0,
-      aov: totalOrders > 0 ? totalRevenue / totalOrders : 0,
-      returnRate: 0, // Would need return data
-    };
-    
-    const benchmark = INDUSTRY_BENCHMARKS[benchmarkCategory];
-    
-    const compareMetric = (user, industry, higherIsBetter = true) => {
-      const diff = user - industry;
-      const pct = industry > 0 ? (diff / industry) * 100 : 0;
-      const isGood = higherIsBetter ? diff >= 0 : diff <= 0;
-      return { diff, pct, isGood };
-    };
-    
-    return (
-      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => setShowBenchmarks(false)}>
-        <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl border border-slate-700 w-full max-w-2xl shadow-2xl" onClick={e => e.stopPropagation()}>
-          <div className="p-6 border-b border-slate-700">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-amber-500/20 rounded-xl flex items-center justify-center">
-                  <BarChart3 className="w-5 h-5 text-amber-400" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-white">Industry Benchmarks</h3>
-                  <p className="text-slate-400 text-sm">Compare your performance to industry averages</p>
-                </div>
-              </div>
-              <button onClick={() => setShowBenchmarks(false)} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
-                <X className="w-5 h-5 text-slate-400" />
-              </button>
-            </div>
-          </div>
-          
-          <div className="p-6">
-            {/* Category Selector */}
-            <div className="mb-6">
-              <label className="block text-sm text-slate-400 mb-2">Your Industry</label>
-              <div className="grid grid-cols-3 gap-2">
-                {Object.entries(INDUSTRY_BENCHMARKS).map(([key, val]) => (
-                  <button
-                    key={key}
-                    onClick={() => setBenchmarkCategory(key)}
-                    className={`py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
-                      benchmarkCategory === key
-                        ? 'bg-amber-600 text-white'
-                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                    }`}
-                  >
-                    {val.name.split(' ')[0]}
-                  </button>
-                ))}
-              </div>
-            </div>
-            
-            {/* Comparison Grid */}
-            <div className="space-y-4">
-              {[
-                { label: 'Profit Margin', user: userMetrics.margin, industry: benchmark.avgMargin, suffix: '%', higherIsBetter: true },
-                { label: 'TACOS (Ad Spend %)', user: userMetrics.tacos, industry: benchmark.avgTacos, suffix: '%', higherIsBetter: false },
-                { label: 'Avg Order Value', user: userMetrics.aov, industry: benchmark.avgAov, prefix: '$', higherIsBetter: true },
-              ].map(metric => {
-                const comparison = compareMetric(metric.user, metric.industry, metric.higherIsBetter);
-                return (
-                  <div key={metric.label} className="bg-slate-800/50 rounded-xl p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="text-slate-300 font-medium">{metric.label}</span>
-                      <span className={`text-sm px-2 py-1 rounded-full ${
-                        comparison.isGood ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
-                      }`}>
-                        {comparison.isGood ? '↑' : '↓'} {Math.abs(comparison.pct).toFixed(0)}% {comparison.isGood ? 'above' : 'below'} avg
-                      </span>
-                    </div>
-                    <div className="flex items-end gap-4">
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between text-sm mb-1">
-                          <span className="text-slate-500">You</span>
-                          <span className="text-white font-semibold">
-                            {metric.prefix || ''}{metric.user.toFixed(1)}{metric.suffix || ''}
-                          </span>
-                        </div>
-                        <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
-                          <div 
-                            className={`h-full rounded-full ${comparison.isGood ? 'bg-emerald-500' : 'bg-rose-500'}`}
-                            style={{ width: `${Math.min(100, (metric.user / Math.max(metric.user, metric.industry)) * 100)}%` }}
-                          />
-                        </div>
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between text-sm mb-1">
-                          <span className="text-slate-500">Industry Avg</span>
-                          <span className="text-slate-400 font-medium">
-                            {metric.prefix || ''}{metric.industry.toFixed(1)}{metric.suffix || ''}
-                          </span>
-                        </div>
-                        <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-slate-500 rounded-full"
-                            style={{ width: `${Math.min(100, (metric.industry / Math.max(metric.user, metric.industry)) * 100)}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            
-            {/* Industry Info */}
-            <div className="mt-6 p-4 bg-slate-800/30 rounded-xl">
-              <p className="text-slate-400 text-sm">
-                <strong className="text-white">{benchmark.name}</strong> benchmarks are based on aggregated industry data. 
-                Your actual performance may vary based on specific product categories, pricing strategy, and market conditions.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-  
   // Amazon Forecasts (from Amazon's SKU Economics forecast reports)
   const [amazonForecasts, setAmazonForecasts] = useState(() => {
     try { return safeLocalStorageGet(AMAZON_FORECAST_KEY, {}); } catch (e) { devWarn("[init]", e?.message); return {}; }
@@ -3625,7 +3475,7 @@ allWeekKeys.forEach((weekKey) => {
     
     // Auto-sync settings
     autoSync: {
-      enabled: false, // Master toggle
+      enabled: true, // Master toggle
       intervalHours: 4, // How often to sync (when app is open)
       onAppLoad: true, // Sync on app load if stale
       staleThresholdHours: 4, // Consider data stale after this many hours
@@ -17920,7 +17770,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     <>
       <OnboardingWizard />
       <PdfExportModal />
-      <BenchmarksModal />
       <ConfirmDialog />
     </>
   );
@@ -17937,7 +17786,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   // ==================== DASHBOARD VIEW ====================
 
   // ==================== GLOBAL MODALS (rendered once, not per-view) ====================
-  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><BenchmarksModal /><KeyboardShortcuts setView={setView} exportAll={exportAll} setShowAdsAIChat={setShowAdsAIChat} setToast={setToast} /><AuditLog isOpen={showAuditLog} onClose={() => setShowAuditLog(false)} auditLog={getAuditLog()} /></>);
+  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><KeyboardShortcuts setView={setView} exportAll={exportAll} setShowAdsAIChat={setShowAdsAIChat} setToast={setToast} /><AuditLog isOpen={showAuditLog} onClose={() => setShowAuditLog(false)} auditLog={getAuditLog()} /></>);
 
   if (view === 'dashboard') {
     return <DashboardView
@@ -17992,7 +17841,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setSelectedInvDate={setSelectedInvDate}
       setSelectedPeriod={setSelectedPeriod}
       setSelectedWeek={setSelectedWeek}
-      setShowBenchmarks={setShowBenchmarks}
       setShowCogsManager={setShowCogsManager}
       setShowExportModal={setShowExportModal}
       setShowForecast={setShowForecast}
@@ -19081,7 +18929,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setSettingsTab={setSettingsTab}
       setShopifyCredentials={setShopifyCredentials}
       setShowAdsBulkUpload={setShowAdsBulkUpload}
-      setShowBenchmarks={setShowBenchmarks}
       setShowOnboarding={setShowOnboarding}
       setShowPdfExport={setShowPdfExport}
       setShowResetConfirm={setShowResetConfirm}
@@ -19134,7 +18981,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     <>
       <OnboardingWizard />
       <PdfExportModal />
-      <BenchmarksModal />
       <ConfirmDialog />
     </>
   );

@@ -64,7 +64,6 @@ const DashboardView = ({
   setSelectedInvDate,
   setSelectedPeriod,
   setSelectedWeek,
-  setShowBenchmarks,
   setShowCogsManager,
   setShowExportModal,
   setShowForecast,
@@ -863,8 +862,30 @@ const DashboardView = ({
                 )}
                 <button onClick={() => setShowExportModal(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Export CSV"><FileDown className="w-4 h-4" /></button>
                 <button onClick={() => setShowPdfExport(true)} className="p-2 hover:bg-slate-700 rounded text-violet-400" title="Export PDF Report"><FileText className="w-4 h-4" /></button>
-                <button onClick={() => setShowBenchmarks(true)} className="p-2 hover:bg-slate-700 rounded text-amber-400" title="Industry Benchmarks"><BarChart3 className="w-4 h-4" /></button>
                 <button onClick={() => setShowUploadHelp(true)} className="p-2 hover:bg-slate-700 rounded text-slate-300" title="Help"><HelpCircle className="w-4 h-4" /></button>
+                {/* Sync Status Indicator */}
+                {runAutoSync && (
+                  <button 
+                    onClick={() => runAutoSync(true)} 
+                    disabled={autoSyncStatus?.running}
+                    className={`p-2 hover:bg-slate-700 rounded flex items-center gap-1.5 text-sm font-medium disabled:opacity-70 ${
+                      autoSyncStatus?.running ? 'text-violet-400' : 
+                      autoSyncStatus?.results?.length > 0 && autoSyncStatus.results.every(r => r.success) ? 'text-emerald-400' :
+                      autoSyncStatus?.results?.some(r => !r.success) ? 'text-amber-400' : 'text-slate-400'
+                    }`}
+                    title={autoSyncStatus?.running ? 'Syncing data...' : autoSyncStatus?.lastCheck ? `Last sync: ${new Date(autoSyncStatus.lastCheck).toLocaleTimeString()}` : 'Sync all connected services'}
+                  >
+                    <RefreshCw className={`w-4 h-4 ${autoSyncStatus?.running ? 'animate-spin' : ''}`} />
+                    <span className="hidden sm:inline">
+                      {autoSyncStatus?.running ? 'Syncing...' : 'Sync'}
+                    </span>
+                    {autoSyncStatus?.lastCheck && !autoSyncStatus?.running && (
+                      <span className="hidden md:inline text-xs text-slate-500 ml-0.5">
+                        {new Date(autoSyncStatus.lastCheck).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                      </span>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           </div>

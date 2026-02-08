@@ -83,7 +83,6 @@ const SettingsView = ({
   setSettingsTab,
   setShopifyCredentials,
   setShowAdsBulkUpload,
-  setShowBenchmarks,
   setShowOnboarding,
   setShowPdfExport,
   setShowResetConfirm,
@@ -3416,14 +3415,6 @@ const SettingsView = ({
             >
               <Sparkles className="w-3 h-3" />
               Restart Setup Guide
-            </button>
-            <span className="text-slate-600">•</span>
-            <button
-              onClick={() => setShowBenchmarks(true)}
-              className="text-xs text-slate-400 hover:text-amber-400 flex items-center gap-1 transition-colors"
-            >
-              <BarChart3 className="w-3 h-3" />
-              Industry Benchmarks
             </button>
             <span className="text-slate-600">•</span>
             <button
