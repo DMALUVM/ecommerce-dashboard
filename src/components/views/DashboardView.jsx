@@ -504,6 +504,12 @@ const DashboardView = ({
           weekLabel,
           weekEndDate: weekEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         },
+        prevWtd: {
+          ...prevWtd,
+          margin: prevWtd.revenue > 0 ? (prevWtd.netProfit / prevWtd.revenue) * 100 : 0,
+          tacos: prevWtd.revenue > 0 ? (prevWtd.adSpend / prevWtd.revenue) * 100 : 0,
+          weekLabel: `${prevWeekStartDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${prevWeekEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+        },
         mtd: {
           ...mtd,
           margin: mtd.revenue > 0 ? (mtd.netProfit / mtd.revenue) * 100 : 0,
@@ -1085,14 +1091,14 @@ const DashboardView = ({
                       </button>
                     </div>
                     
-                    {/* WTD and MTD Side by Side */}
+                    {/* WTD and Prior Week Side by Side */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      {/* Last Complete Week */}
+                      {/* Current Week */}
                       <div className="bg-slate-900/50 rounded-xl p-4 border border-violet-500/20">
                         <div className="flex items-center justify-between mb-3">
                           <h4 className="text-sm font-semibold text-violet-400 flex items-center gap-2">
                             <Calendar className="w-4 h-4" />
-                            Last Week: {periodMetrics.wtd.weekLabel || ''}
+                            Current Week: {periodMetrics.wtd.weekLabel || ''}
                           </h4>
                           <span className="text-xs text-slate-500">{periodMetrics.wtd.daysCount} days</span>
                         </div>
@@ -1128,59 +1134,53 @@ const DashboardView = ({
                         </div>
                       </div>
                       
-                      {/* Month to Date */}
+                      {/* Prior Week */}
                       <div className="bg-slate-900/50 rounded-xl p-4 border border-cyan-500/20">
                         <div className="flex items-center justify-between mb-3">
                           <h4 className="text-sm font-semibold text-cyan-400 flex items-center gap-2">
                             <CalendarRange className="w-4 h-4" />
-                            {periodMetrics.monthName} 1-{periodMetrics.latestDay ? new Date(periodMetrics.latestDay + 'T12:00:00').getDate() : ''}
+                            Prior Week: {periodMetrics.prevWtd.weekLabel || ''}
                           </h4>
-                          <span className="text-xs text-slate-500">{periodMetrics.mtd.daysCount} days</span>
+                          <span className="text-xs text-slate-500">{periodMetrics.prevWtd.daysCount} days</span>
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
                             <p className="text-slate-500 text-xs">Revenue</p>
-                            <p className="text-xl font-bold text-white">{formatCurrency(periodMetrics.mtd.revenue)}</p>
-                            {periodMetrics.mtd.revenueChange !== null && (
-                              <p className={`text-xs flex items-center gap-1 ${periodMetrics.mtd.revenueChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                {periodMetrics.mtd.revenueChange >= 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
-                                {Math.abs(periodMetrics.mtd.revenueChange).toFixed(1)}% vs last mo
-                              </p>
-                            )}
+                            <p className="text-xl font-bold text-white">{formatCurrency(periodMetrics.prevWtd.revenue)}</p>
                           </div>
                           <div>
                             <p className="text-slate-500 text-xs">Net Profit</p>
-                            <p className={`text-xl font-bold ${periodMetrics.mtd.netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {formatCurrency(periodMetrics.mtd.netProfit)}
+                            <p className={`text-xl font-bold ${periodMetrics.prevWtd.netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {formatCurrency(periodMetrics.prevWtd.netProfit)}
                             </p>
-                            <p className="text-xs text-slate-500">{periodMetrics.mtd.margin.toFixed(1)}% margin</p>
+                            <p className="text-xs text-slate-500">{periodMetrics.prevWtd.margin.toFixed(1)}% margin</p>
                           </div>
                           <div>
                             <p className="text-slate-500 text-xs">Units</p>
-                            <p className="text-lg font-semibold text-white">{formatNumber(periodMetrics.mtd.units)}</p>
+                            <p className="text-lg font-semibold text-white">{formatNumber(periodMetrics.prevWtd.units)}</p>
                           </div>
                           <div>
                             <p className="text-slate-500 text-xs">Ad Spend</p>
-                            <p className="text-lg font-semibold text-violet-400">{formatCurrency(periodMetrics.mtd.adSpend)}</p>
-                            <p className={`text-xs ${periodMetrics.mtd.tacos <= 15 ? 'text-emerald-400' : periodMetrics.mtd.tacos <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>
-                              {periodMetrics.mtd.tacos.toFixed(1)}% TACOS
+                            <p className="text-lg font-semibold text-violet-400">{formatCurrency(periodMetrics.prevWtd.adSpend)}</p>
+                            <p className={`text-xs ${periodMetrics.prevWtd.tacos <= 15 ? 'text-emerald-400' : periodMetrics.prevWtd.tacos <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {periodMetrics.prevWtd.tacos.toFixed(1)}% TACOS
                             </p>
                           </div>
                         </div>
                       </div>
                     </div>
                     
-                    {/* Channel Split Bar (MTD) */}
+                    {/* Channel Split Bar (Current Week) */}
                     <div className="mt-4 bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
                       <div className="flex justify-between text-xs text-slate-400 mb-2">
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500" />Amazon MTD: {formatCurrency(periodMetrics.mtd.amazonRev)}</span>
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />Shopify MTD: {formatCurrency(periodMetrics.mtd.shopifyRev)}</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500" />Amazon: {formatCurrency(periodMetrics.wtd.amazonRev)}</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />Shopify: {formatCurrency(periodMetrics.wtd.shopifyRev)}</span>
                       </div>
                       <div className="h-2 bg-slate-800 rounded-full overflow-hidden flex">
-                        {periodMetrics.mtd.revenue > 0 && (
+                        {periodMetrics.wtd.revenue > 0 && (
                           <>
-                            <div className="bg-orange-500 h-full" style={{ width: `${(periodMetrics.mtd.amazonRev / periodMetrics.mtd.revenue) * 100}%` }} />
-                            <div className="bg-blue-500 h-full" style={{ width: `${(periodMetrics.mtd.shopifyRev / periodMetrics.mtd.revenue) * 100}%` }} />
+                            <div className="bg-orange-500 h-full" style={{ width: `${(periodMetrics.wtd.amazonRev / periodMetrics.wtd.revenue) * 100}%` }} />
+                            <div className="bg-blue-500 h-full" style={{ width: `${(periodMetrics.wtd.shopifyRev / periodMetrics.wtd.revenue) * 100}%` }} />
                           </>
                         )}
                       </div>
