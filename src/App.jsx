@@ -11254,7 +11254,7 @@ const savePeriods = async (d) => {
                 // Queue cloud save
                 try { queueCloudSave({ ...combinedData, dailySales: updated }); } catch (e) { /* non-critical */ }
                 
-                devLog(`Amazon sales sync: merged ${mergedDays} days, skipped ${skippedDays} (SKU Economics)`);
+                devWarn(`Amazon sales sync: merged ${mergedDays} days, skipped ${skippedDays} (SKU Economics)`);
                 return updated;
               });
               
