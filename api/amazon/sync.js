@@ -14,6 +14,12 @@
 // - Sales velocity from FBA reports
 
 import crypto from 'crypto';
+import { gunzipSync } from 'zlib';
+
+// Allow up to 60s for report generation + download
+export const config = {
+  maxDuration: 60,
+};
 
 export default async function handler(req, res) {
   // CORS headers
@@ -556,156 +562,197 @@ export default async function handler(req, res) {
     const syncStartTime = Date.now();
     try {
       const daysBack = parseInt(req.body.daysBack) || 14;
-      const createdAfter = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+      const startDateISO = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+      const endDateISO = new Date().toISOString();
       
-      console.log(`Fetching Amazon orders since ${createdAfter} (${daysBack} days back)`);
+      console.log(`Requesting Amazon sales report: ${startDateISO} to ${endDateISO}`);
 
-      // Step 1: Fetch all orders (FBA/Shipped) from the last N days
-      const allOrders = [];
-      let nextToken = null;
+      // Step 1: Request a flat-file orders report (one row per line item, includes SKU + date)
+      const createReport = await spApiRequest(
+        accessToken,
+        '/reports/2021-06-30/reports',
+        'POST',
+        {
+          reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
+          marketplaceIds: [marketplaceId],
+          dataStartTime: startDateISO,
+          dataEndTime: endDateISO,
+        }
+      );
       
-      do {
-        let endpoint = `/orders/v0/orders?MarketplaceIds=${marketplaceId}&CreatedAfter=${encodeURIComponent(createdAfter)}&FulfillmentChannels=AFN&OrderStatuses=Shipped`;
-        if (nextToken) {
-          endpoint += `&NextToken=${encodeURIComponent(nextToken)}`;
-        }
+      const reportId = createReport.reportId;
+      console.log(`Report requested: ${reportId}`);
+
+      // Step 2: Poll for report completion (max ~50s for serverless safety)
+      let reportReady = false;
+      let reportDocId = null;
+      let pollCount = 0;
+      
+      while (Date.now() - syncStartTime < 50000 && pollCount < 12) {
+        await new Promise(r => setTimeout(r, pollCount < 3 ? 3000 : 5000));
+        pollCount++;
         
-        const ordersData = await spApiRequest(accessToken, endpoint);
+        const reportStatus = await spApiRequest(
+          accessToken,
+          `/reports/2021-06-30/reports/${reportId}`
+        );
         
-        if (ordersData.payload?.Orders) {
-          allOrders.push(...ordersData.payload.Orders);
-        }
+        console.log(`Poll ${pollCount}: ${reportStatus.processingStatus}`);
         
-        nextToken = ordersData.payload?.NextToken;
-        await new Promise(r => setTimeout(r, 300));
-        
-        // Safety limit
-        if (allOrders.length > 500) {
-          console.log('Hit 500 order safety limit');
+        if (reportStatus.processingStatus === 'DONE') {
+          reportDocId = reportStatus.reportDocumentId;
+          reportReady = true;
           break;
+        } else if (reportStatus.processingStatus === 'CANCELLED' || reportStatus.processingStatus === 'FATAL') {
+          throw new Error(`Report failed: ${reportStatus.processingStatus}`);
         }
-      } while (nextToken);
+        // IN_QUEUE or IN_PROGRESS — keep polling
+      }
 
-      console.log(`Found ${allOrders.length} orders, fetching line items...`);
+      if (!reportReady) {
+        // Report not ready yet — return reportId so client can retry
+        return res.status(200).json({
+          success: true,
+          syncType: 'sales',
+          source: 'amazon-report-pending',
+          reportId,
+          summary: { status: 'pending', message: 'Report still processing — will be available on next sync' },
+        });
+      }
 
-      // Step 2: Fetch order items for each order
-      // Rate limits: burst of 30 at 300ms, then 2100ms between calls
+      // Step 3: Download the report document
+      const docMeta = await spApiRequest(
+        accessToken,
+        `/reports/2021-06-30/documents/${reportDocId}`
+      );
+      
+      const reportUrl = docMeta.url;
+      console.log(`Downloading report from: ${reportUrl.substring(0, 80)}...`);
+      
+      const reportResponse = await fetch(reportUrl);
+      if (!reportResponse.ok) {
+        throw new Error(`Failed to download report: ${reportResponse.status}`);
+      }
+      
+      // Handle compressed or plain text
+      let reportText;
+      const compressionAlgo = docMeta.compressionAlgorithm;
+      if (compressionAlgo === 'GZIP') {
+        const buffer = Buffer.from(await reportResponse.arrayBuffer());
+        reportText = gunzipSync(buffer).toString('utf-8');
+      } else {
+        reportText = await reportResponse.text();
+      }
+
+      // Step 4: Parse TSV into daily per-SKU data
+      const lines = reportText.split('\n');
+      const headers = lines[0]?.split('\t').map(h => h.trim().toLowerCase()) || [];
+      
+      // Find relevant column indices
+      const colMap = {};
+      headers.forEach((h, i) => {
+        if (h.includes('purchase-date') || h.includes('purchase date')) colMap.date = i;
+        if (h === 'sku') colMap.sku = i;
+        if (h === 'quantity') colMap.qty = i;
+        if (h.includes('item-price') || h === 'item-price') colMap.price = i;
+        if (h.includes('item-tax') || h === 'item-tax') colMap.tax = i;
+        if (h === 'asin') colMap.asin = i;
+        if (h.includes('product-name') || h === 'product-name') colMap.name = i;
+        if (h === 'order-status') colMap.status = i;
+      });
+      
+      console.log(`Report headers found: ${headers.length} columns, mapped: ${JSON.stringify(colMap)}`);
+
       const dailyData = {};
       const skuTotals = {};
-      let processedOrders = 0;
-      let burstRemaining = 28; // Leave a small buffer from the 30 burst limit
-
-      for (const order of allOrders) {
-        // Timeout protection for serverless (50s max to leave room for response)
-        if (Date.now() - syncStartTime > 50000) {
-          console.log(`Timeout approaching at ${processedOrders}/${allOrders.length} orders`);
-          break;
+      let parsedRows = 0;
+      let skippedRows = 0;
+      
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split('\t');
+        if (cols.length < 3) continue;
+        
+        // Skip cancelled orders
+        const status = colMap.status !== undefined ? cols[colMap.status]?.trim() : '';
+        if (status && status.toLowerCase() === 'cancelled') { skippedRows++; continue; }
+        
+        const rawDate = colMap.date !== undefined ? cols[colMap.date]?.trim() : '';
+        const sku = colMap.sku !== undefined ? cols[colMap.sku]?.trim() : '';
+        const qty = colMap.qty !== undefined ? parseInt(cols[colMap.qty]) || 0 : 0;
+        const price = colMap.price !== undefined ? parseFloat(cols[colMap.price]) || 0 : 0;
+        const asin = colMap.asin !== undefined ? cols[colMap.asin]?.trim() : '';
+        const name = colMap.name !== undefined ? cols[colMap.name]?.trim() : sku;
+        
+        if (!sku || !rawDate || qty <= 0) { skippedRows++; continue; }
+        
+        // Extract date (handle ISO datetime or plain date)
+        const orderDate = rawDate.split('T')[0];
+        if (!orderDate || orderDate.length !== 10) { skippedRows++; continue; }
+        
+        // Initialize daily bucket
+        if (!dailyData[orderDate]) {
+          dailyData[orderDate] = {
+            amazon: {
+              revenue: 0,
+              units: 0,
+              orders: 0,
+              returns: 0,
+              skuData: {},
+              source: 'api',
+            },
+          };
         }
-
-        try {
-          const itemsData = await spApiRequest(
-            accessToken,
-            `/orders/v0/orders/${order.AmazonOrderId}/orderItems`
-          );
-          
-          const orderDate = (order.PurchaseDate || order.CreatedDate || '').split('T')[0];
-          if (!orderDate) continue;
-          
-          // Initialize daily bucket
-          if (!dailyData[orderDate]) {
-            dailyData[orderDate] = {
-              amazon: {
-                revenue: 0,
-                units: 0,
-                orders: 0,
-                returns: 0,
-                skuData: {},
-                source: 'api',
-              },
-            };
-          }
-          
-          dailyData[orderDate].amazon.orders++;
-          
-          const items = itemsData.payload?.OrderItems || [];
-          for (const item of items) {
-            const sku = item.SellerSKU;
-            if (!sku) continue;
-            
-            const qty = item.QuantityOrdered || 0;
-            const price = parseFloat(item.ItemPrice?.Amount || 0);
-            const itemTax = parseFloat(item.ItemTax?.Amount || 0);
-            
-            dailyData[orderDate].amazon.revenue += price;
-            dailyData[orderDate].amazon.units += qty;
-            
-            // Per-SKU accumulation
-            if (!dailyData[orderDate].amazon.skuData[sku]) {
-              dailyData[orderDate].amazon.skuData[sku] = {
-                sku,
-                name: item.Title || sku,
-                asin: item.ASIN || '',
-                unitsSold: 0,
-                revenue: 0,
-              };
-            }
-            dailyData[orderDate].amazon.skuData[sku].unitsSold += qty;
-            dailyData[orderDate].amazon.skuData[sku].revenue += price;
-            
-            // Running totals across all days
-            if (!skuTotals[sku]) skuTotals[sku] = { sku, name: item.Title || sku, asin: item.ASIN || '', unitsSold: 0, revenue: 0 };
-            skuTotals[sku].unitsSold += qty;
-            skuTotals[sku].revenue += price;
-          }
-          
-          processedOrders++;
-          
-          // Rate limiting: use burst capacity first, then slow down
-          if (burstRemaining > 0) {
-            burstRemaining--;
-            await new Promise(r => setTimeout(r, 300));
-          } else {
-            await new Promise(r => setTimeout(r, 2100));
-          }
-
-        } catch (itemErr) {
-          console.error(`Failed to get items for order ${order.AmazonOrderId}:`, itemErr.message);
-          // If we get a throttle error, slow down significantly
-          if (itemErr.message?.includes('429') || itemErr.message?.includes('QuotaExceeded')) {
-            burstRemaining = 0;
-            await new Promise(r => setTimeout(r, 5000));
-          }
-          continue;
+        
+        dailyData[orderDate].amazon.revenue += price;
+        dailyData[orderDate].amazon.units += qty;
+        
+        // Per-SKU accumulation
+        if (!dailyData[orderDate].amazon.skuData[sku]) {
+          dailyData[orderDate].amazon.skuData[sku] = {
+            sku,
+            name,
+            asin,
+            unitsSold: 0,
+            revenue: 0,
+          };
         }
+        dailyData[orderDate].amazon.skuData[sku].unitsSold += qty;
+        dailyData[orderDate].amazon.skuData[sku].revenue += price;
+        
+        // Running totals
+        if (!skuTotals[sku]) skuTotals[sku] = { sku, name, asin, unitsSold: 0, revenue: 0 };
+        skuTotals[sku].unitsSold += qty;
+        skuTotals[sku].revenue += price;
+        
+        parsedRows++;
       }
 
       // Convert skuData from objects to sorted arrays for client compatibility
+      // Count unique orders per day
       Object.values(dailyData).forEach(day => {
         if (day.amazon?.skuData) {
           const skuArr = Object.values(day.amazon.skuData).sort((a, b) => b.unitsSold - a.unitsSold);
           day.amazon.skuData = skuArr;
+          day.amazon.orders = skuArr.length; // Approximate (line items, not unique orders)
         }
-        // Add total summary per day
         day.total = {
           revenue: day.amazon?.revenue || 0,
           units: day.amazon?.units || 0,
-          orders: day.amazon?.orders || 0,
         };
       });
 
       const totalUnits = Object.values(skuTotals).reduce((s, i) => s + i.unitsSold, 0);
       const totalRevenue = Object.values(skuTotals).reduce((s, i) => s + i.revenue, 0);
 
-      console.log(`Sales sync complete: ${processedOrders}/${allOrders.length} orders, ${totalUnits} units, ${Object.keys(dailyData).length} days`);
+      console.log(`Sales report parsed: ${parsedRows} rows, ${skippedRows} skipped, ${totalUnits} units, ${Object.keys(dailyData).length} days, ${Date.now() - syncStartTime}ms`);
 
       return res.status(200).json({
         success: true,
         syncType: 'sales',
-        source: 'amazon-orders-api',
+        source: 'amazon-report',
         summary: {
-          totalOrders: processedOrders,
-          totalOrdersFound: allOrders.length,
-          incomplete: processedOrders < allOrders.length,
+          totalRows: parsedRows,
+          skippedRows,
           daysWithData: Object.keys(dailyData).length,
           totalUnits,
           totalRevenue: Math.round(totalRevenue * 100) / 100,

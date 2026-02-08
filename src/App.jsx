@@ -11266,6 +11266,9 @@ const savePeriods = async (d) => {
               const units = data.summary?.totalUnits || 0;
               const days = data.summary?.daysWithData || 0;
               results.push({ service: 'Amazon', success: true, message: `${units} units across ${days} days` });
+            } else if (!data.error && res.ok && data.source === 'amazon-report-pending') {
+              // Report still generating — don't update lastSync so it retries next time
+              results.push({ service: 'Amazon', success: true, message: 'Sales report generating — will complete on next sync' });
             } else if (!data.error && res.ok) {
               // Successful but no daily data (e.g. no recent orders)
               setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
