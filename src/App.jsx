@@ -11181,8 +11181,9 @@ const savePeriods = async (d) => {
   
   // Auto-sync function
   const runAutoSync = useCallback(async (force = false) => {
-    if (!appSettings.autoSync?.enabled && !force) return;
-    if (autoSyncStatus.running) return;
+    console.log('[AutoSync] Starting...', { force, enabled: appSettings.autoSync?.enabled, running: autoSyncStatus.running });
+    if (!appSettings.autoSync?.enabled && !force) { console.log('[AutoSync] Skipped — not enabled and not forced'); return; }
+    if (autoSyncStatus.running) { console.log('[AutoSync] Skipped — already running'); return; }
     
     const threshold = appSettings.autoSync?.staleThresholdHours || 4;
     const results = [];
@@ -11191,11 +11192,14 @@ const savePeriods = async (d) => {
     
     try {
       // Check Amazon - use /api/amazon/sync endpoint for sales data
+      console.log('[AutoSync] Amazon check:', { autoSyncAmazon: appSettings.autoSync?.amazon, connected: amazonCredentials.connected, lastSync: amazonCredentials.lastSync });
       if (appSettings.autoSync?.amazon !== false && amazonCredentials.connected) {
         const amazonStale = isServiceStale(amazonCredentials.lastSync, threshold);
+        console.log('[AutoSync] Amazon stale?', amazonStale, '| force?', force);
         
         if (amazonStale || force) {
           try {
+            console.log('[AutoSync] Fetching /api/amazon/sync with syncType: sales...');
             const res = await fetch('/api/amazon/sync', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -11210,6 +11214,7 @@ const savePeriods = async (d) => {
               }),
             });
             const data = await res.json();
+            console.log('[AutoSync] Amazon response:', { status: res.status, ok: res.ok, error: data.error, hasDailyData: !!data.dailyData, summary: data.summary });
             if (!data.error && res.ok && data.dailyData) {
               setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               
