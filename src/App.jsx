@@ -6428,6 +6428,15 @@ const savePeriods = async (d) => {
     Object.entries(dailyByWeek).forEach(([weekKey, dailyAgg]) => {
       const existingWeek = updatedWeeks[weekKey];
       
+      // Protect manually uploaded weeks (SKU Economics) from being overwritten by API aggregation.
+      // Manual uploads DON'T have 'aggregatedFrom' set. If a week has real Amazon data 
+      // (skuData with revenue/fees) but no aggregatedFrom, it came from SKU Economics — don't touch it.
+      const isManualUpload = existingWeek && !existingWeek.aggregatedFrom && 
+        existingWeek.amazon?.skuData?.length > 0 && 
+        (existingWeek.amazon?.fees > 0 || existingWeek.amazon?.netProfit !== 0);
+      
+      if (isManualUpload) return; // SKU Economics is authoritative — skip this week
+      
       // If no existing week or existing week is missing data, update it
       const shouldUpdate = !existingWeek || 
         // Update if daily has ads but weekly doesn't
