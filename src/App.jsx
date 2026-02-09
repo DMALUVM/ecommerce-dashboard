@@ -7783,6 +7783,34 @@ const savePeriods = async (d) => {
       }
     }
 
+    // FALLBACK: If Shopify sync failed or returned no home inventory,
+    // preserve homeQty from previous snapshot so inventory status stays accurate
+    if (Object.keys(homeInv).length === 0) {
+      const prevDate = Object.keys(invHistory).sort().reverse()[0];
+      const prevItems = prevDate ? (invHistory[prevDate]?.items || []) : [];
+      const prevSummary = prevDate ? (invHistory[prevDate]?.summary || {}) : {};
+      prevItems.forEach(item => {
+        const hq = item.homeQty || 0;
+        if (hq > 0 && item.sku) {
+          const skuUpper = item.sku.toUpperCase().replace(/SHOP$/, '');
+          const baseSku = skuUpper;
+          const cost = item.cost || cogsLookup[item.sku] || cogsLookup[skuUpper] || 0;
+          // Store under multiple key formats for matching
+          [baseSku, baseSku + 'SHOP', item.sku.toUpperCase()].forEach(key => {
+            if (!homeInv[key]) {
+              homeInv[key] = { sku: key, name: item.name || item.sku, total: hq, cost };
+            }
+          });
+        }
+      });
+      if (Object.keys(homeInv).length > 0) {
+        homeSource = 'previous-snapshot';
+        homeTotal = prevSummary.homeUnits || prevItems.reduce((s, i) => s + (i.homeQty || 0), 0);
+        homeValue = prevSummary.homeValue || prevItems.reduce((s, i) => s + ((i.homeQty || 0) * (i.cost || 0)), 0);
+        devWarn(`Home inventory: Using ${Object.keys(homeInv).length} items from previous snapshot (sync unavailable)`);
+      }
+    }
+
     // ===== COMBINE ALL INVENTORY SOURCES =====
     // Build case-insensitive lookup maps for matching
     const tplInvLower = {};
@@ -11870,6 +11898,94 @@ const savePeriods = async (d) => {
         }
       }
       
+      // Refresh home inventory from Shopify (so home quantities stay current alongside 3PL sync)
+      if (shopifyCredentials.connected && shopifyCredentials.clientSecret) {
+        try {
+          const res = await fetch('/api/shopify/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              storeUrl: shopifyCredentials.storeUrl,
+              accessToken: shopifyCredentials.clientSecret,
+              clientId: shopifyCredentials.clientId,
+              clientSecret: shopifyCredentials.clientSecret,
+              syncType: 'inventory',
+            }),
+          });
+          const data = await res.json();
+          if (data.success && data.items) {
+            // Build home inventory lookup
+            const homeInvLookup = {};
+            let homeTotal = 0, homeValue = 0;
+            const seenHomeSkus = new Set();
+            data.items.forEach(item => {
+              const sku = item.sku;
+              if (!sku) return;
+              const skuLower = sku.toLowerCase();
+              if (seenHomeSkus.has(skuLower)) return;
+              seenHomeSkus.add(skuLower);
+              const homeQty = item.homeQty || 0;
+              if (homeQty === 0) return;
+              const skuUpper = sku.toUpperCase();
+              homeInvLookup[skuUpper] = homeQty;
+              homeInvLookup[skuLower] = homeQty;
+              homeInvLookup[sku] = homeQty;
+              homeTotal += homeQty;
+              homeValue += homeQty * (item.cost || 0);
+            });
+            
+            // Update current inventory snapshot with fresh home quantities
+            if (Object.keys(homeInvLookup).length > 0) {
+              const targetDate = Object.keys(invHistory).sort().reverse()[0];
+              if (targetDate && invHistory[targetDate]) {
+                const currentSnapshot = invHistory[targetDate];
+                const updatedItems = currentSnapshot.items.map(item => {
+                  const normalizedSku = (item.sku || '').toUpperCase();
+                  const baseSku = normalizedSku.replace(/SHOP$/, '');
+                  const newHomeQty = homeInvLookup[item.sku] ?? homeInvLookup[normalizedSku] ?? homeInvLookup[baseSku] ?? homeInvLookup[baseSku + 'SHOP'] ?? (item.homeQty || 0);
+                  const newTotal = (item.amazonQty || 0) + (item.threeplQty || 0) + newHomeQty;
+                  // Recalculate DOS with updated total
+                  const vel = item.correctedVel || item.weeklyVel || 0;
+                  const newDos = vel > 0 ? Math.round((newTotal / vel) * 7) : (item.daysOfSupply || 999);
+                  // Recalculate health with updated DOS
+                  const itemLeadTime = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
+                  const itemCritThreshold = Math.max(14, itemLeadTime);
+                  const itemLowThreshold = Math.max(30, itemLeadTime + 14);
+                  const itemOverstockThreshold = Math.max(90, (leadTimeSettings.minOrderWeeks || 22) * 7 + (leadTimeSettings.reorderTriggerDays || 60) + itemLeadTime);
+                  let newHealth = item.health || 'unknown';
+                  if (vel > 0) {
+                    if (newDos < itemCritThreshold) newHealth = 'critical';
+                    else if (newDos < itemLowThreshold) newHealth = 'low';
+                    else if (newDos <= itemOverstockThreshold) newHealth = 'healthy';
+                    else newHealth = 'overstock';
+                  } else if (newTotal === 0) {
+                    newHealth = 'critical';
+                  }
+                  return { ...item, homeQty: newHomeQty, totalQty: newTotal, totalValue: newTotal * (item.cost || 0), daysOfSupply: newDos, health: newHealth };
+                });
+                const updatedSnapshot = {
+                  ...currentSnapshot,
+                  items: updatedItems,
+                  summary: {
+                    ...currentSnapshot.summary,
+                    homeUnits: homeTotal,
+                    homeValue: homeValue,
+                    totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + (currentSnapshot.summary?.threeplUnits || 0) + homeTotal,
+                    totalValue: (currentSnapshot.summary?.amazonValue || 0) + (currentSnapshot.summary?.threeplValue || 0) + homeValue,
+                  },
+                };
+                const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+                setInvHistory(updatedHistory);
+                saveInv(updatedHistory);
+                devWarn(`Auto-sync: Updated home inventory for ${Object.keys(homeInvLookup).length / 3} SKUs, ${homeTotal} total units`);
+              }
+            }
+          }
+        } catch (err) {
+          devWarn('Home inventory auto-sync error:', err.message);
+        }
+      }
+      
       // Check QuickBooks Online
       if (appSettings.autoSync?.qbo !== false && qboCredentials.connected) {
         const qboStale = isServiceStale(qboCredentials.lastSync, threshold);
@@ -12936,21 +13052,34 @@ Keep insights brief and actionable. Format as numbered list.`;
       const rawInvItems = latestInvKey ? (invHistory[latestInvKey]?.items || []) : [];
       const deduped = {};
       rawInvItems.forEach(item => {
-        const normSku = (item.sku || '').toUpperCase();
+        const normSku = (item.sku || '').toUpperCase().replace(/SHOP$/, '');
         if (!deduped[normSku] || (item.totalQty || 0) > (deduped[normSku].totalQty || 0)) {
           // Keep the entry with more inventory, or merge quantities
           if (deduped[normSku]) {
-            // Merge: add quantities from duplicate
+            // Merge: combine quantities from duplicate
+            const mergedAmazon = Math.max(item.amazonQty || 0, deduped[normSku].amazonQty || 0);
+            const mergedThreepl = Math.max(item.threeplQty || 0, deduped[normSku].threeplQty || 0);
+            const mergedHome = Math.max(item.homeQty || 0, deduped[normSku].homeQty || 0);
             item = { 
               ...item, 
               sku: normSku,
-              amazonQty: (item.amazonQty || 0) + (deduped[normSku].amazonQty || 0),
-              threeplQty: Math.max(item.threeplQty || 0, deduped[normSku].threeplQty || 0), // Don't double-count 3PL
-              homeQty: Math.max(item.homeQty || 0, deduped[normSku].homeQty || 0),
-              totalQty: (item.amazonQty || 0) + Math.max(item.threeplQty || 0, deduped[normSku].threeplQty || 0) + Math.max(item.homeQty || 0, deduped[normSku].homeQty || 0),
+              amazonQty: mergedAmazon,
+              threeplQty: mergedThreepl,
+              homeQty: mergedHome,
+              totalQty: mergedAmazon + mergedThreepl + mergedHome,
             };
           }
           deduped[normSku] = item;
+        } else if (deduped[normSku]) {
+          // Even if this item has less total, merge its homeQty if higher
+          const mergedHome = Math.max(item.homeQty || 0, deduped[normSku].homeQty || 0);
+          if (mergedHome > (deduped[normSku].homeQty || 0)) {
+            deduped[normSku] = {
+              ...deduped[normSku],
+              homeQty: mergedHome,
+              totalQty: (deduped[normSku].amazonQty || 0) + (deduped[normSku].threeplQty || 0) + mergedHome,
+            };
+          }
         }
       });
       const inventoryItems = Object.values(deduped).map(item => ({

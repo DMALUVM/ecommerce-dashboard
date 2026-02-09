@@ -1,7 +1,7 @@
 import { devWarn, devError } from '../../utils/logger';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertCircle, AlertTriangle, Bell, Boxes, Brain, Check, CheckCircle, ChevronLeft, ChevronRight, Clock, DollarSign, Download, Edit, Filter, Flag, HelpCircle, Info, List, Loader2, Package, Plus, RefreshCw, Save, Search, Settings, ShoppingCart, Target, Trash2, TrendingUp, Truck, Upload, X, Zap
+  AlertCircle, AlertTriangle, Bell, Boxes, Brain, Check, CheckCircle, ChevronLeft, ChevronRight, Clock, DollarSign, Download, Edit, Filter, Flag, HelpCircle, Home, Info, List, Loader2, Package, Plus, RefreshCw, Save, Search, Settings, ShoppingCart, Target, Trash2, TrendingUp, Truck, Upload, X, Zap
 } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
@@ -236,27 +236,36 @@ const InventoryView = ({
         // First time seeing this SKU
         skuMap.set(dedupKey, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
       } else {
-        // We have a duplicate - decide which to keep
-        const existingHasInventory = (existing.totalQty || 0) > 0;
+        // We have a duplicate - merge home inventory from both, then decide which to keep
+        // Always take the MAX homeQty from either variant
+        const mergedHomeQty = Math.max(item.homeQty || 0, existing.homeQty || 0);
         
-        // Priority: 
-        // 1. Has inventory beats no inventory
-        // 2. Shop variant beats non-Shop if both have same inventory status
-        // 3. Higher inventory wins if tied
+        // Decide which base item to keep
+        const existingHasInventory = (existing.totalQty || 0) > 0;
+        let winner = existing;
+        let shouldReplace = false;
+        
         if (hasInventory && !existingHasInventory) {
-          // New item has inventory, existing doesn't - replace
-          skuMap.set(dedupKey, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+          shouldReplace = true;
         } else if (hasInventory === existingHasInventory) {
-          // Both have same inventory status
           if (isShopVariant && !existing._isShopVariant) {
-            // Prefer Shop variant
-            skuMap.set(dedupKey, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+            shouldReplace = true;
           } else if ((item.totalQty || 0) > (existing.totalQty || 0)) {
-            // Higher inventory wins
-            skuMap.set(dedupKey, { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant });
+            shouldReplace = true;
           }
         }
-        // Otherwise keep existing
+        
+        if (shouldReplace) {
+          winner = { ...item, _baseSku: baseSku, _isShopVariant: isShopVariant };
+        }
+        
+        // Merge: ensure homeQty is the max from either variant
+        // and recalculate totalQty to include it
+        winner.homeQty = mergedHomeQty;
+        winner.totalQty = (winner.amazonQty || 0) + (winner.threeplQty || 0) + mergedHomeQty;
+        winner.totalValue = winner.totalQty * (winner.cost || 0);
+        
+        skuMap.set(dedupKey, winner);
       }
     });
     
@@ -395,6 +404,7 @@ const InventoryView = ({
     const adjustmentRatio = originalTotal > 0 ? adjustedTotalQty / originalTotal : 1;
     const adjustedAmazonQty = Math.round((item.amazonQty || 0) * adjustmentRatio);
     const adjustedThreeplQty = Math.round((item.threeplQty || 0) * adjustmentRatio);
+    const adjustedHomeQty = Math.round((item.homeQty || 0) * adjustmentRatio);
     
     return {
       ...item,
@@ -402,6 +412,7 @@ const InventoryView = ({
       totalQty: adjustedTotalQty,
       amazonQty: adjustedAmazonQty,
       threeplQty: adjustedThreeplQty,
+      homeQty: adjustedHomeQty,
       daysOfSupply: newDaysOfSupply,
       stockoutDate: newStockoutDate,
       reorderByDate: newReorderByDate,
@@ -459,6 +470,7 @@ const InventoryView = ({
       case 'name': aVal = a.name || a.sku; bVal = b.name || b.sku; break;
       case 'amazonQty': aVal = a.amazonQty || 0; bVal = b.amazonQty || 0; break;
       case 'threeplQty': aVal = a.threeplQty || 0; bVal = b.threeplQty || 0; break;
+      case 'homeQty': aVal = a.homeQty || 0; bVal = b.homeQty || 0; break;
       case 'totalQty': aVal = a.totalQty || 0; bVal = b.totalQty || 0; break;
       case 'totalValue': aVal = a.totalValue || 0; bVal = b.totalValue || 0; break;
       case 'amzWeeklyVel': aVal = a.amzWeeklyVel || 0; bVal = b.amzWeeklyVel || 0; break;
@@ -483,7 +495,7 @@ const InventoryView = ({
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportSelectedSkus, setExportSelectedSkus] = useState(new Set()); // empty = all
   const [exportColumns, setExportColumns] = useState({
-    product: true, sku: true, abc: true, amazon: true, threepl: true, totalUnits: true, value: true,
+    product: true, sku: true, abc: true, amazon: true, threepl: true, home: true, totalUnits: true, value: true,
     amzVelocity: true, shopVelocity: true, totalVelocity: true, daysOfSupply: true,
     turnover: true, stockoutDate: true, orderBy: true, status: true,
   });
@@ -493,6 +505,7 @@ const InventoryView = ({
     { key: 'abc', label: 'ABC Class' },
     { key: 'amazon', label: 'Amazon Qty' },
     { key: 'threepl', label: '3PL Qty' },
+    { key: 'home', label: 'Home Qty' },
     { key: 'totalUnits', label: 'Total Units' },
     { key: 'value', label: 'Value' },
     { key: 'amzVelocity', label: 'AMZ Velocity' },
@@ -527,6 +540,7 @@ const InventoryView = ({
         if (ec.abc) row['ABC'] = item.abcClass || '';
         if (ec.amazon) row['Amazon'] = item.amazonQty || 0;
         if (ec.threepl) row['3PL'] = item.threeplQty || 0;
+        if (ec.home) row['Home'] = item.homeQty || 0;
         if (ec.totalUnits) row['Total Units'] = item.totalQty || 0;
         if (ec.value) row['Value'] = Math.round((item.totalValue || 0) * 100) / 100;
         if (ec.amzVelocity) row['AMZ Velocity'] = Math.round((item.amzWeeklyVel || 0) * 10) / 10;
@@ -560,26 +574,32 @@ const InventoryView = ({
   };
 
   // Recalculate summary based on filtered items
-  // Use item-level calculations, but fall back to snapshot summary for 3PL if items don't have data
+  // Use item-level calculations, but fall back to snapshot summary if items don't have data
   const itemThreeplUnits = items.reduce((s, i) => s + (i.threeplQty || 0), 0);
   const itemThreeplValue = items.reduce((s, i) => s + ((i.threeplValue ?? ((i.threeplQty || 0) * (i.cost || 0))) || 0), 0);
   const itemAmazonUnits = items.reduce((s, i) => s + (i.amazonQty || 0), 0);
   const itemAmazonValue = items.reduce((s, i) => s + ((i.amazonValue ?? ((i.amazonQty || 0) * (i.cost || 0))) || 0), 0);
+  const itemHomeUnits = items.reduce((s, i) => s + (i.homeQty || 0), 0);
+  const itemHomeValue = items.reduce((s, i) => s + ((i.homeQty || 0) * (i.cost || 0)), 0);
   
   // Use item totals if available, otherwise fall back to snapshot summary
   const finalThreeplUnits = itemThreeplUnits > 0 ? itemThreeplUnits : (summary.threeplUnits || 0);
   const finalThreeplValue = itemThreeplValue > 0 ? itemThreeplValue : (summary.threeplValue || 0);
   const finalAmazonUnits = itemAmazonUnits > 0 ? itemAmazonUnits : (summary.amazonUnits || 0);
   const finalAmazonValue = itemAmazonValue > 0 ? itemAmazonValue : (summary.amazonValue || 0);
+  const finalHomeUnits = itemHomeUnits > 0 ? itemHomeUnits : (summary.homeUnits || 0);
+  const finalHomeValue = itemHomeValue > 0 ? itemHomeValue : (summary.homeValue || 0);
   
   const filteredSummary = {
     ...summary,
-    totalUnits: finalAmazonUnits + finalThreeplUnits + (summary.homeUnits || 0),
-    totalValue: finalAmazonValue + finalThreeplValue + (summary.homeValue || 0),
+    totalUnits: finalAmazonUnits + finalThreeplUnits + finalHomeUnits,
+    totalValue: finalAmazonValue + finalThreeplValue + finalHomeValue,
     amazonUnits: finalAmazonUnits,
     amazonValue: finalAmazonValue,
     threeplUnits: finalThreeplUnits,
     threeplValue: finalThreeplValue,
+    homeUnits: finalHomeUnits,
+    homeValue: finalHomeValue,
     skuCount: items.length,
     critical: items.filter(i => i.health === 'critical').length,
     low: items.filter(i => i.health === 'low').length,
@@ -990,11 +1010,12 @@ const InventoryView = ({
             <button onClick={() => idx > 0 && setSelectedInvDate(dates[idx - 1])} disabled={idx <= 0} className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
           </div>
         )}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className={`grid grid-cols-2 ${filteredSummary.homeUnits > 0 ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-4 mb-6`}>
           <MetricCard label="Total Units" value={formatNumber(filteredSummary.totalUnits)} sub={filteredSummary.skuCount + ' active SKUs'} icon={Package} color="blue" />
           <MetricCard label="Total Value (at cost)" value={formatCurrency(filteredSummary.totalValue)} sub="Units × COGS" icon={DollarSign} color="emerald" />
           <MetricCard label="Amazon FBA" value={formatNumber(filteredSummary.amazonUnits)} sub={formatCurrency(filteredSummary.amazonValue)} icon={ShoppingCart} color="orange" />
           <MetricCard label="3PL" value={formatNumber(filteredSummary.threeplUnits)} sub={formatCurrency(filteredSummary.threeplValue)} icon={Boxes} color="violet" />
+          {filteredSummary.homeUnits > 0 && <MetricCard label="Home" value={formatNumber(filteredSummary.homeUnits)} sub={formatCurrency(filteredSummary.homeValue)} icon={Home} color="cyan" />}
         </div>
         {data?.velocitySource && <div className="bg-cyan-900/20 border border-cyan-500/30 rounded-xl p-3 mb-6"><p className="text-cyan-400 text-sm"><span className="font-semibold">Velocity:</span> {data?.velocitySource}</p></div>}
         
@@ -1112,7 +1133,14 @@ const InventoryView = ({
                       <thead>
                         <tr className="text-slate-500 text-xs">
                           <th className="text-left pb-2">SKU</th>
-                          <th className="text-right pb-2">Qty</th>
+                          {filteredSummary.homeUnits > 0 ? (<>
+                            <th className="text-right pb-2">AMZ</th>
+                            <th className="text-right pb-2">3PL</th>
+                            <th className="text-right pb-2">Home</th>
+                            <th className="text-right pb-2">Total</th>
+                          </>) : (
+                            <th className="text-right pb-2">Qty</th>
+                          )}
                           <th className="text-right pb-2">Velocity/wk</th>
                           <th className="text-right pb-2">Days Left</th>
                           <th className="text-left pb-2 pl-2">Status</th>
@@ -1122,7 +1150,14 @@ const InventoryView = ({
                         {lowStock.sort((a, b) => a.daysOfSupply - b.daysOfSupply).slice(0, 15).map(item => (
                           <tr key={item.sku} className="border-t border-slate-700/50">
                             <td className="py-1.5 text-white max-w-[150px] truncate" title={item.name}>{item.sku}</td>
-                            <td className="py-1.5 text-right text-white">{formatNumber(item.totalQty)}</td>
+                            {filteredSummary.homeUnits > 0 ? (<>
+                              <td className="py-1.5 text-right text-orange-400">{formatNumber(item.amazonQty || 0)}</td>
+                              <td className="py-1.5 text-right text-violet-400">{formatNumber(item.threeplQty || 0)}</td>
+                              <td className="py-1.5 text-right text-cyan-400">{(item.homeQty || 0) > 0 ? formatNumber(item.homeQty) : '—'}</td>
+                              <td className="py-1.5 text-right text-white font-medium">{formatNumber(item.totalQty)}</td>
+                            </>) : (
+                              <td className="py-1.5 text-right text-white">{formatNumber(item.totalQty)}</td>
+                            )}
                             <td className="py-1.5 text-right text-slate-400">{item.weeklyVel.toFixed(1)}</td>
                             <td className={`py-1.5 text-right font-semibold ${item.daysOfSupply < 30 ? 'text-rose-400' : item.daysOfSupply < 60 ? 'text-amber-400' : 'text-yellow-400'}`}>{item.daysOfSupply}</td>
                             <td className="py-1.5 pl-2">
@@ -1164,6 +1199,7 @@ const InventoryView = ({
                         <th className="text-left pb-2">SKU</th>
                         <th className="text-right pb-2">Amazon</th>
                         <th className="text-right pb-2">3PL</th>
+                        {filteredSummary.homeUnits > 0 && <th className="text-right pb-2">Home</th>}
                         <th className="text-right pb-2">Total</th>
                         <th className="text-left pb-2 pl-2">Alert Reason</th>
                       </tr>
@@ -1192,6 +1228,7 @@ const InventoryView = ({
                             </td>
                             <td className="py-1.5 text-right text-orange-400">{formatNumber(item.amazonQty || 0)}</td>
                             <td className="py-1.5 text-right text-violet-400">{formatNumber(item.threeplQty || 0)}</td>
+                            {filteredSummary.homeUnits > 0 && <td className="py-1.5 text-right text-cyan-400">{(item.homeQty || 0) > 0 ? formatNumber(item.homeQty) : '—'}</td>}
                             <td className="py-1.5 text-right text-white font-medium">{formatNumber(item.totalQty)}</td>
                             <td className="py-1.5 pl-2">
                               {alertReason.map((r, i) => (
@@ -1331,13 +1368,14 @@ const InventoryView = ({
           )}
           
           <div className="overflow-x-auto">
-            <table className="w-full" style={{tableLayout: 'fixed', minWidth: '1100px'}}>
+            <table className="w-full" style={{tableLayout: 'fixed', minWidth: filteredSummary.homeUnits > 0 ? '1160px' : '1100px'}}>
               <colgroup>
                 <col style={{width: '185px'}} />
                 <col style={{width: '30px'}} />
-                <col style={{width: '65px'}} />
-                <col style={{width: '65px'}} />
-                <col style={{width: '65px'}} />
+                <col style={{width: '60px'}} />
+                <col style={{width: '55px'}} />
+                {filteredSummary.homeUnits > 0 && <col style={{width: '55px'}} />}
+                <col style={{width: '60px'}} />
                 <col style={{width: '80px'}} />
                 <col style={{width: '55px'}} />
                 <col style={{width: '55px'}} />
@@ -1355,6 +1393,7 @@ const InventoryView = ({
                   { key: 'abcClass', label: 'ABC', align: 'center' },
                   { key: 'amazonQty', label: 'Amazon', align: 'right' },
                   { key: 'threeplQty', label: '3PL', align: 'right' },
+                  ...(filteredSummary.homeUnits > 0 ? [{ key: 'homeQty', label: 'Home', align: 'right' }] : []),
                   { key: 'totalQty', label: 'Total', align: 'right' },
                   { key: 'totalValue', label: 'Value', align: 'right' },
                   { key: 'amzWeeklyVel', label: 'AMZ Vel', align: 'right' },
@@ -1416,6 +1455,7 @@ const InventoryView = ({
                       </td>
                       <td className="text-right px-2 py-2 text-orange-400 text-sm">{formatNumber(item.amazonQty)}</td>
                       <td className={`text-right px-2 py-2 text-sm ${settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty ? 'text-rose-400 font-bold' : 'text-violet-400'}`}>{formatNumber(item.threeplQty)}</td>
+                      {filteredSummary.homeUnits > 0 && <td className="text-right px-2 py-2 text-cyan-400 text-sm">{(item.homeQty || 0) > 0 ? formatNumber(item.homeQty) : '—'}</td>}
                       <td className="text-right px-2 py-2 text-white text-sm font-medium">{formatNumber(item.totalQty)}</td>
                       <td className="text-right px-2 py-2 text-white text-sm">{formatCurrency(item.totalValue)}</td>
                       <td className="text-right px-2 py-2 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>
