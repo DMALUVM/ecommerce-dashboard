@@ -11256,6 +11256,8 @@ const savePeriods = async (d) => {
     
     const threshold = appSettings.autoSync?.staleThresholdHours || 4;
     const results = [];
+    // Track latest inventory across sequential sync operations to prevent stale overwrites
+    let latestInvHistory = invHistory;
     
     setAutoSyncStatus(prev => ({ ...prev, running: true, lastCheck: new Date().toISOString() }));
     
@@ -11771,14 +11773,14 @@ const savePeriods = async (d) => {
                 // Update inventory snapshot with Packiyo data + recalculated velocities
                 if (data.inventoryBySku) {
                   const todayStr = new Date().toISOString().split('T')[0];
-                  const targetDate = invHistory[todayStr] ? todayStr :
-                    (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
-                    Object.keys(invHistory).sort().reverse()[0];
+                  const targetDate = latestInvHistory[todayStr] ? todayStr :
+                    (selectedInvDate && latestInvHistory[selectedInvDate]) ? selectedInvDate :
+                    Object.keys(latestInvHistory).sort().reverse()[0];
                   
-                  console.log('[AutoSync] Snapshot update:', { todayStr, targetDate, hasFreshAmazon: !!freshAmazonFbaData, freshAmazonKeys: freshAmazonFbaData ? Object.keys(freshAmazonFbaData).length : 0, invHistoryDates: Object.keys(invHistory), selectedInvDate });
+                  console.log('[AutoSync] Snapshot update:', { todayStr, targetDate, hasFreshAmazon: !!freshAmazonFbaData, freshAmazonKeys: freshAmazonFbaData ? Object.keys(freshAmazonFbaData).length : 0, invHistoryDates: Object.keys(latestInvHistory), selectedInvDate });
                   
-                  if (targetDate && invHistory[targetDate]) {
-                    const currentSnapshot = invHistory[targetDate];
+                  if (targetDate && latestInvHistory[targetDate]) {
+                    const currentSnapshot = latestInvHistory[targetDate];
                     const packiyoData = data.inventoryBySku;
                     const today = new Date();
                     const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
@@ -11960,7 +11962,8 @@ const savePeriods = async (d) => {
                       },
                     };
                     
-                    const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+                    const updatedHistory = { ...latestInvHistory, [targetDate]: updatedSnapshot };
+                    latestInvHistory = updatedHistory; // Track for subsequent syncs
                     setInvHistory(updatedHistory);
                     setSelectedInvDate(targetDate);
                     saveInv(updatedHistory);
@@ -11988,9 +11991,9 @@ const savePeriods = async (d) => {
       console.log('[AutoSync] Amazon-only fallback check:', { hasFreshData: !!freshAmazonFbaData, packiyoSynced: results.some(r => r.service === 'Packiyo' && r.success) });
       if (freshAmazonFbaData && !results.some(r => r.service === 'Packiyo' && r.success)) {
         try {
-          const targetDate = Object.keys(invHistory).sort().reverse()[0];
-          if (targetDate && invHistory[targetDate]) {
-            const currentSnapshot = invHistory[targetDate];
+          const targetDate = Object.keys(latestInvHistory).sort().reverse()[0];
+          if (targetDate && latestInvHistory[targetDate]) {
+            const currentSnapshot = latestInvHistory[targetDate];
             let newAmzTotal = 0, newAmzValue = 0, newAmzInbound = 0;
             const updatedItems = currentSnapshot.items.map(item => {
               const freshAmz = freshAmazonFbaData[item.sku] || freshAmazonFbaData[(item.sku || '').toUpperCase()] || freshAmazonFbaData[(item.sku || '').toLowerCase()] || null;
@@ -12017,7 +12020,8 @@ const savePeriods = async (d) => {
               },
               sources: { ...currentSnapshot.sources, amazon: 'amazon-fba-auto-sync', lastAmazonFbaSync: new Date().toISOString() },
             };
-            const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+            const updatedHistory = { ...latestInvHistory, [targetDate]: updatedSnapshot };
+            latestInvHistory = updatedHistory;
             setInvHistory(updatedHistory);
             saveInv(updatedHistory);
             devWarn(`Auto-sync: Updated Amazon FBA inventory in snapshot (no Packiyo sync needed)`);
@@ -12064,9 +12068,9 @@ const savePeriods = async (d) => {
             
             // Update current inventory snapshot with fresh home quantities
             if (Object.keys(homeInvLookup).length > 0) {
-              const targetDate = Object.keys(invHistory).sort().reverse()[0];
-              if (targetDate && invHistory[targetDate]) {
-                const currentSnapshot = invHistory[targetDate];
+              const targetDate = Object.keys(latestInvHistory).sort().reverse()[0];
+              if (targetDate && latestInvHistory[targetDate]) {
+                const currentSnapshot = latestInvHistory[targetDate];
                 const updatedItems = currentSnapshot.items.map(item => {
                   const normalizedSku = (item.sku || '').toUpperCase();
                   const baseSku = normalizedSku.replace(/SHOP$/, '');
@@ -12104,7 +12108,8 @@ const savePeriods = async (d) => {
                     totalValue: (currentSnapshot.summary?.amazonValue || 0) + (currentSnapshot.summary?.threeplValue || 0) + homeValue,
                   },
                 };
-                const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+                const updatedHistory = { ...latestInvHistory, [targetDate]: updatedSnapshot };
+                latestInvHistory = updatedHistory;
                 setInvHistory(updatedHistory);
                 saveInv(updatedHistory);
                 devWarn(`Auto-sync: Updated home inventory for ${Object.keys(homeInvLookup).length / 3} SKUs, ${homeTotal} total units`);
