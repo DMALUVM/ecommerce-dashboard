@@ -7898,7 +7898,11 @@ const savePeriods = async (d) => {
       const hQty = h.total || 0;
       const awdItem = awdData[sku] || awdData[skuLower] || awdData[sku.toUpperCase()] || {};
       const awdQty = awdItem.awdQuantity || 0;
-      const totalQty = aQty + tQty + hQty + awdQty;
+      const aInbound = a.inbound || 0;
+      const awdInb = awdItem.awdInbound || 0;
+      const tInbound = t.inbound || 0;
+      const totalInbound = aInbound + awdInb + tInbound;
+      const totalQty = aQty + tQty + hQty + awdQty + totalInbound;
       
       const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || cogsLookup[skuLower] || 0;
       
@@ -8021,9 +8025,9 @@ const savePeriods = async (d) => {
         daysUntilMustOrder,
         suggestedOrderQty,
         leadTimeDays,
-        amazonInbound: a.inbound || 0, 
-        awdInbound: awdItem.awdInbound || 0,
-        threeplInbound: t.inbound || 0,
+        amazonInbound: aInbound, 
+        awdInbound: awdInb,
+        threeplInbound: tInbound,
         // Industry-standard demand metrics
         safetyStock,
         reorderPoint,
@@ -8216,7 +8220,7 @@ const savePeriods = async (d) => {
       velocitySource: velNote + learningNote,
       inventorySources: sourceNote,
       summary: { 
-        totalUnits: amzTotal + tplTotal + homeTotal + awdTotal, 
+        totalUnits: amzTotal + tplTotal + homeTotal + awdTotal + amzInbound + tplInbound, 
         totalValue: amzValue + tplValue + homeValue + awdValue, 
         amazonUnits: amzTotal, 
         amazonValue: amzValue, 
@@ -11828,7 +11832,7 @@ const savePeriods = async (d) => {
                       const newAwdInbound = freshAmz ? (freshAmz.awdInbound || 0) : (item.awdInbound || 0);
                       if (matchedCount <= 3) console.log('[AutoSync] Item update:', { sku: item.sku, normalizedItemSku, oldAmzQty: item.amazonQty, freshAmzFound: !!freshAmz, newAmazonQty, newAwdQty, newAmazonInbound, freshAmzTotal: freshAmz?.total });
                       
-                      const newTotalQty = newAmazonQty + newTplQty + (item.homeQty || 0) + newAwdQty;
+                      const newTotalQty = newAmazonQty + newTplQty + (item.homeQty || 0) + newAwdQty + newAmazonInbound + newAwdInbound + newTplInbound;
                       
                       // Get velocity with corrections
                       const velocityData = getAutoVelocity(item.sku);
@@ -11943,6 +11947,7 @@ const savePeriods = async (d) => {
                     const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
                     const newAwdTotal = updatedItems.reduce((s, i) => s + (i.awdQty || 0), 0);
                     const newAwdValue = updatedItems.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
+                    const newTotalInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0) + (i.awdInbound || 0) + (i.threeplInbound || 0), 0);
                     
                     const updatedSnapshot = {
                       ...currentSnapshot,
@@ -11956,7 +11961,7 @@ const savePeriods = async (d) => {
                         awdValue: newAwdValue,
                         threeplUnits: newTplTotal,
                         threeplValue: newTplValue,
-                        totalUnits: newAmzTotal + newTplTotal + (currentSnapshot.summary?.homeUnits || 0) + newAwdTotal,
+                        totalUnits: newAmzTotal + newTplTotal + (currentSnapshot.summary?.homeUnits || 0) + newAwdTotal + newTotalInbound,
                         totalValue: newAmzValue + newTplValue + (currentSnapshot.summary?.homeValue || 0) + newAwdValue,
                         skuCount: updatedItems.length,
                         // Recalculated supply chain KPIs
@@ -12018,7 +12023,8 @@ const savePeriods = async (d) => {
               const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
               const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
               const newAwdQty = freshAmz ? (freshAmz.awdQty || 0) : (item.awdQty || 0);
-              const newTotal = newAmazonQty + (item.threeplQty || 0) + (item.homeQty || 0) + newAwdQty;
+              const newAwdInbound = freshAmz ? (freshAmz.awdInbound || 0) : (item.awdInbound || 0);
+              const newTotal = newAmazonQty + (item.threeplQty || 0) + (item.homeQty || 0) + newAwdQty + newAmazonInbound + newAwdInbound + (item.threeplInbound || 0);
               const vel = item.correctedVel || item.weeklyVel || 0;
               const newDos = vel > 0 ? Math.round((newTotal / vel) * 7) : (item.daysOfSupply || 999);
               newAmzTotal += newAmazonQty;
@@ -12026,8 +12032,9 @@ const savePeriods = async (d) => {
               newAmzInbound += newAmazonInbound;
               newAwdTotal += newAwdQty;
               newAwdValue += newAwdQty * (item.cost || 0);
-              return { ...item, amazonQty: newAmazonQty, amazonInbound: newAmazonInbound, awdQty: newAwdQty, totalQty: newTotal, totalValue: newTotal * (item.cost || 0), daysOfSupply: newDos };
+              return { ...item, amazonQty: newAmazonQty, amazonInbound: newAmazonInbound, awdQty: newAwdQty, awdInbound: newAwdInbound, totalQty: newTotal, totalValue: newTotal * (item.cost || 0), daysOfSupply: newDos };
             });
+            const newTotalInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0) + (i.awdInbound || 0) + (i.threeplInbound || 0), 0);
             const updatedSnapshot = {
               ...currentSnapshot,
               items: updatedItems,
@@ -12038,7 +12045,7 @@ const savePeriods = async (d) => {
                 amazonInbound: newAmzInbound,
                 awdUnits: newAwdTotal,
                 awdValue: newAwdValue,
-                totalUnits: newAmzTotal + (currentSnapshot.summary?.threeplUnits || 0) + (currentSnapshot.summary?.homeUnits || 0) + newAwdTotal,
+                totalUnits: newAmzTotal + (currentSnapshot.summary?.threeplUnits || 0) + (currentSnapshot.summary?.homeUnits || 0) + newAwdTotal + newTotalInbound,
                 totalValue: newAmzValue + (currentSnapshot.summary?.threeplValue || 0) + (currentSnapshot.summary?.homeValue || 0) + newAwdValue,
               },
               sources: { ...currentSnapshot.sources, amazon: 'amazon-fba-awd-auto-sync', lastAmazonFbaSync: new Date().toISOString() },
@@ -12098,7 +12105,7 @@ const savePeriods = async (d) => {
                   const normalizedSku = (item.sku || '').toUpperCase();
                   const baseSku = normalizedSku.replace(/SHOP$/, '');
                   const newHomeQty = homeInvLookup[item.sku] ?? homeInvLookup[normalizedSku] ?? homeInvLookup[baseSku] ?? homeInvLookup[baseSku + 'SHOP'] ?? (item.homeQty || 0);
-                  const newTotal = (item.amazonQty || 0) + (item.threeplQty || 0) + newHomeQty + (item.awdQty || 0);
+                  const newTotal = (item.amazonQty || 0) + (item.threeplQty || 0) + newHomeQty + (item.awdQty || 0) + (item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0);
                   // Recalculate DOS with updated total
                   const vel = item.correctedVel || item.weeklyVel || 0;
                   const newDos = vel > 0 ? Math.round((newTotal / vel) * 7) : (item.daysOfSupply || 999);
@@ -12127,7 +12134,7 @@ const savePeriods = async (d) => {
                     ...currentSnapshot.summary,
                     homeUnits: homeTotal,
                     homeValue: homeValue,
-                    totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + (currentSnapshot.summary?.threeplUnits || 0) + homeTotal + (currentSnapshot.summary?.awdUnits || 0),
+                    totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + (currentSnapshot.summary?.threeplUnits || 0) + homeTotal + (currentSnapshot.summary?.awdUnits || 0) + (currentSnapshot.summary?.amazonInbound || 0) + (currentSnapshot.summary?.threeplInbound || 0),
                     totalValue: (currentSnapshot.summary?.amazonValue || 0) + (currentSnapshot.summary?.threeplValue || 0) + homeValue + (currentSnapshot.summary?.awdValue || 0),
                   },
                 };
@@ -13857,7 +13864,8 @@ Respond with ONLY this JSON:
         const dailyVelocity = weeklyVelocity / 7;
         const leadTimeDays = getLeadTime(item.sku);
         
-        const totalStock = (item.amazonQty || 0) + (item.threeplQty || 0) + (item.homeQty || 0) + (item.awdQty || 0);
+        const totalInbound = (item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0);
+        const totalStock = (item.amazonQty || 0) + (item.threeplQty || 0) + (item.homeQty || 0) + (item.awdQty || 0) + totalInbound;
         const currentStock = daysElapsed > 0 
           ? Math.max(0, totalStock - Math.round(dailyVelocity * daysElapsed))
           : totalStock;

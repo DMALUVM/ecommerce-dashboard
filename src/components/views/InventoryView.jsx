@@ -263,7 +263,10 @@ const InventoryView = ({
         // and recalculate totalQty to include it
         winner.homeQty = mergedHomeQty;
         winner.awdQty = Math.max(item.awdQty || 0, existing.awdQty || 0);
-        winner.totalQty = (winner.amazonQty || 0) + (winner.threeplQty || 0) + mergedHomeQty + (winner.awdQty || 0);
+        winner.amazonInbound = Math.max(item.amazonInbound || 0, existing.amazonInbound || 0);
+        winner.awdInbound = Math.max(item.awdInbound || 0, existing.awdInbound || 0);
+        winner.threeplInbound = Math.max(item.threeplInbound || 0, existing.threeplInbound || 0);
+        winner.totalQty = (winner.amazonQty || 0) + (winner.threeplQty || 0) + mergedHomeQty + (winner.awdQty || 0) + (winner.amazonInbound || 0) + (winner.awdInbound || 0) + (winner.threeplInbound || 0);
         winner.totalValue = winner.totalQty * (winner.cost || 0);
         
         skuMap.set(dedupKey, winner);
@@ -477,7 +480,7 @@ const InventoryView = ({
       case 'name': aVal = a.name || a.sku; bVal = b.name || b.sku; break;
       case 'amazonQty': aVal = a.amazonQty || 0; bVal = b.amazonQty || 0; break;
       case 'awdQty': aVal = a.awdQty || 0; bVal = b.awdQty || 0; break;
-      case 'amazonInbound': aVal = a.amazonInbound || 0; bVal = b.amazonInbound || 0; break;
+      case 'amazonInbound': aVal = (a.amazonInbound || 0) + (a.awdInbound || 0) + (a.threeplInbound || 0); bVal = (b.amazonInbound || 0) + (b.awdInbound || 0) + (b.threeplInbound || 0); break;
       case 'threeplQty': aVal = a.threeplQty || 0; bVal = b.threeplQty || 0; break;
       case 'homeQty': aVal = a.homeQty || 0; bVal = b.homeQty || 0; break;
       case 'totalQty': aVal = a.totalQty || 0; bVal = b.totalQty || 0; break;
@@ -551,7 +554,7 @@ const InventoryView = ({
         if (ec.abc) row['ABC'] = item.abcClass || '';
         if (ec.amazon) row['FBA'] = item.amazonQty || 0;
         if (ec.awd) row['AWD'] = item.awdQty || 0;
-        if (ec.inbound) row['Inbound'] = item.amazonInbound || 0;
+        if (ec.inbound) row['Inbound'] = (item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0);
         if (ec.threepl) row['3PL'] = item.threeplQty || 0;
         if (ec.home) row['Home'] = item.homeQty || 0;
         if (ec.totalUnits) row['Total Units'] = item.totalQty || 0;
@@ -596,7 +599,7 @@ const InventoryView = ({
   const itemHomeValue = items.reduce((s, i) => s + ((i.homeQty || 0) * (i.cost || 0)), 0);
   const itemAwdUnits = items.reduce((s, i) => s + (i.awdQty || 0), 0);
   const itemAwdValue = items.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
-  const itemInboundUnits = items.reduce((s, i) => s + (i.amazonInbound || 0), 0);
+  const itemInboundUnits = items.reduce((s, i) => s + (i.amazonInbound || 0) + (i.awdInbound || 0) + (i.threeplInbound || 0), 0);
   
   // Use item totals if available, otherwise fall back to snapshot summary
   const finalThreeplUnits = itemThreeplUnits > 0 ? itemThreeplUnits : (summary.threeplUnits || 0);
@@ -611,7 +614,7 @@ const InventoryView = ({
   
   const filteredSummary = {
     ...summary,
-    totalUnits: finalAmazonUnits + finalThreeplUnits + finalHomeUnits + finalAwdUnits,
+    totalUnits: finalAmazonUnits + finalThreeplUnits + finalHomeUnits + finalAwdUnits + finalInboundUnits,
     totalValue: finalAmazonValue + finalThreeplValue + finalHomeValue + finalAwdValue,
     amazonUnits: finalAmazonUnits,
     amazonValue: finalAmazonValue,
@@ -1046,8 +1049,8 @@ const InventoryView = ({
           <MetricCard label="Total Units" value={formatNumber(filteredSummary.totalUnits)} sub={filteredSummary.skuCount + ' active SKUs'} icon={Package} color="blue" />
           <MetricCard label="Total Value (at cost)" value={formatCurrency(filteredSummary.totalValue)} sub="Units × COGS" icon={DollarSign} color="emerald" />
           <MetricCard label="Amazon FBA" value={formatNumber(filteredSummary.amazonUnits)} sub={formatCurrency(filteredSummary.amazonValue)} icon={ShoppingCart} color="orange" />
-          {finalAwdUnits > 0 && <MetricCard label="AWD" value={formatNumber(filteredSummary.awdUnits)} sub={formatCurrency(filteredSummary.awdValue)} icon={Boxes} color="amber" />}
-          {finalInboundUnits > 0 && <MetricCard label="Inbound" value={formatNumber(filteredSummary.amazonInbound)} sub="In transit to FBA" icon={TrendingUp} color="sky" />}
+          <MetricCard label="AWD" value={formatNumber(filteredSummary.awdUnits)} sub={formatCurrency(filteredSummary.awdValue)} icon={Boxes} color="amber" />
+          <MetricCard label="Inbound" value={formatNumber(filteredSummary.amazonInbound)} sub="In transit" icon={TrendingUp} color="sky" />
           <MetricCard label="3PL" value={formatNumber(filteredSummary.threeplUnits)} sub={formatCurrency(filteredSummary.threeplValue)} icon={Boxes} color="violet" />
           {filteredSummary.homeUnits > 0 && <MetricCard label="Home" value={formatNumber(filteredSummary.homeUnits)} sub={formatCurrency(filteredSummary.homeValue)} icon={Home} color="cyan" />}
         </div>
@@ -1261,8 +1264,8 @@ const InventoryView = ({
                               <p className="text-slate-500 text-xs truncate">{item.name}</p>
                             </td>
                             <td className="py-1.5 text-right text-orange-400">{formatNumber(item.amazonQty || 0)}</td>
-                            {finalAwdUnits > 0 && <td className="py-1.5 text-right text-amber-400">{(item.awdQty || 0) > 0 ? formatNumber(item.awdQty) : '—'}</td>}
-                            {finalInboundUnits > 0 && <td className="py-1.5 text-right text-sky-400">{(item.amazonInbound || 0) > 0 ? formatNumber(item.amazonInbound) : '—'}</td>}
+                            <td className="py-1.5 text-right text-amber-400">{(item.awdQty || 0) > 0 ? formatNumber(item.awdQty) : '—'}</td>
+                            <td className="py-1.5 text-right text-sky-400">{((item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0)) > 0 ? formatNumber((item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0)) : '—'}</td>
                             <td className="py-1.5 text-right text-violet-400">{formatNumber(item.threeplQty || 0)}</td>
                             {filteredSummary.homeUnits > 0 && <td className="py-1.5 text-right text-cyan-400">{(item.homeQty || 0) > 0 ? formatNumber(item.homeQty) : '—'}</td>}
                             <td className="py-1.5 text-right text-white font-medium">{formatNumber(item.totalQty)}</td>
@@ -1404,13 +1407,13 @@ const InventoryView = ({
           )}
           
           <div className="overflow-x-auto">
-            <table className="w-full" style={{tableLayout: 'fixed', minWidth: `${1100 + (finalAwdUnits > 0 ? 55 : 0) + (finalInboundUnits > 0 ? 60 : 0) + (filteredSummary.homeUnits > 0 ? 55 : 0)}px`}}>
+            <table className="w-full" style={{tableLayout: 'fixed', minWidth: `${1210 + (filteredSummary.homeUnits > 0 ? 55 : 0)}px`}}>
               <colgroup>
                 <col style={{width: '185px'}} />
                 <col style={{width: '30px'}} />
                 <col style={{width: '60px'}} />
-                {finalAwdUnits > 0 && <col style={{width: '55px'}} />}
-                {finalInboundUnits > 0 && <col style={{width: '60px'}} />}
+                <col style={{width: '55px'}} />
+                <col style={{width: '60px'}} />
                 <col style={{width: '55px'}} />
                 {filteredSummary.homeUnits > 0 && <col style={{width: '55px'}} />}
                 <col style={{width: '60px'}} />
@@ -1430,8 +1433,8 @@ const InventoryView = ({
                   { key: 'name', label: 'Product', align: 'left' },
                   { key: 'abcClass', label: 'ABC', align: 'center' },
                   { key: 'amazonQty', label: 'FBA', align: 'right' },
-                  ...(finalAwdUnits > 0 ? [{ key: 'awdQty', label: 'AWD', align: 'right' }] : []),
-                  ...(finalInboundUnits > 0 ? [{ key: 'amazonInbound', label: 'Inbound', align: 'right' }] : []),
+                  { key: 'awdQty', label: 'AWD', align: 'right' },
+                  { key: 'amazonInbound', label: 'Inbound', align: 'right' },
                   { key: 'threeplQty', label: '3PL', align: 'right' },
                   ...(filteredSummary.homeUnits > 0 ? [{ key: 'homeQty', label: 'Home', align: 'right' }] : []),
                   { key: 'totalQty', label: 'Total', align: 'right' },
@@ -1494,8 +1497,8 @@ const InventoryView = ({
                         </span>
                       </td>
                       <td className="text-right px-2 py-2 text-orange-400 text-sm">{formatNumber(item.amazonQty)}</td>
-                      {finalAwdUnits > 0 && <td className="text-right px-2 py-2 text-amber-400 text-sm">{(item.awdQty || 0) > 0 ? formatNumber(item.awdQty) : '—'}</td>}
-                      {finalInboundUnits > 0 && <td className="text-right px-2 py-2 text-sky-400 text-sm">{(item.amazonInbound || 0) > 0 ? formatNumber(item.amazonInbound) : '—'}</td>}
+                      <td className="text-right px-2 py-2 text-amber-400 text-sm">{(item.awdQty || 0) > 0 ? formatNumber(item.awdQty) : '—'}</td>
+                      <td className="text-right px-2 py-2 text-sky-400 text-sm">{((item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0)) > 0 ? formatNumber((item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0)) : '—'}</td>
                       <td className={`text-right px-2 py-2 text-sm ${settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty ? 'text-rose-400 font-bold' : 'text-violet-400'}`}>{formatNumber(item.threeplQty)}</td>
                       {filteredSummary.homeUnits > 0 && <td className="text-right px-2 py-2 text-cyan-400 text-sm">{(item.homeQty || 0) > 0 ? formatNumber(item.homeQty) : '—'}</td>}
                       <td className="text-right px-2 py-2 text-white text-sm font-medium">{formatNumber(item.totalQty)}</td>
