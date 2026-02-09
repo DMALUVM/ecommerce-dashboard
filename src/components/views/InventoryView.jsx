@@ -308,7 +308,10 @@ const InventoryView = ({
     const newDaysOfSupply = weeklyVel > 0 ? Math.round((adjustedTotalQty / weeklyVel) * 7) : 999;
     
     // Recalculate stockout and reorder dates from TODAY
-    const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
+    // Lead time: per-item (from snapshot) > category match > default
+    const itemNameLower = (item.name || item.sku || '').toLowerCase();
+    const catLeadMatch = Object.entries(leadTimeSettings.categoryLeadTimes || {}).find(([kw]) => itemNameLower.includes(kw.toLowerCase()));
+    const leadTimeDays = item.leadTimeDays || catLeadMatch?.[1] || leadTimeSettings.defaultLeadTimeDays || 14;
     const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
     const uiMinOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
     const uiOverstockThreshold = Math.max(90, (uiMinOrderWeeks * 7) + reorderTriggerDays + leadTimeDays);
@@ -636,6 +639,16 @@ const InventoryView = ({
   // Get SKU settings helper
   const getSkuSettings = (sku) => leadTimeSettings.skuSettings?.[sku] || {};
   
+  // Resolve effective lead time for a SKU: per-SKU > category match > default
+  const getEffectiveLeadTime = (sku, itemName) => {
+    const skuSetting = leadTimeSettings.skuSettings?.[sku]?.leadTime;
+    if (skuSetting) return skuSetting;
+    const name = (itemName || sku || '').toLowerCase();
+    const catMatch = Object.entries(leadTimeSettings.categoryLeadTimes || {}).find(([kw]) => name.includes(kw.toLowerCase()));
+    if (catMatch) return catMatch[1];
+    return leadTimeSettings.defaultLeadTimeDays || 14;
+  };
+  
   // Check for custom low stock alerts
   const customAlerts = items.filter(item => {
     const settings = getSkuSettings(item.sku);
@@ -812,7 +825,7 @@ const InventoryView = ({
                           type="number" 
                           value={skuSettingsEditForm.leadTime || ''} 
                           onChange={(e) => setSkuSettingsEditForm(f => ({...f, leadTime: e.target.value}))} 
-                          placeholder={String(leadTimeSettings.defaultLeadTimeDays)} 
+                          placeholder={String(getEffectiveLeadTime(item.sku, item.name))} 
                           className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-center text-sm" 
                         />
                       </td>
@@ -882,7 +895,7 @@ const InventoryView = ({
                     </td>
                     <td className="text-right py-2 px-2 text-orange-400">{formatNumber(item.amazonQty || 0)}</td>
                     <td className="text-right py-2 px-2 text-violet-400">{formatNumber(item.threeplQty || 0)}</td>
-                    <td className="text-center py-2 px-2">{settings.leadTime ? <span className="text-emerald-400">{settings.leadTime}d</span> : <span className="text-slate-500">{leadTimeSettings.defaultLeadTimeDays}d</span>}</td>
+                    <td className="text-center py-2 px-2">{settings.leadTime ? <span className="text-emerald-400">{settings.leadTime}d</span> : (() => { const elt = getEffectiveLeadTime(item.sku, item.name); const isCategory = elt !== (leadTimeSettings.defaultLeadTimeDays || 14); return <span className={isCategory ? 'text-cyan-400' : 'text-slate-500'}>{elt}d</span>; })()}</td>
                     <td className="text-center py-2 px-2">{settings.reorderPoint ? <span className="text-emerald-400">{formatNumber(settings.reorderPoint)}</span> : <span className="text-slate-500">—</span>}</td>
                     <td className="text-center py-2 px-2">
                       {settings.threeplAlertQty ? <span className="text-amber-400">{formatNumber(settings.threeplAlertQty)}</span> : <span className="text-slate-500">—</span>}
