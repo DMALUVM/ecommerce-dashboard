@@ -11345,8 +11345,147 @@ const savePeriods = async (d) => {
             });
             const data = await res.json();
             if (!data.error && res.ok) {
+              // ========== PROCESS DAILY DATA ==========
+              const cogsLookup = getCogsLookup();
+              const updatedDays = { ...allDaysData };
+              let syncedDayCount = 0;
+              
+              Object.entries(data.dailyData || {}).forEach(([dateKey, dayData]) => {
+                syncedDayCount++;
+                const existing = updatedDays[dateKey] || {};
+                const amazonData = existing.amazon || { revenue: 0, units: 0, orders: 0 };
+                const shopifyData = dayData.shopify || { revenue: 0, units: 0, orders: 0 };
+                
+                // Calculate COGS from SKU data
+                let calculatedCogs = shopifyData.cogs || 0;
+                if (!calculatedCogs && shopifyData.skuData && Object.keys(cogsLookup).length > 0) {
+                  (Array.isArray(shopifyData.skuData) ? shopifyData.skuData : Object.values(shopifyData.skuData)).forEach(sku => {
+                    const unitCost = cogsLookup[sku.sku] || 0;
+                    calculatedCogs += unitCost * (sku.unitsSold || sku.units || 0);
+                    if (unitCost > 0) sku.cogs = unitCost * (sku.unitsSold || sku.units || 0);
+                  });
+                }
+                
+                // Preserve existing ad data
+                const existingMetaSpend = existing.metaSpend || existing.shopify?.metaSpend || 0;
+                const existingGoogleSpend = existing.googleSpend || existing.shopify?.googleSpend || 0;
+                
+                const mergedShopifyData = {
+                  ...shopifyData,
+                  cogs: calculatedCogs,
+                  metaSpend: existingMetaSpend,
+                  metaAds: existingMetaSpend,
+                  googleSpend: existingGoogleSpend,
+                  googleAds: existingGoogleSpend,
+                  adSpend: existingMetaSpend + existingGoogleSpend,
+                };
+                
+                // Calculate profit
+                const grossProfit = (mergedShopifyData.revenue || 0) - calculatedCogs - (mergedShopifyData.threeplCosts || 0);
+                mergedShopifyData.netProfit = grossProfit - mergedShopifyData.adSpend;
+                mergedShopifyData.netMargin = mergedShopifyData.revenue > 0 ? (mergedShopifyData.netProfit / mergedShopifyData.revenue) * 100 : 0;
+                if (mergedShopifyData.adSpend > 0) mergedShopifyData.roas = mergedShopifyData.revenue / mergedShopifyData.adSpend;
+                
+                updatedDays[dateKey] = {
+                  ...existing,
+                  amazon: amazonData,
+                  shopify: mergedShopifyData,
+                  total: {
+                    revenue: (amazonData.revenue || 0) + (mergedShopifyData.revenue || 0),
+                    units: (amazonData.units || 0) + (mergedShopifyData.units || 0),
+                    orders: (amazonData.orders || 0) + (mergedShopifyData.orders || 0),
+                    cogs: (amazonData.cogs || 0) + calculatedCogs,
+                    netProfit: (amazonData.netProfit || 0) + (mergedShopifyData.netProfit || 0),
+                  },
+                  metaSpend: existingMetaSpend,
+                  metaAds: existingMetaSpend,
+                  metaImpressions: existing.metaImpressions,
+                  metaClicks: existing.metaClicks,
+                  googleSpend: existingGoogleSpend,
+                  googleAds: existingGoogleSpend,
+                  googleImpressions: existing.googleImpressions,
+                  googleClicks: existing.googleClicks,
+                  ads: existing.ads,
+                  expenses: existing.expenses,
+                  notes: existing.notes,
+                };
+              });
+              
+              if (syncedDayCount > 0) {
+                setAllDaysData(updatedDays);
+                try { safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
+              }
+              
+              // ========== PROCESS WEEKLY DATA ==========
+              const updatedWeeks = { ...allWeeksData };
+              Object.entries(data.weeklyData || {}).forEach(([weekKey, weekData]) => {
+                if (updatedWeeks[weekKey]) {
+                  const existingWeek = updatedWeeks[weekKey];
+                  const existingShopify = existingWeek.shopify || {};
+                  const metaSpend = existingShopify.metaSpend || existingShopify.metaAds || 0;
+                  const googleSpend = existingShopify.googleSpend || existingShopify.googleAds || 0;
+                  const totalAds = metaSpend + googleSpend;
+                  
+                  let weekCogs = weekData.shopify?.cogs || 0;
+                  if (!weekCogs && weekData.shopify?.skuData && Object.keys(cogsLookup).length > 0) {
+                    (Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData)).forEach(sku => {
+                      const unitCost = cogsLookup[sku.sku] || 0;
+                      weekCogs += unitCost * (sku.unitsSold || sku.units || 0);
+                    });
+                  }
+                  
+                  const mergedShopify = {
+                    ...weekData.shopify,
+                    cogs: weekCogs,
+                    metaSpend, metaAds: metaSpend,
+                    googleSpend, googleAds: googleSpend,
+                    adSpend: totalAds,
+                  };
+                  const grossProfit = (mergedShopify.revenue || 0) - weekCogs - (mergedShopify.threeplCosts || 0);
+                  mergedShopify.netProfit = grossProfit - totalAds;
+                  mergedShopify.netMargin = mergedShopify.revenue > 0 ? (mergedShopify.netProfit / mergedShopify.revenue) * 100 : 0;
+                  if (totalAds > 0) mergedShopify.roas = mergedShopify.revenue / totalAds;
+                  
+                  updatedWeeks[weekKey] = {
+                    ...existingWeek,
+                    shopify: mergedShopify,
+                    total: {
+                      ...existingWeek.total,
+                      revenue: (existingWeek.amazon?.revenue || 0) + (mergedShopify.revenue || 0),
+                      units: (existingWeek.amazon?.units || 0) + (mergedShopify.units || 0),
+                      adSpend: (existingWeek.amazon?.adSpend || 0) + totalAds,
+                      netProfit: (existingWeek.amazon?.netProfit || 0) + (mergedShopify.netProfit || 0),
+                      cogs: (existingWeek.amazon?.cogs || 0) + weekCogs,
+                    },
+                  };
+                } else {
+                  // New week
+                  let newWeekCogs = weekData.shopify?.cogs || 0;
+                  if (!newWeekCogs && weekData.shopify?.skuData && Object.keys(cogsLookup).length > 0) {
+                    (Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData)).forEach(sku => {
+                      const unitCost = cogsLookup[sku.sku] || 0;
+                      newWeekCogs += unitCost * (sku.unitsSold || sku.units || 0);
+                    });
+                  }
+                  const updatedWeekData = { ...weekData };
+                  if (updatedWeekData.shopify) {
+                    updatedWeekData.shopify = { ...updatedWeekData.shopify, cogs: newWeekCogs };
+                    const revenue = updatedWeekData.shopify.revenue || 0;
+                    updatedWeekData.shopify.netProfit = revenue - newWeekCogs - (updatedWeekData.shopify.threeplCosts || 0) - (updatedWeekData.shopify.adSpend || 0);
+                    updatedWeekData.shopify.netMargin = revenue > 0 ? (updatedWeekData.shopify.netProfit / revenue) * 100 : 0;
+                  }
+                  if (updatedWeekData.total) updatedWeekData.total.cogs = newWeekCogs;
+                  updatedWeeks[weekKey] = updatedWeekData;
+                }
+              });
+              
+              if (Object.keys(data.weeklyData || {}).length > 0) {
+                setAllWeeksData(updatedWeeks);
+                save(updatedWeeks);
+              }
+              
               setShopifyCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-              results.push({ service: 'Shopify', success: true, orders: data.orderCount || 0 });
+              results.push({ service: 'Shopify', success: true, orders: data.orderCount || 0, days: syncedDayCount });
             } else {
               results.push({ service: 'Shopify', success: false, error: data.error || `HTTP ${res.status}` });
               devWarn('Shopify auto-sync failed:', data.error || res.status);
