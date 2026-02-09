@@ -11535,8 +11535,10 @@ const savePeriods = async (d) => {
       // Check Packiyo - use /api/packiyo/sync endpoint
       // But first, fetch fresh Amazon FBA inventory so snapshot updates use current numbers
       let freshAmazonFbaData = null;
+      console.log('[AutoSync] Amazon FBA inventory check:', { connected: amazonCredentials.connected, hasRefreshToken: !!amazonCredentials.refreshToken });
       if (amazonCredentials.connected && amazonCredentials.refreshToken) {
         try {
+          console.log('[AutoSync] Fetching /api/amazon/sync with syncType: fba...');
           const fbaRes = await fetch('/api/amazon/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -11550,6 +11552,7 @@ const savePeriods = async (d) => {
             }),
           });
           const fbaData = await fbaRes.json();
+          console.log('[AutoSync] Amazon FBA response:', { status: fbaRes.status, ok: fbaRes.ok, success: fbaData.success, itemCount: fbaData.items?.length, error: fbaData.error, summary: fbaData.summary });
           if (fbaData.success && fbaData.items) {
             // Build lookup: normalized SKU -> { fulfillable, reserved, total, inbound }
             freshAmazonFbaData = {};
@@ -11571,11 +11574,13 @@ const savePeriods = async (d) => {
                 if (!freshAmazonFbaData[k]) freshAmazonFbaData[k] = entry;
               });
             });
-            devWarn(`Auto-sync: Fetched fresh Amazon FBA inventory (${fbaData.items.length} SKUs, ${fbaData.summary?.totalUnits || 0} units)`);
+            console.log('[AutoSync] Amazon FBA inventory built:', { skuCount: seenSkus.size, sampleKeys: Object.keys(freshAmazonFbaData).slice(0, 6), sampleEntry: freshAmazonFbaData[Object.keys(freshAmazonFbaData)[0]] });
             results.push({ service: 'Amazon FBA Inventory', success: true, skus: fbaData.items.length });
+          } else {
+            console.log('[AutoSync] Amazon FBA: no items or not success', { success: fbaData.success, hasItems: !!fbaData.items, error: fbaData.error });
           }
         } catch (err) {
-          devWarn('Amazon FBA inventory auto-sync error:', err.message);
+          console.error('[AutoSync] Amazon FBA inventory error:', err.message);
         }
       }
       
