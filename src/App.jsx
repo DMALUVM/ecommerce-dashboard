@@ -7538,6 +7538,7 @@ const savePeriods = async (d) => {
     let amzSource = 'file-upload';
     let awdData = {};
     let awdTotal = 0;
+    let awdValue = 0;
 
     // Try Amazon SP-API first if connected
     if (amazonCredentials.connected && amazonCredentials.refreshToken) {
@@ -7600,12 +7601,14 @@ const savePeriods = async (d) => {
             
             // Track AWD separately
             if (item.awdQuantity > 0) {
+              const awdCost = cogsLookup[item.sku] || cogsLookup[skuLower] || cogsLookup[skuUpper] || 0;
               awdData[skuUpper] = {
                 sku: skuUpper,
                 awdQuantity: item.awdQuantity,
                 awdInbound: item.awdInbound || 0,
               };
               awdTotal += item.awdQuantity;
+              awdValue += item.awdQuantity * awdCost;
             }
           });
           
@@ -7893,7 +7896,9 @@ const savePeriods = async (d) => {
       const aQty = a.total || 0;
       const tQty = t.total || 0;
       const hQty = h.total || 0;
-      const totalQty = aQty + tQty + hQty;
+      const awdItem = awdData[sku] || awdData[skuLower] || awdData[sku.toUpperCase()] || {};
+      const awdQty = awdItem.awdQuantity || 0;
+      const totalQty = aQty + tQty + hQty + awdQty;
       
       const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || cogsLookup[skuLower] || 0;
       
@@ -8000,6 +8005,7 @@ const savePeriods = async (d) => {
         amazonQty: aQty, 
         threeplQty: tQty,
         homeQty: hQty,
+        awdQty,
         totalQty, 
         cost, 
         totalValue: totalQty * cost, 
@@ -8016,6 +8022,7 @@ const savePeriods = async (d) => {
         suggestedOrderQty,
         leadTimeDays,
         amazonInbound: a.inbound || 0, 
+        awdInbound: awdItem.awdInbound || 0,
         threeplInbound: t.inbound || 0,
         // Industry-standard demand metrics
         safetyStock,
@@ -8209,12 +8216,13 @@ const savePeriods = async (d) => {
       velocitySource: velNote + learningNote,
       inventorySources: sourceNote,
       summary: { 
-        totalUnits: amzTotal + tplTotal + homeTotal, 
-        totalValue: amzValue + tplValue + homeValue, 
+        totalUnits: amzTotal + tplTotal + homeTotal + awdTotal, 
+        totalValue: amzValue + tplValue + homeValue + awdValue, 
         amazonUnits: amzTotal, 
         amazonValue: amzValue, 
         amazonInbound: amzInbound,
         awdUnits: awdTotal,
+        awdValue: awdValue,
         threeplUnits: tplTotal, 
         threeplValue: tplValue, 
         threeplInbound: tplInbound,
@@ -11256,6 +11264,8 @@ const savePeriods = async (d) => {
     
     const threshold = appSettings.autoSync?.staleThresholdHours || 4;
     const results = [];
+    // Track latest inventory across sequential sync operations to prevent stale overwrites
+    let latestInvHistory = invHistory;
     
     setAutoSyncStatus(prev => ({ ...prev, running: true, lastCheck: new Date().toISOString() }));
     
@@ -11535,13 +11545,15 @@ const savePeriods = async (d) => {
       // Check Packiyo - use /api/packiyo/sync endpoint
       // But first, fetch fresh Amazon FBA inventory so snapshot updates use current numbers
       let freshAmazonFbaData = null;
+      console.log('[AutoSync] Amazon FBA inventory check:', { connected: amazonCredentials.connected, hasRefreshToken: !!amazonCredentials.refreshToken });
       if (amazonCredentials.connected && amazonCredentials.refreshToken) {
         try {
+          console.log('[AutoSync] Fetching /api/amazon/sync with syncType: all (FBA + AWD)...');
           const fbaRes = await fetch('/api/amazon/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              syncType: 'fba',
+              syncType: 'all',
               refreshToken: amazonCredentials.refreshToken,
               clientId: amazonCredentials.clientId,
               clientSecret: amazonCredentials.clientSecret,
@@ -11550,8 +11562,9 @@ const savePeriods = async (d) => {
             }),
           });
           const fbaData = await fbaRes.json();
+          console.log('[AutoSync] Amazon FBA+AWD response:', { status: fbaRes.status, ok: fbaRes.ok, success: fbaData.success, itemCount: fbaData.items?.length, error: fbaData.error, summary: fbaData.summary });
           if (fbaData.success && fbaData.items) {
-            // Build lookup: normalized SKU -> { fulfillable, reserved, total, inbound }
+            // Build lookup: normalized SKU -> { fulfillable, reserved, total, inbound, awdQty, awdInbound }
             freshAmazonFbaData = {};
             const seenSkus = new Set();
             fbaData.items.forEach(item => {
@@ -11565,22 +11578,28 @@ const savePeriods = async (d) => {
               const reserved = item.fbaReserved || item.reserved || 0;
               const inbound = (item.fbaInbound || item.totalInbound || 0);
               const total = fulfillable + reserved;
-              const entry = { fulfillable, reserved, inbound, total, asin: item.asin || '' };
+              const awdQty = item.awdQuantity || 0;
+              const awdInbound = item.awdInbound || 0;
+              const entry = { fulfillable, reserved, inbound, total, awdQty, awdInbound, asin: item.asin || '' };
               // Store under multiple key variants for matching
               [item.sku, skuLower, skuUpper, baseSku, baseSku.toLowerCase(), baseSku + 'SHOP', baseSku.toLowerCase() + 'shop'].forEach(k => {
                 if (!freshAmazonFbaData[k]) freshAmazonFbaData[k] = entry;
               });
             });
-            devWarn(`Auto-sync: Fetched fresh Amazon FBA inventory (${fbaData.items.length} SKUs, ${fbaData.summary?.totalUnits || 0} units)`);
+            console.log('[AutoSync] Amazon FBA+AWD inventory built:', { skuCount: seenSkus.size, sampleKeys: Object.keys(freshAmazonFbaData).slice(0, 6), sampleEntry: freshAmazonFbaData[Object.keys(freshAmazonFbaData)[0]] });
             results.push({ service: 'Amazon FBA Inventory', success: true, skus: fbaData.items.length });
+          } else {
+            console.log('[AutoSync] Amazon FBA+AWD: no items or not success', { success: fbaData.success, hasItems: !!fbaData.items, error: fbaData.error });
           }
         } catch (err) {
-          devWarn('Amazon FBA inventory auto-sync error:', err.message);
+          console.error('[AutoSync] Amazon FBA+AWD inventory error:', err.message);
         }
       }
       
+      console.log('[AutoSync] Packiyo check:', { enabled: appSettings.autoSync?.packiyo !== false, connected: packiyoCredentials.connected });
       if (appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected) {
         const packiyoStale = isServiceStale(packiyoCredentials.lastSync, threshold);
+        console.log('[AutoSync] Packiyo stale?', packiyoStale, '| force?', force);
         
         if (packiyoStale || force) {
           try {
@@ -11595,6 +11614,7 @@ const savePeriods = async (d) => {
               }),
             });
             const data = await res.json();
+            console.log('[AutoSync] Packiyo response:', { ok: res.ok, error: data.error, hasProducts: !!data.products, hasInventoryBySku: !!data.inventoryBySku, skuCount: data.summary?.skuCount });
             if (!data.error && res.ok) {
               if (data.products) {
                 setPackiyoInventoryData(data);
@@ -11763,12 +11783,14 @@ const savePeriods = async (d) => {
                 // Update inventory snapshot with Packiyo data + recalculated velocities
                 if (data.inventoryBySku) {
                   const todayStr = new Date().toISOString().split('T')[0];
-                  const targetDate = invHistory[todayStr] ? todayStr :
-                    (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
-                    Object.keys(invHistory).sort().reverse()[0];
+                  const targetDate = latestInvHistory[todayStr] ? todayStr :
+                    (selectedInvDate && latestInvHistory[selectedInvDate]) ? selectedInvDate :
+                    Object.keys(latestInvHistory).sort().reverse()[0];
                   
-                  if (targetDate && invHistory[targetDate]) {
-                    const currentSnapshot = invHistory[targetDate];
+                  console.log('[AutoSync] Snapshot update:', { todayStr, targetDate, hasFreshAmazon: !!freshAmazonFbaData, freshAmazonKeys: freshAmazonFbaData ? Object.keys(freshAmazonFbaData).length : 0, invHistoryDates: Object.keys(latestInvHistory), selectedInvDate });
+                  
+                  if (targetDate && latestInvHistory[targetDate]) {
+                    const currentSnapshot = latestInvHistory[targetDate];
                     const packiyoData = data.inventoryBySku;
                     const today = new Date();
                     const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
@@ -11802,8 +11824,11 @@ const savePeriods = async (d) => {
                       const freshAmz = freshAmazonFbaData?.[item.sku] || freshAmazonFbaData?.[normalizedItemSku] || freshAmazonFbaData?.[(item.sku || '').toUpperCase()] || freshAmazonFbaData?.[(item.sku || '').toLowerCase()] || null;
                       const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
                       const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
+                      const newAwdQty = freshAmz ? (freshAmz.awdQty || 0) : (item.awdQty || 0);
+                      const newAwdInbound = freshAmz ? (freshAmz.awdInbound || 0) : (item.awdInbound || 0);
+                      if (matchedCount <= 3) console.log('[AutoSync] Item update:', { sku: item.sku, normalizedItemSku, oldAmzQty: item.amazonQty, freshAmzFound: !!freshAmz, newAmazonQty, newAwdQty, newAmazonInbound, freshAmzTotal: freshAmz?.total });
                       
-                      const newTotalQty = newAmazonQty + newTplQty + (item.homeQty || 0);
+                      const newTotalQty = newAmazonQty + newTplQty + (item.homeQty || 0) + newAwdQty;
                       
                       // Get velocity with corrections
                       const velocityData = getAutoVelocity(item.sku);
@@ -11861,6 +11886,8 @@ const savePeriods = async (d) => {
                         ...item,
                         amazonQty: newAmazonQty,
                         amazonInbound: newAmazonInbound,
+                        awdQty: newAwdQty,
+                        awdInbound: newAwdInbound,
                         threeplQty: newTplQty,
                         threeplInbound: newTplInbound,
                         totalQty: newTotalQty,
@@ -11914,6 +11941,8 @@ const savePeriods = async (d) => {
                     const newAmzTotal = updatedItems.reduce((s, i) => s + (i.amazonQty || 0), 0);
                     const newAmzValue = updatedItems.reduce((s, i) => s + ((i.amazonQty || 0) * (i.cost || 0)), 0);
                     const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
+                    const newAwdTotal = updatedItems.reduce((s, i) => s + (i.awdQty || 0), 0);
+                    const newAwdValue = updatedItems.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
                     
                     const updatedSnapshot = {
                       ...currentSnapshot,
@@ -11923,10 +11952,12 @@ const savePeriods = async (d) => {
                         amazonUnits: newAmzTotal,
                         amazonValue: newAmzValue,
                         amazonInbound: newAmzInbound,
+                        awdUnits: newAwdTotal,
+                        awdValue: newAwdValue,
                         threeplUnits: newTplTotal,
                         threeplValue: newTplValue,
-                        totalUnits: newAmzTotal + newTplTotal + (currentSnapshot.summary?.homeUnits || 0),
-                        totalValue: newAmzValue + newTplValue + (currentSnapshot.summary?.homeValue || 0),
+                        totalUnits: newAmzTotal + newTplTotal + (currentSnapshot.summary?.homeUnits || 0) + newAwdTotal,
+                        totalValue: newAmzValue + newTplValue + (currentSnapshot.summary?.homeValue || 0) + newAwdValue,
                         skuCount: updatedItems.length,
                         // Recalculated supply chain KPIs
                         critical,
@@ -11949,10 +11980,12 @@ const savePeriods = async (d) => {
                       },
                     };
                     
-                    const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+                    const updatedHistory = { ...latestInvHistory, [targetDate]: updatedSnapshot };
+                    latestInvHistory = updatedHistory; // Track for subsequent syncs
                     setInvHistory(updatedHistory);
                     setSelectedInvDate(targetDate);
                     saveInv(updatedHistory);
+                    console.log('[AutoSync] Snapshot saved:', { targetDate, amzUnits: updatedSnapshot.summary?.amazonUnits, tplUnits: updatedSnapshot.summary?.threeplUnits, totalUnits: updatedSnapshot.summary?.totalUnits });
                     
                   }
                 }
@@ -11973,23 +12006,27 @@ const savePeriods = async (d) => {
       
       // Refresh home inventory from Shopify (so home quantities stay current alongside 3PL sync)
       // Also: if Packiyo didn't sync but we have fresh Amazon FBA data, update the snapshot anyway
+      console.log('[AutoSync] Amazon-only fallback check:', { hasFreshData: !!freshAmazonFbaData, packiyoSynced: results.some(r => r.service === 'Packiyo' && r.success) });
       if (freshAmazonFbaData && !results.some(r => r.service === 'Packiyo' && r.success)) {
         try {
-          const targetDate = Object.keys(invHistory).sort().reverse()[0];
-          if (targetDate && invHistory[targetDate]) {
-            const currentSnapshot = invHistory[targetDate];
-            let newAmzTotal = 0, newAmzValue = 0, newAmzInbound = 0;
+          const targetDate = Object.keys(latestInvHistory).sort().reverse()[0];
+          if (targetDate && latestInvHistory[targetDate]) {
+            const currentSnapshot = latestInvHistory[targetDate];
+            let newAmzTotal = 0, newAmzValue = 0, newAmzInbound = 0, newAwdTotal = 0, newAwdValue = 0;
             const updatedItems = currentSnapshot.items.map(item => {
               const freshAmz = freshAmazonFbaData[item.sku] || freshAmazonFbaData[(item.sku || '').toUpperCase()] || freshAmazonFbaData[(item.sku || '').toLowerCase()] || null;
               const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
               const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
-              const newTotal = newAmazonQty + (item.threeplQty || 0) + (item.homeQty || 0);
+              const newAwdQty = freshAmz ? (freshAmz.awdQty || 0) : (item.awdQty || 0);
+              const newTotal = newAmazonQty + (item.threeplQty || 0) + (item.homeQty || 0) + newAwdQty;
               const vel = item.correctedVel || item.weeklyVel || 0;
               const newDos = vel > 0 ? Math.round((newTotal / vel) * 7) : (item.daysOfSupply || 999);
               newAmzTotal += newAmazonQty;
               newAmzValue += newAmazonQty * (item.cost || 0);
               newAmzInbound += newAmazonInbound;
-              return { ...item, amazonQty: newAmazonQty, amazonInbound: newAmazonInbound, totalQty: newTotal, totalValue: newTotal * (item.cost || 0), daysOfSupply: newDos };
+              newAwdTotal += newAwdQty;
+              newAwdValue += newAwdQty * (item.cost || 0);
+              return { ...item, amazonQty: newAmazonQty, amazonInbound: newAmazonInbound, awdQty: newAwdQty, totalQty: newTotal, totalValue: newTotal * (item.cost || 0), daysOfSupply: newDos };
             });
             const updatedSnapshot = {
               ...currentSnapshot,
@@ -11999,12 +12036,15 @@ const savePeriods = async (d) => {
                 amazonUnits: newAmzTotal,
                 amazonValue: newAmzValue,
                 amazonInbound: newAmzInbound,
-                totalUnits: newAmzTotal + (currentSnapshot.summary?.threeplUnits || 0) + (currentSnapshot.summary?.homeUnits || 0),
-                totalValue: newAmzValue + (currentSnapshot.summary?.threeplValue || 0) + (currentSnapshot.summary?.homeValue || 0),
+                awdUnits: newAwdTotal,
+                awdValue: newAwdValue,
+                totalUnits: newAmzTotal + (currentSnapshot.summary?.threeplUnits || 0) + (currentSnapshot.summary?.homeUnits || 0) + newAwdTotal,
+                totalValue: newAmzValue + (currentSnapshot.summary?.threeplValue || 0) + (currentSnapshot.summary?.homeValue || 0) + newAwdValue,
               },
-              sources: { ...currentSnapshot.sources, amazon: 'amazon-fba-auto-sync', lastAmazonFbaSync: new Date().toISOString() },
+              sources: { ...currentSnapshot.sources, amazon: 'amazon-fba-awd-auto-sync', lastAmazonFbaSync: new Date().toISOString() },
             };
-            const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+            const updatedHistory = { ...latestInvHistory, [targetDate]: updatedSnapshot };
+            latestInvHistory = updatedHistory;
             setInvHistory(updatedHistory);
             saveInv(updatedHistory);
             devWarn(`Auto-sync: Updated Amazon FBA inventory in snapshot (no Packiyo sync needed)`);
@@ -12051,14 +12091,14 @@ const savePeriods = async (d) => {
             
             // Update current inventory snapshot with fresh home quantities
             if (Object.keys(homeInvLookup).length > 0) {
-              const targetDate = Object.keys(invHistory).sort().reverse()[0];
-              if (targetDate && invHistory[targetDate]) {
-                const currentSnapshot = invHistory[targetDate];
+              const targetDate = Object.keys(latestInvHistory).sort().reverse()[0];
+              if (targetDate && latestInvHistory[targetDate]) {
+                const currentSnapshot = latestInvHistory[targetDate];
                 const updatedItems = currentSnapshot.items.map(item => {
                   const normalizedSku = (item.sku || '').toUpperCase();
                   const baseSku = normalizedSku.replace(/SHOP$/, '');
                   const newHomeQty = homeInvLookup[item.sku] ?? homeInvLookup[normalizedSku] ?? homeInvLookup[baseSku] ?? homeInvLookup[baseSku + 'SHOP'] ?? (item.homeQty || 0);
-                  const newTotal = (item.amazonQty || 0) + (item.threeplQty || 0) + newHomeQty;
+                  const newTotal = (item.amazonQty || 0) + (item.threeplQty || 0) + newHomeQty + (item.awdQty || 0);
                   // Recalculate DOS with updated total
                   const vel = item.correctedVel || item.weeklyVel || 0;
                   const newDos = vel > 0 ? Math.round((newTotal / vel) * 7) : (item.daysOfSupply || 999);
@@ -12087,11 +12127,12 @@ const savePeriods = async (d) => {
                     ...currentSnapshot.summary,
                     homeUnits: homeTotal,
                     homeValue: homeValue,
-                    totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + (currentSnapshot.summary?.threeplUnits || 0) + homeTotal,
-                    totalValue: (currentSnapshot.summary?.amazonValue || 0) + (currentSnapshot.summary?.threeplValue || 0) + homeValue,
+                    totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + (currentSnapshot.summary?.threeplUnits || 0) + homeTotal + (currentSnapshot.summary?.awdUnits || 0),
+                    totalValue: (currentSnapshot.summary?.amazonValue || 0) + (currentSnapshot.summary?.threeplValue || 0) + homeValue + (currentSnapshot.summary?.awdValue || 0),
                   },
                 };
-                const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+                const updatedHistory = { ...latestInvHistory, [targetDate]: updatedSnapshot };
+                latestInvHistory = updatedHistory;
                 setInvHistory(updatedHistory);
                 saveInv(updatedHistory);
                 devWarn(`Auto-sync: Updated home inventory for ${Object.keys(homeInvLookup).length / 3} SKUs, ${homeTotal} total units`);
@@ -13763,60 +13804,66 @@ Respond with ONLY this JSON:
       }
       
       // Get reorder settings
-      const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60; // Want shipment to arrive when stock = this
-      const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22; // Minimum order size (5 months ≈ 22 weeks)
+      const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
+      const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
       const aiDefaultLeadTime = leadTimeSettings.defaultLeadTimeDays || 14;
       const aiOverstockThreshold = Math.max(90, (minOrderWeeks * 7) + reorderTriggerDays + aiDefaultLeadTime);
       const aiLowThreshold = Math.max(30, aiDefaultLeadTime + 14);
       const aiCriticalThreshold = Math.max(14, aiDefaultLeadTime);
       
-      // Pre-calculated stockout dates and reorder points already exist on each item
-      // Check if data comes from recent API sync (Packiyo/Amazon) - use that date instead of snapshot date
       const today = new Date();
       const snapshotData = invHistory[latestInvKey];
       const lastPackiyoSync = snapshotData?.sources?.lastPackiyoSync ? new Date(snapshotData.sources.lastPackiyoSync) : null;
-      const lastAmazonSync = snapshotData?.sources?.lastAmazonSync ? new Date(snapshotData.sources.lastAmazonSync) : null;
+      const lastAmazonSync = snapshotData?.sources?.lastAmazonFbaSync ? new Date(snapshotData.sources.lastAmazonFbaSync) : null;
       
-      // Use most recent sync date, falling back to snapshot date
       let effectiveDataDate = new Date(latestInvKey + 'T12:00:00');
-      if (lastPackiyoSync && lastPackiyoSync > effectiveDataDate) {
-        effectiveDataDate = lastPackiyoSync;
-      }
-      if (lastAmazonSync && lastAmazonSync > effectiveDataDate) {
-        effectiveDataDate = lastAmazonSync;
-      }
+      if (lastPackiyoSync && lastPackiyoSync > effectiveDataDate) effectiveDataDate = lastPackiyoSync;
+      if (lastAmazonSync && lastAmazonSync > effectiveDataDate) effectiveDataDate = lastAmazonSync;
       
-      // Only apply days-elapsed if data is actually old
       const daysElapsed = Math.max(0, Math.floor((today - effectiveDataDate) / (1000 * 60 * 60 * 24)));
       
-      
-      // DEDUPLICATE inventory items by normalized SKU (case-insensitive)
-      // Keep the item with the highest totalQty (most complete data)
+      // DEDUPLICATE — match InventoryView logic: normalize by stripping SHOP suffix
       const rawItems = invHistory[latestInvKey]?.items || [];
       const dedupedByNormalizedSku = {};
       rawItems.forEach(item => {
-        const normalizedSku = (item.sku || '').trim().toUpperCase();
-        const existing = dedupedByNormalizedSku[normalizedSku];
-        if (!existing || (item.totalQty || 0) > (existing.totalQty || 0)) {
-          dedupedByNormalizedSku[normalizedSku] = item;
+        const normSku = (item.sku || '').trim().toUpperCase().replace(/SHOP$/, '');
+        const existing = dedupedByNormalizedSku[normSku];
+        if (!existing) {
+          dedupedByNormalizedSku[normSku] = { ...item };
+        } else {
+          // Merge: take max of each channel
+          existing.amazonQty = Math.max(existing.amazonQty || 0, item.amazonQty || 0);
+          existing.threeplQty = Math.max(existing.threeplQty || 0, item.threeplQty || 0);
+          existing.homeQty = Math.max(existing.homeQty || 0, item.homeQty || 0);
+          existing.awdQty = Math.max(existing.awdQty || 0, item.awdQty || 0);
+          existing.amazonInbound = Math.max(existing.amazonInbound || 0, item.amazonInbound || 0);
+          existing.awdInbound = Math.max(existing.awdInbound || 0, item.awdInbound || 0);
+          existing.totalQty = (existing.amazonQty || 0) + (existing.threeplQty || 0) + (existing.homeQty || 0) + (existing.awdQty || 0);
+          if (!existing.name || existing.name === existing.sku) existing.name = item.name;
+          if (!existing.weeklyVel && item.weeklyVel) existing.weeklyVel = item.weeklyVel;
+          if (!existing.amzWeeklyVel && item.amzWeeklyVel) existing.amzWeeklyVel = item.amzWeeklyVel;
+          if (!existing.shopWeeklyVel && item.shopWeeklyVel) existing.shopWeeklyVel = item.shopWeeklyVel;
+          if (!existing.cost && item.cost) existing.cost = item.cost;
         }
       });
       const dedupedItems = Object.values(dedupedByNormalizedSku);
       
+      // Build currentInventory with all fields
+      let totalValue = 0;
+      let criticalCount = 0, reorderCount = 0, healthyCount = 0, overstockCount = 0;
+      
       const currentInventory = dedupedItems.map(item => {
-        const weeklyVelocity = item.weeklyVel || 0;
+        const weeklyVelocity = item.weeklyVel || item.correctedVel || 0;
         const dailyVelocity = weeklyVelocity / 7;
         const leadTimeDays = getLeadTime(item.sku);
         
-        // Only adjust stock if data is old (daysElapsed > 0)
+        const totalStock = (item.amazonQty || 0) + (item.threeplQty || 0) + (item.homeQty || 0) + (item.awdQty || 0);
         const currentStock = daysElapsed > 0 
-          ? Math.max(0, (item.totalQty || 0) - Math.round(dailyVelocity * daysElapsed))
-          : (item.totalQty || 0);
+          ? Math.max(0, totalStock - Math.round(dailyVelocity * daysElapsed))
+          : totalStock;
         
-        // Recalculate days of supply from TODAY
         const daysOfSupply = weeklyVelocity > 0 ? Math.round((currentStock / weeklyVelocity) * 7) : 999;
         
-        // Recalculate dates from TODAY
         let stockoutDate = null;
         let reorderByDate = null;
         let daysUntilMustOrder = null;
@@ -13832,29 +13879,42 @@ Respond with ONLY this JSON:
           reorderByDate = reorderBy.toISOString().split('T')[0];
         }
         
-        const suggestedOrderQty = item.suggestedOrderQty || Math.ceil(weeklyVelocity * minOrderWeeks);
+        const suggestedOrderQty = weeklyVelocity > 0 
+          ? Math.ceil(weeklyVelocity * minOrderWeeks) + (item.safetyStock || 0)
+          : 0;
         
-        // Use pre-calculated urgency or derive consistently with inventory page
-        // Match the inventory page health logic: dynamic thresholds based on reorder cycle
+        // Dynamic urgency matching inventory page logic
         let calculatedUrgency = 'healthy';
         if (dailyVelocity > 0) {
-          if (daysUntilMustOrder < 0) calculatedUrgency = 'critical'; // Past reorder date
-          else if (daysOfSupply < aiCriticalThreshold || daysUntilMustOrder < 7) calculatedUrgency = 'critical';
-          else if (daysOfSupply < aiLowThreshold || daysUntilMustOrder < 14) calculatedUrgency = 'low';
+          if (daysUntilMustOrder !== null && daysUntilMustOrder < 0) calculatedUrgency = 'critical';
+          else if (daysOfSupply < aiCriticalThreshold || (daysUntilMustOrder !== null && daysUntilMustOrder < 7)) calculatedUrgency = 'critical';
+          else if (daysOfSupply < aiLowThreshold || (daysUntilMustOrder !== null && daysUntilMustOrder < 14)) calculatedUrgency = 'low';
           else if (daysOfSupply <= aiOverstockThreshold) calculatedUrgency = 'healthy';
           else calculatedUrgency = 'overstock';
         } else if (currentStock === 0) {
-          calculatedUrgency = 'critical'; // No stock, no velocity
+          calculatedUrgency = 'critical';
         }
+        
+        // Pre-calculate summary counts
+        if (calculatedUrgency === 'critical') criticalCount++;
+        else if (calculatedUrgency === 'low') reorderCount++;
+        else if (calculatedUrgency === 'healthy') healthyCount++;
+        else if (calculatedUrgency === 'overstock') overstockCount++;
+        
+        const itemCost = getCogsCost(item.sku) || item.cost || 0;
+        totalValue += currentStock * itemCost;
         
         return {
           sku: item.sku,
-          name: savedProductNames[item.sku] || item.name || item.sku,
+          name: savedProductNames[item.sku] || savedProductNames[(item.sku || '').replace(/shop$/i, '').toUpperCase()] || item.name || item.sku,
           currentStock,
-          amazonStock: item.amazonQty || 0,
+          fbaStock: item.amazonQty || 0,
+          awdStock: item.awdQty || 0,
+          inbound: (item.amazonInbound || 0) + (item.awdInbound || 0),
           threeplStock: item.threeplQty || 0,
+          homeStock: item.homeQty || 0,
           weeklyVelocity: Math.round(weeklyVelocity * 10) / 10,
-          dailyVelocity: Math.round(dailyVelocity * 10) / 10,
+          dailyVelocity: Math.round(dailyVelocity * 100) / 100,
           daysOfSupply,
           stockoutDate,
           reorderByDate,
@@ -13863,14 +13923,12 @@ Respond with ONLY this JSON:
           calculatedUrgency,
           health: item.health,
           leadTimeDays,
-          cost: getCogsCost(item.sku) || item.cost || 0,
-          // Include demand metrics for AI context
+          cost: itemCost,
           safetyStock: item.safetyStock || 0,
           reorderPoint: item.reorderPoint || 0,
           seasonalFactor: item.seasonalFactor || 1.0,
           cv: item.cv || 0,
           demandClass: item.demandClass || 'unknown',
-          // Supply chain metrics
           abcClass: item.abcClass || 'C',
           turnoverRate: item.turnoverRate || 0,
           eoq: item.eoq || 0,
@@ -13879,6 +13937,9 @@ Respond with ONLY this JSON:
           annualCarryingCost: item.annualCarryingCost || 0,
         };
       });
+      
+      // Pre-calculated summary — these are authoritative, AI should echo them
+      const preCalcSummary = { criticalCount, reorderCount, healthyCount, overstockCount, totalValue: Math.round(totalValue), totalSkus: currentInventory.length };
       
       // Get production pipeline
       const pendingProduction = productionPipeline.map(p => ({
@@ -13891,54 +13952,55 @@ Respond with ONLY this JSON:
       const prompt = `You are an expert inventory planner. Review the pre-calculated inventory analysis and provide reorder recommendations.
 
 ## TODAY'S DATE: ${today.toISOString().split('T')[0]}
+## DATA FRESHNESS: ${daysElapsed === 0 ? 'Live (synced today)' : `${daysElapsed} days old — stock adjusted for estimated sales`}
 
 ## REORDER SETTINGS
-- Lead Time: ${leadTimeSettings.defaultLeadTimeDays} days (time from placing order to arrival)
+- Lead Time: ${leadTimeSettings.defaultLeadTimeDays} days default (per-category and per-SKU overrides may apply — see leadTimeDays per item)
 - Target Buffer: ${reorderTriggerDays} days (want shipment to arrive when stock reaches this level)
 - Minimum Order: ${minOrderWeeks} weeks of supply (${Math.round(minOrderWeeks / 4.3)} months)
 
-## HOW REORDER DATES ARE CALCULATED:
-- stockoutDate = Today + daysOfSupply (when stock hits 0)
-- reorderByDate = Today + daysUntilMustOrder (when to place the order)
-- Reorder point includes safety stock (Z=1.65, 95% service level) and seasonal adjustment
-- safetyStock = units of buffer to protect against demand variability
-- seasonalFactor = current month's demand relative to average (>1 = peak season, <1 = slow)
-- cv = coefficient of variation (demand variability: smooth <0.5, lumpy 0.5-1.0, intermittent >1.0)
-- suggestedOrderQty already includes safety stock buffer
+## INVENTORY LOCATIONS:
+- FBA = Amazon Fulfillment Centers (sellable inventory: fulfillable + reserved)
+- AWD = Amazon Warehousing & Distribution (auto-replenishes FBA)
+- 3PL = Third-party logistics (Packiyo)
+- Home = Home inventory
+- Inbound = Shipments in transit to FBA/AWD
+- Total includes ALL locations (FBA + AWD + 3PL + Home)
+- suggestedOrderQty = ${minOrderWeeks} weeks of supply + safety stock buffer
 
-## URGENCY LEVELS (dynamic thresholds based on reorder cycle — minOrderWeeks=${minOrderWeeks}, leadTime=${aiDefaultLeadTime}d):
+## PRE-CALCULATED SUMMARY (authoritative — use these exact numbers):
+${JSON.stringify(preCalcSummary)}
+
+## URGENCY THRESHOLDS (dynamic, based on reorder cycle):
 - CRITICAL: daysUntilMustOrder < 0 (overdue!) OR daysOfSupply < ${aiCriticalThreshold} OR daysUntilMustOrder < 7
-- REORDER: daysOfSupply < ${aiLowThreshold} OR daysUntilMustOrder < 14 (maps to "Low" on inventory page)
+- REORDER ("low"): daysOfSupply < ${aiLowThreshold} OR daysUntilMustOrder < 14
 - HEALTHY: daysOfSupply ${aiLowThreshold}-${aiOverstockThreshold} AND daysUntilMustOrder >= 14
-- MONITOR: daysOfSupply > ${aiOverstockThreshold} (overstock - excess capital tied up)
+- OVERSTOCK: daysOfSupply > ${aiOverstockThreshold} (excess capital)
 
-## SUPPLY CHAIN METRICS (per SKU):
-- abcClass: A (top 80% revenue), B (next 15%), C (bottom 5%) — prioritize A-class items
-- turnoverRate: annual turns (target 6×+ for DTC, 3-4× acceptable)
-- eoq: Economic Order Quantity (optimal order size to minimize total cost)
-- sellThroughRate: monthly sell-through % (>20% is good)
-- stockoutRisk: 0-100 score combining days of supply, lead time, and demand variability
-- annualCarryingCost: yearly cost of holding this inventory (25% of value)
-
-## CURRENT INVENTORY (${currentInventory.length} SKUs) - ALL VALUES PRE-CALCULATED
-${JSON.stringify(currentInventory.slice(0, 30), null, 2)}
+## CURRENT INVENTORY (${currentInventory.length} SKUs) — ALL VALUES PRE-CALCULATED:
+${JSON.stringify(currentInventory.slice(0, 40), null, 2)}
 
 ## PENDING PRODUCTION ORDERS (${pendingProduction.length} orders)
 ${pendingProduction.length > 0 ? JSON.stringify(pendingProduction, null, 2) : 'No pending production orders'}
 
-## IMPORTANT INSTRUCTIONS:
-- Use the pre-calculated values (stockoutDate, reorderByDate, daysUntilMustOrder, suggestedOrderQty) - do NOT recalculate
-- suggestedOrderQty is already set to ${minOrderWeeks} weeks of supply - use this value
-- Factor in pending production: if production arrives before reorderByDate, it may change urgency
-- For items with 0 velocity, mark as "monitor" or "healthy" based on stock levels
+## INSTRUCTIONS:
+- Use the pre-calculated values (daysOfSupply, stockoutDate, reorderByDate, suggestedOrderQty) — do NOT recalculate
+- suggestedOrderQty = ${minOrderWeeks} weeks of supply + safety stock — use this exact value
+- Include ALL SKUs in recommendations (not just critical/reorder — also healthy and overstock items)
+- The summary counts MUST match the pre-calculated summary above exactly
+- totalValue MUST be ${Math.round(totalValue)} (pre-calculated from cost × currentStock)
+- Factor in pending production: if production arrives before reorderByDate, note it
+- Group similar products if they share the same urgency and action
+- For overstock items, note the excess capital tied up and suggest strategies
 
 Respond with ONLY this JSON:
 {
   "summary": {
-    "criticalCount": number,
-    "reorderCount": number,
-    "healthyCount": number,
-    "totalValue": number
+    "criticalCount": ${criticalCount},
+    "reorderCount": ${reorderCount},
+    "healthyCount": ${healthyCount},
+    "overstockCount": ${overstockCount},
+    "totalValue": ${Math.round(totalValue)}
   },
   "recommendations": [
     {
@@ -13950,16 +14012,16 @@ Respond with ONLY this JSON:
       "daysOfSupply": number,
       "leadTimeDays": number,
       "weeklyVelocity": number,
-      "suggestedOrderQty": number (use the pre-calculated value),
+      "suggestedOrderQty": number (use pre-calculated value),
       "reorderDate": "use reorderByDate from input",
-      "stockoutDate": "use stockoutDate from input", 
+      "stockoutDate": "use stockoutDate from input",
       "pendingProduction": number or null,
       "pendingArrivalDate": "date or null",
       "reasoning": "why this recommendation"
     }
   ],
-  "alerts": ["urgent alert 1", "urgent alert 2"],
-  "insights": "overall inventory health assessment"
+  "alerts": ["urgent alert strings"],
+  "insights": "overall inventory health assessment including AWD replenishment pipeline notes"
 }`;
 
       // Use unified AI helper that handles streaming
@@ -13968,6 +14030,17 @@ Respond with ONLY this JSON:
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const inventory = JSON.parse(jsonMatch[0]);
+        
+        // Override summary with pre-calculated values (authoritative)
+        inventory.summary = {
+          criticalCount: preCalcSummary.criticalCount,
+          reorderCount: preCalcSummary.reorderCount,
+          healthyCount: preCalcSummary.healthyCount,
+          overstockCount: preCalcSummary.overstockCount,
+          totalValue: preCalcSummary.totalValue,
+          totalSkus: preCalcSummary.totalSkus,
+        };
+        
         setAiForecastModule(prev => ({
           ...prev,
           inventory: { ...inventory, generatedAt: new Date().toISOString() },

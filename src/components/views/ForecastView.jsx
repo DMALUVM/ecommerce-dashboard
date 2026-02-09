@@ -651,7 +651,7 @@ const ForecastView = ({
                 {aiForecastModule.inventory ? (
                   <div className="space-y-4">
                     {/* Summary Cards */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                       <div className="bg-rose-900/30 rounded-xl p-4 border border-rose-500/30">
                         <p className="text-rose-400 text-sm">Critical</p>
                         <p className="text-3xl font-bold text-white">{aiForecastModule.inventory.summary?.criticalCount || 0}</p>
@@ -664,10 +664,14 @@ const ForecastView = ({
                         <p className="text-emerald-400 text-sm">Healthy</p>
                         <p className="text-3xl font-bold text-white">{aiForecastModule.inventory.summary?.healthyCount || 0}</p>
                       </div>
+                      <div className="bg-cyan-900/30 rounded-xl p-4 border border-cyan-500/30">
+                        <p className="text-cyan-400 text-sm">Overstock</p>
+                        <p className="text-3xl font-bold text-white">{aiForecastModule.inventory.summary?.overstockCount || 0}</p>
+                      </div>
                       <div className="bg-slate-800 rounded-xl p-4 border border-slate-600">
-                        <p className="text-slate-400 text-sm">Total Value (AI est.)</p>
+                        <p className="text-slate-400 text-sm">Inventory Value</p>
                         <p className="text-2xl font-bold text-white">{formatCurrency(aiForecastModule.inventory.summary?.totalValue || 0)}</p>
-                        <p className="text-slate-500 text-xs">See Inventory for precise</p>
+                        <p className="text-slate-500 text-xs">{aiForecastModule.inventory.summary?.totalSkus || 0} SKUs</p>
                       </div>
                     </div>
                     
@@ -709,11 +713,11 @@ const ForecastView = ({
                               </div>
                               <p className="text-slate-400 text-sm">{rec.action}</p>
                               <div className="flex flex-wrap gap-3 mt-2 text-xs">
-                                <span className="text-slate-500">Stock: {rec.currentStock}</span>
+                                <span className="text-slate-500">Stock: {(rec.currentStock || 0).toLocaleString()}</span>
                                 <span className="text-slate-500">Velocity: {rec.weeklyVelocity?.toFixed(1)}/wk</span>
                                 <span className="text-slate-500">DOS: {rec.daysOfSupply} days</span>
                                 <span className="text-slate-500">Lead: {rec.leadTimeDays} days</span>
-                                {rec.suggestedOrderQty && <span className="text-amber-400 font-medium">Order: {rec.suggestedOrderQty} units</span>}
+                                {rec.suggestedOrderQty > 0 && <span className="text-amber-400 font-medium">Order: {rec.suggestedOrderQty.toLocaleString()} units</span>}
                                 {rec.stockoutDate && <span className="text-rose-400">Stockout: {rec.stockoutDate}</span>}
                               </div>
                               {rec.pendingProduction && (
