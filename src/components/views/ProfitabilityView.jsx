@@ -260,47 +260,63 @@ const ProfitabilityView = ({
       });
     } else {
       // Single period
-      const data = getData(currentPeriodKey);
-      if (data) {
-        totals.revenue = data.total?.revenue || 0;
-        totals.cogs = data.total?.cogs || 0;
-        totals.amazonFees = data.amazon?.fees || 0;
-        // Get 3PL from data OR ledger
-        totals.threeplCosts = data.shopify?.threeplCosts || 0;
-        totals.adSpend = data.total?.adSpend || 0;
-        totals.profit = getProfit(data.total);
-        totals.units = data.total?.units || 0;
-        totals.returns = data.amazon?.returns || 0;
-        
-        // Add 3PL costs from ledger for weekly periods if not in weekly data
-        if (trendsTab === 'weekly' && currentPeriodKey) {
-          const ledgerThreepl = getWeek3PLCosts(currentPeriodKey);
-          // Use ledger data if it's higher (meaning we have ledger data)
-          if (ledgerThreepl > totals.threeplCosts) {
-            totals.threeplCosts = ledgerThreepl;
-          }
+      if (trendsTab === 'monthly' && currentPeriodKey) {
+        // Monthly: aggregate from DAILY data for accuracy (weekly boundaries cross months)
+        const monthMatch = currentPeriodKey.toLowerCase().match(/^(january|february|march|april|may|june|july|august|september|october|november|december)/);
+        const yearMatch = currentPeriodKey.match(/(20\d{2})/);
+        if (monthMatch && yearMatch) {
+          const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+          const monthIdx = monthNames.indexOf(monthMatch[1]);
+          const year = parseInt(yearMatch[1]);
+          const monthPrefix = `${year}-${String(monthIdx + 1).padStart(2, '0')}`;
+          
+          // Sum all days in this month
+          Object.entries(allDaysData).forEach(([dayKey, dayData]) => {
+            if (!dayKey.startsWith(monthPrefix) || !dayData) return;
+            const amazon = dayData.amazon || {};
+            const shopify = dayData.shopify || {};
+            totals.revenue += (amazon.revenue || 0) + (shopify.revenue || 0);
+            totals.units += (amazon.units || 0) + (shopify.units || 0);
+            totals.returns += amazon.returns || 0;
+            
+            // COGS
+            let aCogs = amazon.cogs || 0;
+            if (!aCogs && amazon.skuData) (Array.isArray(amazon.skuData) ? amazon.skuData : Object.values(amazon.skuData)).forEach(s => { aCogs += s.cogs || 0; });
+            let sCogs = shopify.cogs || 0;
+            if (!sCogs && shopify.skuData) (Array.isArray(shopify.skuData) ? shopify.skuData : Object.values(shopify.skuData)).forEach(s => { sCogs += s.cogs || 0; });
+            totals.cogs += aCogs + sCogs;
+            
+            totals.amazonFees += amazon.fees || 0;
+            totals.threeplCosts += shopify.threeplCosts || 0;
+            totals.adSpend += (amazon.adSpend || 0) + (shopify.metaSpend || shopify.metaAds || dayData.metaSpend || 0) + (shopify.googleSpend || shopify.googleAds || dayData.googleSpend || 0);
+            totals.profit += (amazon.netProfit || 0) + (shopify.netProfit || 0);
+          });
+          
+          // Also check 3PL ledger for the month
+          const monthWeeks = sortedWeeks.filter(w => {
+            const wDate = new Date(w + 'T00:00:00');
+            return wDate.getFullYear() === year && wDate.getMonth() === monthIdx;
+          });
+          let ledgerTotal = 0;
+          monthWeeks.forEach(w => { ledgerTotal += getWeek3PLCosts(w); });
+          if (ledgerTotal > totals.threeplCosts) totals.threeplCosts = ledgerTotal;
         }
-        
-        // For monthly periods, sum up weekly ledger data
-        if (trendsTab === 'monthly' && currentPeriodKey) {
-          // Find weeks that fall in this month
-          const monthMatch = currentPeriodKey.toLowerCase().match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/);
-          const yearMatch = currentPeriodKey.match(/(20\d{2})/);
-          if (monthMatch && yearMatch) {
-            const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-            const month = monthNames.indexOf(monthMatch[1]);
-            const year = parseInt(yearMatch[1]);
-            const monthWeeks = sortedWeeks.filter(w => {
-              const wDate = new Date(w + 'T00:00:00');
-              return wDate.getFullYear() === year && wDate.getMonth() === month;
-            });
-            let ledgerTotal = 0;
-            monthWeeks.forEach(w => {
-              ledgerTotal += getWeek3PLCosts(w);
-            });
-            if (ledgerTotal > totals.threeplCosts) {
-              totals.threeplCosts = ledgerTotal;
-            }
+      } else {
+        // Weekly / Quarterly - use existing getData path
+        const data = getData(currentPeriodKey);
+        if (data) {
+          totals.revenue = data.total?.revenue || 0;
+          totals.cogs = data.total?.cogs || 0;
+          totals.amazonFees = data.amazon?.fees || 0;
+          totals.threeplCosts = data.shopify?.threeplCosts || 0;
+          totals.adSpend = data.total?.adSpend || 0;
+          totals.profit = getProfit(data.total);
+          totals.units = data.total?.units || 0;
+          totals.returns = data.amazon?.returns || 0;
+          
+          if (trendsTab === 'weekly' && currentPeriodKey) {
+            const ledgerThreepl = getWeek3PLCosts(currentPeriodKey);
+            if (ledgerThreepl > totals.threeplCosts) totals.threeplCosts = ledgerThreepl;
           }
         }
       }
@@ -350,6 +366,59 @@ const ProfitabilityView = ({
     }
     
     const weeklyBreakdown = [];
+    
+    // Populate breakdown rows based on view type
+    if (trendsTab === 'monthly' && currentPeriodKey) {
+      // Show weekly breakdown for the month
+      const monthMatch2 = currentPeriodKey.toLowerCase().match(/^(january|february|march|april|may|june|july|august|september|october|november|december)/);
+      const yearMatch2 = currentPeriodKey.match(/(20\d{2})/);
+      if (monthMatch2 && yearMatch2) {
+        const monthNames2 = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+        const monthIdx2 = monthNames2.indexOf(monthMatch2[1]);
+        const year2 = parseInt(yearMatch2[1]);
+        const monthWeeks2 = sortedWeeks.filter(w => {
+          const wDate = new Date(w + 'T00:00:00');
+          return wDate.getFullYear() === year2 && wDate.getMonth() === monthIdx2;
+        });
+        monthWeeks2.forEach(w => {
+          const data = getMergedWeekData(w);
+          if (!data) return;
+          const rev = data.total?.revenue || 0;
+          const profit = getProfit(data.total);
+          const ledgerThreepl = getWeek3PLCosts(w);
+          const threeplVal = Math.max(data.shopify?.threeplCosts || 0, ledgerThreepl);
+          weeklyBreakdown.push({
+            week: w,
+            revenue: rev,
+            cogs: data.total?.cogs || 0,
+            amazonFees: data.amazon?.fees || 0,
+            threeplCosts: threeplVal,
+            adSpend: data.total?.adSpend || 0,
+            profit: profit,
+            margin: rev > 0 ? (profit / rev) * 100 : 0,
+          });
+        });
+      }
+    } else if (trendsTab === 'yearly') {
+      // Show monthly breakdown for YTD
+      const ytdMonths = monthlyPeriods.filter(p => p.includes(String(new Date().getFullYear())));
+      ytdMonths.forEach(p => {
+        const data = getData(p);
+        if (!data) return;
+        const rev = data.total?.revenue || 0;
+        const profit = getProfit(data.total);
+        weeklyBreakdown.push({
+          week: p,
+          revenue: rev,
+          cogs: data.total?.cogs || 0,
+          amazonFees: data.amazon?.fees || 0,
+          threeplCosts: data.shopify?.threeplCosts || 0,
+          adSpend: data.total?.adSpend || 0,
+          profit: profit,
+          margin: rev > 0 ? (profit / rev) * 100 : 0,
+        });
+      });
+    }
     
     // Calculate percentages with safeguards
     // Cap percentages to reasonable values and handle bad data
@@ -876,7 +945,7 @@ const ProfitabilityView = ({
           
           {/* Weekly Breakdown Table */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">Weekly Breakdown</h3>
+            <h3 className="text-lg font-semibold text-white mb-4">{trendsTab === 'monthly' ? 'Weekly Breakdown' : trendsTab === 'yearly' ? 'Monthly Breakdown' : 'Period Breakdown'}</h3>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>

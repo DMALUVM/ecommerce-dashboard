@@ -480,28 +480,65 @@ const InventoryView = ({
   
   // Export inventory to Excel
   const [exportingXlsx, setExportingXlsx] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportSelectedSkus, setExportSelectedSkus] = useState(new Set()); // empty = all
+  const [exportColumns, setExportColumns] = useState({
+    product: true, sku: true, abc: true, amazon: true, threepl: true, totalUnits: true, value: true,
+    amzVelocity: true, shopVelocity: true, totalVelocity: true, daysOfSupply: true,
+    turnover: true, stockoutDate: true, orderBy: true, status: true,
+  });
+  const allExportColumns = [
+    { key: 'product', label: 'Product' },
+    { key: 'sku', label: 'SKU' },
+    { key: 'abc', label: 'ABC Class' },
+    { key: 'amazon', label: 'Amazon Qty' },
+    { key: 'threepl', label: '3PL Qty' },
+    { key: 'totalUnits', label: 'Total Units' },
+    { key: 'value', label: 'Value' },
+    { key: 'amzVelocity', label: 'AMZ Velocity' },
+    { key: 'shopVelocity', label: 'Shop Velocity' },
+    { key: 'totalVelocity', label: 'Total Velocity' },
+    { key: 'daysOfSupply', label: 'Days of Supply' },
+    { key: 'turnover', label: 'Turnover' },
+    { key: 'stockoutDate', label: 'Stockout Date' },
+    { key: 'orderBy', label: 'Order By' },
+    { key: 'status', label: 'Status' },
+  ];
+  
+  // Initialize export SKU selection when modal opens
+  const openExportModal = () => {
+    setExportSelectedSkus(new Set(items.map(i => i.sku)));
+    setShowExportModal(true);
+  };
+  
   const exportInventoryExcel = async () => {
     if (exportingXlsx || items.length === 0) return;
     setExportingXlsx(true);
     try {
       const XLSX = await loadXLSX();
-      const rows = items.map(item => ({
-        'Product': item.name || item.sku,
-        'SKU': item.sku,
-        'ABC': item.abcClass || '',
-        'Amazon': item.amazonQty || 0,
-        '3PL': item.threeplQty || 0,
-        'Total Units': item.totalQty || 0,
-        'Value': Math.round((item.totalValue || 0) * 100) / 100,
-        'AMZ Velocity': Math.round((item.amzWeeklyVel || 0) * 10) / 10,
-        'Shop Velocity': Math.round((item.shopWeeklyVel || 0) * 10) / 10,
-        'Total Velocity': Math.round((item.weeklyVel || 0) * 10) / 10,
-        'Days of Supply': item.daysOfSupply || 0,
-        'Turnover': Math.round((item.turnoverRate || 0) * 10) / 10,
-        'Stockout Date': item.stockoutDate || '',
-        'Order By': item.reorderByDate || '',
-        'Status': item.health || '',
-      }));
+      const exportItems = exportSelectedSkus.size > 0 
+        ? items.filter(item => exportSelectedSkus.has(item.sku))
+        : items;
+      const ec = exportColumns;
+      const rows = exportItems.map(item => {
+        const row = {};
+        if (ec.product) row['Product'] = item.name || item.sku;
+        if (ec.sku) row['SKU'] = item.sku;
+        if (ec.abc) row['ABC'] = item.abcClass || '';
+        if (ec.amazon) row['Amazon'] = item.amazonQty || 0;
+        if (ec.threepl) row['3PL'] = item.threeplQty || 0;
+        if (ec.totalUnits) row['Total Units'] = item.totalQty || 0;
+        if (ec.value) row['Value'] = Math.round((item.totalValue || 0) * 100) / 100;
+        if (ec.amzVelocity) row['AMZ Velocity'] = Math.round((item.amzWeeklyVel || 0) * 10) / 10;
+        if (ec.shopVelocity) row['Shop Velocity'] = Math.round((item.shopWeeklyVel || 0) * 10) / 10;
+        if (ec.totalVelocity) row['Total Velocity'] = Math.round((item.weeklyVel || 0) * 10) / 10;
+        if (ec.daysOfSupply) row['Days of Supply'] = item.daysOfSupply || 0;
+        if (ec.turnover) row['Turnover'] = Math.round((item.turnoverRate || 0) * 10) / 10;
+        if (ec.stockoutDate) row['Stockout Date'] = item.stockoutDate || '';
+        if (ec.orderBy) row['Order By'] = item.reorderByDate || '';
+        if (ec.status) row['Status'] = item.health || '';
+        return row;
+      });
       const ws = XLSX.utils.json_to_sheet(rows);
       // Set column widths
       ws['!cols'] = [
@@ -512,6 +549,7 @@ const InventoryView = ({
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
       XLSX.writeFile(wb, `inventory_${selectedInvDate || new Date().toISOString().split('T')[0]}.xlsx`);
+      setShowExportModal(false);
       if (setToast) setToast({ message: `Exported ${rows.length} products to Excel`, type: 'success' });
     } catch (err) {
       console.error('Excel export failed:', err);
@@ -859,9 +897,83 @@ const InventoryView = ({
     </div>
   ) : null;
   
+  // Export Modal
+  const ExportModalJSX = showExportModal ? (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setShowExportModal(false)}>
+      <div className="bg-slate-800 rounded-2xl border border-slate-600 w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="p-4 border-b border-slate-700 flex items-center justify-between">
+          <h3 className="text-lg font-bold text-white flex items-center gap-2"><Download className="w-5 h-5 text-cyan-400" />Export Inventory</h3>
+          <button onClick={() => setShowExportModal(false)} className="p-2 hover:bg-white/10 rounded-lg"><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Column Selection */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-semibold text-slate-300">Columns</h4>
+              <div className="flex gap-2">
+                <button onClick={() => setExportColumns(Object.fromEntries(allExportColumns.map(c => [c.key, true])))} className="text-xs text-cyan-400 hover:text-cyan-300">All</button>
+                <button onClick={() => setExportColumns(Object.fromEntries(allExportColumns.map(c => [c.key, false])))} className="text-xs text-slate-400 hover:text-slate-300">None</button>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-1">
+              {allExportColumns.map(col => (
+                <label key={col.key} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700/50 cursor-pointer">
+                  <input type="checkbox" checked={exportColumns[col.key] || false} onChange={e => setExportColumns(prev => ({ ...prev, [col.key]: e.target.checked }))} className="rounded bg-slate-700 border-slate-600 text-cyan-500" />
+                  <span className="text-sm text-slate-300">{col.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          
+          {/* SKU Selection */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-semibold text-slate-300">SKUs ({exportSelectedSkus.size} of {items.length})</h4>
+              <div className="flex gap-2">
+                <button onClick={() => setExportSelectedSkus(new Set(items.map(i => i.sku)))} className="text-xs text-cyan-400 hover:text-cyan-300">All</button>
+                <button onClick={() => setExportSelectedSkus(new Set())} className="text-xs text-slate-400 hover:text-slate-300">None</button>
+              </div>
+            </div>
+            <div className="max-h-52 overflow-y-auto border border-slate-700 rounded-lg">
+              {items.map(item => (
+                <label key={item.sku} className="flex items-center gap-3 px-3 py-2 hover:bg-slate-700/50 cursor-pointer border-b border-slate-700/50 last:border-0">
+                  <input type="checkbox" checked={exportSelectedSkus.has(item.sku)} onChange={e => {
+                    const next = new Set(exportSelectedSkus);
+                    e.target.checked ? next.add(item.sku) : next.delete(item.sku);
+                    setExportSelectedSkus(next);
+                  }} className="rounded bg-slate-700 border-slate-600 text-cyan-500" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-white truncate">{item.name || item.sku}</p>
+                    <p className="text-xs text-slate-500">{item.sku} • {item.totalQty || 0} units</p>
+                  </div>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${item.health === 'healthy' ? 'bg-emerald-900/50 text-emerald-400' : item.health === 'low' ? 'bg-amber-900/50 text-amber-400' : item.health === 'critical' ? 'bg-rose-900/50 text-rose-400' : 'bg-slate-700 text-slate-400'}`}>
+                    {item.health || '—'}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="p-4 border-t border-slate-700 bg-slate-800/50 flex items-center justify-between">
+          <p className="text-slate-400 text-sm">{exportSelectedSkus.size} SKUs × {Object.values(exportColumns).filter(Boolean).length} columns</p>
+          <div className="flex gap-2">
+            <button onClick={() => setShowExportModal(false)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white">Cancel</button>
+            <button 
+              onClick={exportInventoryExcel} 
+              disabled={exportingXlsx || exportSelectedSkus.size === 0 || !Object.values(exportColumns).some(Boolean)}
+              className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg text-white flex items-center gap-2"
+            >
+              <Download className="w-4 h-4" />{exportingXlsx ? 'Exporting...' : 'Export to Excel'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : null;
+  
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-      <div className="max-w-7xl mx-auto">{globalModals}
+      <div className="max-w-7xl mx-auto">{globalModals}{SkuSettingsModalJSX}{ExportModalJSX}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
           <div><h1 className="text-2xl lg:text-3xl font-bold text-white">📦 Inventory Management</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} • {items.length} active SKUs</p></div>
           <div className="flex gap-2">
@@ -1141,15 +1253,12 @@ const InventoryView = ({
                 Show zero stock
               </label>
               <button 
-                onClick={exportInventoryExcel} 
-                disabled={exportingXlsx || items.length === 0}
+                onClick={openExportModal} 
+                disabled={items.length === 0}
                 className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg text-white text-sm flex items-center gap-1"
                 title="Export to Excel"
               >
-                <Download className="w-4 h-4" />{exportingXlsx ? 'Exporting...' : 'Export'}
-              </button>
-              <button onClick={() => setShowSkuSettings(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-1">
-                <Settings className="w-4 h-4" />Settings
+                <Download className="w-4 h-4" />Export
               </button>
             </div>
           </div>
