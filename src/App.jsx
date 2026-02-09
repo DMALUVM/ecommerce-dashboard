@@ -11533,6 +11533,52 @@ const savePeriods = async (d) => {
       }
       
       // Check Packiyo - use /api/packiyo/sync endpoint
+      // But first, fetch fresh Amazon FBA inventory so snapshot updates use current numbers
+      let freshAmazonFbaData = null;
+      if (amazonCredentials.connected && amazonCredentials.refreshToken) {
+        try {
+          const fbaRes = await fetch('/api/amazon/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              syncType: 'fba',
+              refreshToken: amazonCredentials.refreshToken,
+              clientId: amazonCredentials.clientId,
+              clientSecret: amazonCredentials.clientSecret,
+              sellerId: amazonCredentials.sellerId,
+              marketplaceId: amazonCredentials.marketplaceId || 'ATVPDKIKX0DER',
+            }),
+          });
+          const fbaData = await fbaRes.json();
+          if (fbaData.success && fbaData.items) {
+            // Build lookup: normalized SKU -> { fulfillable, reserved, total, inbound }
+            freshAmazonFbaData = {};
+            const seenSkus = new Set();
+            fbaData.items.forEach(item => {
+              if (!item.sku) return;
+              const skuLower = item.sku.toLowerCase();
+              if (seenSkus.has(skuLower)) return;
+              seenSkus.add(skuLower);
+              const skuUpper = item.sku.toUpperCase();
+              const baseSku = skuUpper.replace(/SHOP$/, '');
+              const fulfillable = item.fbaFulfillable || item.fulfillable || item.available || 0;
+              const reserved = item.fbaReserved || item.reserved || 0;
+              const inbound = (item.fbaInbound || item.totalInbound || 0);
+              const total = fulfillable + reserved;
+              const entry = { fulfillable, reserved, inbound, total, asin: item.asin || '' };
+              // Store under multiple key variants for matching
+              [item.sku, skuLower, skuUpper, baseSku, baseSku.toLowerCase(), baseSku + 'SHOP', baseSku.toLowerCase() + 'shop'].forEach(k => {
+                if (!freshAmazonFbaData[k]) freshAmazonFbaData[k] = entry;
+              });
+            });
+            devWarn(`Auto-sync: Fetched fresh Amazon FBA inventory (${fbaData.items.length} SKUs, ${fbaData.summary?.totalUnits || 0} units)`);
+            results.push({ service: 'Amazon FBA Inventory', success: true, skus: fbaData.items.length });
+          }
+        } catch (err) {
+          devWarn('Amazon FBA inventory auto-sync error:', err.message);
+        }
+      }
+      
       if (appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected) {
         const packiyoStale = isServiceStale(packiyoCredentials.lastSync, threshold);
         
@@ -11752,7 +11798,12 @@ const savePeriods = async (d) => {
                       newTplTotal += newTplQty;
                       newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
                       
-                      const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
+                      // Use fresh Amazon FBA data if available, otherwise keep snapshot value
+                      const freshAmz = freshAmazonFbaData?.[item.sku] || freshAmazonFbaData?.[normalizedItemSku] || freshAmazonFbaData?.[(item.sku || '').toUpperCase()] || freshAmazonFbaData?.[(item.sku || '').toLowerCase()] || null;
+                      const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
+                      const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
+                      
+                      const newTotalQty = newAmazonQty + newTplQty + (item.homeQty || 0);
                       
                       // Get velocity with corrections
                       const velocityData = getAutoVelocity(item.sku);
@@ -11808,6 +11859,8 @@ const savePeriods = async (d) => {
                       
                       return {
                         ...item,
+                        amazonQty: newAmazonQty,
+                        amazonInbound: newAmazonInbound,
                         threeplQty: newTplQty,
                         threeplInbound: newTplInbound,
                         totalQty: newTotalQty,
@@ -11857,15 +11910,23 @@ const savePeriods = async (d) => {
                       ? Math.round((itemsWithVel.filter(i => i.totalQty > 0).length / itemsWithVel.length) * 1000) / 10 : 100;
                     const abcCounts = updatedItems.reduce((acc, i) => { acc[i.abcClass] = (acc[i.abcClass] || 0) + 1; return acc; }, {});
                     
+                    // Calculate fresh Amazon totals from updated items
+                    const newAmzTotal = updatedItems.reduce((s, i) => s + (i.amazonQty || 0), 0);
+                    const newAmzValue = updatedItems.reduce((s, i) => s + ((i.amazonQty || 0) * (i.cost || 0)), 0);
+                    const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
+                    
                     const updatedSnapshot = {
                       ...currentSnapshot,
                       items: updatedItems,
                       summary: {
                         ...currentSnapshot.summary,
+                        amazonUnits: newAmzTotal,
+                        amazonValue: newAmzValue,
+                        amazonInbound: newAmzInbound,
                         threeplUnits: newTplTotal,
                         threeplValue: newTplValue,
-                        totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + newTplTotal + (currentSnapshot.summary?.homeUnits || 0),
-                        totalValue: (currentSnapshot.summary?.amazonValue || 0) + newTplValue + (currentSnapshot.summary?.homeValue || 0),
+                        totalUnits: newAmzTotal + newTplTotal + (currentSnapshot.summary?.homeUnits || 0),
+                        totalValue: newAmzValue + newTplValue + (currentSnapshot.summary?.homeValue || 0),
                         skuCount: updatedItems.length,
                         // Recalculated supply chain KPIs
                         critical,
@@ -11881,8 +11942,10 @@ const savePeriods = async (d) => {
                       sources: {
                         ...currentSnapshot.sources,
                         threepl: 'packiyo-auto-sync',
+                        amazon: freshAmazonFbaData ? 'amazon-fba-auto-sync' : (currentSnapshot.sources?.amazon || 'unknown'),
                         packiyoConnected: true,
                         lastPackiyoSync: new Date().toISOString(),
+                        lastAmazonFbaSync: freshAmazonFbaData ? new Date().toISOString() : (currentSnapshot.sources?.lastAmazonFbaSync || null),
                       },
                     };
                     
@@ -11909,6 +11972,48 @@ const savePeriods = async (d) => {
       }
       
       // Refresh home inventory from Shopify (so home quantities stay current alongside 3PL sync)
+      // Also: if Packiyo didn't sync but we have fresh Amazon FBA data, update the snapshot anyway
+      if (freshAmazonFbaData && !results.some(r => r.service === 'Packiyo' && r.success)) {
+        try {
+          const targetDate = Object.keys(invHistory).sort().reverse()[0];
+          if (targetDate && invHistory[targetDate]) {
+            const currentSnapshot = invHistory[targetDate];
+            let newAmzTotal = 0, newAmzValue = 0, newAmzInbound = 0;
+            const updatedItems = currentSnapshot.items.map(item => {
+              const freshAmz = freshAmazonFbaData[item.sku] || freshAmazonFbaData[(item.sku || '').toUpperCase()] || freshAmazonFbaData[(item.sku || '').toLowerCase()] || null;
+              const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
+              const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
+              const newTotal = newAmazonQty + (item.threeplQty || 0) + (item.homeQty || 0);
+              const vel = item.correctedVel || item.weeklyVel || 0;
+              const newDos = vel > 0 ? Math.round((newTotal / vel) * 7) : (item.daysOfSupply || 999);
+              newAmzTotal += newAmazonQty;
+              newAmzValue += newAmazonQty * (item.cost || 0);
+              newAmzInbound += newAmazonInbound;
+              return { ...item, amazonQty: newAmazonQty, amazonInbound: newAmazonInbound, totalQty: newTotal, totalValue: newTotal * (item.cost || 0), daysOfSupply: newDos };
+            });
+            const updatedSnapshot = {
+              ...currentSnapshot,
+              items: updatedItems,
+              summary: {
+                ...currentSnapshot.summary,
+                amazonUnits: newAmzTotal,
+                amazonValue: newAmzValue,
+                amazonInbound: newAmzInbound,
+                totalUnits: newAmzTotal + (currentSnapshot.summary?.threeplUnits || 0) + (currentSnapshot.summary?.homeUnits || 0),
+                totalValue: newAmzValue + (currentSnapshot.summary?.threeplValue || 0) + (currentSnapshot.summary?.homeValue || 0),
+              },
+              sources: { ...currentSnapshot.sources, amazon: 'amazon-fba-auto-sync', lastAmazonFbaSync: new Date().toISOString() },
+            };
+            const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+            setInvHistory(updatedHistory);
+            saveInv(updatedHistory);
+            devWarn(`Auto-sync: Updated Amazon FBA inventory in snapshot (no Packiyo sync needed)`);
+          }
+        } catch (err) {
+          devWarn('Amazon-only snapshot update error:', err.message);
+        }
+      }
+      
       if (shopifyCredentials.connected && shopifyCredentials.clientSecret) {
         try {
           const res = await fetch('/api/shopify/sync', {
