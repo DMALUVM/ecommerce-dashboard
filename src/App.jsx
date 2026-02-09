@@ -11584,8 +11584,10 @@ const savePeriods = async (d) => {
         }
       }
       
+      console.log('[AutoSync] Packiyo check:', { enabled: appSettings.autoSync?.packiyo !== false, connected: packiyoCredentials.connected });
       if (appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected) {
         const packiyoStale = isServiceStale(packiyoCredentials.lastSync, threshold);
+        console.log('[AutoSync] Packiyo stale?', packiyoStale, '| force?', force);
         
         if (packiyoStale || force) {
           try {
@@ -11600,6 +11602,7 @@ const savePeriods = async (d) => {
               }),
             });
             const data = await res.json();
+            console.log('[AutoSync] Packiyo response:', { ok: res.ok, error: data.error, hasProducts: !!data.products, hasInventoryBySku: !!data.inventoryBySku, skuCount: data.summary?.skuCount });
             if (!data.error && res.ok) {
               if (data.products) {
                 setPackiyoInventoryData(data);
@@ -11772,6 +11775,8 @@ const savePeriods = async (d) => {
                     (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
                     Object.keys(invHistory).sort().reverse()[0];
                   
+                  console.log('[AutoSync] Snapshot update:', { todayStr, targetDate, hasFreshAmazon: !!freshAmazonFbaData, freshAmazonKeys: freshAmazonFbaData ? Object.keys(freshAmazonFbaData).length : 0, invHistoryDates: Object.keys(invHistory), selectedInvDate });
+                  
                   if (targetDate && invHistory[targetDate]) {
                     const currentSnapshot = invHistory[targetDate];
                     const packiyoData = data.inventoryBySku;
@@ -11807,6 +11812,7 @@ const savePeriods = async (d) => {
                       const freshAmz = freshAmazonFbaData?.[item.sku] || freshAmazonFbaData?.[normalizedItemSku] || freshAmazonFbaData?.[(item.sku || '').toUpperCase()] || freshAmazonFbaData?.[(item.sku || '').toLowerCase()] || null;
                       const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
                       const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
+                      if (matchedCount <= 3) console.log('[AutoSync] Item update:', { sku: item.sku, normalizedItemSku, oldAmzQty: item.amazonQty, freshAmzFound: !!freshAmz, newAmazonQty, freshAmzTotal: freshAmz?.total });
                       
                       const newTotalQty = newAmazonQty + newTplQty + (item.homeQty || 0);
                       
@@ -11958,6 +11964,7 @@ const savePeriods = async (d) => {
                     setInvHistory(updatedHistory);
                     setSelectedInvDate(targetDate);
                     saveInv(updatedHistory);
+                    console.log('[AutoSync] Snapshot saved:', { targetDate, amzUnits: updatedSnapshot.summary?.amazonUnits, tplUnits: updatedSnapshot.summary?.threeplUnits, totalUnits: updatedSnapshot.summary?.totalUnits });
                     
                   }
                 }
@@ -11978,6 +11985,7 @@ const savePeriods = async (d) => {
       
       // Refresh home inventory from Shopify (so home quantities stay current alongside 3PL sync)
       // Also: if Packiyo didn't sync but we have fresh Amazon FBA data, update the snapshot anyway
+      console.log('[AutoSync] Amazon-only fallback check:', { hasFreshData: !!freshAmazonFbaData, packiyoSynced: results.some(r => r.service === 'Packiyo' && r.success) });
       if (freshAmazonFbaData && !results.some(r => r.service === 'Packiyo' && r.success)) {
         try {
           const targetDate = Object.keys(invHistory).sort().reverse()[0];
