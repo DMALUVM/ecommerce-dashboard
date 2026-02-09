@@ -1571,7 +1571,7 @@ const handleLogout = async () => {
   setProductionPipeline([]);
   setThreeplLedger({ orders: {}, weeklyTotals: {} });
   setReturnRates({ overall: {}, bySku: {}, byMonth: {}, byWeek: {} });
-  setLeadTimeSettings({ defaultLeadTimeDays: 14, skuLeadTimes: {}, reorderBuffer: 7 });
+  setLeadTimeSettings({ defaultLeadTimeDays: 14, skuLeadTimes: {}, categoryLeadTimes: {}, reorderBuffer: 7 });
   
   // === Ads & Campaigns ===
   setAmazonCampaigns({ campaigns: [], lastUpdated: null, history: [] });
@@ -1927,6 +1927,7 @@ const handleLogout = async () => {
     const defaultSettings = { 
       defaultLeadTimeDays: 14, 
       skuLeadTimes: {}, 
+      categoryLeadTimes: {}, // { 'lip balm': 21, 'tallow balm': 28, 'deodorant': 14, 'soap': 30 }
       reorderBuffer: 7, 
       reorderTriggerDays: 60, 
       minOrderWeeks: 22,
@@ -1942,6 +1943,7 @@ const handleLogout = async () => {
     return {
       defaultLeadTimeDays: saved.defaultLeadTimeDays || 14,
       skuLeadTimes: saved.skuLeadTimes || {},
+      categoryLeadTimes: saved.categoryLeadTimes || {},
       reorderBuffer: saved.reorderBuffer || 7,
       reorderTriggerDays: saved.reorderTriggerDays || 60,
       minOrderWeeks: saved.minOrderWeeks || 22,
@@ -5120,7 +5122,7 @@ useEffect(() => {
             setThreeplLedger({ orders: {}, weeklyTotals: {} });
             setAmazonCampaigns({ campaigns: [], lastUpdated: null, history: [] });
             setReturnRates({ overall: {}, bySku: {}, byMonth: {}, byWeek: {} });
-            setLeadTimeSettings({ defaultLeadTimeDays: 14, skuLeadTimes: {}, reorderBuffer: 7 });
+            setLeadTimeSettings({ defaultLeadTimeDays: 14, skuLeadTimes: {}, categoryLeadTimes: {}, reorderBuffer: 7 });
             setBankingData({ transactions: [], accounts: {}, categories: {}, monthlySnapshots: {} });
             setConfirmedRecurring([]);
             // Also reset AI forecast states
@@ -7941,7 +7943,12 @@ const savePeriods = async (d) => {
       
       // Calculate stockout and reorder dates - simple math, no AI needed
       const today = new Date();
-      const leadTimeDays = leadTimeSettings.skuLeadTimes?.[sku] || leadTimeSettings.defaultLeadTimeDays || 14;
+      // Lead time priority: per-SKU > category match > default
+      const itemName = (a.name || t.name || h.name || savedProductNames[sku] || sku).toLowerCase();
+      const categoryLeadTime = Object.entries(leadTimeSettings.categoryLeadTimes || {}).find(([keyword]) => 
+        itemName.includes(keyword.toLowerCase())
+      )?.[1];
+      const leadTimeDays = leadTimeSettings.skuLeadTimes?.[sku] || categoryLeadTime || leadTimeSettings.defaultLeadTimeDays || 14;
       const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
       const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
       
@@ -11756,7 +11763,10 @@ const savePeriods = async (d) => {
                       const correctedVelForDOS = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
                       
                       const dos = correctedVelForDOS > 0 ? Math.round((newTotalQty / correctedVelForDOS) * 7) : 999;
-                      const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
+                      // Lead time: per-SKU > per-item (from snapshot) > category > default
+                      const itemNameLower = (item.name || savedProductNames[item.sku] || item.sku || '').toLowerCase();
+                      const catLeadMatch = Object.entries(leadTimeSettings.categoryLeadTimes || {}).find(([kw]) => itemNameLower.includes(kw.toLowerCase()));
+                      const leadTimeDays = item.leadTimeDays || catLeadMatch?.[1] || leadTimeSettings.defaultLeadTimeDays || 14;
                       
                       let stockoutDate = null;
                       let reorderByDate = null;
@@ -11948,7 +11958,9 @@ const savePeriods = async (d) => {
                   const vel = item.correctedVel || item.weeklyVel || 0;
                   const newDos = vel > 0 ? Math.round((newTotal / vel) * 7) : (item.daysOfSupply || 999);
                   // Recalculate health with updated DOS
-                  const itemLeadTime = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
+                  const homeItemName = (item.name || savedProductNames[item.sku] || item.sku || '').toLowerCase();
+                  const homeCatMatch = Object.entries(leadTimeSettings.categoryLeadTimes || {}).find(([kw]) => homeItemName.includes(kw.toLowerCase()));
+                  const itemLeadTime = item.leadTimeDays || homeCatMatch?.[1] || leadTimeSettings.defaultLeadTimeDays || 14;
                   const itemCritThreshold = Math.max(14, itemLeadTime);
                   const itemLowThreshold = Math.max(30, itemLeadTime + 14);
                   const itemOverstockThreshold = Math.max(90, (leadTimeSettings.minOrderWeeks || 22) * 7 + (leadTimeSettings.reorderTriggerDays || 60) + itemLeadTime);
@@ -13407,10 +13419,17 @@ Respond with ONLY this JSON (no markdown):
 
   // ============ MODULAR AI FORECAST SYSTEM ============
   
-  // Helper to get lead time for a SKU
+  // Helper to get lead time for a SKU (priority: per-SKU > category > default)
   const getLeadTime = useCallback((sku) => {
-    return leadTimeSettings.skuLeadTimes[sku] || leadTimeSettings.defaultLeadTimeDays;
-  }, [leadTimeSettings]);
+    if (leadTimeSettings.skuLeadTimes[sku]) return leadTimeSettings.skuLeadTimes[sku];
+    // Check category match by product name
+    const name = (savedProductNames[sku] || savedProductNames[(sku || '').toUpperCase()] || sku || '').toLowerCase();
+    const categoryMatch = Object.entries(leadTimeSettings.categoryLeadTimes || {}).find(([keyword]) => 
+      name.includes(keyword.toLowerCase())
+    );
+    if (categoryMatch) return categoryMatch[1];
+    return leadTimeSettings.defaultLeadTimeDays;
+  }, [leadTimeSettings, savedProductNames]);
   
   // 1. SALES FORECAST AI - Predict tomorrow, week, month, quarter
   const generateSalesForecastAI = useCallback(async (period = 'week') => {

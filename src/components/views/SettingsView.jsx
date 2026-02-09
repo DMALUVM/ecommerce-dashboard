@@ -429,7 +429,7 @@ const SettingsView = ({
                 <p className="text-slate-500 text-xs mt-1">Alert when Amazon inventory falls below this many days of supply</p>
               </div>
               <div>
-                <label className="block text-sm text-slate-400 mb-1">Production Lead Time (days)</label>
+                <label className="block text-sm text-slate-400 mb-1">Default Production Lead Time (days)</label>
                 <input 
                   type="number"
                   value={leadTimeSettings.defaultLeadTimeDays || 14}
@@ -437,7 +437,90 @@ const SettingsView = ({
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white"
                   min="1"
                 />
-                <p className="text-slate-500 text-xs mt-1">Time from placing order to receiving inventory</p>
+                <p className="text-slate-500 text-xs mt-1">Fallback for products not matching any category below</p>
+              </div>
+            </div>
+            
+            {/* Category Lead Times */}
+            <div className="mt-4 bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+              <label className="block text-sm font-medium text-slate-300 mb-3">Lead Time by Product Category</label>
+              <p className="text-slate-500 text-xs mb-3">Set lead times per product type — matched by keyword in product name. Per-SKU overrides (in Inventory → SKU Settings) take priority.</p>
+              <div className="space-y-2">
+                {Object.entries(leadTimeSettings.categoryLeadTimes || {}).map(([keyword, days]) => (
+                  <div key={keyword} className="flex items-center gap-2">
+                    <div className="flex-1 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm capitalize">{keyword}</div>
+                    <input 
+                      type="number"
+                      value={days}
+                      onChange={(e) => {
+                        const newDays = parseInt(e.target.value) || 14;
+                        setLeadTimeSettings(prev => ({
+                          ...prev,
+                          categoryLeadTimes: { ...prev.categoryLeadTimes, [keyword]: newDays }
+                        }));
+                      }}
+                      className="w-24 px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm text-center"
+                      min="1"
+                    />
+                    <span className="text-slate-500 text-xs w-10">days</span>
+                    <button
+                      onClick={() => {
+                        const updated = { ...leadTimeSettings.categoryLeadTimes };
+                        delete updated[keyword];
+                        setLeadTimeSettings(prev => ({ ...prev, categoryLeadTimes: updated }));
+                      }}
+                      className="p-2 text-rose-400 hover:bg-rose-900/30 rounded-lg"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+                
+                {/* Add new category */}
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-700/50">
+                  <select
+                    id="newCategoryLeadTime"
+                    className="flex-1 px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm"
+                    defaultValue=""
+                  >
+                    <option value="" disabled>Add category...</option>
+                    {['lip balm', 'tallow balm', 'deodorant', 'soap'].filter(c => 
+                      !Object.keys(leadTimeSettings.categoryLeadTimes || {}).some(k => k.toLowerCase() === c)
+                    ).map(c => (
+                      <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+                    ))}
+                    <option value="_custom">Custom keyword...</option>
+                  </select>
+                  <input 
+                    type="number"
+                    id="newCategoryLeadTimeDays"
+                    placeholder="Days"
+                    defaultValue={14}
+                    className="w-24 px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm text-center"
+                    min="1"
+                  />
+                  <button
+                    onClick={() => {
+                      const selectEl = document.getElementById('newCategoryLeadTime');
+                      const daysEl = document.getElementById('newCategoryLeadTimeDays');
+                      let keyword = selectEl?.value;
+                      if (!keyword) return;
+                      if (keyword === '_custom') {
+                        keyword = prompt('Enter product keyword (e.g. "sunscreen"):');
+                        if (!keyword) return;
+                      }
+                      const days = parseInt(daysEl?.value) || 14;
+                      setLeadTimeSettings(prev => ({
+                        ...prev,
+                        categoryLeadTimes: { ...prev.categoryLeadTimes, [keyword.toLowerCase()]: days }
+                      }));
+                      if (selectEl) selectEl.value = '';
+                    }}
+                    className="p-2 text-emerald-400 hover:bg-emerald-900/30 rounded-lg"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
