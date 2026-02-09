@@ -3,6 +3,11 @@ import {
   Activity, AlertCircle, AlertTriangle, BarChart3, Brain, Building, Check, ChevronLeft, ChevronRight, CreditCard, DollarSign, Edit, EyeOff, FileText, Filter, Flag, GitCompareArrows, HelpCircle, Key, Landmark, LineChart, Package, Plus, RefreshCw, Save, Settings, ShoppingBag, Target, TrendingDown, TrendingUp, Upload, User, Wallet, X
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
+
+const getProfit = (obj) => {
+  if (!obj) return 0;
+  return obj.netProfit ?? obj.profit ?? 0;
+};
 import { hasDailySalesData } from '../../utils/date';
 import { lsSet } from '../../utils/storage';
 import NavTabs from '../ui/NavTabs';
