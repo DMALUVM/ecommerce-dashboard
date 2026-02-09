@@ -14,12 +14,6 @@
 // - Sales velocity from FBA reports
 
 import crypto from 'crypto';
-import { gunzipSync } from 'zlib';
-
-// Allow up to 60s for report generation + download
-export const config = {
-  maxDuration: 60,
-};
 
 export default async function handler(req, res) {
   // CORS headers
@@ -290,13 +284,21 @@ export default async function handler(req, res) {
       let nextToken = null;
       
       do {
-        // AWD Inventory API endpoint
+        // AWD Inventory API endpoint - details=SHOW required for full quantity breakdown
         let endpoint = `/awd/2024-05-09/inventory`;
         const params = new URLSearchParams();
+        params.append('details', 'SHOW');
         if (nextToken) params.append('nextToken', nextToken);
-        if (params.toString()) endpoint += `?${params.toString()}`;
+        endpoint += `?${params.toString()}`;
 
+        console.log('AWD API request:', endpoint);
         const awdData = await spApiRequest(accessToken, endpoint);
+        console.log('AWD API response keys:', Object.keys(awdData), 'inventory count:', awdData.inventory?.length);
+        
+        // Log first item structure for debugging
+        if (awdData.inventory?.length > 0 && awdItems.length === 0) {
+          console.log('AWD first item structure:', JSON.stringify(awdData.inventory[0], null, 2));
+        }
         
         if (awdData.inventory) {
           awdItems.push(...awdData.inventory);
@@ -309,7 +311,9 @@ export default async function handler(req, res) {
         
       } while (nextToken);
 
-      // Process AWD inventory
+      console.log('AWD total items fetched:', awdItems.length);
+
+      // Process AWD inventory - handle multiple possible response formats
       const awdInventory = {};
       let awdTotalUnits = 0;
 
@@ -317,20 +321,61 @@ export default async function handler(req, res) {
         const sku = item.sku || item.sellerSku;
         if (!sku) return;
 
-        const onHand = item.totalInventory?.quantity || item.onHandQuantity || 0;
-        const inbound = item.inboundInventory?.quantity || 0;
+        // Try multiple field paths for on-hand quantity
+        const summary = item.inventorySummary || item.inventoryDetails || {};
+        const onHand = 
+          item.totalInventory?.quantity ||      // { totalInventory: { quantity: N } }
+          summary.totalQuantity?.quantity ||     // { inventorySummary: { totalQuantity: { quantity: N } } }
+          summary.totalQuantity ||              // { inventorySummary: { totalQuantity: N } }
+          summary.onHandQuantity?.quantity ||
+          summary.onHandQuantity ||
+          item.onHandQuantity ||
+          item.quantity ||
+          0;
         
-        awdTotalUnits += onHand;
+        // Try multiple field paths for inbound quantity
+        const inbound = 
+          item.totalInboundQuantity?.quantity || // { totalInboundQuantity: { quantity: N } }
+          item.totalInboundQuantity ||
+          item.inboundInventory?.quantity ||
+          summary.inboundQuantity?.quantity ||
+          summary.inboundQuantity ||
+          0;
+        
+        // Replenishment quantity (in transit from AWD to FBA)
+        const replenishment =
+          item.replenishmentQuantity?.quantity ||
+          item.replenishmentQuantity ||
+          summary.replenishmentQuantity?.quantity ||
+          summary.replenishmentQuantity ||
+          0;
+        
+        // Reserved quantity
+        const reserved =
+          summary.reservedQuantity?.quantity ||
+          summary.reservedQuantity ||
+          item.reservedQuantity?.quantity ||
+          item.reservedQuantity ||
+          0;
+        
+        const totalAwdQty = (typeof onHand === 'number' ? onHand : 0) + (typeof reserved === 'number' ? reserved : 0);
+        const totalInboundQty = (typeof inbound === 'number' ? inbound : 0);
+        const replenishmentQty = typeof replenishment === 'number' ? replenishment : 0;
+        
+        awdTotalUnits += totalAwdQty;
 
         awdInventory[sku] = {
           sku,
-          name: item.productName || sku,
-          awdQuantity: onHand,
-          awdInbound: inbound,
+          name: item.productName || item.name || sku,
+          awdQuantity: totalAwdQty,
+          awdInbound: totalInboundQty + replenishmentQty, // Both inbound-to-AWD and AWD-to-FBA transfers
+          awdReplenishment: replenishmentQty, // Specifically AWD→FBA transfers
           distributionCenterId: item.distributionCenterId || '',
           lastUpdated: new Date().toISOString(),
         };
       });
+
+      console.log('AWD processed:', Object.keys(awdInventory).length, 'SKUs,', awdTotalUnits, 'total units');
 
       // If this was 'all' sync, merge with FBA and return
       if (syncType === 'all') {
@@ -403,20 +448,26 @@ export default async function handler(req, res) {
       });
 
     } catch (err) {
-      // AWD might not be available for all sellers
-      console.error('AWD inventory sync error:', err);
+      // AWD might not be available - common reasons:
+      // 1. AWD role not assigned to app (requires re-authorization)
+      // 2. Seller not enrolled in AWD
+      // 3. Rate limiting
+      console.error('AWD inventory sync error:', err.message || err);
       
       if (syncType === 'all') {
-        // Return just FBA data if AWD fails
+        // Return FBA data with AWD error details for debugging
         const fbaInventory = req.fbaInventory || {};
         return res.status(200).json({
           success: true,
           syncType: 'fba',
           source: 'amazon-fba',
-          awdError: err.message,
+          awdError: err.message || 'AWD sync failed',
+          awdErrorDetails: 'AWD API call failed. Common fixes: 1) Add AWD role to your SP-API app in Developer Profile, 2) Re-authorize the app after adding the role, 3) Ensure seller is enrolled in AWD program.',
           summary: {
             totalSkus: Object.keys(fbaInventory).length,
             totalUnits: Object.values(fbaInventory).reduce((s, i) => s + (i.available || 0), 0),
+            awdSkus: 0,
+            awdUnits: 0,
           },
           items: Object.values(fbaInventory),
           inventoryBySku: fbaInventory,
@@ -554,223 +605,7 @@ export default async function handler(req, res) {
     }
   }
 
-  // ============ SALES DATA SYNC (from Orders API) ============
-  // Fetches recent FBA orders with per-SKU daily breakdowns for velocity calculation.
-  // This gives near-real-time sales data without waiting for SKU Economics reports.
-  // SKU Economics uploads override this data on the client (more accurate fee/profit data).
-  if (syncType === 'sales') {
-    const syncStartTime = Date.now();
-    try {
-      const daysBack = parseInt(req.body.daysBack) || 14;
-      const startDateISO = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
-      const endDateISO = new Date().toISOString();
-      
-      console.log(`Requesting Amazon sales report: ${startDateISO} to ${endDateISO}`);
-
-      // Step 1: Request a flat-file orders report (one row per line item, includes SKU + date)
-      const createReport = await spApiRequest(
-        accessToken,
-        '/reports/2021-06-30/reports',
-        'POST',
-        {
-          reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
-          marketplaceIds: [marketplaceId],
-          dataStartTime: startDateISO,
-          dataEndTime: endDateISO,
-        }
-      );
-      
-      const reportId = createReport.reportId;
-      console.log(`Report requested: ${reportId}`);
-
-      // Step 2: Poll for report completion (max ~50s for serverless safety)
-      let reportReady = false;
-      let reportDocId = null;
-      let pollCount = 0;
-      
-      while (Date.now() - syncStartTime < 50000 && pollCount < 12) {
-        await new Promise(r => setTimeout(r, pollCount < 3 ? 3000 : 5000));
-        pollCount++;
-        
-        const reportStatus = await spApiRequest(
-          accessToken,
-          `/reports/2021-06-30/reports/${reportId}`
-        );
-        
-        console.log(`Poll ${pollCount}: ${reportStatus.processingStatus}`);
-        
-        if (reportStatus.processingStatus === 'DONE') {
-          reportDocId = reportStatus.reportDocumentId;
-          reportReady = true;
-          break;
-        } else if (reportStatus.processingStatus === 'CANCELLED' || reportStatus.processingStatus === 'FATAL') {
-          throw new Error(`Report failed: ${reportStatus.processingStatus}`);
-        }
-        // IN_QUEUE or IN_PROGRESS — keep polling
-      }
-
-      if (!reportReady) {
-        // Report not ready yet — return reportId so client can retry
-        return res.status(200).json({
-          success: true,
-          syncType: 'sales',
-          source: 'amazon-report-pending',
-          reportId,
-          summary: { status: 'pending', message: 'Report still processing — will be available on next sync' },
-        });
-      }
-
-      // Step 3: Download the report document
-      const docMeta = await spApiRequest(
-        accessToken,
-        `/reports/2021-06-30/documents/${reportDocId}`
-      );
-      
-      const reportUrl = docMeta.url;
-      console.log(`Downloading report from: ${reportUrl.substring(0, 80)}...`);
-      
-      const reportResponse = await fetch(reportUrl);
-      if (!reportResponse.ok) {
-        throw new Error(`Failed to download report: ${reportResponse.status}`);
-      }
-      
-      // Handle compressed or plain text
-      let reportText;
-      const compressionAlgo = docMeta.compressionAlgorithm;
-      if (compressionAlgo === 'GZIP') {
-        const buffer = Buffer.from(await reportResponse.arrayBuffer());
-        reportText = gunzipSync(buffer).toString('utf-8');
-      } else {
-        reportText = await reportResponse.text();
-      }
-
-      // Step 4: Parse TSV into daily per-SKU data
-      const lines = reportText.split('\n');
-      const headers = lines[0]?.split('\t').map(h => h.trim().toLowerCase()) || [];
-      
-      // Find relevant column indices
-      const colMap = {};
-      headers.forEach((h, i) => {
-        if (h.includes('purchase-date') || h.includes('purchase date')) colMap.date = i;
-        if (h === 'sku') colMap.sku = i;
-        if (h === 'quantity') colMap.qty = i;
-        if (h.includes('item-price') || h === 'item-price') colMap.price = i;
-        if (h.includes('item-tax') || h === 'item-tax') colMap.tax = i;
-        if (h === 'asin') colMap.asin = i;
-        if (h.includes('product-name') || h === 'product-name') colMap.name = i;
-        if (h === 'order-status') colMap.status = i;
-      });
-      
-      console.log(`Report headers found: ${headers.length} columns, mapped: ${JSON.stringify(colMap)}`);
-
-      const dailyData = {};
-      const skuTotals = {};
-      let parsedRows = 0;
-      let skippedRows = 0;
-      
-      for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split('\t');
-        if (cols.length < 3) continue;
-        
-        // Skip cancelled orders
-        const status = colMap.status !== undefined ? cols[colMap.status]?.trim() : '';
-        if (status && status.toLowerCase() === 'cancelled') { skippedRows++; continue; }
-        
-        const rawDate = colMap.date !== undefined ? cols[colMap.date]?.trim() : '';
-        const sku = colMap.sku !== undefined ? cols[colMap.sku]?.trim() : '';
-        const qty = colMap.qty !== undefined ? parseInt(cols[colMap.qty]) || 0 : 0;
-        const price = colMap.price !== undefined ? parseFloat(cols[colMap.price]) || 0 : 0;
-        const asin = colMap.asin !== undefined ? cols[colMap.asin]?.trim() : '';
-        const name = colMap.name !== undefined ? cols[colMap.name]?.trim() : sku;
-        
-        if (!sku || !rawDate || qty <= 0) { skippedRows++; continue; }
-        
-        // Extract date (handle ISO datetime or plain date)
-        const orderDate = rawDate.split('T')[0];
-        if (!orderDate || orderDate.length !== 10) { skippedRows++; continue; }
-        
-        // Initialize daily bucket
-        if (!dailyData[orderDate]) {
-          dailyData[orderDate] = {
-            amazon: {
-              revenue: 0,
-              units: 0,
-              orders: 0,
-              returns: 0,
-              skuData: {},
-              source: 'api',
-            },
-          };
-        }
-        
-        dailyData[orderDate].amazon.revenue += price;
-        dailyData[orderDate].amazon.units += qty;
-        
-        // Per-SKU accumulation
-        if (!dailyData[orderDate].amazon.skuData[sku]) {
-          dailyData[orderDate].amazon.skuData[sku] = {
-            sku,
-            name,
-            asin,
-            unitsSold: 0,
-            revenue: 0,
-          };
-        }
-        dailyData[orderDate].amazon.skuData[sku].unitsSold += qty;
-        dailyData[orderDate].amazon.skuData[sku].revenue += price;
-        
-        // Running totals
-        if (!skuTotals[sku]) skuTotals[sku] = { sku, name, asin, unitsSold: 0, revenue: 0 };
-        skuTotals[sku].unitsSold += qty;
-        skuTotals[sku].revenue += price;
-        
-        parsedRows++;
-      }
-
-      // Convert skuData from objects to sorted arrays for client compatibility
-      // Count unique orders per day
-      Object.values(dailyData).forEach(day => {
-        if (day.amazon?.skuData) {
-          const skuArr = Object.values(day.amazon.skuData).sort((a, b) => b.unitsSold - a.unitsSold);
-          day.amazon.skuData = skuArr;
-          day.amazon.orders = skuArr.length; // Approximate (line items, not unique orders)
-        }
-        day.total = {
-          revenue: day.amazon?.revenue || 0,
-          units: day.amazon?.units || 0,
-        };
-      });
-
-      const totalUnits = Object.values(skuTotals).reduce((s, i) => s + i.unitsSold, 0);
-      const totalRevenue = Object.values(skuTotals).reduce((s, i) => s + i.revenue, 0);
-
-      console.log(`Sales report parsed: ${parsedRows} rows, ${skippedRows} skipped, ${totalUnits} units, ${Object.keys(dailyData).length} days, ${Date.now() - syncStartTime}ms`);
-
-      return res.status(200).json({
-        success: true,
-        syncType: 'sales',
-        source: 'amazon-report',
-        summary: {
-          totalRows: parsedRows,
-          skippedRows,
-          daysWithData: Object.keys(dailyData).length,
-          totalUnits,
-          totalRevenue: Math.round(totalRevenue * 100) / 100,
-          skuCount: Object.keys(skuTotals).length,
-          daysBack,
-          processingTimeMs: Date.now() - syncStartTime,
-        },
-        dailyData,
-        skuTotals: Object.values(skuTotals).sort((a, b) => b.unitsSold - a.unitsSold),
-      });
-
-    } catch (err) {
-      console.error('Sales sync error:', err);
-      return res.status(500).json({ error: `Sales sync failed: ${err.message}` });
-    }
-  }
-
   return res.status(400).json({ 
-    error: 'Invalid syncType. Use: test, fba, awd, inventory, all, ads, velocity, sales' 
+    error: 'Invalid syncType. Use: test, fba, awd, inventory, all, ads, velocity' 
   });
 }

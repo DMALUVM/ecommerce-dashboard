@@ -7600,17 +7600,26 @@ const savePeriods = async (d) => {
             amzInv[skuUpper] = itemData;
             
             // Track AWD separately
-            if (item.awdQuantity > 0) {
+            if ((item.awdQuantity || 0) > 0 || (item.awdInbound || 0) > 0 || (item.awdReplenishment || 0) > 0) {
               const awdCost = cogsLookup[item.sku] || cogsLookup[skuLower] || cogsLookup[skuUpper] || 0;
               awdData[skuUpper] = {
                 sku: skuUpper,
-                awdQuantity: item.awdQuantity,
+                awdQuantity: item.awdQuantity || 0,
                 awdInbound: item.awdInbound || 0,
+                awdReplenishment: item.awdReplenishment || 0,
               };
-              awdTotal += item.awdQuantity;
-              awdValue += item.awdQuantity * awdCost;
+              awdTotal += (item.awdQuantity || 0);
+              awdValue += (item.awdQuantity || 0) * awdCost;
             }
           });
+          
+          // Log AWD sync status
+          const awdSkuCount = Object.keys(awdData).length;
+          if (awdSkuCount > 0) {
+            devWarn(`AWD inventory synced: ${awdSkuCount} SKUs, ${awdTotal} units, $${awdValue.toFixed(2)} value`);
+          } else {
+            devWarn('AWD: No inventory returned from API. Check if AWD role is assigned to your SP-API app.');
+          }
           
           // Update Amazon last sync time
           setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
@@ -11566,7 +11575,14 @@ const savePeriods = async (d) => {
             }),
           });
           const fbaData = await fbaRes.json();
-          console.log('[AutoSync] Amazon FBA+AWD response:', { status: fbaRes.status, ok: fbaRes.ok, success: fbaData.success, itemCount: fbaData.items?.length, error: fbaData.error, summary: fbaData.summary });
+          console.log('[AutoSync] Amazon FBA+AWD response:', { status: fbaRes.status, ok: fbaRes.ok, success: fbaData.success, syncType: fbaData.syncType, itemCount: fbaData.items?.length, error: fbaData.error, awdError: fbaData.awdError, summary: fbaData.summary });
+          
+          // Surface AWD error to user
+          if (fbaData.awdError) {
+            console.warn('[AutoSync] AWD API failed:', fbaData.awdError, fbaData.awdErrorDetails || '');
+            setToast({ message: `⚠️ AWD inventory sync failed: ${fbaData.awdError}. FBA data synced OK. Check console for details.`, type: 'warning', duration: 8000 });
+          }
+          
           if (fbaData.success && fbaData.items) {
             // Build lookup: normalized SKU -> { fulfillable, reserved, total, inbound, awdQty, awdInbound }
             freshAmazonFbaData = {};
@@ -11590,7 +11606,30 @@ const savePeriods = async (d) => {
                 if (!freshAmazonFbaData[k]) freshAmazonFbaData[k] = entry;
               });
             });
-            console.log('[AutoSync] Amazon FBA+AWD inventory built:', { skuCount: seenSkus.size, sampleKeys: Object.keys(freshAmazonFbaData).slice(0, 6), sampleEntry: freshAmazonFbaData[Object.keys(freshAmazonFbaData)[0]] });
+            console.log('[AutoSync] Amazon FBA+AWD inventory built:', { skuCount: seenSkus.size, hasAwdData: fbaData.items.some(i => (i.awdQuantity || 0) > 0), awdSkus: fbaData.items.filter(i => (i.awdQuantity || 0) > 0).length, sampleKeys: Object.keys(freshAmazonFbaData).slice(0, 6), sampleEntry: freshAmazonFbaData[Object.keys(freshAmazonFbaData)[0]] });
+            
+            // If AWD API returned no data, preserve existing AWD quantities from current snapshot
+            const hasAnyAwdFromApi = fbaData.items.some(i => (i.awdQuantity || 0) > 0);
+            if (!hasAnyAwdFromApi) {
+              const latestKey = Object.keys(latestInvHistory).sort().reverse()[0];
+              if (latestKey && latestInvHistory[latestKey]?.items) {
+                let awdPreserved = 0;
+                latestInvHistory[latestKey].items.forEach(snapItem => {
+                  if ((snapItem.awdQty || 0) > 0) {
+                    const k = (snapItem.sku || '').toUpperCase();
+                    const baseSku = k.replace(/SHOP$/, '');
+                    [k, baseSku, baseSku + 'SHOP', k.toLowerCase(), baseSku.toLowerCase()].forEach(variant => {
+                      if (freshAmazonFbaData[variant]) {
+                        freshAmazonFbaData[variant] = { ...freshAmazonFbaData[variant], awdQty: snapItem.awdQty, awdInbound: snapItem.awdInbound || 0 };
+                      }
+                    });
+                    awdPreserved++;
+                  }
+                });
+                if (awdPreserved > 0) console.log(`[AutoSync] AWD API empty — preserved ${awdPreserved} AWD quantities from snapshot`);
+              }
+            }
+            
             results.push({ service: 'Amazon FBA Inventory', success: true, skus: fbaData.items.length });
           } else {
             console.log('[AutoSync] Amazon FBA+AWD: no items or not success', { success: fbaData.success, hasItems: !!fbaData.items, error: fbaData.error });
