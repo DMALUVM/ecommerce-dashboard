@@ -19,11 +19,11 @@ const AIChatPanel = ({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [aiMessages, aiLoading]);
-  
-  // Reset clear confirmation when chat closes
-  useEffect(() => {
-    if (!showAIChat) setConfirmingClear(false);
-  }, [showAIChat]);
+
+  const closeChat = () => {
+    setConfirmingClear(false);
+    setShowAIChat(false);
+  };
   
   // Helper to send a suggested question directly
   const sendSuggestion = (text) => {
@@ -37,8 +37,8 @@ const AIChatPanel = ({
 
   if (showAIChat) {
     return (
-      <div className="fixed bottom-4 right-4 z-50 w-96 max-w-[calc(100vw-2rem)]">
-        <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden">
+      <div className="fixed inset-x-2 top-[max(0.5rem,env(safe-area-inset-top))] bottom-[max(0.5rem,env(safe-area-inset-bottom))] sm:inset-auto sm:bottom-4 sm:right-4 sm:w-96 sm:max-w-[calc(100vw-2rem)] z-50">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden h-full sm:h-auto flex flex-col">
           <div className="bg-gradient-to-r from-violet-600 to-indigo-600 p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
@@ -76,13 +76,13 @@ const AIChatPanel = ({
                   </button>
                 )
               )}
-              <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
+              <button onClick={closeChat} className="p-2 hover:bg-white/20 rounded-lg text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
           </div>
           
-          <div className="h-80 overflow-y-auto p-4 space-y-4">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
             {aiMessages.length === 0 && (
               <div className="text-center text-slate-400 py-8">
                 <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
@@ -115,7 +115,7 @@ const AIChatPanel = ({
             <div ref={messagesEndRef} />
           </div>
           
-          <div className="p-4 border-t border-slate-700">
+          <div className="p-4 border-t border-slate-700 pb-[max(1rem,env(safe-area-inset-bottom))]">
             <div className="flex gap-2">
               <input
                 type="text"
@@ -138,12 +138,12 @@ const AIChatPanel = ({
   
   // Floating buttons when chat is closed
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-3">
-      <button onClick={() => generateReport('weekly')} className="w-14 h-14 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group">
+    <div className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-3 sm:right-4 z-50 flex flex-col gap-3">
+      <button onClick={() => generateReport('weekly')} className="w-14 h-14 sm:w-14 sm:h-14 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group">
         <FileText className="w-6 h-6 text-white" />
         <span className="absolute right-full mr-3 px-3 py-1 bg-slate-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">AI Reports</span>
       </button>
-      <button onClick={() => setShowAIChat(true)} className="w-14 h-14 bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group">
+      <button onClick={() => { setConfirmingClear(false); setShowAIChat(true); }} className="w-14 h-14 sm:w-14 sm:h-14 bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group">
         <MessageSquare className="w-6 h-6 text-white" />
         <span className="absolute right-full mr-3 px-3 py-1 bg-slate-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">Ask AI Assistant</span>
       </button>

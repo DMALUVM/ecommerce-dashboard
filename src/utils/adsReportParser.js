@@ -1030,7 +1030,12 @@ export const mergeTier2IntoIntelData = (existing, tier2Results) => {
  * Build a comprehensive AI prompt from ALL available ads data (Tier 1 + Tier 2).
  * This feeds the AI report generator with maximum context.
  */
-export const buildComprehensiveAdsPrompt = (adsIntelData, dailySalesSnippet, amazonCampaigns) => {
+export const buildComprehensiveAdsPrompt = (adsIntelData, dailySalesSnippet, amazonCampaigns, options = {}) => {
+  const clampLimit = (value, fallback) => (Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback);
+  const includeAllThreshold = clampLimit(options.includeAllThreshold, 25);
+  const maxRowsPerReport = clampLimit(options.maxRowsPerReport, 20);
+  const maxWasteRows = clampLimit(options.maxWasteRows, 12);
+  const maxCampaignRows = clampLimit(options.maxCampaignRows, 15);
   const sections = [];
   
   sections.push(`You are an expert Amazon & DTC advertising strategist performing a comprehensive audit of Tallowbourn's advertising across all platforms. Provide specific, actionable recommendations with exact numbers. Do NOT be generic — reference specific campaigns, keywords, ASINs, placements, and metrics.`);
@@ -1057,7 +1062,7 @@ export const buildComprehensiveAdsPrompt = (adsIntelData, dailySalesSnippet, ama
   if (amazonCampaigns?.campaigns?.length > 0) {
     const camps = amazonCampaigns.campaigns;
     const active = camps.filter(c => c.state === 'ENABLED');
-    sections.push(`\n## AMAZON CAMPAIGNS (SP-API)\n${camps.length} total campaigns (${active.length} enabled)\n${camps.slice(0, 20).map(c => `- ${c.name}: ${c.state} | Budget: $${c.budget || 0} | Spend: $${(c.spend || 0).toFixed(2)} | ROAS: ${(c.roas || 0).toFixed(2)}x`).join('\n')}`);
+    sections.push(`\n## AMAZON CAMPAIGNS (SP-API)\n${camps.length} total campaigns (${active.length} enabled)\n${camps.slice(0, maxCampaignRows).map(c => `- ${c.name}: ${c.state} | Budget: $${c.budget || 0} | Spend: $${(c.spend || 0).toFixed(2)} | ROAS: ${(c.roas || 0).toFixed(2)}x`).join('\n')}`);
   }
   
   // ── Tier 2: Deep analysis data ──
@@ -1076,7 +1081,7 @@ export const buildComprehensiveAdsPrompt = (adsIntelData, dailySalesSnippet, ama
         sections.push(`\n## ${platform.toUpperCase()}: ${label} (${rowCount} rows, uploaded ${reportData.meta?.uploadedAt?.slice(0,10) || 'unknown'})`);
         
         // Provide summary + top records based on report type
-        if (rowCount <= 50) {
+        if (rowCount <= includeAllThreshold) {
           // Small dataset — include all records
           sections.push(`Headers: ${reportData.headers.join(' | ')}`);
           records.forEach(r => {
@@ -1094,36 +1099,42 @@ export const buildComprehensiveAdsPrompt = (adsIntelData, dailySalesSnippet, ama
           
           if (spendKey) {
             const sorted = [...records].sort((a, b) => num(b[spendKey]) - num(a[spendKey]));
-            sections.push(`\nTop 30 by spend:`);
-            sorted.slice(0, 30).forEach(r => {
+            const topCount = Math.min(maxRowsPerReport, rowCount);
+            sections.push(`\nTop ${topCount} by spend:`);
+            sorted.slice(0, topCount).forEach(r => {
               const vals = reportData.headers.map(h => r[h] ?? '').join(' | ');
               sections.push(vals);
             });
             
             // Also include worst performers (high spend, low ROAS)
-            const roasKey = reportData.headers.find(h => /roas|return on/i.test(h));
             const salesKey = reportData.headers.find(h => /sales|revenue|conv.*value/i.test(h));
             
             if (salesKey) {
               const wasteful = sorted.filter(r => num(r[spendKey]) > 5 && num(r[salesKey]) === 0);
               if (wasteful.length > 0) {
                 sections.push(`\nWasteful (spend > $5, zero sales): ${wasteful.length} entries`);
-                wasteful.slice(0, 20).forEach(r => {
+                wasteful.slice(0, maxWasteRows).forEach(r => {
                   const vals = reportData.headers.map(h => r[h] ?? '').join(' | ');
                   sections.push(vals);
                 });
               }
             }
+            
+            if (rowCount > topCount) {
+              sections.push(`\n... and ${rowCount - topCount} more rows`);
+            }
           } else {
             // No spend column — just show first 30
-            sections.push(`\nFirst 30 records:`);
-            records.slice(0, 30).forEach(r => {
+            const topCount = Math.min(maxRowsPerReport, rowCount);
+            sections.push(`\nFirst ${topCount} records:`);
+            records.slice(0, topCount).forEach(r => {
               const vals = reportData.headers.map(h => r[h] ?? '').join(' | ');
               sections.push(vals);
             });
+            if (rowCount > topCount) {
+              sections.push(`\n... and ${rowCount - topCount} more rows`);
+            }
           }
-          
-          sections.push(`\n... and ${rowCount - 30} more rows`);
         }
       }
     }

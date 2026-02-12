@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:awd": "node scripts/awd-sanity-check.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.90.1",

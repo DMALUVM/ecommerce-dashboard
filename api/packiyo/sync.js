@@ -8,22 +8,39 @@
 // - Real-time inventory levels from Packiyo
 // - Separate from Shopify inventory (for home/office stock)
 // - Supports multiple warehouses if you have them
+import {
+  applyCors,
+  handlePreflight,
+  requireMethod,
+  enforceRateLimit,
+  enforceUserAuth,
+  getUserSecret,
+} from '../_lib/security.js';
 
 export default async function handler(req, res) {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (!applyCors(req, res)) return res.status(403).json({ error: 'Origin not allowed' });
+  if (handlePreflight(req, res)) return;
+  if (!requireMethod(req, res, 'POST')) return;
+  if (!enforceRateLimit(req, res, 'packiyo-sync', { max: 40, windowMs: 60_000 })) return;
 
-  const { apiKey, customerId, syncType, test } = req.body;
+  const authUser = await enforceUserAuth(req, res);
+  if (!authUser && res.writableEnded) return;
+
+  let { apiKey, customerId, syncType, test, baseUrl } = req.body || {};
+
+  if (!apiKey || !customerId) {
+    try {
+      const record = authUser?.id ? await getUserSecret(authUser.id, 'packiyo') : null;
+      const secret = record?.secret || null;
+      if (secret) {
+        apiKey = apiKey || secret.apiKey;
+        customerId = customerId || secret.customerId;
+        baseUrl = baseUrl || secret.baseUrl;
+      }
+    } catch {
+      // Ignore secret fetch failures and continue with request payload validation.
+    }
+  }
 
   // Validate required fields
   if (!apiKey) {
@@ -36,7 +53,7 @@ export default async function handler(req, res) {
 
   // Use tenant-specific URL if provided, otherwise default
   // Your tenant: excel3pl.packiyo.com
-  const baseUrl = req.body.baseUrl || 'https://excel3pl.packiyo.com/api/v1';
+  baseUrl = baseUrl || 'https://excel3pl.packiyo.com/api/v1';
   
   // Try different header combinations - Packiyo may require specific Accept format
   const headerVariants = [

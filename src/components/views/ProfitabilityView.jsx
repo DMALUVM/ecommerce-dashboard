@@ -106,8 +106,8 @@ const ProfitabilityView = ({
     
     // Categorize periods - flexible matching for various formats
     const monthlyPeriods = sortedPeriods.filter(p => {
-      if (/^(january|february|march|april|may|june|july|august|september|october|november|december)[\s\-]*['']?\d{2,4}$/i.test(p)) return true;
-      if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[\s\-]*['']?\d{2,4}$/i.test(p)) return true;
+      if (/^(january|february|march|april|may|june|july|august|september|october|november|december)[\s-]*['']?\d{2,4}$/i.test(p)) return true;
+      if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[\s-]*['']?\d{2,4}$/i.test(p)) return true;
       if (/^\d{4}-\d{2}$/.test(p)) return true;
       return false;
     }).sort((a, b) => {

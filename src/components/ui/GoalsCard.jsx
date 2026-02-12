@@ -2,6 +2,50 @@ import React from 'react';
 import { Target, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { formatCurrency } from '../../utils/format';
 
+const ProgressBar = ({ current, target, label, projected, trendDir, recentPeriodCount }) => {
+  if (!target || target <= 0) return null;
+
+  const pct = Math.min((current / target) * 100, 100);
+  const hit = current >= target;
+  const projectedPct = projected ? Math.min((projected / target) * 100, 150) : null;
+  const willHit = projected >= target;
+  const diff = current - target;
+  const projectedDiff = projected ? projected - target : null;
+
+  return (
+    <div className="mb-4">
+      <div className="flex justify-between text-sm mb-1">
+        <span className="text-slate-400">{label}</span>
+        <span className="text-white">{formatCurrency(current)} / {formatCurrency(target)}</span>
+      </div>
+      <div className="h-2.5 bg-slate-700 rounded-full overflow-hidden relative">
+        <div className={`h-full transition-all ${hit ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }} />
+        {projectedPct && (
+          <div
+            className={`absolute top-0 h-full w-1 ${willHit ? 'bg-emerald-300' : 'bg-rose-400'}`}
+            style={{ left: `${Math.min(projectedPct, 100)}%` }}
+            title={`Projected: ${formatCurrency(projected)}`}
+          />
+        )}
+      </div>
+      <div className="flex justify-between items-center mt-1">
+        <p className={`text-xs ${hit ? 'text-emerald-400' : 'text-amber-400'}`}>
+          {pct.toFixed(0)}% {hit ? '🎉' : ''}
+          <span className="text-slate-500 ml-1">
+            ({diff >= 0 ? '+' : ''}{formatCurrency(diff)})
+          </span>
+        </p>
+        {projected && recentPeriodCount >= 3 && (
+          <p className={`text-xs flex items-center gap-1 ${willHit ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {trendDir === 'up' ? <TrendingUp className="w-3 h-3" /> : trendDir === 'down' ? <TrendingDown className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
+            Trend: {willHit ? 'On track' : `${formatCurrency(Math.abs(projectedDiff))} short`}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const GoalsCard = ({ 
   weekRevenue = 0, 
   weekProfit = 0, 
@@ -48,49 +92,6 @@ const GoalsCard = ({
   const projectedMonthlyRevenue = revenueTrend.projected * 4;
   const projectedMonthlyProfit = profitTrend.projected * 4;
   
-  const ProgressBar = ({ current, target, label, projected, trendDir }) => {
-    if (!target || target <= 0) return null;
-    const pct = Math.min((current / target) * 100, 100);
-    const hit = current >= target;
-    const projectedPct = projected ? Math.min((projected / target) * 100, 150) : null;
-    const willHit = projected >= target;
-    const diff = current - target;
-    const projectedDiff = projected ? projected - target : null;
-    
-    return (
-      <div className="mb-4">
-        <div className="flex justify-between text-sm mb-1">
-          <span className="text-slate-400">{label}</span>
-          <span className="text-white">{formatCurrency(current)} / {formatCurrency(target)}</span>
-        </div>
-        <div className="h-2.5 bg-slate-700 rounded-full overflow-hidden relative">
-          <div className={`h-full transition-all ${hit ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }} />
-          {projectedPct && (
-            <div 
-              className={`absolute top-0 h-full w-1 ${willHit ? 'bg-emerald-300' : 'bg-rose-400'}`} 
-              style={{ left: `${Math.min(projectedPct, 100)}%` }}
-              title={`Projected: ${formatCurrency(projected)}`}
-            />
-          )}
-        </div>
-        <div className="flex justify-between items-center mt-1">
-          <p className={`text-xs ${hit ? 'text-emerald-400' : 'text-amber-400'}`}>
-            {pct.toFixed(0)}% {hit ? '🎉' : ''} 
-            <span className="text-slate-500 ml-1">
-              ({diff >= 0 ? '+' : ''}{formatCurrency(diff)})
-            </span>
-          </p>
-          {projected && recentWeeks.length >= 3 && (
-            <p className={`text-xs flex items-center gap-1 ${willHit ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {trendDir === 'up' ? <TrendingUp className="w-3 h-3" /> : trendDir === 'down' ? <TrendingDown className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
-              Trend: {willHit ? 'On track' : `${formatCurrency(Math.abs(projectedDiff))} short`}
-            </p>
-          )}
-        </div>
-      </div>
-    );
-  };
-  
   return (
     <div className="bg-gradient-to-br from-amber-900/20 to-slate-800/50 rounded-xl border border-amber-500/30 p-4 mb-6">
       <div className="flex items-center justify-between mb-3">
@@ -105,6 +106,7 @@ const GoalsCard = ({
             label="Weekly Revenue" 
             projected={revenueTrend.projected}
             trendDir={revenueTrend.trend}
+            recentPeriodCount={recentWeeks.length}
           />
         )}
         {goals.weeklyProfit > 0 && (
@@ -114,6 +116,7 @@ const GoalsCard = ({
             label="Weekly Profit" 
             projected={profitTrend.projected}
             trendDir={profitTrend.trend}
+            recentPeriodCount={recentWeeks.length}
           />
         )}
         {goals.monthlyRevenue > 0 && (
@@ -123,6 +126,7 @@ const GoalsCard = ({
             label={monthLabel ? `${monthLabel} Revenue` : 'Monthly Revenue'} 
             projected={projectedMonthlyRevenue}
             trendDir={revenueTrend.trend}
+            recentPeriodCount={recentWeeks.length}
           />
         )}
         {goals.monthlyProfit > 0 && (
@@ -132,6 +136,7 @@ const GoalsCard = ({
             label={monthLabel ? `${monthLabel} Profit` : 'Monthly Profit'} 
             projected={projectedMonthlyProfit}
             trendDir={profitTrend.trend}
+            recentPeriodCount={recentWeeks.length}
           />
         )}
       </div>

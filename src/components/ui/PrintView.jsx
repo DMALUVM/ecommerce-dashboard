@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { useState } from 'react';
 import { Printer, Download, X, FileText, Loader2 } from 'lucide-react';
 

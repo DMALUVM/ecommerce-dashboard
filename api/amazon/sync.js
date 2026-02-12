@@ -12,29 +12,29 @@
 // - AWD (Amazon Warehousing & Distribution) inventory
 // - Ads API for campaign performance data
 // - Sales velocity from FBA reports
-
-import crypto from 'crypto';
+import {
+  applyCors,
+  handlePreflight,
+  requireMethod,
+  enforceRateLimit,
+  enforceUserAuth,
+  getUserSecret,
+} from '../_lib/security.js';
 
 export default async function handler(req, res) {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (!applyCors(req, res)) return res.status(403).json({ error: 'Origin not allowed' });
+  if (handlePreflight(req, res)) return;
+  if (!requireMethod(req, res, 'POST')) return;
+  if (!enforceRateLimit(req, res, 'amazon-sync', { max: 30, windowMs: 60_000 })) return;
 
-  const { 
+  const authUser = await enforceUserAuth(req, res);
+  if (!authUser && res.writableEnded) return;
+
+  let { 
     // SP-API Credentials
     clientId,
     clientSecret, 
     refreshToken,
-    sellerId,
     marketplaceId = 'ATVPDKIKX0DER', // Default to US marketplace
     
     // Ads API Credentials (optional, separate from SP-API)
@@ -48,7 +48,31 @@ export default async function handler(req, res) {
     startDate,
     endDate,
     test
-  } = req.body;
+  } = req.body || {};
+
+  let storedSecret = null;
+  const loadStoredSecret = async () => {
+    if (storedSecret) return storedSecret;
+    if (!authUser?.id) return null;
+    try {
+      const record = await getUserSecret(authUser.id, 'amazon');
+      storedSecret = record?.secret || null;
+      return storedSecret;
+    } catch {
+      return null;
+    }
+  };
+
+  if (!clientId || !clientSecret || !refreshToken) {
+    const secret = await loadStoredSecret();
+    if (secret) {
+      clientId = clientId || secret.clientId;
+      clientSecret = clientSecret || secret.clientSecret;
+      refreshToken = refreshToken || secret.refreshToken;
+      marketplaceId = marketplaceId || secret.marketplaceId;
+      syncType = syncType || secret.syncType;
+    }
+  }
 
   // Validate required fields for SP-API
   if (!clientId || !clientSecret || !refreshToken) {
@@ -61,7 +85,6 @@ export default async function handler(req, res) {
   const getAccessToken = async (clientId, clientSecret, refreshToken) => {
     try {
       console.log('Attempting LWA token exchange...');
-      console.log('Client ID prefix:', clientId?.substring(0, 20) + '...');
       
       const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
         method: 'POST',
@@ -80,12 +103,14 @@ export default async function handler(req, res) {
       console.log('LWA response status:', tokenResponse.status);
       
       if (!tokenResponse.ok) {
-        console.error('LWA token error:', tokenResponse.status, responseText);
+        console.error('LWA token error:', tokenResponse.status);
         let errorDetail = responseText;
         try {
           const errorJson = JSON.parse(responseText);
           errorDetail = errorJson.error_description || errorJson.error || responseText;
-        } catch (e) {}
+        } catch {
+          // Keep raw response text when JSON parsing fails.
+        }
         throw new Error(`LWA authentication failed (${tokenResponse.status}): ${errorDetail}`);
       }
 
@@ -125,6 +150,13 @@ export default async function handler(req, res) {
     }
 
     return response.json();
+  };
+
+  const normalizeAmazonSkuKey = (sku) => (sku || '').trim().toUpperCase();
+  const toNumber = (value) => {
+    if (value === null || value === undefined || value === '') return 0;
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : 0;
   };
 
   // ============ TEST CONNECTION ============
@@ -205,27 +237,42 @@ export default async function handler(req, res) {
       let totalInbound = 0;
 
       inventoryItems.forEach(item => {
-        const sku = item.sellerSku;
-        if (!sku) return;
+        const rawSku = item.sellerSku;
+        const skuKey = normalizeAmazonSkuKey(rawSku);
+        if (!skuKey) return;
 
-        const fulfillable = item.inventoryDetails?.fulfillableQuantity || 0;
-        const inboundWorking = item.inventoryDetails?.inboundWorkingQuantity || 0;
-        const inboundShipped = item.inventoryDetails?.inboundShippedQuantity || 0;
-        const inboundReceiving = item.inventoryDetails?.inboundReceivingQuantity || 0;
-        const reserved = item.inventoryDetails?.reservedQuantity?.totalReservedQuantity || 0;
-        const unfulfillable = item.inventoryDetails?.unfulfillableQuantity?.totalUnfulfillableQuantity || 0;
+        const fulfillable = toNumber(item.inventoryDetails?.fulfillableQuantity);
+        const inboundWorking = toNumber(item.inventoryDetails?.inboundWorkingQuantity);
+        const inboundShipped = toNumber(item.inventoryDetails?.inboundShippedQuantity);
+        const inboundReceiving = toNumber(item.inventoryDetails?.inboundReceivingQuantity);
+        const reserved = toNumber(item.inventoryDetails?.reservedQuantity?.totalReservedQuantity);
+        const unfulfillable = toNumber(item.inventoryDetails?.unfulfillableQuantity?.totalUnfulfillableQuantity);
         
         const totalInboundQty = inboundWorking + inboundShipped + inboundReceiving;
         const available = fulfillable;
-        
+        const existing = fbaInventory[skuKey];
         totalUnits += available;
         totalInbound += totalInboundQty;
-
-        fbaInventory[sku] = {
-          sku,
+        
+        if (existing) {
+          // Defend against duplicate records (case variants / pagination anomalies).
+          existing.fulfillable += fulfillable;
+          existing.reserved += reserved;
+          existing.unfulfillable += unfulfillable;
+          existing.inboundWorking += inboundWorking;
+          existing.inboundShipped += inboundShipped;
+          existing.inboundReceiving += inboundReceiving;
+          existing.totalInbound += totalInboundQty;
+          existing.available += available;
+          existing.total += (available + reserved);
+          return;
+        }
+        
+        fbaInventory[skuKey] = {
+          sku: (rawSku || skuKey).trim(),
           asin: item.asin || '',
           fnsku: item.fnSku || '',
-          name: item.productName || sku,
+          name: item.productName || rawSku || skuKey,
           
           // FBA specific quantities
           fulfillable,
@@ -318,8 +365,9 @@ export default async function handler(req, res) {
       let awdTotalUnits = 0;
 
       awdItems.forEach(item => {
-        const sku = item.sku || item.sellerSku;
-        if (!sku) return;
+        const rawSku = item.sku || item.sellerSku;
+        const skuKey = normalizeAmazonSkuKey(rawSku);
+        if (!skuKey) return;
 
         // Try multiple field paths for on-hand quantity
         const summary = item.inventorySummary || item.inventoryDetails || {};
@@ -358,15 +406,22 @@ export default async function handler(req, res) {
           item.reservedQuantity ||
           0;
         
-        const totalAwdQty = (typeof onHand === 'number' ? onHand : 0) + (typeof reserved === 'number' ? reserved : 0);
-        const totalInboundQty = (typeof inbound === 'number' ? inbound : 0);
-        const replenishmentQty = typeof replenishment === 'number' ? replenishment : 0;
+        const totalAwdQty = toNumber(onHand) + toNumber(reserved);
+        const totalInboundQty = toNumber(inbound);
+        const replenishmentQty = toNumber(replenishment);
         
         awdTotalUnits += totalAwdQty;
+        const existing = awdInventory[skuKey];
+        if (existing) {
+          existing.awdQuantity += totalAwdQty;
+          existing.awdInbound += (totalInboundQty + replenishmentQty);
+          existing.awdReplenishment += replenishmentQty;
+          return;
+        }
 
-        awdInventory[sku] = {
-          sku,
-          name: item.productName || item.name || sku,
+        awdInventory[skuKey] = {
+          sku: (rawSku || skuKey).trim(),
+          name: item.productName || item.name || rawSku || skuKey,
           awdQuantity: totalAwdQty,
           awdInbound: totalInboundQty + replenishmentQty, // Both inbound-to-AWD and AWD-to-FBA transfers
           awdReplenishment: replenishmentQty, // Specifically AWD→FBA transfers
@@ -382,37 +437,42 @@ export default async function handler(req, res) {
         const fbaInventory = req.fbaInventory || {};
         
         // Merge FBA and AWD data
-        const allSkus = new Set([...Object.keys(fbaInventory), ...Object.keys(awdInventory)]);
+        const allSkus = new Set([
+          ...Object.keys(fbaInventory).map(normalizeAmazonSkuKey),
+          ...Object.keys(awdInventory).map(normalizeAmazonSkuKey),
+        ]);
         const mergedInventory = {};
         
-        allSkus.forEach(sku => {
-          const fba = fbaInventory[sku] || {};
-          const awd = awdInventory[sku] || {};
+        allSkus.forEach(skuKey => {
+          const fba = fbaInventory[skuKey] || {};
+          const awd = awdInventory[skuKey] || {};
+          const outputSku = fba.sku || awd.sku || skuKey;
           
-          mergedInventory[sku] = {
-            sku,
+          mergedInventory[skuKey] = {
+            sku: outputSku,
             asin: fba.asin || '',
             fnsku: fba.fnsku || '',
-            name: fba.name || awd.name || sku,
+            name: fba.name || awd.name || outputSku,
             
             // FBA quantities
-            fbaFulfillable: fba.fulfillable || 0,
-            fbaReserved: fba.reserved || 0,
-            fbaInbound: fba.totalInbound || 0,
-            fbaTotal: (fba.fulfillable || 0) + (fba.reserved || 0),
+            fbaFulfillable: toNumber(fba.fulfillable),
+            fbaReserved: toNumber(fba.reserved),
+            fbaInbound: toNumber(fba.totalInbound),
+            fbaTotal: toNumber(fba.fulfillable) + toNumber(fba.reserved),
             
             // AWD quantities
-            awdQuantity: awd.awdQuantity || 0,
-            awdInbound: awd.awdInbound || 0,
+            awdQuantity: toNumber(awd.awdQuantity),
+            awdInbound: toNumber(awd.awdInbound),
+            awdReplenishment: toNumber(awd.awdReplenishment),
             
             // Combined Amazon totals (FBA + AWD)
-            amazonTotal: (fba.fulfillable || 0) + (fba.reserved || 0) + (awd.awdQuantity || 0),
-            amazonInbound: (fba.totalInbound || 0) + (awd.awdInbound || 0),
+            amazonTotal: toNumber(fba.fulfillable) + toNumber(fba.reserved) + toNumber(awd.awdQuantity),
+            amazonInbound: toNumber(fba.totalInbound) + toNumber(awd.awdInbound),
             
             // For compatibility - these are ONLY Amazon quantities
             // 3PL and Shopify inventory should be merged client-side
-            available: fba.fulfillable || 0,
-            total: (fba.fulfillable || 0) + (fba.reserved || 0),
+            available: toNumber(fba.fulfillable),
+            total: toNumber(fba.fulfillable) + toNumber(fba.reserved),
           };
         });
 
@@ -481,10 +541,19 @@ export default async function handler(req, res) {
   // ============ ADS API SYNC ============
   // Requires separate Ads API credentials
   if (syncType === 'ads') {
-    if (!adsClientId || !adsClientSecret || !adsRefreshToken || !adsProfileId) {
-      return res.status(400).json({ 
-        error: 'Missing Ads API credentials. Required: adsClientId, adsClientSecret, adsRefreshToken, adsProfileId' 
-      });
+      if (!adsClientId || !adsClientSecret || !adsRefreshToken || !adsProfileId) {
+        const secret = await loadStoredSecret();
+        if (secret) {
+          adsClientId = adsClientId || secret.adsClientId;
+          adsClientSecret = adsClientSecret || secret.adsClientSecret;
+          adsRefreshToken = adsRefreshToken || secret.adsRefreshToken;
+          adsProfileId = adsProfileId || secret.adsProfileId;
+        }
+      }
+      if (!adsClientId || !adsClientSecret || !adsRefreshToken || !adsProfileId) {
+        return res.status(400).json({ 
+          error: 'Missing Ads API credentials. Required: adsClientId, adsClientSecret, adsRefreshToken, adsProfileId' 
+        });
     }
 
     try {

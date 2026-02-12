@@ -23,7 +23,7 @@ const Toast = ({ toast, setToast, showSaveConfirm }) => {
       
       return () => clearTimeout(timer);
     }
-  }, [toast]);
+  }, [toast, setToast]);
   
   const dismissToast = (id) => {
     queueRef.current = queueRef.current.filter(t => t.id !== id);
@@ -33,7 +33,7 @@ const Toast = ({ toast, setToast, showSaveConfirm }) => {
   
   if (showSaveConfirm) {
     return (
-      <div className="fixed bottom-4 right-4 bg-gradient-to-r from-emerald-600 to-green-600 text-white px-5 py-3 rounded-xl shadow-2xl shadow-emerald-500/30 flex items-center gap-3 z-50 animate-slide-in">
+      <div className="fixed left-3 right-3 sm:left-auto sm:right-4 bottom-[max(0.75rem,env(safe-area-inset-bottom))] bg-gradient-to-r from-emerald-600 to-green-600 text-white px-5 py-3 rounded-xl shadow-2xl shadow-emerald-500/30 flex items-center gap-3 z-50 animate-slide-in sm:w-auto">
         <div className="w-6 h-6 bg-white/20 rounded-full flex items-center justify-center">
           <Check className="w-4 h-4" />
         </div>
@@ -72,13 +72,13 @@ const Toast = ({ toast, setToast, showSaveConfirm }) => {
   };
   
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 items-end">
+    <div className="fixed left-3 right-3 sm:left-auto sm:right-4 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-50 flex flex-col gap-2 items-stretch sm:items-end">
       {toastQueue.map((t, idx) => {
         const { bg, shadow, Icon, iconBg } = config[t.type] || config.success;
         return (
           <div 
             key={t.id}
-            className={`px-4 py-3 rounded-xl shadow-2xl ${shadow} flex items-center gap-3 bg-gradient-to-r ${bg} text-white max-w-sm transition-all duration-200 animate-slide-in`}
+            className={`px-4 py-3 rounded-xl shadow-2xl ${shadow} flex items-center gap-3 bg-gradient-to-r ${bg} text-white w-full sm:max-w-sm sm:w-auto transition-all duration-200 animate-slide-in`}
             style={{ opacity: 1 - (toastQueue.length - 1 - idx) * 0.15 }}
           >
             <div className={`w-8 h-8 ${iconBg} rounded-lg flex items-center justify-center flex-shrink-0`}>

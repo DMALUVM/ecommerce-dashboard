@@ -1,25 +1,38 @@
 import React from 'react';
 import { FileText, X, ShoppingCart, ShoppingBag, Boxes, Truck, DollarSign } from 'lucide-react';
 
-const UploadHelpModal = ({ showUploadHelp, setShowUploadHelp }) => {
-  if (!showUploadHelp) return null;
-  
-  const HelpSection = ({ icon, title, steps, color = 'violet' }) => (
-    <div className={`bg-slate-900/50 rounded-xl p-4 border border-${color}-500/20`}>
-      <h4 className={`text-${color}-400 font-semibold mb-3 flex items-center gap-2`}>
+const COLOR_CLASS_MAP = {
+  violet: { border: 'border-violet-500/20', text: 'text-violet-400' },
+  orange: { border: 'border-orange-500/20', text: 'text-orange-400' },
+  blue: { border: 'border-blue-500/20', text: 'text-blue-400' },
+  emerald: { border: 'border-emerald-500/20', text: 'text-emerald-400' },
+  amber: { border: 'border-amber-500/20', text: 'text-amber-400' },
+  rose: { border: 'border-rose-500/20', text: 'text-rose-400' },
+};
+
+const HelpSection = ({ icon, title, steps, color = 'violet' }) => {
+  const colorClasses = COLOR_CLASS_MAP[color] || COLOR_CLASS_MAP.violet;
+
+  return (
+    <div className={`bg-slate-900/50 rounded-xl p-4 border ${colorClasses.border}`}>
+      <h4 className={`${colorClasses.text} font-semibold mb-3 flex items-center gap-2`}>
         {icon}
         {title}
       </h4>
       <ol className="space-y-2 text-sm text-slate-300">
         {steps.map((step, i) => (
           <li key={i} className="flex gap-2">
-            <span className={`text-${color}-400 font-medium`}>{i + 1}.</span>
+            <span className={`${colorClasses.text} font-medium`}>{i + 1}.</span>
             <span>{step}</span>
           </li>
         ))}
       </ol>
     </div>
   );
+};
+
+const UploadHelpModal = ({ showUploadHelp, setShowUploadHelp }) => {
+  if (!showUploadHelp) return null;
   
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">

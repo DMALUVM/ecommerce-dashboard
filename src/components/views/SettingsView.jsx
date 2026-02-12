@@ -26,13 +26,16 @@ const SettingsView = ({
   autoSyncStatus,
   bankingData,
   combinedData,
+  createStore,
   current,
+  deleteStore,
   exportAll,
   files,
   forecastCorrections,
   getCogsLookup,
   globalModals,
   goals,
+  handleLogout,
   importData,
   invHistory,
   invoices,
@@ -43,10 +46,13 @@ const SettingsView = ({
   navDropdown,
   notificationSettings,
   now,
+  normalizeSkuKey,
   packiyoCredentials,
   packiyoInventoryData,
   packiyoInventoryStatus,
   qboCredentials,
+  saveInv,
+  savePeriods,
   runAutoSync,
   savedCogs,
   savedProductNames,
@@ -86,6 +92,7 @@ const SettingsView = ({
   setShowAdsBulkUpload,
   setShowOnboarding,
   setShowPdfExport,
+  setShow3PLBulkUpload,
   setShowResetConfirm,
   setShowSaveConfirm,
   setStoreLogo,
@@ -102,6 +109,7 @@ const SettingsView = ({
   storeLogo,
   storeName,
   stores,
+  switchStore,
   theme,
   toast,
   setView,
@@ -155,6 +163,10 @@ const SettingsView = ({
       ...((localSettings || appSettings)?.modulesEnabled || {}),
     }
   };
+
+  const googleServiceAccountEmail =
+    import.meta.env.VITE_GOOGLE_SERVICE_ACCOUNT_EMAIL ||
+    'your-service-account@project.iam.gserviceaccount.com';
   
   const updateSetting = (path, value) => {
     setLocalSettings(prev => {
@@ -986,6 +998,20 @@ const SettingsView = ({
                       const shopifyVelocityLookup = {};
                       const velocityTrends = {}; // Track if velocity is accelerating/decelerating
                       const rawVelocityLookup = {}; // Store uncorrected velocity
+                      const storeVelocity = (lookup, sku, velocity) => {
+                        const skuLower = sku.toLowerCase();
+                        const skuUpper = sku.toUpperCase();
+                        const baseSku = sku.replace(/shop$/i, '').toUpperCase();
+                        const baseSkuLower = baseSku.toLowerCase();
+                        const withShop = baseSku + 'Shop';
+                        const withShopLower = withShop.toLowerCase();
+                        const withShopUpper = baseSku + 'SHOP';
+                        
+                        [sku, skuLower, skuUpper, baseSku, baseSkuLower, withShop, withShopLower, withShopUpper].forEach(key => {
+                          if (!lookup[key]) lookup[key] = 0;
+                          lookup[key] = Math.max(lookup[key], velocity); // Use max to avoid double-counting
+                        });
+                      };
                       
                       try {
                         
@@ -1007,22 +1033,6 @@ const SettingsView = ({
                           
                           // Temporary storage for weighted calculation
                           const skuDailyUnits = {}; // { sku: { shopify: [day1, day2...], amazon: [day1, day2...] } }
-                          
-                          // Helper to store velocity under multiple key variants
-                          const storeVelocity = (lookup, sku, velocity) => {
-                            const skuLower = sku.toLowerCase();
-                            const skuUpper = sku.toUpperCase();
-                            const baseSku = sku.replace(/shop$/i, '').toUpperCase();
-                            const baseSkuLower = baseSku.toLowerCase();
-                            const withShop = baseSku + 'Shop';
-                            const withShopLower = withShop.toLowerCase();
-                            const withShopUpper = baseSku + 'SHOP';
-                            
-                            [sku, skuLower, skuUpper, baseSku, baseSkuLower, withShop, withShopLower, withShopUpper].forEach(key => {
-                              if (!lookup[key]) lookup[key] = 0;
-                              lookup[key] = Math.max(lookup[key], velocity); // Use max to avoid double-counting
-                            });
-                          };
                           
                           // Collect daily units for each SKU
                           last28Days.forEach((date, dayIndex) => {
@@ -1120,14 +1130,6 @@ const SettingsView = ({
                             // Store raw (uncorrected) velocity
                             rawVelocityLookup[sku] = shopifyVel + amazonVel;
                           });
-                          
-                          
-                          // Show sample velocities with trends
-                          const shopifyOnlySamples = ['DDPE0032', 'DDPE0005', 'DDPE0027'];
-                          shopifyOnlySamples.forEach(sku => {
-                            const trend = velocityTrends[sku];
-                          });
-                        } else {
                         }
                         
                         // SUPPLEMENT: Use weekly data for slow-moving SKUs with 0 daily velocity
@@ -1284,8 +1286,6 @@ const SettingsView = ({
                           
                           if (packiyoItem) {
                             matchedCount++;
-                            if (matchedCount <= 3) {
-                            }
                           }
                           
                           newTplTotal += newTplQty;
@@ -1307,10 +1307,6 @@ const SettingsView = ({
                           
                           // Display RAW total velocity (AMZ + Shop), but use corrected for DOS
                           const weeklyVel = rawWeeklyVel; // Show raw in UI
-                          
-                          // Debug: Log velocity lookup for first few items
-                          if (matchedCount <= 5) {
-                          }
                           
                           // Use CORRECTED velocity for Days of Supply calculation
                           const dos = correctedVelForDOS > 0 ? Math.round((newTotalQty / correctedVelForDOS) * 7) : 999;
@@ -2586,7 +2582,7 @@ const SettingsView = ({
               <div className="bg-slate-900/50 rounded-xl p-4">
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-slate-300 text-sm font-medium mb-2">Client ID</label>
+                    <label className="block text-slate-300 text-sm font-medium mb-2">Client ID (optional)</label>
                     <input
                       type="text"
                       placeholder="Your QBO app Client ID"
@@ -2594,9 +2590,10 @@ const SettingsView = ({
                       onChange={(e) => setQboCredentials(p => ({ ...p, clientId: e.target.value }))}
                       className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
+                    <p className="text-slate-500 text-xs mt-1">If QBO credentials are set in Vercel environment variables, you can leave this blank.</p>
                   </div>
                   <div>
-                    <label className="block text-slate-300 text-sm font-medium mb-2">Client Secret</label>
+                    <label className="block text-slate-300 text-sm font-medium mb-2">Client Secret (optional)</label>
                     <input
                       type="password"
                       placeholder="Your QBO app Client Secret"
@@ -2619,14 +2616,10 @@ const SettingsView = ({
                   
                   <button
                     onClick={async () => {
-                      if (!qboCredentials.clientId || !qboCredentials.clientSecret) {
-                        setToast({ message: 'Please enter Client ID and Client Secret', type: 'error' });
-                        return;
-                      }
-                      
                       setToast({ message: 'Initiating QuickBooks OAuth...', type: 'info' });
                       
                       try {
+                        sessionStorage.removeItem('qbo_oauth_state');
                         // Redirect to QBO OAuth
                         const res = await fetch('/api/qbo/auth', {
                           method: 'POST',
@@ -2641,8 +2634,14 @@ const SettingsView = ({
                         if (res.ok) {
                           const data = await res.json();
                           if (data.authUrl) {
+                            if (data.state) {
+                              sessionStorage.setItem('qbo_oauth_state', data.state);
+                            }
                             // Open OAuth window
-                            window.open(data.authUrl, 'qbo-oauth', 'width=600,height=700');
+                            const popup = window.open(data.authUrl, 'qbo-oauth', 'width=600,height=700');
+                            if (!popup) {
+                              throw new Error('Popup blocked by browser. Please allow popups and try again.');
+                            }
                           } else if (data.accessToken) {
                             // Direct token (for testing)
                             setQboCredentials(p => ({ 
@@ -2661,8 +2660,7 @@ const SettingsView = ({
                         setToast({ message: 'QuickBooks connection failed: ' + err.message, type: 'error' });
                       }
                     }}
-                    disabled={!qboCredentials.clientId || !qboCredentials.clientSecret}
-                    className="w-full px-4 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 rounded-xl text-white font-medium flex items-center justify-center gap-2"
+                    className="w-full px-4 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-xl text-white font-medium flex items-center justify-center gap-2"
                   >
                     <Landmark className="w-4 h-4" />Connect to QuickBooks
                   </button>
@@ -3122,7 +3120,7 @@ const SettingsView = ({
           <div className="bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400 space-y-1">
             <p><strong className="text-white">Setup:</strong></p>
             <p>1. Create a Google Sheet (or use an existing one)</p>
-            <p>2. Share it with: <strong className="text-cyan-300">{process.env?.GOOGLE_SERVICE_ACCOUNT_EMAIL || 'your-service-account@project.iam.gserviceaccount.com'}</strong> (Editor access)</p>
+            <p>2. Share it with: <strong className="text-cyan-300">{googleServiceAccountEmail}</strong> (Editor access)</p>
             <p>3. Copy the spreadsheet ID from the URL: docs.google.com/spreadsheets/d/<strong className="text-white">THIS_PART</strong>/edit</p>
             <p>4. Paste it above and click Push</p>
             <p className="mt-1 text-slate-500">Creates 3 tabs: P&L, Channels, Actions. Each push overwrites previous data.</p>

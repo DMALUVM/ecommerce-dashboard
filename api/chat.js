@@ -1,20 +1,35 @@
 // api/chat.js - Anthropic Claude API with streaming
 // Uses streaming to satisfy 25s first-byte requirement while using full 60s
+import {
+  applyCors,
+  handlePreflight,
+  requireMethod,
+  enforceRateLimit,
+  enforceUserAuth,
+} from './_lib/security.js';
 
 export const config = {
   maxDuration: 60,
 };
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (!applyCors(req, res)) return res.status(403).json({ error: 'Origin not allowed' });
+  if (handlePreflight(req, res)) return;
+  if (!requireMethod(req, res, 'POST')) return;
+  if (!enforceRateLimit(req, res, 'chat', { max: 45, windowMs: 60_000 })) return;
+
+  const authUser = await enforceUserAuth(req, res);
+  if (!authUser && res.writableEnded) return;
 
   try {
     const { system, messages, model = 'claude-sonnet-4-20250514', max_tokens = 4000 } = req.body || {};
+    const safeMaxTokens = Math.min(12000, Math.max(256, Number(max_tokens) || 4000));
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Messages array required' });
+    }
+    if (messages.length > 80) {
+      return res.status(400).json({ error: 'Too many messages. Reduce conversation history and retry.' });
     }
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -41,7 +56,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model,
-        max_tokens,
+        max_tokens: safeMaxTokens,
         messages,
         stream: true,
         ...(system && { system }),
@@ -78,8 +93,8 @@ export default async function handler(req, res) {
               fullText += parsed.delta.text;
               res.write(`data: ${JSON.stringify({ type: 'delta', text: parsed.delta.text })}\n\n`);
             }
-          } catch (e) {
-            // Skip parse errors
+          } catch {
+            // Skip partial chunk parse errors during streaming.
           }
         }
       }

@@ -639,6 +639,52 @@ const safeLocalStorageSet = (key, value) => {
   }
 };
 
+const safeLocalStorageRemove = (key) => {
+  const alwaysAllowedKeys = ['ecommerce_theme', 'ecommerce_settings_tab', 'ecomm_last_activity_v1'];
+  if (!shouldUseLocalStorage && !alwaysAllowedKeys.includes(key)) return;
+  try {
+    localStorage.removeItem(key);
+  } catch (e) {
+    devWarn(`Failed to remove localStorage key: ${key}`, e);
+  }
+};
+
+const redactShopifyCredentialsForCloud = (creds = {}) => ({
+  storeUrl: creds.storeUrl || '',
+  connected: !!creds.connected,
+  lastSync: creds.lastSync || null,
+  authMethod: creds.clientId ? 'oauth' : 'token',
+});
+
+const redactPackiyoCredentialsForCloud = (creds = {}) => ({
+  customerId: creds.customerId || '',
+  baseUrl: creds.baseUrl || '',
+  connected: !!creds.connected,
+  lastSync: creds.lastSync || null,
+  customerName: creds.customerName || '',
+});
+
+const redactAmazonCredentialsForCloud = (creds = {}) => ({
+  clientId: creds.clientId || '',
+  sellerId: creds.sellerId || '',
+  marketplaceId: creds.marketplaceId || 'ATVPDKIKX0DER',
+  connected: !!creds.connected,
+  lastSync: creds.lastSync || null,
+  adsClientId: creds.adsClientId || '',
+  adsProfileId: creds.adsProfileId || '',
+  adsConnected: !!creds.adsConnected,
+  adsLastSync: creds.adsLastSync || null,
+});
+
+const redactQboCredentialsForCloud = (creds = {}) => ({
+  clientId: creds.clientId || '',
+  realmId: creds.realmId || '',
+  connected: !!creds.connected,
+  lastSync: creds.lastSync || null,
+  syncFrequency: creds.syncFrequency || 'daily',
+  autoSync: !!creds.autoSync,
+});
+
 // Normalize SKU keys for deduplication - strips trailing "Shop" suffix and uppercases
 const normalizeSkuKey = (sku) => (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
 
@@ -1456,6 +1502,8 @@ const [authMode, setAuthMode] = useState('sign_in'); // sign_in | sign_up
 const [authError, setAuthError] = useState('');
 const [cloudStatus, setCloudStatus] = useState('');
 const [isAuthReady, setIsAuthReady] = useState(false);
+const [secureSecretsLoaded, setSecureSecretsLoaded] = useState(false);
+const secureSecretSaveTimersRef = useRef({});
 const lastSavedRef = useRef(0);
 const saveTimerRef = useRef(null);
 const isLoadingDataRef = useRef(false);
@@ -1508,6 +1556,28 @@ const handleAuth = async (e) => {
     setAuthError(err?.message || 'Login failed');
   }
 };
+
+useEffect(() => {
+  if (typeof window === 'undefined') return;
+  const nativeFetch = window.fetch.bind(window);
+  const token = session?.access_token;
+
+  window.fetch = (input, init = {}) => {
+    const rawUrl = typeof input === 'string' ? input : (input?.url || '');
+    const isApiRoute = rawUrl.startsWith('/api/');
+    if (!isApiRoute || !token) return nativeFetch(input, init);
+
+    const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+    if (!headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    return nativeFetch(input, { ...init, headers });
+  };
+
+  return () => {
+    window.fetch = nativeFetch;
+  };
+}, [session?.access_token]);
 
 const handleLogout = async () => {
   if (!supabase) return;
@@ -2039,17 +2109,27 @@ const handleLogout = async () => {
   // Listen for QBO OAuth callback from popup window
   useEffect(() => {
     const handleQBOMessage = (event) => {
-      if (event.data?.type === 'QBO_AUTH_SUCCESS') {
-        setQboCredentials(prev => ({
-          ...prev,
-          accessToken: event.data.accessToken,
-          refreshToken: event.data.refreshToken,
-          realmId: event.data.realmId || prev.realmId,
-          connected: true,
-          lastSync: null,
-        }));
-        setToast({ message: 'Connected to QuickBooks Online!', type: 'success' });
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type !== 'QBO_AUTH_SUCCESS') return;
+
+      const expectedState = sessionStorage.getItem('qbo_oauth_state');
+      const returnedState = event.data?.state || '';
+      if (expectedState && returnedState !== expectedState) {
+        sessionStorage.removeItem('qbo_oauth_state');
+        setToast({ message: 'QuickBooks auth was rejected due to state mismatch. Please reconnect.', type: 'error' });
+        return;
       }
+
+      sessionStorage.removeItem('qbo_oauth_state');
+      setQboCredentials(prev => ({
+        ...prev,
+        accessToken: event.data.accessToken,
+        refreshToken: event.data.refreshToken,
+        realmId: event.data.realmId || prev.realmId,
+        connected: true,
+        lastSync: null,
+      }));
+      setToast({ message: 'Connected to QuickBooks Online!', type: 'success' });
     };
     
     window.addEventListener('message', handleQBOMessage);
@@ -2068,6 +2148,11 @@ const handleLogout = async () => {
     safeLocalStorageSet('ecommerce_notifications_v1', JSON.stringify(notificationSettings));
   }, [notificationSettings]);
 
+  const exportAllRef = useRef(exportAll);
+  exportAllRef.current = exportAll;
+  const importDataRef = useRef(importData);
+  importDataRef.current = importData;
+
   // Backup reminder - prompt when data exists but no backup in 7+ days
   useEffect(() => {
     const hasData = Object.keys(allWeeksData).length > 0 || Object.keys(allDaysData).length > 0;
@@ -2084,7 +2169,7 @@ const handleLogout = async () => {
             ? `Last backup was ${daysSinceBackup} days ago. Export a backup to protect your data.`
             : 'You haven\'t backed up your data yet. Export a backup from the header bar.',
           type: 'warning',
-          action: { label: 'Backup Now', onClick: exportAll }
+          action: { label: 'Backup Now', onClick: () => exportAllRef.current() }
         });
       }, 5000); // 5s delay so it doesn't flash on load
       return () => clearTimeout(timer);
@@ -3312,7 +3397,7 @@ allWeekKeys.forEach((weekKey) => {
       },
       lastUpdated: new Date().toISOString(),
     };
-  }, [allWeeksData]);
+  }, [allWeeksData, allDaysData]);
   
   // Auto-update return rates when weekly data changes
   useEffect(() => {
@@ -3339,7 +3424,7 @@ allWeekKeys.forEach((weekKey) => {
     if (invoices.length > 0 || localStorage.getItem(INVOICES_KEY)) {
       queueCloudSave({ ...combinedData, invoices });
     }
-  }, [invoices]);
+  }, [invoices, queueCloudSave, combinedData]);
   
   // Save notes to localStorage and cloud
   useEffect(() => {
@@ -3378,7 +3463,7 @@ allWeekKeys.forEach((weekKey) => {
     if (storeLogo) {
       safeLocalStorageSet('ecommerce_store_logo', storeLogo);
     } else {
-      localStorage.removeItem('ecommerce_store_logo');
+      safeLocalStorageRemove('ecommerce_store_logo');
     }
   }, [storeLogo]);
   
@@ -3412,7 +3497,23 @@ allWeekKeys.forEach((weekKey) => {
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  });
+  }, [
+    showStoreSelector,
+    showGoalsModal,
+    showCogsManager,
+    showProductCatalog,
+    showExportModal,
+    showInvoiceModal,
+    showForecast,
+    showBreakEven,
+    showUploadHelp,
+    showAdsIntelUpload,
+    showDtcIntelUpload,
+    showTaxStateConfig,
+    selectedTaxState,
+    viewingDayDetails,
+    navDropdown,
+  ]);
 
   // Request notification permission
   const requestNotifications = async () => {
@@ -4075,14 +4176,14 @@ const combinedData = useMemo(() => ({
   // Recurring expenses
   confirmedRecurring,
   // Shopify Integration credentials
-  shopifyCredentials,
+  shopifyCredentials: shouldUseLocalStorage ? shopifyCredentials : redactShopifyCredentialsForCloud(shopifyCredentials),
   // Packiyo 3PL Integration credentials
-  packiyoCredentials,
+  packiyoCredentials: shouldUseLocalStorage ? packiyoCredentials : redactPackiyoCredentialsForCloud(packiyoCredentials),
   // Amazon SP-API Integration credentials
-  amazonCredentials,
+  amazonCredentials: shouldUseLocalStorage ? amazonCredentials : redactAmazonCredentialsForCloud(amazonCredentials),
   // QuickBooks Online Integration credentials
-  qboCredentials,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, adsIntelData, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials, qboCredentials]);
+  qboCredentials: shouldUseLocalStorage ? qboCredentials : redactQboCredentialsForCloud(qboCredentials),
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, adsIntelData, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials, qboCredentials, actionItems, reportHistory]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -4287,7 +4388,7 @@ useEffect(() => {
     setAllWeeksData(updatedWeeks);
     save(updatedWeeks);
   }
-}, [threeplLedger]); // Only re-run when threeplLedger changes
+}, [threeplLedger, allWeeksData, save]); // Only re-run when threeplLedger changes
 
 const saveGoals = useCallback((newGoals) => {
   setGoals(newGoals);
@@ -4422,12 +4523,17 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
     .eq('user_id', session.user.id)
     .maybeSingle();
   
-  if (existingData?.data?.storeData) {
-    payload.data.storeData = {
-      ...existingData.data.storeData,
-      [activeStoreId || 'default']: cloudDataObj
+  if (existingData?.data) {
+    const existingRootData = existingData.data;
+    payload.data = {
+      ...existingRootData, // Preserve root-level encrypted/system keys (e.g., _secureSecrets)
+      stores: existingRootData.stores || stores,
+      activeStoreId: activeStoreId,
+      storeData: {
+        ...(existingRootData.storeData || {}),
+        [activeStoreId || 'default']: cloudDataObj,
+      },
     };
-    payload.data.stores = existingData.data.stores || stores;
   }
   
   const { error } = await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
@@ -4476,15 +4582,14 @@ useEffect(() => {
   try {
     if (storeName !== undefined) writeToLocal(STORE_KEY, storeName || '');
   } catch (e) { devError("[error]", e); }
-  queueCloudSave({ ...combinedData, storeName });
-}, [storeName]);
+}, [storeName, writeToLocal]);
 
 // Sync new features to cloud when they change
 useEffect(() => {
   if (!session?.user?.id || !supabase) return;
   if (isLoadingDataRef.current) return; // Don't sync during initial load
   queueCloudSave(combinedData);
-}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials, qboCredentials]);
+}, [session?.user?.id, combinedData, queueCloudSave]);
 
 // ── Process ads file uploads (Tier 1 daily KPIs + Tier 2 deep analysis) ──
 const processAdsUpload = useCallback(async (fileList) => {
@@ -4508,6 +4613,7 @@ const processAdsUpload = useCallback(async (fileList) => {
 
 // Persist Shopify credentials to localStorage for offline backup
 useEffect(() => {
+  if (!shouldUseLocalStorage) return;
   if (shopifyCredentials.storeUrl || shopifyCredentials.connected) {
     try {
       lsSet('ecommerce_shopify_creds_v1', JSON.stringify(shopifyCredentials));
@@ -4517,6 +4623,7 @@ useEffect(() => {
 
 // Persist Packiyo credentials to localStorage for offline backup
 useEffect(() => {
+  if (!shouldUseLocalStorage) return;
   if (packiyoCredentials.apiKey || packiyoCredentials.connected) {
     try {
       lsSet('ecommerce_packiyo_creds_v1', JSON.stringify(packiyoCredentials));
@@ -4526,6 +4633,7 @@ useEffect(() => {
 
 // Persist Amazon credentials to localStorage for offline backup
 useEffect(() => {
+  if (!shouldUseLocalStorage) return;
   if (amazonCredentials.refreshToken || amazonCredentials.connected) {
     try {
       lsSet('ecommerce_amazon_creds_v1', JSON.stringify(amazonCredentials));
@@ -4535,12 +4643,242 @@ useEffect(() => {
 
 // Persist QBO credentials to localStorage for offline backup
 useEffect(() => {
+  if (!shouldUseLocalStorage) return;
   if (qboCredentials.accessToken || qboCredentials.connected || qboCredentials.clientId) {
     try {
       lsSet('ecommerce_qbo_creds_v1', JSON.stringify(qboCredentials));
     } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
 }, [qboCredentials]);
+
+const hasSecretValue = (provider, secretPayload = {}) => {
+  const secretKeys = {
+    shopify: ['accessToken', 'clientSecret'],
+    packiyo: ['apiKey'],
+    amazon: ['clientSecret', 'refreshToken', 'adsClientSecret', 'adsRefreshToken'],
+    qbo: ['clientSecret', 'accessToken', 'refreshToken'],
+  };
+  const keys = secretKeys[provider] || [];
+  return keys.some(k => String(secretPayload[k] || '').trim().length > 0);
+};
+
+const loadSecureSecrets = useCallback(async () => {
+  if (shouldUseLocalStorage || !session?.user?.id || !session?.access_token) return;
+  try {
+    const res = await fetch('/api/secrets/get', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ providers: ['shopify', 'packiyo', 'amazon', 'qbo'] }),
+    });
+    if (!res.ok) throw new Error(`Secure secret load failed (${res.status})`);
+    const json = await res.json();
+    const secrets = json?.secrets || {};
+
+    if (secrets.shopify?.secret || secrets.shopify?.metadata) {
+      const s = secrets.shopify?.secret || {};
+      const m = secrets.shopify?.metadata || {};
+      setShopifyCredentials(prev => ({
+        ...prev,
+        storeUrl: s.storeUrl || m.storeUrl || prev.storeUrl,
+        clientId: s.clientId || prev.clientId,
+        clientSecret: s.clientSecret || s.accessToken || prev.clientSecret,
+        connected: typeof m.connected === 'boolean' ? m.connected : prev.connected,
+        lastSync: m.lastSync || prev.lastSync,
+      }));
+    }
+    if (secrets.packiyo?.secret || secrets.packiyo?.metadata) {
+      const s = secrets.packiyo?.secret || {};
+      const m = secrets.packiyo?.metadata || {};
+      setPackiyoCredentials(prev => ({
+        ...prev,
+        apiKey: s.apiKey || prev.apiKey,
+        customerId: s.customerId || m.customerId || prev.customerId,
+        baseUrl: s.baseUrl || m.baseUrl || prev.baseUrl,
+        connected: typeof m.connected === 'boolean' ? m.connected : prev.connected,
+        lastSync: m.lastSync || prev.lastSync,
+        customerName: m.customerName || prev.customerName,
+      }));
+    }
+    if (secrets.amazon?.secret || secrets.amazon?.metadata) {
+      const s = secrets.amazon?.secret || {};
+      const m = secrets.amazon?.metadata || {};
+      setAmazonCredentials(prev => ({
+        ...prev,
+        clientId: s.clientId || prev.clientId,
+        clientSecret: s.clientSecret || prev.clientSecret,
+        refreshToken: s.refreshToken || prev.refreshToken,
+        sellerId: s.sellerId || prev.sellerId,
+        marketplaceId: s.marketplaceId || prev.marketplaceId,
+        connected: typeof m.connected === 'boolean' ? m.connected : prev.connected,
+        lastSync: m.lastSync || prev.lastSync,
+        adsClientId: s.adsClientId || prev.adsClientId,
+        adsClientSecret: s.adsClientSecret || prev.adsClientSecret,
+        adsRefreshToken: s.adsRefreshToken || prev.adsRefreshToken,
+        adsProfileId: s.adsProfileId || prev.adsProfileId,
+        adsConnected: typeof m.adsConnected === 'boolean' ? m.adsConnected : prev.adsConnected,
+        adsLastSync: m.adsLastSync || prev.adsLastSync,
+      }));
+    }
+    if (secrets.qbo?.secret || secrets.qbo?.metadata) {
+      const s = secrets.qbo?.secret || {};
+      const m = secrets.qbo?.metadata || {};
+      setQboCredentials(prev => ({
+        ...prev,
+        clientId: s.clientId || prev.clientId,
+        clientSecret: s.clientSecret || prev.clientSecret,
+        realmId: s.realmId || prev.realmId,
+        accessToken: s.accessToken || prev.accessToken,
+        refreshToken: s.refreshToken || prev.refreshToken,
+        connected: typeof m.connected === 'boolean' ? m.connected : prev.connected,
+        lastSync: m.lastSync || prev.lastSync,
+        syncFrequency: m.syncFrequency || prev.syncFrequency,
+        autoSync: typeof m.autoSync === 'boolean' ? m.autoSync : prev.autoSync,
+      }));
+    }
+  } catch (err) {
+    devWarn('Secure credential load failed:', err?.message || err);
+  } finally {
+    setSecureSecretsLoaded(true);
+  }
+}, [session?.user?.id, session?.access_token]);
+
+const queueSecureSecretSave = useCallback((provider, secretPayload, metadata, clearSensitiveFields) => {
+  if (shouldUseLocalStorage || !session?.user?.id || !session?.access_token) return;
+  if (!hasSecretValue(provider, secretPayload)) return;
+
+  if (secureSecretSaveTimersRef.current[provider]) {
+    clearTimeout(secureSecretSaveTimersRef.current[provider]);
+  }
+
+  secureSecretSaveTimersRef.current[provider] = setTimeout(async () => {
+    try {
+      const res = await fetch('/api/secrets/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ provider, secret: secretPayload, metadata }),
+      });
+      if (!res.ok) throw new Error(`Secure secret save failed (${res.status})`);
+      if (typeof clearSensitiveFields === 'function') clearSensitiveFields();
+    } catch (err) {
+      devWarn(`Secure credential save failed for ${provider}:`, err?.message || err);
+    }
+  }, 900);
+}, [session?.user?.id, session?.access_token]);
+
+useEffect(() => () => {
+  Object.values(secureSecretSaveTimersRef.current || {}).forEach(timer => clearTimeout(timer));
+  secureSecretSaveTimersRef.current = {};
+}, []);
+
+useEffect(() => {
+  if (shouldUseLocalStorage || !session?.user?.id || !session?.access_token) {
+    setSecureSecretsLoaded(false);
+    return;
+  }
+  loadSecureSecrets();
+}, [session?.user?.id, session?.access_token, loadSecureSecrets]);
+
+useEffect(() => {
+  if (!secureSecretsLoaded || shouldUseLocalStorage || !shopifyCredentials.connected) return;
+  queueSecureSecretSave(
+    'shopify',
+    {
+      storeUrl: shopifyCredentials.storeUrl,
+      clientId: shopifyCredentials.clientId,
+      clientSecret: shopifyCredentials.clientSecret,
+      accessToken: shopifyCredentials.clientSecret,
+    },
+    {
+      storeUrl: shopifyCredentials.storeUrl,
+      connected: !!shopifyCredentials.connected,
+      lastSync: shopifyCredentials.lastSync || null,
+    },
+    () => setShopifyCredentials(prev => ({ ...prev, clientSecret: '' }))
+  );
+}, [secureSecretsLoaded, shopifyCredentials.storeUrl, shopifyCredentials.clientId, shopifyCredentials.clientSecret, shopifyCredentials.connected, shopifyCredentials.lastSync, queueSecureSecretSave]);
+
+useEffect(() => {
+  if (!secureSecretsLoaded || shouldUseLocalStorage || !packiyoCredentials.connected) return;
+  queueSecureSecretSave(
+    'packiyo',
+    {
+      apiKey: packiyoCredentials.apiKey,
+      customerId: packiyoCredentials.customerId,
+      baseUrl: packiyoCredentials.baseUrl,
+    },
+    {
+      customerId: packiyoCredentials.customerId,
+      baseUrl: packiyoCredentials.baseUrl,
+      connected: !!packiyoCredentials.connected,
+      lastSync: packiyoCredentials.lastSync || null,
+      customerName: packiyoCredentials.customerName || '',
+    },
+    () => setPackiyoCredentials(prev => ({ ...prev, apiKey: '' }))
+  );
+}, [secureSecretsLoaded, packiyoCredentials.apiKey, packiyoCredentials.customerId, packiyoCredentials.baseUrl, packiyoCredentials.connected, packiyoCredentials.lastSync, packiyoCredentials.customerName, queueSecureSecretSave]);
+
+useEffect(() => {
+  if (!secureSecretsLoaded || shouldUseLocalStorage || !amazonCredentials.connected) return;
+  queueSecureSecretSave(
+    'amazon',
+    {
+      clientId: amazonCredentials.clientId,
+      clientSecret: amazonCredentials.clientSecret,
+      refreshToken: amazonCredentials.refreshToken,
+      sellerId: amazonCredentials.sellerId,
+      marketplaceId: amazonCredentials.marketplaceId,
+      adsClientId: amazonCredentials.adsClientId,
+      adsClientSecret: amazonCredentials.adsClientSecret,
+      adsRefreshToken: amazonCredentials.adsRefreshToken,
+      adsProfileId: amazonCredentials.adsProfileId,
+    },
+    {
+      connected: !!amazonCredentials.connected,
+      lastSync: amazonCredentials.lastSync || null,
+      adsConnected: !!amazonCredentials.adsConnected,
+      adsLastSync: amazonCredentials.adsLastSync || null,
+    },
+    () => setAmazonCredentials(prev => ({
+      ...prev,
+      clientSecret: '',
+      refreshToken: '',
+      adsClientSecret: '',
+      adsRefreshToken: '',
+    }))
+  );
+}, [secureSecretsLoaded, amazonCredentials.clientId, amazonCredentials.clientSecret, amazonCredentials.refreshToken, amazonCredentials.sellerId, amazonCredentials.marketplaceId, amazonCredentials.adsClientId, amazonCredentials.adsClientSecret, amazonCredentials.adsRefreshToken, amazonCredentials.adsProfileId, amazonCredentials.connected, amazonCredentials.lastSync, amazonCredentials.adsConnected, amazonCredentials.adsLastSync, queueSecureSecretSave]);
+
+useEffect(() => {
+  if (!secureSecretsLoaded || shouldUseLocalStorage || !qboCredentials.connected) return;
+  queueSecureSecretSave(
+    'qbo',
+    {
+      clientId: qboCredentials.clientId,
+      clientSecret: qboCredentials.clientSecret,
+      realmId: qboCredentials.realmId,
+      accessToken: qboCredentials.accessToken,
+      refreshToken: qboCredentials.refreshToken,
+    },
+    {
+      connected: !!qboCredentials.connected,
+      lastSync: qboCredentials.lastSync || null,
+      syncFrequency: qboCredentials.syncFrequency || 'daily',
+      autoSync: !!qboCredentials.autoSync,
+    },
+    () => setQboCredentials(prev => ({
+      ...prev,
+      clientSecret: '',
+      accessToken: '',
+      refreshToken: '',
+    }))
+  );
+}, [secureSecretsLoaded, qboCredentials.clientId, qboCredentials.clientSecret, qboCredentials.realmId, qboCredentials.accessToken, qboCredentials.refreshToken, qboCredentials.connected, qboCredentials.lastSync, qboCredentials.syncFrequency, qboCredentials.autoSync, queueSecureSecretSave]);
 
 const loadFromCloud = useCallback(async (storeId = null) => {
   if (!supabase || !session?.user?.id) return { ok: false, reason: 'no_session', stores: [] };
@@ -4657,10 +4995,53 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages) setAiMessages(cloud.aiMessages);
     if (cloud.bankingData) setBankingData(cloud.bankingData);
     if (cloud.confirmedRecurring) setConfirmedRecurring(cloud.confirmedRecurring);
-    if (cloud.shopifyCredentials) setShopifyCredentials(cloud.shopifyCredentials);
-    if (cloud.packiyoCredentials) setPackiyoCredentials(cloud.packiyoCredentials);
-    if (cloud.amazonCredentials) setAmazonCredentials(cloud.amazonCredentials);
-    if (cloud.qboCredentials) setQboCredentials(cloud.qboCredentials);
+    if (cloud.shopifyCredentials) {
+      if (shouldUseLocalStorage) setShopifyCredentials(cloud.shopifyCredentials);
+      else setShopifyCredentials(prev => ({
+        ...prev,
+        storeUrl: cloud.shopifyCredentials.storeUrl || prev.storeUrl,
+        connected: typeof cloud.shopifyCredentials.connected === 'boolean' ? cloud.shopifyCredentials.connected : prev.connected,
+        lastSync: cloud.shopifyCredentials.lastSync || prev.lastSync,
+      }));
+    }
+    if (cloud.packiyoCredentials) {
+      if (shouldUseLocalStorage) setPackiyoCredentials(cloud.packiyoCredentials);
+      else setPackiyoCredentials(prev => ({
+        ...prev,
+        customerId: cloud.packiyoCredentials.customerId || prev.customerId,
+        baseUrl: cloud.packiyoCredentials.baseUrl || prev.baseUrl,
+        connected: typeof cloud.packiyoCredentials.connected === 'boolean' ? cloud.packiyoCredentials.connected : prev.connected,
+        lastSync: cloud.packiyoCredentials.lastSync || prev.lastSync,
+        customerName: cloud.packiyoCredentials.customerName || prev.customerName,
+      }));
+    }
+    if (cloud.amazonCredentials) {
+      if (shouldUseLocalStorage) setAmazonCredentials(cloud.amazonCredentials);
+      else setAmazonCredentials(prev => ({
+        ...prev,
+        clientId: cloud.amazonCredentials.clientId || prev.clientId,
+        sellerId: cloud.amazonCredentials.sellerId || prev.sellerId,
+        marketplaceId: cloud.amazonCredentials.marketplaceId || prev.marketplaceId,
+        connected: typeof cloud.amazonCredentials.connected === 'boolean' ? cloud.amazonCredentials.connected : prev.connected,
+        lastSync: cloud.amazonCredentials.lastSync || prev.lastSync,
+        adsClientId: cloud.amazonCredentials.adsClientId || prev.adsClientId,
+        adsProfileId: cloud.amazonCredentials.adsProfileId || prev.adsProfileId,
+        adsConnected: typeof cloud.amazonCredentials.adsConnected === 'boolean' ? cloud.amazonCredentials.adsConnected : prev.adsConnected,
+        adsLastSync: cloud.amazonCredentials.adsLastSync || prev.adsLastSync,
+      }));
+    }
+    if (cloud.qboCredentials) {
+      if (shouldUseLocalStorage) setQboCredentials(cloud.qboCredentials);
+      else setQboCredentials(prev => ({
+        ...prev,
+        clientId: cloud.qboCredentials.clientId || prev.clientId,
+        realmId: cloud.qboCredentials.realmId || prev.realmId,
+        connected: typeof cloud.qboCredentials.connected === 'boolean' ? cloud.qboCredentials.connected : prev.connected,
+        lastSync: cloud.qboCredentials.lastSync || prev.lastSync,
+        syncFrequency: cloud.qboCredentials.syncFrequency || prev.syncFrequency,
+        autoSync: typeof cloud.qboCredentials.autoSync === 'boolean' ? cloud.qboCredentials.autoSync : prev.autoSync,
+      }));
+    }
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -4696,10 +5077,12 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages && cloud.aiMessages.length > 0) writeToLocal('ecommerce_ai_chat_history_v1', JSON.stringify(cloud.aiMessages));
     if (cloud.bankingData) writeToLocal('ecommerce_banking_v1', JSON.stringify(cloud.bankingData));
     if (cloud.confirmedRecurring) writeToLocal('ecommerce_recurring_v1', JSON.stringify(cloud.confirmedRecurring));
-    if (cloud.shopifyCredentials) writeToLocal('ecommerce_shopify_creds_v1', JSON.stringify(cloud.shopifyCredentials));
-    if (cloud.packiyoCredentials) writeToLocal('ecommerce_packiyo_creds_v1', JSON.stringify(cloud.packiyoCredentials));
-    if (cloud.amazonCredentials) writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify(cloud.amazonCredentials));
-    if (cloud.qboCredentials) writeToLocal('ecommerce_qbo_creds_v1', JSON.stringify(cloud.qboCredentials));
+    if (shouldUseLocalStorage) {
+      if (cloud.shopifyCredentials) writeToLocal('ecommerce_shopify_creds_v1', JSON.stringify(cloud.shopifyCredentials));
+      if (cloud.packiyoCredentials) writeToLocal('ecommerce_packiyo_creds_v1', JSON.stringify(cloud.packiyoCredentials));
+      if (cloud.amazonCredentials) writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify(cloud.amazonCredentials));
+      if (cloud.qboCredentials) writeToLocal('ecommerce_qbo_creds_v1', JSON.stringify(cloud.qboCredentials));
+    }
 
     setCloudStatus('');
     return { ok: true, reason: 'success', stores: loadedStores };
@@ -5043,7 +5426,7 @@ useEffect(() => {
     }
   }, 30000);
   return () => clearInterval(t);
-}, [session, supabase, isLocked]);
+}, [session, isLocked, LOCK_MS]);
 
 // Manual lock helper
 const lockNow = () => {
@@ -5203,25 +5586,25 @@ useEffect(() => {
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [session, isAuthReady]);
 
-const save = async (d) => {
+const save = useCallback(async (d) => {
   try {
     writeToLocal(STORAGE_KEY, JSON.stringify(d));
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, sales: d });
   } catch (e) { devError("[error]", e); }
-};
+}, [writeToLocal, queueCloudSave, combinedData]);
 
-const saveInv = async (d) => {
+const saveInv = useCallback(async (d) => {
   try {
     writeToLocal(INVENTORY_KEY, JSON.stringify(d));
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, inventory: d });
   } catch (e) { devError("[error]", e); }
-};
+}, [writeToLocal, queueCloudSave, combinedData]);
 
-const saveCogs = async (lookup) => {
+const saveCogs = useCallback(async (lookup) => {
   try {
     const updatedAt = new Date().toISOString();
     writeToLocal(COGS_KEY, JSON.stringify({ lookup, updatedAt }));
@@ -5231,7 +5614,7 @@ const saveCogs = async (lookup) => {
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, cogs: { lookup, updatedAt } });
   } catch (e) { devError("[error]", e); }
-};
+}, [writeToLocal, queueCloudSave, combinedData]);
 
 // Save generated report to history (called by report modals)
 const saveReportToHistory = useCallback((report) => {
@@ -5251,14 +5634,14 @@ const saveReportToHistory = useCallback((report) => {
   return entry;
 }, [reportHistory, combinedData, queueCloudSave]);
 
-const savePeriods = async (d) => {
+const savePeriods = useCallback(async (d) => {
   try {
     writeToLocal(PERIODS_KEY, JSON.stringify(d));
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
     queueCloudSave({ ...combinedData, periods: d });
   } catch (e) { devError("[error]", e); }
-};
+}, [writeToLocal, queueCloudSave, combinedData]);
 
   const handleFile = useCallback(async (type, file, isInv = false) => {
     if (!file) return;
@@ -5552,7 +5935,7 @@ const savePeriods = async (d) => {
       devError('Reprocess error:', err);
       setToast({ message: 'Error reprocessing: ' + err.message, type: 'error' });
     }
-  }, [reprocessFiles, reprocessAdSpend, allWeeksData, savedCogs]);
+  }, [reprocessFiles, reprocessAdSpend, allWeeksData, savedCogs, leadTimeSettings.storageCostAllocation, save]);
 
   const getCogsLookup = useCallback(() => {
     const lookup = { ...savedCogs };
@@ -5805,6 +6188,7 @@ const savePeriods = async (d) => {
   }, [weekEnding, savedCogs]);
 
   // Validation Modal Component (defined inline for access to state)
+  const processSalesCoreRef = useRef(null);
   const processSales = useCallback(() => {
     const cogsLookup = getCogsLookup();
     if (!weekEnding) { setToast({ message: 'Please select a week ending date', type: 'error' }); return; }
@@ -5824,13 +6208,13 @@ const savePeriods = async (d) => {
     
     if (allWarnings.length > 0) {
       setDataValidationWarnings(allWarnings);
-      setPendingProcessAction(() => processSalesCore);
+      setPendingProcessAction(() => processSalesCoreRef.current);
       setShowValidationModal(true);
       return;
     }
     
-    processSalesCore();
-  }, [files, adSpend, weekEnding, allWeeksData, getCogsLookup, validateUploadData]);
+    processSalesCoreRef.current?.();
+  }, [files, weekEnding, getCogsLookup, validateUploadData]);
   
   const processSalesCore = useCallback(() => {
     const cogsLookup = getCogsLookup();
@@ -5937,7 +6321,8 @@ const savePeriods = async (d) => {
     setAllWeeksData(updated); save(updated); setSelectedWeek(weekEnding); setView('weekly'); setIsProcessing(false);
     setFiles({ amazon: null, shopify: null, cogs: null, threepl: [] }); setFileNames({ amazon: '', shopify: '', cogs: '', threepl: [] }); setAdSpend({ meta: '', google: '' }); setWeekEnding('');
     audit('weekly_save', weekEnding); setToast({ message: 'Week data saved successfully!', type: 'success' });
-  }, [files, adSpend, weekEnding, allWeeksData, getCogsLookup, save]);
+  }, [files, adSpend, weekEnding, allWeeksData, getCogsLookup, save, leadTimeSettings.storageCostAllocation]);
+  processSalesCoreRef.current = processSalesCore;
 
   // Process daily upload
   const processDailyUpload = useCallback(async () => {
@@ -6486,7 +6871,7 @@ const savePeriods = async (d) => {
       setAllWeeksData(updatedWeeks);
       save(updatedWeeks);
     }
-  }, [allDaysData]); // Only depend on allDaysData to avoid loops
+  }, [allDaysData, save]); // Only depend on allDaysData to avoid loops
 
   // Auto-aggregate weekly data into monthly periods
   // This ensures period data is always up-to-date for AI queries
@@ -6665,7 +7050,7 @@ const savePeriods = async (d) => {
       setAllPeriodsData(updatedPeriods);
       try { safeLocalStorageSet('ecommerce_periods_v1', JSON.stringify(updatedPeriods)); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
     }
-  }, [allWeeksData]); // Only depend on allWeeksData to avoid loops
+  }, [allWeeksData, allPeriodsData]); // Only depend on allWeeksData to avoid loops
 
   const processBulkImport = useCallback(() => {
     const cogsLookup = getCogsLookup();
@@ -6769,7 +7154,7 @@ const savePeriods = async (d) => {
     setAllWeeksData(newWeeksData); save(newWeeksData);
     setBulkImportResult({ weeksCreated, dateRange: amazonWeeks.length > 0 ? `${amazonWeeks[0]} to ${amazonWeeks[amazonWeeks.length-1]}` : '' });
     setIsProcessing(false); setFiles({ amazon: null, shopify: null, cogs: null, threepl: null }); setFileNames({ amazon: '', shopify: '', cogs: '', threepl: '' });
-  }, [files, allWeeksData, getCogsLookup]);
+  }, [files, allWeeksData, getCogsLookup, save]);
 
   const processCustomPeriod = useCallback(() => {
     if (!customStartDate || !customEndDate) { setToast({ message: 'Select start and end dates', type: 'error' }); return; }
@@ -6800,6 +7185,7 @@ const savePeriods = async (d) => {
   }, [customStartDate, customEndDate, allWeeksData]);
 
   // Process a period (month/year) without weekly breakdown
+  const processPeriodCoreRef = useRef(null);
   const processPeriod = useCallback(() => {
     const cogsLookup = { ...savedCogs };
     if (!periodFiles.amazon || !periodFiles.shopify || !periodLabel.trim()) { setToast({ message: 'Upload Amazon & Shopify files and enter a label (e.g., "January 2025")', type: 'error' }); return; }
@@ -6812,13 +7198,13 @@ const savePeriods = async (d) => {
     
     if (allWarnings.length > 0) {
       setDataValidationWarnings(allWarnings);
-      setPendingProcessAction(() => processPeriodCore);
+      setPendingProcessAction(() => processPeriodCoreRef.current);
       setShowValidationModal(true);
       return;
     }
     
-    processPeriodCore();
-  }, [periodFiles, periodAdSpend, periodLabel, savedCogs, allPeriodsData, validateUploadData]);
+    processPeriodCoreRef.current?.();
+  }, [periodFiles, periodLabel, savedCogs, validateUploadData]);
   
   const processPeriodCore = useCallback(() => {
     const cogsLookup = { ...savedCogs };
@@ -6924,7 +7310,8 @@ const savePeriods = async (d) => {
     setAllPeriodsData(updated); savePeriods(updated); setSelectedPeriod(periodKey); setView('period-view'); setIsProcessing(false);
     setPeriodFiles({ amazon: null, shopify: null, threepl: [] }); setPeriodFileNames({ amazon: '', shopify: '', threepl: [] }); setPeriodAdSpend({ meta: '', google: '' }); setPeriodLabel('');
     audit('period_save', selectedPeriod); setToast({ message: 'Period data saved successfully!', type: 'success' });
-  }, [periodFiles, periodAdSpend, periodLabel, allPeriodsData, savedCogs, savePeriods]);
+  }, [periodFiles, periodAdSpend, periodLabel, allPeriodsData, savedCogs, savePeriods, leadTimeSettings.storageCostAllocation, selectedPeriod]);
+  processPeriodCoreRef.current = processPeriodCore;
 
   const deletePeriod = (k) => { 
     const data = allPeriodsData[k];
@@ -7138,7 +7525,7 @@ const savePeriods = async (d) => {
     // Weekly data covers ALL weeks - catches slow-moving products that may not sell in any 28-day window
     const useWeeklyAsPrimary = velocityDataSource !== 'direct-localStorage';
     let weeklyHasSkuEconomics = false; // Track if SKU Economics has been uploaded (set in weekly block)
-    if (true) { // Always run - supplement slow movers even if daily data exists
+    if (weeksCount >= 0) { // Always run - supplement slow movers even if daily data exists
     // SOURCE 1: Weekly sales data
     if (weeksCount > 0) {
       if (useWeeklyAsPrimary) velocityDataSource = 'weekly';
@@ -7152,17 +7539,6 @@ const savePeriods = async (d) => {
         const weekData = allWeeksData[w];
         
         // DEBUG: Log week structure in detail
-        
-        if (weekData.amazon?.skuData) {
-          const skuArr = Array.isArray(weekData.amazon.skuData) ? weekData.amazon.skuData : Object.values(weekData.amazon.skuData);
-          if (skuArr.length > 0) {
-          }
-        }
-        if (weekData.shopify?.skuData) {
-          const skuArr = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
-          if (skuArr.length > 0) {
-          }
-        }
         
         // Shopify SKU velocity - store in weekly accumulator
         if (weekData.shopify?.skuData) {
@@ -7532,6 +7908,12 @@ const savePeriods = async (d) => {
     // Store to ref so Packiyo sync can access it
     skuDemandStatsRef.current = skuDemandStats;
 
+    const toNum = (value) => {
+      if (value === null || value === undefined || value === '') return 0;
+      const parsed = typeof value === 'number' ? value : Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+
     // ===== AMAZON FBA/AWD INVENTORY - Use SP-API if connected, otherwise fall back to file upload =====
     const amzInv = {};
     let amzTotal = 0, amzValue = 0, amzInbound = 0;
@@ -7572,9 +7954,10 @@ const savePeriods = async (d) => {
             const skuUpper = sku.toUpperCase();
             
             // Use FBA quantities (AWD is separate distribution inventory)
-            const avail = item.fbaFulfillable || item.available || 0;
-            const reserved = item.fbaReserved || 0;
-            const inb = item.fbaInbound || item.amazonInbound || 0;
+            const avail = toNum(item.fbaFulfillable ?? item.fulfillable ?? item.available);
+            const reserved = toNum(item.fbaReserved ?? item.reserved);
+            // Never fall back to combined amazonInbound here; AWD inbound is tracked separately.
+            const inb = toNum(item.fbaInbound ?? item.totalInbound ?? item.inbound);
             const total = avail + reserved;
             
             const cost = cogsLookup[sku] || cogsLookup[skuLower] || cogsLookup[skuUpper] || 0;
@@ -7600,16 +7983,19 @@ const savePeriods = async (d) => {
             amzInv[skuUpper] = itemData;
             
             // Track AWD separately
-            if ((item.awdQuantity || 0) > 0 || (item.awdInbound || 0) > 0 || (item.awdReplenishment || 0) > 0) {
+            const itemAwdQty = toNum(item.awdQuantity);
+            const itemAwdInbound = toNum(item.awdInbound);
+            const itemAwdReplenishment = toNum(item.awdReplenishment);
+            if (itemAwdQty > 0 || itemAwdInbound > 0 || itemAwdReplenishment > 0) {
               const awdCost = cogsLookup[item.sku] || cogsLookup[skuLower] || cogsLookup[skuUpper] || 0;
               awdData[skuUpper] = {
                 sku: skuUpper,
-                awdQuantity: item.awdQuantity || 0,
-                awdInbound: item.awdInbound || 0,
-                awdReplenishment: item.awdReplenishment || 0,
+                awdQuantity: itemAwdQty,
+                awdInbound: itemAwdInbound,
+                awdReplenishment: itemAwdReplenishment,
               };
-              awdTotal += (item.awdQuantity || 0);
-              awdValue += (item.awdQuantity || 0) * awdCost;
+              awdTotal += itemAwdQty;
+              awdValue += itemAwdQty * awdCost;
             }
           });
           
@@ -7619,6 +8005,36 @@ const savePeriods = async (d) => {
             devWarn(`AWD inventory synced: ${awdSkuCount} SKUs, ${awdTotal} units, $${awdValue.toFixed(2)} value`);
           } else {
             devWarn('AWD: No inventory returned from API. Check if AWD role is assigned to your SP-API app.');
+          }
+
+          // Preserve prior AWD snapshot values if AWD failed/empty from API.
+          // This prevents false stockout noise when AWD role/auth intermittently fails.
+          const awdSyncFailed = Boolean(data.awdError) || data.syncType === 'fba';
+          if ((awdSyncFailed || awdSkuCount === 0) && Object.keys(invHistory || {}).length > 0) {
+            const latestSnapshotKey = Object.keys(invHistory).sort().reverse()[0];
+            const latestSnapshotItems = latestSnapshotKey ? (invHistory[latestSnapshotKey]?.items || []) : [];
+            let preservedAwdSkus = 0;
+            latestSnapshotItems.forEach(prevItem => {
+              const prevAwdQty = toNum(prevItem.awdQty);
+              if (prevAwdQty <= 0) return;
+              const normalizedPrevSku = normalizeSkuKey(prevItem.sku);
+              if (!normalizedPrevSku || awdData[normalizedPrevSku]) return;
+
+              const prevAwdInbound = toNum(prevItem.awdInbound);
+              const prevCost = prevItem.cost || cogsLookup[prevItem.sku] || cogsLookup[normalizedPrevSku] || 0;
+              awdData[normalizedPrevSku] = {
+                sku: normalizedPrevSku,
+                awdQuantity: prevAwdQty,
+                awdInbound: prevAwdInbound,
+                awdReplenishment: toNum(prevItem.awdReplenishment),
+              };
+              awdTotal += prevAwdQty;
+              awdValue += prevAwdQty * prevCost;
+              preservedAwdSkus++;
+            });
+            if (preservedAwdSkus > 0) {
+              devWarn(`AWD fallback: preserved ${preservedAwdSkus} SKU(s) from latest snapshot (${latestSnapshotKey})`);
+            }
           }
           
           // Update Amazon last sync time
@@ -7905,7 +8321,14 @@ const savePeriods = async (d) => {
       const aQty = a.total || 0;
       const tQty = t.total || 0;
       const hQty = h.total || 0;
-      const awdItem = awdData[sku] || awdData[skuLower] || awdData[sku.toUpperCase()] || {};
+      const normalizedSku = normalizeSkuKey(sku);
+      const awdItem =
+        awdData[sku] ||
+        awdData[skuLower] ||
+        awdData[sku.toUpperCase()] ||
+        awdData[normalizedSku] ||
+        awdData[normalizedSku.toLowerCase()] ||
+        {};
       const awdQty = awdItem.awdQuantity || 0;
       const aInbound = a.inbound || 0;
       const awdInb = awdItem.awdInbound || 0;
@@ -8191,6 +8614,8 @@ const savePeriods = async (d) => {
     
     // Build velocity source description
     let velNote = '';
+    const dailyDaysCount = Object.keys(legacyDailyData || {}).length;
+    const periodsCount = Object.keys(allPeriodsData || {}).length;
     if (velocityDataSource === 'none') {
       // Check if FBA inventory has t30 data
       const hasFbaT30 = Object.values(amzInv).some(item => item.amzWeeklyVel > 0);
@@ -8222,6 +8647,10 @@ const savePeriods = async (d) => {
       : '';
     
     const sourceNote = `Amazon: ${amzSource}${awdTotal > 0 ? ` (AWD: ${awdTotal} units)` : ''}, 3PL: ${tplSource}${homeSource !== 'none' ? `, Home: ${homeSource}` : ''}`;
+    const snapshotAmazonInbound = items.reduce((sum, item) => sum + (item.amazonInbound || 0), 0);
+    const snapshotAwdInbound = items.reduce((sum, item) => sum + (item.awdInbound || 0), 0);
+    const snapshotThreeplInbound = items.reduce((sum, item) => sum + (item.threeplInbound || 0), 0);
+    const snapshotTotalInbound = snapshotAmazonInbound + snapshotAwdInbound + snapshotThreeplInbound;
     
     const snapshot = {
       date: snapshotDate, 
@@ -8229,16 +8658,17 @@ const savePeriods = async (d) => {
       velocitySource: velNote + learningNote,
       inventorySources: sourceNote,
       summary: { 
-        totalUnits: amzTotal + tplTotal + homeTotal + awdTotal + amzInbound + tplInbound, 
+        totalUnits: amzTotal + tplTotal + homeTotal + awdTotal + snapshotTotalInbound, 
         totalValue: amzValue + tplValue + homeValue + awdValue, 
         amazonUnits: amzTotal, 
         amazonValue: amzValue, 
-        amazonInbound: amzInbound,
+        amazonInbound: snapshotAmazonInbound,
         awdUnits: awdTotal,
         awdValue: awdValue,
+        awdInbound: snapshotAwdInbound,
         threeplUnits: tplTotal, 
         threeplValue: tplValue, 
-        threeplInbound: tplInbound,
+        threeplInbound: snapshotThreeplInbound,
         homeUnits: homeTotal,
         homeValue: homeValue,
         critical, 
@@ -8288,7 +8718,7 @@ const savePeriods = async (d) => {
       message: `Inventory snapshot saved (3PL: ${tplSource}, ${items.length} SKUs)`, 
       type: 'success' 
     });
-  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, allPeriodsData, allDaysData, forecastCorrections, packiyoCredentials, shopifyCredentials, amazonCredentials, leadTimeSettings]);
+  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, allPeriodsData, allDaysData, forecastCorrections, packiyoCredentials, shopifyCredentials, amazonCredentials, leadTimeSettings, saveInv, savedProductNames]);
 
   const deleteWeek = (k) => { 
     const data = allWeeksData[k];
@@ -8397,7 +8827,7 @@ const savePeriods = async (d) => {
         roas: (week.amazon.adSpend + totalShopAds) > 0 ? week.total.revenue/(week.amazon.adSpend + totalShopAds) : 0 }
     };
     setAllWeeksData(updated); save(updated); setShowEditAdSpend(false);
-  }, [allWeeksData]);
+  }, [allWeeksData, save]);
 
   // Update 3PL costs for a week
   const updateWeek3PL = useCallback((weekKey, threeplCost) => {
@@ -8425,7 +8855,7 @@ const savePeriods = async (d) => {
     save(updated); 
     setShowEdit3PL(false);
     setToast({ message: '3PL costs updated', type: 'success' });
-  }, [allWeeksData]);
+  }, [allWeeksData, save]);
 
   // Parse Amazon Campaign CSV (aggregate campaign data)
   const parseAmazonCampaignCSV = useCallback((content) => {
@@ -8490,7 +8920,7 @@ const savePeriods = async (d) => {
         }
         cols.push(curr);
         
-        const parseNum = (val) => parseFloat((val || '').replace(/[\$,%]/g, '').replace(/,/g, '')) || 0;
+        const parseNum = (val) => parseFloat((val || '').replace(/[$,%]/g, '').replace(/,/g, '')) || 0;
         
         const campaign = {
           id: i,
@@ -9245,10 +9675,6 @@ const savePeriods = async (d) => {
         
         const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
         
-        // DEBUG: Log what was parsed
-        if (amazonSkus.length > 0) {
-        }
-        
         // Validate dateRange before using
         if (!dateRange || !dateRange.endDate) {
           devError('Missing dateRange or endDate for file:', fileData.name);
@@ -9526,7 +9952,7 @@ const savePeriods = async (d) => {
             
             const totalShopAds = newMetaSpend + newGoogleSpend;
             const oldShopAds = period.shopify?.adSpend || 0;
-            const shopProfit = (getProfit(periodData.shopify)) + oldShopAds - totalShopAds;
+            const shopProfit = getProfit(period.shopify) + oldShopAds - totalShopAds;
             
             updatedPeriods[periodKey] = {
               ...period,
@@ -9542,7 +9968,7 @@ const savePeriods = async (d) => {
               total: {
                 ...period.total,
                 adSpend: (period.amazon?.adSpend || 0) + totalShopAds,
-                netProfit: (getProfit(periodData.amazon)) + shopProfit,
+                netProfit: getProfit(period.amazon) + shopProfit,
               },
               // Store ad KPIs
               adKPIs: {
@@ -9937,7 +10363,7 @@ const savePeriods = async (d) => {
     } finally {
       setIsProcessing(false);
     }
-  }, [allWeeksData, allDaysData, allPeriodsData, save, combinedData]);
+  }, [allWeeksData, allDaysData, allPeriodsData, save, combinedData, queueCloudSave, savePeriods]);
 
   const getMonths = () => { const m = new Set(); Object.keys(allWeeksData).forEach(w => { const d = new Date(w+'T00:00:00'); m.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`); }); return Array.from(m).sort().reverse(); };
   const getYears = () => { const y = new Set(); Object.keys(allWeeksData).forEach(w => { y.add(new Date(w+'T00:00:00').getFullYear()); }); return Array.from(y).sort().reverse(); };
@@ -10590,7 +11016,7 @@ const savePeriods = async (d) => {
       sortedPeriods.forEach(p => {
         const period = allPeriodsData[p];
         const rev = (period.amazon?.revenue || 0) + (period.shopify?.revenue || 0);
-        const profit = (getProfit(periodData.amazon)) + (getProfit(periodData.shopify));
+        const profit = getProfit(period.amazon) + getProfit(period.shopify);
         const units = (period.amazon?.units || 0) + (period.shopify?.units || 0);
         const startDate = new Date(period.startDate || p);
         const endDate = new Date(period.endDate || p);
@@ -11253,7 +11679,7 @@ const savePeriods = async (d) => {
         });
       }
     }
-  }, [getAmazonForecastComparison, forecastAccuracyHistory.records]);
+  }, [getAmazonForecastComparison, forecastAccuracyHistory.records, forecastAccuracyHistory.modelVersion]);
   // ============ END AUTO-LEARNING EFFECT ============
 
   // ============ AUTO-SYNC EFFECT ============
@@ -11471,7 +11897,7 @@ const savePeriods = async (d) => {
               
               if (syncedDayCount > 0) {
                 setAllDaysData(updatedDays);
-                try { safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
+                safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays));
               }
               
               // ========== PROCESS WEEKLY DATA ==========
@@ -11986,7 +12412,9 @@ const savePeriods = async (d) => {
                     const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
                     const newAwdTotal = updatedItems.reduce((s, i) => s + (i.awdQty || 0), 0);
                     const newAwdValue = updatedItems.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
-                    const newTotalInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0) + (i.awdInbound || 0) + (i.threeplInbound || 0), 0);
+                    const newAwdInbound = updatedItems.reduce((s, i) => s + (i.awdInbound || 0), 0);
+                    const newThreeplInbound = updatedItems.reduce((s, i) => s + (i.threeplInbound || 0), 0);
+                    const newTotalInbound = newAmzInbound + newAwdInbound + newThreeplInbound;
                     
                     const updatedSnapshot = {
                       ...currentSnapshot,
@@ -11998,8 +12426,10 @@ const savePeriods = async (d) => {
                         amazonInbound: newAmzInbound,
                         awdUnits: newAwdTotal,
                         awdValue: newAwdValue,
+                        awdInbound: newAwdInbound,
                         threeplUnits: newTplTotal,
                         threeplValue: newTplValue,
+                        threeplInbound: newThreeplInbound,
                         totalUnits: newAmzTotal + newTplTotal + (currentSnapshot.summary?.homeUnits || 0) + newAwdTotal + newTotalInbound,
                         totalValue: newAmzValue + newTplValue + (currentSnapshot.summary?.homeValue || 0) + newAwdValue,
                         skuCount: updatedItems.length,
@@ -12058,7 +12488,13 @@ const savePeriods = async (d) => {
             const currentSnapshot = latestInvHistory[targetDate];
             let newAmzTotal = 0, newAmzValue = 0, newAmzInbound = 0, newAwdTotal = 0, newAwdValue = 0;
             const updatedItems = currentSnapshot.items.map(item => {
-              const freshAmz = freshAmazonFbaData[item.sku] || freshAmazonFbaData[(item.sku || '').toUpperCase()] || freshAmazonFbaData[(item.sku || '').toLowerCase()] || null;
+              const normalizedItemSku = normalizeSkuKey(item.sku);
+              const freshAmz =
+                freshAmazonFbaData[item.sku] ||
+                freshAmazonFbaData[normalizedItemSku] ||
+                freshAmazonFbaData[(item.sku || '').toUpperCase()] ||
+                freshAmazonFbaData[(item.sku || '').toLowerCase()] ||
+                null;
               const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
               const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
               const newAwdQty = freshAmz ? (freshAmz.awdQty || 0) : (item.awdQty || 0);
@@ -12073,6 +12509,7 @@ const savePeriods = async (d) => {
               newAwdValue += newAwdQty * (item.cost || 0);
               return { ...item, amazonQty: newAmazonQty, amazonInbound: newAmazonInbound, awdQty: newAwdQty, awdInbound: newAwdInbound, totalQty: newTotal, totalValue: newTotal * (item.cost || 0), daysOfSupply: newDos };
             });
+            const newAwdInbound = updatedItems.reduce((s, i) => s + (i.awdInbound || 0), 0);
             const newTotalInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0) + (i.awdInbound || 0) + (i.threeplInbound || 0), 0);
             const updatedSnapshot = {
               ...currentSnapshot,
@@ -12084,6 +12521,7 @@ const savePeriods = async (d) => {
                 amazonInbound: newAmzInbound,
                 awdUnits: newAwdTotal,
                 awdValue: newAwdValue,
+                awdInbound: newAwdInbound,
                 totalUnits: newAmzTotal + (currentSnapshot.summary?.threeplUnits || 0) + (currentSnapshot.summary?.homeUnits || 0) + newAwdTotal + newTotalInbound,
                 totalValue: newAmzValue + (currentSnapshot.summary?.threeplValue || 0) + (currentSnapshot.summary?.homeValue || 0) + newAwdValue,
               },
@@ -12173,7 +12611,7 @@ const savePeriods = async (d) => {
                     ...currentSnapshot.summary,
                     homeUnits: homeTotal,
                     homeValue: homeValue,
-                    totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + (currentSnapshot.summary?.threeplUnits || 0) + homeTotal + (currentSnapshot.summary?.awdUnits || 0) + (currentSnapshot.summary?.amazonInbound || 0) + (currentSnapshot.summary?.threeplInbound || 0),
+                    totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + (currentSnapshot.summary?.threeplUnits || 0) + homeTotal + (currentSnapshot.summary?.awdUnits || 0) + (currentSnapshot.summary?.amazonInbound || 0) + (currentSnapshot.summary?.awdInbound || 0) + (currentSnapshot.summary?.threeplInbound || 0),
                     totalValue: (currentSnapshot.summary?.amazonValue || 0) + (currentSnapshot.summary?.threeplValue || 0) + homeValue + (currentSnapshot.summary?.awdValue || 0),
                   },
                 };
@@ -12210,39 +12648,35 @@ const savePeriods = async (d) => {
             
             // If token expired, try to refresh
             if (res.status === 401) {
-              try {
-                const refreshRes = await fetch('/api/qbo/refresh', {
+              const refreshRes = await fetch('/api/qbo/refresh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refreshToken: qboCredentials.refreshToken }),
+              });
+              if (refreshRes.ok) {
+                const refreshData = await refreshRes.json();
+                currentAccessToken = refreshData.accessToken;
+                setQboCredentials(p => ({
+                  ...p,
+                  accessToken: refreshData.accessToken,
+                  refreshToken: refreshData.refreshToken || p.refreshToken,
+                }));
+                // Retry with new token
+                res = await fetch('/api/qbo/sync', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ refreshToken: qboCredentials.refreshToken }),
+                  body: JSON.stringify({
+                    realmId: qboCredentials.realmId,
+                    accessToken: currentAccessToken,
+                    refreshToken: refreshData.refreshToken || qboCredentials.refreshToken,
+                  }),
                 });
-                if (refreshRes.ok) {
-                  const refreshData = await refreshRes.json();
-                  currentAccessToken = refreshData.accessToken;
-                  setQboCredentials(p => ({
-                    ...p,
-                    accessToken: refreshData.accessToken,
-                    refreshToken: refreshData.refreshToken || p.refreshToken,
-                  }));
-                  // Retry with new token
-                  res = await fetch('/api/qbo/sync', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      realmId: qboCredentials.realmId,
-                      accessToken: currentAccessToken,
-                      refreshToken: refreshData.refreshToken || qboCredentials.refreshToken,
-                    }),
-                  });
-                } else {
-                  const refreshError = await refreshRes.json();
-                  if (refreshError.needsReauth) {
-                    setQboCredentials(p => ({ ...p, connected: false, accessToken: '', refreshToken: '' }));
-                  }
-                  throw new Error('QBO token refresh failed');
+              } else {
+                const refreshError = await refreshRes.json();
+                if (refreshError.needsReauth) {
+                  setQboCredentials(p => ({ ...p, connected: false, accessToken: '', refreshToken: '' }));
                 }
-              } catch (refreshErr) {
-                throw refreshErr;
+                throw new Error('QBO token refresh failed');
               }
             }
             
@@ -12304,6 +12738,7 @@ const savePeriods = async (d) => {
       }
       
       if (results.length === 0) {
+        devWarn('Auto-sync completed with no eligible integrations to run.');
       }
       
     } catch (err) {
@@ -12326,7 +12761,7 @@ const savePeriods = async (d) => {
         }
       }
     }
-  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, qboCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs]);
+  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, qboCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs, getCogsLookup, save, saveInv, savedProductNames]);
   
   // Run auto-sync on app load (if enabled)
   const runAutoSyncRef = useRef(runAutoSync);
@@ -12345,7 +12780,7 @@ const savePeriods = async (d) => {
     }, 3000);
     
     return () => clearTimeout(timer);
-  }, []); // Only run once on mount
+  }, [appSettings.autoSync?.enabled, appSettings.autoSync?.onAppLoad, amazonCredentials.connected, shopifyCredentials.connected, packiyoCredentials.connected]); // Run when auto-sync is enabled/configured
   
   // Set up interval for periodic sync (if enabled)
   useEffect(() => {
@@ -12363,7 +12798,7 @@ const savePeriods = async (d) => {
     }, intervalMs);
     
     return () => clearInterval(interval);
-  }, [appSettings.autoSync?.enabled, appSettings.autoSync?.intervalHours]);
+  }, [appSettings.autoSync?.enabled, appSettings.autoSync?.intervalHours, amazonCredentials.connected, shopifyCredentials.connected, packiyoCredentials.connected]);
   // ============ END AUTO-SYNC EFFECT ============
 
   // ============ UNIFIED AI LEARNING SYSTEM ============
@@ -12689,7 +13124,7 @@ const savePeriods = async (d) => {
     // Debounce to avoid excessive updates
     const timer = setTimeout(updateModel, 1000);
     return () => clearTimeout(timer);
-  }, [allDaysData, allWeeksData, allPeriodsData, forecastCorrections, scanDataAvailability]);
+  }, [allDaysData, allWeeksData, allPeriodsData, forecastCorrections, scanDataAvailability, unifiedAIModel.corrections]);
   
   // ============ SMART DATA AGGREGATION ============
   // Provides comprehensive business metrics that properly handle gaps in daily data
@@ -13606,7 +14041,7 @@ Respond with ONLY this JSON (no markdown):
     } finally {
       setAiForecastLoading(false);
     }
-  }, [allWeeksData, allDaysData, amazonForecasts, invHistory, savedProductNames, forecastCorrections, aiForecastLoading]);
+  }, [allWeeksData, allDaysData, allPeriodsData, amazonForecasts, invHistory, savedProductNames, aiForecastLoading]);
   // ============ END AI-POWERED FORECASTING ============
 
   // ============ MODULAR AI FORECAST SYSTEM ============
@@ -14178,7 +14613,7 @@ Respond with ONLY this JSON:
         setToast({ message: `Analysis failed: ${error.message}`, type: 'error' });
       }
     }
-  }, [invHistory, savedProductNames, savedCogs, productionPipeline, leadTimeSettings, getLeadTime]);
+  }, [invHistory, savedProductNames, productionPipeline, leadTimeSettings, getLeadTime, getCogsCost, saveInv]);
   
   // 3. CHANNEL FORECAST AI - Amazon or Shopify specific
   const generateChannelForecastAI = useCallback(async (channel = 'amazon') => {
@@ -14447,7 +14882,7 @@ Analyze the data and respond with ONLY this JSON:
   // Auto-update learning when data changes
   useEffect(() => {
     updateAILearning();
-  }, [allDaysData, allWeeksData]);
+  }, [updateAILearning]);
   
   // ============ END MODULAR AI FORECAST SYSTEM ============
 
@@ -14727,12 +15162,12 @@ Analyze the data and respond with ONLY this JSON:
         else if (hasInv) printInventory({ storeName, invHistory, savedCogs, appSettings });
         else setToast({ message: 'No data to print yet. Upload some data first.', type: 'warning' });
       }} />
-      <button onClick={exportAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" /><span className="hidden sm:inline">Export</span></button>
-      <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" /><span className="hidden sm:inline">Import</span><input type="file" accept=".json" onChange={(e) => e.target.files[0] && importData(e.target.files[0])} className="hidden" /></label>
+      <button onClick={() => exportAllRef.current()} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white"><Download className="w-4 h-4" /><span className="hidden sm:inline">Export</span></button>
+      <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white cursor-pointer"><Upload className="w-4 h-4" /><span className="hidden sm:inline">Import</span><input type="file" accept=".json" onChange={(e) => e.target.files[0] && importDataRef.current(e.target.files[0])} className="hidden" /></label>
       <button onClick={() => setShowAuditLog(true)} className="flex items-center gap-2 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-400 hover:text-white transition-colors" title="Activity Log"><Clock className="w-4 h-4" /></button>
       <NotificationCenter salesTaxConfig={salesTaxConfig} inventoryData={invHistory?.[Object.keys(invHistory || {}).sort().pop()]?.items || []} allDaysData={allDaysData} appSettings={appSettings} lastBackupDate={lastBackupDate} setView={setView} setToast={setToast} />
     </div>
-  ), [allWeeksData, allDaysData, allPeriodsData, savedCogs, savedProductNames, storeName, isLocked, cloudStatus, session, stores, activeStoreId, dataStatus, salesTaxConfig, invHistory, appSettings, lastBackupDate]);
+  ), [allWeeksData, allDaysData, allPeriodsData, savedCogs, savedProductNames, storeName, session, stores, activeStoreId, dataStatus, salesTaxConfig, invHistory, appSettings, lastBackupDate]);
 
   // Day Details Modal - shows detailed breakdown for a specific day
   const [editingDayAdSpend, setEditingDayAdSpend] = useState(false);
@@ -16148,6 +16583,7 @@ Analyze the data and respond with ONLY this JSON:
     
     try {
       const ctx = prepareDataContext();
+      const sortedDays = Object.keys(allDaysData || {}).sort();
       
       // Build alerts summary for AI
       const alertsSummary = [];
@@ -16155,10 +16591,10 @@ Analyze the data and respond with ONLY this JSON:
         alertsSummary.push(`LOW STOCK ALERT: ${ctx.inventory.lowStockItems.length} products need reorder (${ctx.inventory.lowStockItems.map(i => i.sku).join(', ')})`);
       }
       // Add critical reorder deadline alerts
-      const criticalReorders = inventoryItems.filter(i => 
-        i.daysUntilMustOrder !== null && i.daysUntilMustOrder !== undefined && 
-        i.daysUntilMustOrder <= 14 && i.weeklyVelocity > 0
-      );
+      const criticalReorders = [
+        ...(ctx.inventory?.urgentReorder || []).map((item) => ({ ...item, daysUntilMustOrder: 0 })),
+        ...(ctx.inventory?.needsReorderSoon || []),
+      ].filter((item) => item.weeklyVelocity > 0);
       if (criticalReorders.length > 0) {
         alertsSummary.push(`🚨 REORDER DEADLINES: ${criticalReorders.map(i => 
           `${i.sku} (${i.daysUntilMustOrder <= 0 ? 'OVERDUE' : i.daysUntilMustOrder + ' days left'})`
@@ -17272,6 +17708,14 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
       const tier = getModelTier(aiChatModel);
       const budgets = AI_TOKEN_BUDGETS[tier];
       const tokenBudget = needsFullContext ? budgets.audit : budgets.followUp;
+      const promptLimitsByTier = {
+        haiku: { maxCampaignRows: 8, includeAllThreshold: 10, maxRowsPerReport: 10, maxWasteRows: 6, maxDataChars: 18000 },
+        sonnet: { maxCampaignRows: 12, includeAllThreshold: 18, maxRowsPerReport: 14, maxWasteRows: 10, maxDataChars: 30000 },
+        opus: { maxCampaignRows: 18, includeAllThreshold: 24, maxRowsPerReport: 22, maxWasteRows: 14, maxDataChars: 45000 },
+      };
+      const promptLimits = promptLimitsByTier[tier] || promptLimitsByTier.sonnet;
+      const historyMessageCap = needsFullContext ? 8 : 14;
+      const historyCharCap = needsFullContext ? 7000 : 14000;
       
       // ── SYSTEM PROMPT: Instructions only (cacheable, no data) ──
       const systemPrompt = `You are a $15,000/month Amazon PPC strategist and multi-channel advertising expert performing analysis for Tallowbourn, a tallow-based skincare brand selling lip balms, body balms, and natural deodorant through Amazon and Shopify (DTC).
@@ -17339,15 +17783,20 @@ Reference the full data from the prior analysis. Be concise but still specific w
         sortedDays.slice(-30).forEach(d => { last30Days[d] = allDaysData[d]; });
         
         // Primary: New Tier 2 comprehensive prompt (from adsReportParser)
-        dataBlock = buildComprehensiveAdsPrompt(adsIntelData, last30Days, amazonCampaigns);
+        dataBlock = buildComprehensiveAdsPrompt(adsIntelData, last30Days, amazonCampaigns, promptLimits);
         
         // Append old-format intel if available and not redundant
         const oldContext = buildAdsIntelContext(adsIntelData);
-        if (oldContext && !dataBlock.includes('SP SEARCH TERM')) {
+        if (oldContext && tier !== 'haiku' && !dataBlock.includes('SP SEARCH TERM')) {
           dataBlock += '\n' + oldContext;
         }
         const dtcContext = buildDtcIntelContext(dtcIntelData);
-        if (dtcContext) dataBlock += '\n' + dtcContext;
+        if (dtcContext) {
+          const dtcMaxChars = tier === 'haiku' ? 6000 : tier === 'sonnet' ? 10000 : 16000;
+          dataBlock += '\n' + (dtcContext.length > dtcMaxChars
+            ? `${dtcContext.slice(0, dtcMaxChars)}\n[...DTC context truncated for token efficiency...]`
+            : dtcContext);
+        }
         
         // ── Inject prior report memory for continuity ──
         if (adsAiReportHistory.length > 0) {
@@ -17375,6 +17824,10 @@ Reference the full data from the prior analysis. Be concise but still specific w
         if (sourcesList.length > 0) {
           dataBlock += `\n\n## DATA SOURCES ANALYZED\n${sourcesList.join('\n')}\n\nIMPORTANT: Begin your report with a "📂 Sources Analyzed" section listing these exact data sources so the reader knows what the analysis is based on. If critical data is MISSING (e.g., no search terms, no placement data), call it out explicitly as a gap.`;
         }
+        
+        if (dataBlock.length > promptLimits.maxDataChars) {
+          dataBlock = `${dataBlock.slice(0, promptLimits.maxDataChars)}\n\n[Context truncated to fit model token budget. Ask follow-up questions if you need a deeper slice.]`;
+        }
       } else {
         // Lightweight context for follow-ups
         const sortedDays = Object.keys(allDaysData || {}).sort();
@@ -17392,11 +17845,25 @@ Reference the full data from the prior analysis. Be concise but still specific w
       const userContent = needsFullContext 
         ? `Here is my current advertising data:\n\n${dataBlock}\n\n---\n\nMy request: ${userMessage}`
         : `${dataBlock}\n\n${userMessage}`;
+      
+      const recentAdsMessages = adsAiMessages
+        .slice(-historyMessageCap)
+        .map(m => ({ role: m.role, content: m.content }))
+        .filter(m => m.content);
+      const boundedAdsHistory = [];
+      let historyChars = 0;
+      for (let i = recentAdsMessages.length - 1; i >= 0; i--) {
+        const message = recentAdsMessages[i];
+        const msgLength = message.content.length;
+        if (historyChars + msgLength > historyCharCap) break;
+        boundedAdsHistory.unshift(message);
+        historyChars += msgLength;
+      }
 
       // ── Send with smart token budget ──
       const aiResponse = await callAI({
         system: systemPrompt,
-        messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userContent }],
+        messages: [...boundedAdsHistory, { role: 'user', content: userContent }],
       }, '', aiChatModel, tokenBudget);
       
       const responseText = aiResponse || 'Sorry, I could not process that.';
@@ -17411,7 +17878,7 @@ Reference the full data from the prior analysis. Be concise but still specific w
         // Extract key issues (first few bullet points from STOP section)
         const stopSection = responseText.match(/##.*?STOP.*?\n([\s\S]*?)(?=##|$)/i);
         const keyIssues = stopSection 
-          ? stopSection[1].split('\n').filter(l => l.trim().startsWith('-') || l.trim().startsWith('*')).slice(0, 3).map(l => l.replace(/^[\s\-\*]+/, '').substring(0, 80)).join('; ')
+          ? stopSection[1].split('\n').filter(l => l.trim().startsWith('-') || l.trim().startsWith('*')).slice(0, 3).map(l => l.replace(/^[\s*-]+/, '').substring(0, 80)).join('; ')
           : 'See report';
         
         setAdsAiReportHistory(prev => [...prev, {
@@ -17431,14 +17898,17 @@ Reference the full data from the prior analysis. Be concise but still specific w
     }
   };
 
+  const sendAdsAIMessageRef = useRef(sendAdsAIMessage);
+  sendAdsAIMessageRef.current = sendAdsAIMessage;
+
   // Auto-trigger action plan generation after upload
   useEffect(() => {
     if (pendingAdsAnalysisRef.current && showAdsAIChat && view === 'ads' && !adsAiLoading) {
       pendingAdsAnalysisRef.current = false;
       const autoPrompt = `Generate my complete Amazon Ads Action Plan. Analyze ALL of the data I've uploaded — search terms, placements, targeting, campaigns, daily performance, business reports, organic queries — everything. Tell me exactly what's working, what's wasting money, and give me a specific prioritized action plan I can implement this week. Include dollar amounts for every recommendation.`;
-      setTimeout(() => sendAdsAIMessage(autoPrompt), 300);
+      setTimeout(() => sendAdsAIMessageRef.current(autoPrompt), 300);
     }
-  }, [showAdsAIChat, view]);
+  }, [showAdsAIChat, view, adsAiLoading]);
 
   // Save weekly reports to localStorage
   useEffect(() => {
@@ -18208,7 +18678,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       const amazonAds = period?.amazon?.adSpend || 0;
       current = {
         revenue: period.total?.revenue || 0,
-        profit: getProfit(periodData.total),
+        profit: getProfit(period.total),
         units: period.total?.units || 0,
         adSpend: period.total?.adSpend || 0,
         cogs: period.total?.cogs || 0,
@@ -19518,13 +19988,16 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       autoSyncStatus={autoSyncStatus}
       bankingData={bankingData}
       combinedData={combinedData}
+      createStore={createStore}
       current={current}
+      deleteStore={deleteStore}
       exportAll={exportAll}
       files={files}
       forecastCorrections={forecastCorrections}
       getCogsLookup={getCogsLookup}
       globalModals={globalModals}
       goals={goals}
+      handleLogout={handleLogout}
       importData={importData}
       invHistory={invHistory}
       invoices={invoices}
@@ -19535,10 +20008,13 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       navDropdown={navDropdown}
       notificationSettings={notificationSettings}
       now={now}
+      normalizeSkuKey={normalizeSkuKey}
       packiyoCredentials={packiyoCredentials}
       packiyoInventoryData={packiyoInventoryData}
       packiyoInventoryStatus={packiyoInventoryStatus}
       qboCredentials={qboCredentials}
+      saveInv={saveInv}
+      savePeriods={savePeriods}
       runAutoSync={runAutoSync}
       savedCogs={savedCogs}
       savedProductNames={savedProductNames}
@@ -19576,6 +20052,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setSettingsTab={setSettingsTab}
       setShopifyCredentials={setShopifyCredentials}
       setShowAdsBulkUpload={setShowAdsBulkUpload}
+      setShow3PLBulkUpload={setShow3PLBulkUpload}
       setShowOnboarding={setShowOnboarding}
       setShowPdfExport={setShowPdfExport}
       setShowResetConfirm={setShowResetConfirm}
@@ -19594,6 +20071,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       storeLogo={storeLogo}
       storeName={storeName}
       stores={stores}
+      switchStore={switchStore}
       theme={theme}
       toast={toast}
       setView={setView}

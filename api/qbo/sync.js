@@ -1,24 +1,39 @@
 // /api/qbo/sync.js
 // Fetches transactions from QuickBooks Online
+import {
+  applyCors,
+  handlePreflight,
+  requireMethod,
+  enforceRateLimit,
+  enforceUserAuth,
+  getUserSecret,
+} from '../_lib/security.js';
 
 export default async function handler(req, res) {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (!applyCors(req, res)) return res.status(403).json({ error: 'Origin not allowed' });
+  if (handlePreflight(req, res)) return;
+  if (!requireMethod(req, res, 'POST')) return;
+  if (!enforceRateLimit(req, res, 'qbo-sync', { max: 30, windowMs: 60_000 })) return;
 
-  // Handle preflight
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  // Only allow POST
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  const authUser = await enforceUserAuth(req, res, { required: false });
+  if (!authUser && res.writableEnded) return;
 
   try {
-    const { accessToken, realmId, refreshToken, startDate, endDate } = req.body || {};
+    let { accessToken, realmId, refreshToken, startDate, endDate } = req.body || {};
+
+    if (!accessToken || !realmId) {
+      try {
+        const record = authUser?.id ? await getUserSecret(authUser.id, 'qbo') : null;
+        const secret = record?.secret || null;
+        if (secret) {
+          accessToken = accessToken || secret.accessToken;
+          realmId = realmId || secret.realmId;
+          refreshToken = refreshToken || secret.refreshToken;
+        }
+      } catch {
+        // Ignore secret fetch failures and continue with request payload validation.
+      }
+    }
 
     // Validate required fields
     if (!accessToken || !realmId) {

@@ -2,13 +2,24 @@
 // API Route: /api/alerts/test-slack.js
 // Tests that a Slack webhook URL is valid and working
 // =============================================================
+import {
+  applyCors,
+  handlePreflight,
+  requireMethod,
+  enforceRateLimit,
+  enforceUserAuth,
+} from '../_lib/security.js';
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (!applyCors(req, res)) return res.status(403).json({ error: 'Origin not allowed' });
+  if (handlePreflight(req, res)) return;
+  if (!requireMethod(req, res, 'POST')) return;
+  if (!enforceRateLimit(req, res, 'alerts-test-slack', { max: 12, windowMs: 60_000 })) return;
 
-  const { webhookUrl, storeName } = req.body;
+  const authUser = await enforceUserAuth(req, res);
+  if (!authUser && res.writableEnded) return;
+
+  const { webhookUrl, storeName } = req.body || {};
 
   if (!webhookUrl || !webhookUrl.startsWith('https://hooks.slack.com/')) {
     return res.status(400).json({ error: 'Invalid Slack webhook URL. Must start with https://hooks.slack.com/' });

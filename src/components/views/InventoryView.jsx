@@ -88,7 +88,7 @@ const InventoryView = ({
   // Defensive defaults for summary
   const summary = (data && data.summary) || {
     totalUnits: 0, totalValue: 0, amazonUnits: 0, amazonValue: 0, 
-    amazonInbound: 0, threeplUnits: 0, threeplValue: 0, threeplInbound: 0,
+    amazonInbound: 0, awdInbound: 0, threeplUnits: 0, threeplValue: 0, threeplInbound: 0,
     critical: 0, low: 0, healthy: 0, overstock: 0, skuCount: 0
   };
   const rawItems = (data && data.items) || [];
@@ -282,7 +282,8 @@ const InventoryView = ({
   
   // Check if we have recent API sync data
   const lastPackiyoSync = data?.sources?.lastPackiyoSync ? new Date(data.sources.lastPackiyoSync) : null;
-  const lastAmazonSync = data?.sources?.lastAmazonSync ? new Date(data.sources.lastAmazonSync) : null;
+  const lastAmazonSyncRaw = data?.sources?.lastAmazonFbaSync || data?.sources?.lastAmazonSync;
+  const lastAmazonSync = lastAmazonSyncRaw ? new Date(lastAmazonSyncRaw) : null;
   
   // Use the most recent sync date (Packiyo or Amazon), falling back to snapshot date
   let effectiveDataDate = new Date(selectedInvDate + 'T12:00:00');
@@ -491,9 +492,10 @@ const InventoryView = ({
       case 'daysOfSupply': aVal = a.daysOfSupply || 999; bVal = b.daysOfSupply || 999; break;
       case 'stockoutDate': aVal = a.stockoutDate || '9999'; bVal = b.stockoutDate || '9999'; break;
       case 'reorderByDate': aVal = a.reorderByDate || '9999'; bVal = b.reorderByDate || '9999'; break;
-      case 'health': 
+      case 'health': {
         const healthOrder = { critical: 0, low: 1, healthy: 2, overstock: 3, unknown: 4 };
         aVal = healthOrder[a.health] ?? 4; bVal = healthOrder[b.health] ?? 4; break;
+      }
       default: aVal = a.totalValue || 0; bVal = b.totalValue || 0;
     }
     if (typeof aVal === 'string') {
@@ -610,7 +612,9 @@ const InventoryView = ({
   const finalHomeValue = itemHomeValue > 0 ? itemHomeValue : (summary.homeValue || 0);
   const finalAwdUnits = itemAwdUnits > 0 ? itemAwdUnits : (summary.awdUnits || 0);
   const finalAwdValue = itemAwdValue > 0 ? itemAwdValue : (summary.awdValue || 0);
-  const finalInboundUnits = itemInboundUnits > 0 ? itemInboundUnits : (summary.amazonInbound || 0);
+  const finalInboundUnits = itemInboundUnits > 0
+    ? itemInboundUnits
+    : ((summary.amazonInbound || 0) + (summary.awdInbound || 0) + (summary.threeplInbound || 0));
   
   const filteredSummary = {
     ...summary,
@@ -646,6 +650,50 @@ const InventoryView = ({
     })(),
     abcCounts: items.reduce((acc, i) => { if (i.abcClass) acc[i.abcClass] = (acc[i.abcClass] || 0) + 1; return acc; }, {}) || summary.abcCounts || {},
   };
+
+  const formatSyncAge = (timestamp) => {
+    if (!timestamp) return 'Not synced';
+    const ts = new Date(timestamp);
+    if (Number.isNaN(ts.getTime())) return 'Not synced';
+    const diffMs = Date.now() - ts.getTime();
+    if (diffMs < 60 * 1000) return 'just now';
+    const diffMins = Math.floor(diffMs / (60 * 1000));
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ago`;
+  };
+
+  const snapshotCreatedAt = data?.createdAt || null;
+  const amazonLastSync = data?.sources?.lastAmazonFbaSync || data?.sources?.lastAmazonSync || snapshotCreatedAt;
+  const packiyoLastSync = data?.sources?.lastPackiyoSync || snapshotCreatedAt;
+  const summaryInboundTotal = (summary.amazonInbound || 0) + (summary.awdInbound || 0) + (summary.threeplInbound || 0);
+  const itemUnitsTotal = items.reduce((s, i) =>
+    s +
+    (i.amazonQty || 0) +
+    (i.threeplQty || 0) +
+    (i.homeQty || 0) +
+    (i.awdQty || 0) +
+    (i.amazonInbound || 0) +
+    (i.awdInbound || 0) +
+    (i.threeplInbound || 0), 0);
+  const inboundDelta = itemInboundUnits - summaryInboundTotal;
+  const unitDelta = itemUnitsTotal - (summary.totalUnits || 0);
+  const skuDedupedCount = Math.max(0, rawItems.length - deduplicatedItems.length);
+  const negativeInventoryCount = items.filter(i =>
+    (i.amazonQty || 0) < 0 || (i.awdQty || 0) < 0 || (i.threeplQty || 0) < 0 || (i.homeQty || 0) < 0 ||
+    (i.amazonInbound || 0) < 0 || (i.awdInbound || 0) < 0 || (i.threeplInbound || 0) < 0
+  ).length;
+  const missingCostCount = items.filter(i => !i.cost || i.cost <= 0).length;
+  const awdOnlyCount = items.filter(i => (i.awdQty || 0) > 0 && (i.amazonQty || 0) === 0).length;
+  const dataHealthIssues = [
+    negativeInventoryCount > 0 ? `${negativeInventoryCount} SKU(s) have negative quantities` : null,
+    Math.abs(unitDelta) > 1 ? `Summary vs item unit mismatch: ${unitDelta > 0 ? '+' : ''}${formatNumber(unitDelta)}` : null,
+    Math.abs(inboundDelta) > 1 ? `Inbound mismatch: ${inboundDelta > 0 ? '+' : ''}${formatNumber(inboundDelta)} units` : null,
+    missingCostCount > 0 ? `${missingCostCount} SKU(s) missing COGS` : null,
+    skuDedupedCount > 0 ? `${skuDedupedCount} duplicate SKU variant(s) normalized` : null,
+  ].filter(Boolean);
   
   // Dynamic thresholds for display in tooltips and labels
   const displayThresholds = (() => {
@@ -1050,7 +1098,7 @@ const InventoryView = ({
           <MetricCard label="Total Value (at cost)" value={formatCurrency(filteredSummary.totalValue)} sub="Units × COGS" icon={DollarSign} color="emerald" />
           <MetricCard label="Amazon FBA" value={formatNumber(filteredSummary.amazonUnits)} sub={formatCurrency(filteredSummary.amazonValue)} icon={ShoppingCart} color="orange" />
           <MetricCard label="AWD" value={formatNumber(filteredSummary.awdUnits)} sub={formatCurrency(filteredSummary.awdValue)} icon={Boxes} color="amber" />
-          <MetricCard label="Inbound" value={formatNumber(filteredSummary.amazonInbound)} sub="In transit" icon={TrendingUp} color="sky" />
+          <MetricCard label="Inbound" value={formatNumber(filteredSummary.amazonInbound)} sub="FBA + AWD + 3PL" icon={TrendingUp} color="sky" />
           <MetricCard label="3PL" value={formatNumber(filteredSummary.threeplUnits)} sub={formatCurrency(filteredSummary.threeplValue)} icon={Boxes} color="violet" />
           {filteredSummary.homeUnits > 0 && <MetricCard label="Home" value={formatNumber(filteredSummary.homeUnits)} sub={formatCurrency(filteredSummary.homeValue)} icon={Home} color="cyan" />}
         </div>
@@ -1097,6 +1145,51 @@ const InventoryView = ({
             </div>
           </div>
         )}
+        <div className={`rounded-xl p-4 mb-6 border ${dataHealthIssues.length > 0 ? 'bg-rose-900/20 border-rose-500/30' : 'bg-emerald-900/15 border-emerald-500/25'}`}>
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-2">
+                {dataHealthIssues.length > 0 ? <AlertTriangle className="w-5 h-5 text-rose-400" /> : <CheckCircle className="w-5 h-5 text-emerald-400" />}
+                <h3 className={`font-semibold ${dataHealthIssues.length > 0 ? 'text-rose-300' : 'text-emerald-300'}`}>Data Integrity & Sync</h3>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs mb-3">
+                <div className="bg-slate-900/40 rounded-lg p-2 border border-slate-700/40">
+                  <p className="text-slate-400">Amazon Sync</p>
+                  <p className="text-white font-medium">{formatSyncAge(amazonLastSync)}</p>
+                </div>
+                <div className="bg-slate-900/40 rounded-lg p-2 border border-slate-700/40">
+                  <p className="text-slate-400">Packiyo Sync</p>
+                  <p className="text-white font-medium">{formatSyncAge(packiyoLastSync)}</p>
+                </div>
+                <div className="bg-slate-900/40 rounded-lg p-2 border border-slate-700/40">
+                  <p className="text-slate-400">AWD-Only SKUs</p>
+                  <p className="text-white font-medium">{formatNumber(awdOnlyCount)}</p>
+                </div>
+                <div className="bg-slate-900/40 rounded-lg p-2 border border-slate-700/40">
+                  <p className="text-slate-400">Snapshot Time</p>
+                  <p className="text-white font-medium">{snapshotCreatedAt ? new Date(snapshotCreatedAt).toLocaleString() : 'Unknown'}</p>
+                </div>
+              </div>
+              {dataHealthIssues.length > 0 ? (
+                <div className="space-y-1">
+                  {dataHealthIssues.map((issue, idxIssue) => (
+                    <p key={idxIssue} className="text-rose-300 text-xs">• {issue}</p>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-emerald-300 text-xs">No structural inventory math issues detected in this snapshot.</p>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => { setUploadTab('inventory'); setView('upload'); }} className="px-3 py-2 bg-cyan-700 hover:bg-cyan-600 rounded-lg text-white text-xs font-medium flex items-center gap-1">
+                <RefreshCw className="w-3.5 h-3.5" />Run Inventory Sync
+              </button>
+              <button onClick={openExportModal} disabled={items.length === 0} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg text-white text-xs font-medium flex items-center gap-1">
+                <Download className="w-3.5 h-3.5" />Export Snapshot
+              </button>
+            </div>
+          </div>
+        </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4 cursor-help" title={`SKUs with less than ${displayThresholds.critical} days of supply remaining, or whose reorder date has already passed. These need immediate attention to avoid stockouts.`}><div className="flex items-center gap-2 mb-2"><AlertCircle className="w-5 h-5 text-rose-400" /><span className="text-rose-400 font-medium">Critical</span><HelpCircle className="w-3 h-3 text-rose-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.critical}</p><p className="text-xs text-slate-400">&lt;{displayThresholds.critical} days supply</p></div>
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 cursor-help" title={`SKUs with ${displayThresholds.critical}-${displayThresholds.low} days of supply remaining. You should start planning a reorder now to avoid running low before your shipment arrives.`}><div className="flex items-center gap-2 mb-2"><AlertTriangle className="w-5 h-5 text-amber-400" /><span className="text-amber-400 font-medium">Low</span><HelpCircle className="w-3 h-3 text-amber-400/30" /></div><p className="text-2xl font-bold text-white">{filteredSummary.low}</p><p className="text-xs text-slate-400">{displayThresholds.critical}-{displayThresholds.low} days supply</p></div>
@@ -1234,7 +1327,9 @@ const InventoryView = ({
                     <thead>
                       <tr className="text-slate-500 text-xs">
                         <th className="text-left pb-2">SKU</th>
-                        <th className="text-right pb-2">Amazon</th>
+                        <th className="text-right pb-2">FBA</th>
+                        <th className="text-right pb-2">AWD</th>
+                        <th className="text-right pb-2">Inbound</th>
                         <th className="text-right pb-2">3PL</th>
                         {filteredSummary.homeUnits > 0 && <th className="text-right pb-2">Home</th>}
                         <th className="text-right pb-2">Total</th>

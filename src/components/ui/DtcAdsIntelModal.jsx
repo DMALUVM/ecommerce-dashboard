@@ -1,7 +1,8 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { useState } from 'react';
 import { X, Upload, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, ShoppingCart, Zap, Download, FileText, Globe, Instagram, Archive, Loader2 } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
-import { AI_DEFAULT_MODEL } from '../../utils/config';
+import { AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, getModelTier } from '../../utils/config';
 
 // ============ REPORT TYPES ============
 
@@ -744,6 +745,27 @@ export const buildDtcActionReportPrompt = (intelData) => {
   if (intelData.shopifyAOV?.length) available.push('Shopify AOV');
   if (intelData.shopifyConversion?.length) available.push('Shopify Conversion');
   if (intelData.shopifyLandingPages?.length) available.push('Shopify Landing Pages');
+  
+  const reportCoverage = [
+    { key: 'googleCampaign', label: 'Google Campaigns', critical: true, present: !!intelData.googleCampaign?.length },
+    { key: 'googleSearchTerms', label: 'Google Search Terms', critical: true, present: !!intelData.googleSearchTerms },
+    { key: 'metaCampaign', label: 'Meta Campaigns', critical: true, present: !!intelData.metaCampaign?.length },
+    { key: 'metaAds', label: 'Meta Ads', critical: true, present: !!intelData.metaAds?.length },
+    { key: 'shopifySales', label: 'Shopify Sales', critical: true, present: !!intelData.shopifySales?.length },
+    { key: 'shopifySessions', label: 'Shopify Sessions', critical: true, present: !!intelData.shopifySessions?.length },
+    { key: 'metaAdSets', label: 'Meta Ad Sets', critical: false, present: !!intelData.metaAdSets?.length },
+    { key: 'googleKeywords', label: 'Google Keywords', critical: false, present: !!intelData.googleKeywords?.length },
+    { key: 'googleAssetGroups', label: 'Google PMax Assets', critical: false, present: !!intelData.googleAssetGroups?.length },
+    { key: 'metaAdSetPlacement', label: 'Meta Placement Breakdown', critical: false, present: !!intelData.metaAdSetPlacement?.length },
+    { key: 'shopifyConversion', label: 'Shopify Conversion', critical: false, present: !!intelData.shopifyConversion?.length },
+    { key: 'shopifyAOV', label: 'Shopify AOV', critical: false, present: !!intelData.shopifyAOV?.length },
+    { key: 'shopifyLandingPages', label: 'Shopify Landing Pages', critical: false, present: !!intelData.shopifyLandingPages?.length },
+    { key: 'amazonSearchQuery', label: 'Amazon Search Query', critical: false, present: !!intelData.amazonSearchQuery?.length },
+  ];
+  const coveredCount = reportCoverage.filter(r => r.present).length;
+  const completenessScore = Math.round((coveredCount / reportCoverage.length) * 100);
+  const missingCritical = reportCoverage.filter(r => r.critical && !r.present).map(r => r.label);
+  const missingRecommended = reportCoverage.filter(r => !r.critical && !r.present).map(r => r.label);
 
   // Detect which platforms have data for conditional framework/section inclusion
   const hasMeta = !!(intelData.metaCampaign?.length || intelData.metaAdSets?.length || intelData.metaAds?.length);
@@ -955,6 +977,12 @@ Review: Blended ROAS trend, CAC by channel, AOV stability, conversion rate by de
 
 ${frameworks}
 
+ATTRIBUTION & DATA QUALITY RULES:
+- Meta commonly reports 7d click / 1d view; Google conversion windows differ by account settings; Shopify revenue is source-of-truth for blended performance.
+- Never present Meta and Google platform ROAS as perfectly comparable without caveats.
+- When platform attribution and Shopify outcomes diverge, explain why and prioritize recommendations that improve true blended ROAS.
+- Every major recommendation must include Confidence: High / Medium / Low based on data coverage, date alignment, and attribution compatibility.
+
 FORMAT YOUR REPORT IN MARKDOWN. Be AGGRESSIVE, SPECIFIC, and OPERATOR-LEVEL. Every recommendation must include:
 1. The EXACT campaign name, ad name, keyword, or page URL
 2. Current performance metrics from the data
@@ -973,6 +1001,12 @@ You are not an advisor. You are the fractional CMO in the operator seat. Write a
 - Revenue equation breakdown: Traffic × Conv Rate × AOV = Revenue. Which lever is broken?
 - Top 3 wins, top 3 problems
 - 1-sentence CEO verdict: "The business is [healthy/at risk/bleeding] because [reason]"
+
+## 🧪 DATA CONFIDENCE & ATTRIBUTION REALITY CHECK
+- Data completeness score (0-100) and rationale
+- Attribution-window notes (Meta vs Google vs Shopify source-of-truth) and key measurement risks
+- Table: Insight | Data Source(s) | Attribution Caveat | Confidence (High/Medium/Low)
+- Every priority action must include "Confidence: High/Medium/Low"
 `;
 
   if (hasMeta) {
@@ -1072,6 +1106,9 @@ Numbered checklist of EVERY action, organized by platform (${[hasMeta && 'Meta A
 
 REPORTS AVAILABLE: ${available.join(', ')}
 ${available.length < 5 ? `\nNOTE: Only ${available.length} report types uploaded. Analyze what's available and note which missing reports would enable deeper analysis.` : ''}
+DATA COMPLETENESS SCORE: ${completenessScore}% (${coveredCount}/${reportCoverage.length} report groups present)
+${missingCritical.length > 0 ? `CRITICAL MISSING REPORTS: ${missingCritical.join(', ')}` : 'CRITICAL MISSING REPORTS: None'}
+${missingRecommended.length > 0 ? `RECOMMENDED MISSING REPORTS: ${missingRecommended.join(', ')}` : 'RECOMMENDED MISSING REPORTS: None'}
 
 PRODUCT CONTEXT:
 - Lip Balm 3-Pack — hero SKU, ~$14 price point, highest volume
@@ -1102,7 +1139,7 @@ const renderMarkdown = (md) => {
   var gt = new RegExp('>', 'g');
   var html = md.replace(lt, '&lt;').replace(gt, '&gt;');
   // Remove horizontal rules (--- or ___) to avoid empty spacing
-  html = html.replace(/^[\-_]{3,}\s*$/gm, '');
+  html = html.replace(/^[-_]{3,}\s*$/gm, '');
   // Headers
   html = html.replace(/^# (.*$)/gm, '&lt;h2&gt;$1&lt;/h2&gt;');
   html = html.replace(/^## (.*$)/gm, '&lt;h2&gt;$1&lt;/h2&gt;');
@@ -1322,7 +1359,10 @@ const DtcAdsIntelModal = ({
     try {
       const prompts = buildDtcActionReportPrompt(dtcIntelData);
       if (!prompts) throw new Error('No data available');
-      const response = await callAI(prompts.userPrompt, prompts.systemPrompt);
+      const selectedModel = (typeof window !== 'undefined' && window.__aiModelOverride) || AI_DEFAULT_MODEL;
+      const modelTier = getModelTier(selectedModel);
+      const tokenBudget = AI_TOKEN_BUDGETS[modelTier]?.report || 8000;
+      const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel, tokenBudget);
       setActionReport(response);
       // Save to report history
       if (saveReportToHistory) {
@@ -1336,13 +1376,13 @@ const DtcAdsIntelModal = ({
         saveReportToHistory({
           type: 'dtc',
           content: response,
-          model: window.__aiModelOverride || AI_DEFAULT_MODEL,
+          model: selectedModel,
           metrics: {
             revenue: totalRev,
             adSpend: totalSpend,
             roas: totalSpend > 0 ? totalRev / totalSpend : 0,
             tacos: totalRev > 0 ? (totalSpend / totalRev * 100) : 0,
-            actionCount: (response.match(/^\d+[\.\)]/gm) || []).length,
+            actionCount: (response.match(/^\d+[.)]/gm) || []).length,
           },
         });
       }
@@ -1370,6 +1410,31 @@ const DtcAdsIntelModal = ({
   const typeLabels = Object.fromEntries(REPORT_TYPES.map(r => [r.key, r.label]));
   const typeColors = Object.fromEntries(REPORT_TYPES.map(r => [r.key, r.color]));
   const showReportView = actionReport || generatingReport || reportError;
+  const hasStoredDataForType = (type) => {
+    const value = dtcIntelData?.[type];
+    if (!value) return false;
+    if (Array.isArray(value)) return value.length > 0;
+    return true;
+  };
+  const hasCoverageForType = (type) => validFiles.some(d => d.type === type) || hasStoredDataForType(type);
+  const uploadBlueprint = [
+    { key: 'googleCampaign', label: 'Google Campaigns', priority: 'critical' },
+    { key: 'googleSearchTerms', label: 'Google Search Terms', priority: 'critical' },
+    { key: 'metaCampaign', label: 'Meta Campaigns', priority: 'critical' },
+    { key: 'metaAds', label: 'Meta Ads', priority: 'critical' },
+    { key: 'shopifySales', label: 'Shopify Sales', priority: 'critical' },
+    { key: 'shopifySessions', label: 'Shopify Sessions', priority: 'critical' },
+    { key: 'metaAdSets', label: 'Meta Ad Sets', priority: 'recommended' },
+    { key: 'googleKeywords', label: 'Google Keywords', priority: 'recommended' },
+    { key: 'googleAssetGroups', label: 'Google PMax Assets', priority: 'recommended' },
+    { key: 'metaAdSetPlacement', label: 'Meta Placement', priority: 'recommended' },
+    { key: 'shopifyConversion', label: 'Shopify Conversion', priority: 'recommended' },
+    { key: 'shopifyAOV', label: 'Shopify AOV', priority: 'recommended' },
+    { key: 'shopifyLandingPages', label: 'Shopify Landing Pages', priority: 'recommended' },
+    { key: 'amazonSearchQuery', label: 'Amazon Search Query', priority: 'recommended' },
+  ];
+  const criticalBlueprint = uploadBlueprint.filter(item => item.priority === 'critical');
+  const criticalCovered = criticalBlueprint.filter(item => hasCoverageForType(item.key)).length;
 
   const platformIcon = (type) => {
     const rt = REPORT_TYPES.find(r => r.key === type);
@@ -1462,6 +1527,29 @@ const DtcAdsIntelModal = ({
               </div>
             </div>
           )}
+          
+          <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-slate-200 text-sm font-semibold">Upload Blueprint</p>
+              <p className="text-xs text-slate-400">{criticalCovered}/{criticalBlueprint.length} core reports covered</p>
+            </div>
+            <p className="text-slate-400 text-xs mt-1">Core set for high-value reporting: Google Campaigns + Search Terms, Meta Campaigns + Ads, Shopify Sales + Sessions. Add conversion/AOV/breakdowns to increase confidence.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+              {uploadBlueprint.map(item => {
+                const covered = hasCoverageForType(item.key);
+                return (
+                  <div
+                    key={item.key}
+                    className={`rounded-lg border px-2.5 py-2 text-xs flex items-center gap-2 ${covered ? 'border-emerald-500/30 bg-emerald-900/20 text-emerald-300' : item.priority === 'critical' ? 'border-amber-500/30 bg-amber-900/20 text-amber-200' : 'border-slate-700 bg-slate-900/40 text-slate-400'}`}
+                  >
+                    {covered ? <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />}
+                    <span className="truncate">{item.label}{item.priority === 'critical' ? ' (core)' : ''}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-slate-500 text-[11px] mt-2">Use matching date ranges across Meta, Google, and Shopify exports for cleaner attribution analysis.</p>
+          </div>
 
           {/* Drop zone */}
           {!actionReport && !generatingReport && (

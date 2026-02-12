@@ -128,6 +128,8 @@ const UploadView = ({
         </div>
       );
     };
+
+    const hasCogs = Object.keys(savedCogs || {}).length > 0;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
@@ -1047,8 +1049,12 @@ const UploadView = ({
                           const dates = Object.keys(legacy).sort().reverse();
                           const withAmazonSku = dates.filter(d => legacy[d]?.amazon?.skuData?.length > 0);
                           if (withAmazonSku.length > 0) {
+                            devWarn(`Legacy dailySales found with ${withAmazonSku.length} day(s) containing Amazon SKU data.`);
+                          } else {
+                            devWarn('Legacy dailySales found but no Amazon SKU data arrays were detected.');
                           }
                         } else {
+                          devWarn('No legacy dailySales key found in localStorage.');
                         }
                         alert('Check console (F12) for localStorage data');
                       }}
@@ -2214,7 +2220,11 @@ const UploadView = ({
                             });
                             setAllDaysData(updatedDays);
                             // Save daily data to localStorage
-                            try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
+                            try {
+                              lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays));
+                            } catch (e) {
+                              devWarn('Failed to persist synced daily data locally:', e?.message || e);
+                            }
                             
                             // Merge weekly data - PRESERVE existing ad data
                             const updatedWeeks = { ...allWeeksData };

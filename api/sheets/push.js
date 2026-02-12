@@ -4,6 +4,13 @@
 // Uses a Google Cloud Service Account (no OAuth needed)
 // =============================================================
 import { google } from 'googleapis';
+import {
+  applyCors,
+  handlePreflight,
+  requireMethod,
+  enforceRateLimit,
+  enforceUserAuth,
+} from '../_lib/security.js';
 
 // Service account credentials from environment
 const CREDENTIALS = {
@@ -169,9 +176,13 @@ async function writeToSheet(auth, spreadsheetId, sheetName, data) {
 
 // ============ MAIN HANDLER ============
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (!applyCors(req, res)) return res.status(403).json({ error: 'Origin not allowed' });
+  if (handlePreflight(req, res)) return;
+  if (!requireMethod(req, res, 'POST')) return;
+  if (!enforceRateLimit(req, res, 'sheets-push', { max: 20, windowMs: 60_000 })) return;
+
+  const authUser = await enforceUserAuth(req, res);
+  if (!authUser && res.writableEnded) return;
 
   const { spreadsheetId, weeklyData, actionItems, sheets: sheetConfig } = req.body;
 

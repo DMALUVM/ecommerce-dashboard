@@ -1,13 +1,34 @@
 // /api/qbo/refresh.js
 // Refreshes expired QBO access token using refresh token
+import {
+  applyCors,
+  handlePreflight,
+  requireMethod,
+  enforceRateLimit,
+  enforceUserAuth,
+  getUserSecret,
+} from '../_lib/security.js';
 
 export default async function handler(req, res) {
-  // Only allow POST
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (!applyCors(req, res)) return res.status(403).json({ error: 'Origin not allowed' });
+  if (handlePreflight(req, res)) return;
+  if (!requireMethod(req, res, 'POST')) return;
+  if (!enforceRateLimit(req, res, 'qbo-refresh', { max: 25, windowMs: 60_000 })) return;
 
-  const { refreshToken } = req.body;
+  const authUser = await enforceUserAuth(req, res, { required: false });
+  if (!authUser && res.writableEnded) return;
+
+  let { refreshToken } = req.body || {};
+
+  if (!refreshToken) {
+    try {
+      const record = authUser?.id ? await getUserSecret(authUser.id, 'qbo') : null;
+      const secret = record?.secret || null;
+      refreshToken = refreshToken || secret?.refreshToken;
+    } catch {
+      // Ignore secret fetch failures and continue with request payload validation.
+    }
+  }
 
   if (!refreshToken) {
     return res.status(400).json({ error: 'Missing refreshToken' });

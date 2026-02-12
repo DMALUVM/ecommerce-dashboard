@@ -333,7 +333,7 @@ const ActionTracker = ({ actionItems, setActionItems, queueCloudSave, combinedDa
 };
 
 // ============ PARSE ACTIONS FROM REPORT MARKDOWN ============
-export const parseActionsFromReport = (markdown, reportType, reportId) => {
+const parseActionsFromReport = (markdown, reportType, reportId) => {
   if (!markdown) return [];
   const actions = [];
   
@@ -364,7 +364,7 @@ export const parseActionsFromReport = (markdown, reportType, reportId) => {
       else if (/strategic|🔴|15\+ min/i.test(trimmed)) currentPriority = 'strategic';
       
       // Match action items (numbered or bulleted)
-      const actionMatch = trimmed.match(/^(?:\d+[\.\)]\s*|[-*]\s*|☐\s*)(.{15,})/);
+      const actionMatch = trimmed.match(/^(?:\d+[.)]\s*|[-*]\s*|☐\s*)(.{15,})/);
       if (actionMatch) {
         const text = actionMatch[1].replace(/\*\*/g, '').replace(/`/g, '').trim();
         // Skip headers and non-actionable lines

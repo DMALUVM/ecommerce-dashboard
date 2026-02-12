@@ -1,18 +1,29 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import {
-  ArrowDownRight, ArrowUpRight, Check, Table, Upload
-} from 'lucide-react';
+import React from 'react';
+import { ArrowDownRight, ArrowUpRight } from 'lucide-react';
 import { formatCurrency, formatNumber, formatPercent } from '../../utils/format';
 import NavTabs from '../ui/NavTabs';
 
+const YoYBadge = ({ change }) => {
+  if (change === null) return <span className="text-slate-500">—</span>;
+
+  const isPositive = change > 0;
+  const color = isPositive ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400';
+  const Icon = isPositive ? ArrowUpRight : ArrowDownRight;
+
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm ${color}`}>
+      <Icon className="w-3 h-3" />
+      {Math.abs(change).toFixed(1)}%
+    </span>
+  );
+};
+
 const YoYView = ({
-  adSpend,
   allDaysData,
   allPeriodsData,
   allWeeksData,
   appSettings,
   bankingData,
-  current,
   dataBar,
   getProfit,
   globalModals,
@@ -43,7 +54,7 @@ const YoYView = ({
         monthlyPeriodYears.push(match[1]);
       } else {
         // Try 2-digit year (e.g., '25 or -25)
-        match = k.match(/[''\-](\d{2})$/);
+        match = k.match(/['-](\d{2})$/);
         if (match) {
           const shortYear = match[1];
           const fullYear = shortYear >= '50' ? '19' + shortYear : '20' + shortYear;
@@ -227,19 +238,6 @@ const YoYView = ({
       return ((current - previous) / previous) * 100;
     };
     
-    const YoYBadge = ({ change }) => {
-      if (change === null) return <span className="text-slate-500">—</span>;
-      const isPositive = change > 0;
-      const color = isPositive ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400';
-      const Icon = isPositive ? ArrowUpRight : ArrowDownRight;
-      return (
-        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm ${color}`}>
-          <Icon className="w-3 h-3" />
-          {Math.abs(change).toFixed(1)}%
-        </span>
-      );
-    };
-    
     // Find max for chart
     const maxMonthlyRev = Math.max(
       ...allMonths.map(m => Math.max(currentMonths[m]?.revenue || 0, previousMonths[m]?.revenue || 0))
@@ -256,9 +254,9 @@ const YoYView = ({
             <p className="text-slate-400">{previousYear && currentYear ? `Comparing ${currentYear} vs ${previousYear}` : (currentYear ? `${currentYear} data (add previous year data to compare)` : 'No data available - upload periods labeled as years (e.g., "2024", "2025")')}</p>
             {hasMonthlyData && (
               <p className="text-slate-500 text-xs mt-2">
-                {Object.keys(currentMonths).length > 0 && `${currentYear}: ${Object.keys(currentMonths).map(m => monthNames[parseInt(m)-1]).join(', ')}`}
+                {Object.keys(currentMonths).length > 0 && `${currentYear}: ${Object.keys(currentMonths).map((m) => monthNames[Number(m) - 1]).join(', ')}`}
                 {Object.keys(currentMonths).length > 0 && Object.keys(previousMonths).length > 0 && ' • '}
-                {Object.keys(previousMonths).length > 0 && `${previousYear}: ${Object.keys(previousMonths).map(m => monthNames[parseInt(m)-1]).join(', ')}`}
+                {Object.keys(previousMonths).length > 0 && `${previousYear}: ${Object.keys(previousMonths).map((m) => monthNames[Number(m) - 1]).join(', ')}`}
               </p>
             )}
           </div>
@@ -337,7 +335,7 @@ const YoYView = ({
                     </p>
                   </div>
                 </div>
-                <p className="text-slate-500 text-sm mt-3">{previousYearData.weeks} weeks of data</p>
+                <p className="text-slate-500 text-sm mt-3">{previousYearData.source === 'period' ? previousYearData.label : `${previousYearData.weeks} weeks of data`}</p>
               </div>
             ) : (
               <div className="bg-slate-800/30 rounded-xl border border-dashed border-slate-600 p-5 flex items-center justify-center">
@@ -367,6 +365,7 @@ const YoYView = ({
                               {previousYear}: {formatCurrency(prevRev)}
                             </div>
                             <div 
+                              title={`${previousYear}: ${formatCurrency(prevRev)}`}
                               className="w-full max-w-[30px] bg-slate-600 rounded-t transition-all hover:bg-slate-500" 
                               style={{ height: `${Math.max(prevHeight, prevRev > 0 ? 4 : 0)}px` }} 
                             />
@@ -377,6 +376,7 @@ const YoYView = ({
                             {currentYear}: {formatCurrency(currRev)}
                           </div>
                           <div 
+                            title={`${currentYear}: ${formatCurrency(currRev)}`}
                             className="w-full max-w-[30px] bg-violet-500 rounded-t transition-all hover:bg-violet-400" 
                             style={{ height: `${Math.max(currHeight, currRev > 0 ? 4 : 0)}px` }} 
                           />

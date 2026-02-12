@@ -1,30 +1,32 @@
 // /api/qbo/auth.js
 // Initiates QuickBooks OAuth flow
+import crypto from 'crypto';
+import {
+  applyCors,
+  handlePreflight,
+  requireMethod,
+  enforceRateLimit,
+  enforceUserAuth,
+} from '../_lib/security.js';
+
+const buildStateCookie = (state) => {
+  const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  return `qbo_oauth_state=${encodeURIComponent(state)}; Max-Age=600; Path=/api/qbo; HttpOnly; SameSite=Lax${secureFlag}`;
+};
 
 export default async function handler(req, res) {
-  // Set CORS headers for browser requests
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  
-  // Only allow POST
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (!applyCors(req, res)) return res.status(403).json({ error: 'Origin not allowed' });
+  if (handlePreflight(req, res)) return;
+  if (!requireMethod(req, res, 'POST')) return;
+  if (!enforceRateLimit(req, res, 'qbo-auth', { max: 20, windowMs: 60_000 })) return;
+
+  const authUser = await enforceUserAuth(req, res, { required: false });
+  if (!authUser && res.writableEnded) return;
 
   try {
     const clientId = process.env.QBO_CLIENT_ID;
     const redirectUri = process.env.QBO_REDIRECT_URI;
-    
-    // Debug logging (remove in production)
-    console.log('QBO Auth - Client ID exists:', !!clientId);
-    console.log('QBO Auth - Redirect URI exists:', !!redirectUri);
-    
+
     if (!clientId) {
       return res.status(500).json({ 
         error: 'QBO_CLIENT_ID not configured',
@@ -42,9 +44,9 @@ export default async function handler(req, res) {
     // Scopes needed for transaction access
     const scope = 'com.intuit.quickbooks.accounting';
     
-    // Generate random state for CSRF protection
-    const state = Math.random().toString(36).substring(2, 15) + 
-                  Math.random().toString(36).substring(2, 15);
+    // Generate cryptographically secure state for CSRF protection
+    const state = crypto.randomBytes(32).toString('base64url');
+    res.setHeader('Set-Cookie', buildStateCookie(state));
     
     // Build Intuit OAuth URL
     const authUrl = 'https://appcenter.intuit.com/connect/oauth2?' +

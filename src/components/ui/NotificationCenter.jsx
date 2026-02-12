@@ -34,7 +34,9 @@ const NotificationCenter = ({
   // Persist dismissed
   useEffect(() => {
     try { localStorage.setItem('ecommerce_dismissed_notifications_v1', JSON.stringify(dismissed.slice(-100))); }
-    catch {}
+    catch {
+      // Ignore localStorage write failures.
+    }
   }, [dismissed]);
 
   // ── Generate notifications ──
@@ -84,7 +86,9 @@ const NotificationCenter = ({
             }
           }
         }
-      } catch {}
+      } catch {
+        // Skip malformed per-state config without crashing notifications.
+      }
     });
 
     // 2. INVENTORY ALERTS

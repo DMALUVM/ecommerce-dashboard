@@ -3,11 +3,20 @@ import { ChevronRight, Truck } from 'lucide-react';
 import { formatCurrency, formatNumber, formatPercent } from '../../utils/format';
 import { withShippingSkuRow } from '../../utils/reconcile';
 
+const SortHeader = ({ field, label, align = 'right', onSort, activeField, dir }) => (
+  <th
+    onClick={() => onSort(field)}
+    className={`${align === 'left' ? 'text-left' : 'text-right'} text-xs font-medium text-slate-400 uppercase px-2 py-2 cursor-pointer hover:text-white transition-all ${activeField === field ? 'text-violet-400' : ''}`}
+  >
+    {label} {activeField === field && (dir === 'desc' ? '↓' : '↑')}
+  </th>
+);
+
 const ChannelCard = ({ title, color, data, isAmz, showSkuTable = false }) => {
   const [expanded, setExpanded] = useState(false);
   const [show3plBreakdown, setShow3plBreakdown] = useState(false);
   const [skuSort, setSkuSort] = useState({ field: 'netSales', dir: 'desc' });
-  const skuDataRaw = data.skuData || [];
+  const skuDataRaw = useMemo(() => data.skuData || [], [data.skuData]);
   const threeplBreakdown = data.threeplBreakdown || {};
   const has3plData = !isAmz && (data.threeplCosts > 0);
   const has3plBreakdown = has3plData && Object.values(threeplBreakdown).some(v => v > 0);
@@ -46,15 +55,6 @@ const ChannelCard = ({ title, color, data, isAmz, showSkuTable = false }) => {
   const handleSort = (field) => {
     setSkuSort(prev => ({ field, dir: prev.field === field && prev.dir === 'desc' ? 'asc' : 'desc' }));
   };
-  
-  const SortHeader = ({ field, label, align = 'right' }) => (
-    <th 
-      onClick={() => handleSort(field)}
-      className={`text-${align} text-xs font-medium text-slate-400 uppercase px-2 py-2 cursor-pointer hover:text-white transition-all ${skuSort.field === field ? 'text-violet-400' : ''}`}
-    >
-      {label} {skuSort.field === field && (skuSort.dir === 'desc' ? '↓' : '↑')}
-    </th>
-  );
   
   return (
     <div className="bg-slate-800/50 rounded-2xl border border-slate-700 overflow-hidden">
@@ -176,15 +176,15 @@ const ChannelCard = ({ title, color, data, isAmz, showSkuTable = false }) => {
                     <thead className="bg-slate-900/50 sticky top-0">
                       <tr>
                         <th className="text-left text-xs font-medium text-slate-400 uppercase px-2 py-2">SKU</th>
-                        <SortHeader field="unitsSold" label="Units" />
-                        <SortHeader field="netSales" label="Sales" />
-                        {isAmz && <SortHeader field="fees" label="Fees" />}
-                        {isAmz && <SortHeader field="adSpend" label="Ad Spend" />}
-                        {isAmz && <SortHeader field="returns" label="Returns" />}
-                        {!isAmz && <SortHeader field="discounts" label="Discounts" />}
-                        <SortHeader field="cogs" label="COGS" />
-                        <SortHeader field="profit" label="Profit" />
-                        <SortHeader field="proceedsPerUnit" label="$/Unit" />
+                        <SortHeader field="unitsSold" label="Units" onSort={handleSort} activeField={skuSort.field} dir={skuSort.dir} />
+                        <SortHeader field="netSales" label="Sales" onSort={handleSort} activeField={skuSort.field} dir={skuSort.dir} />
+                        {isAmz && <SortHeader field="fees" label="Fees" onSort={handleSort} activeField={skuSort.field} dir={skuSort.dir} />}
+                        {isAmz && <SortHeader field="adSpend" label="Ad Spend" onSort={handleSort} activeField={skuSort.field} dir={skuSort.dir} />}
+                        {isAmz && <SortHeader field="returns" label="Returns" onSort={handleSort} activeField={skuSort.field} dir={skuSort.dir} />}
+                        {!isAmz && <SortHeader field="discounts" label="Discounts" onSort={handleSort} activeField={skuSort.field} dir={skuSort.dir} />}
+                        <SortHeader field="cogs" label="COGS" onSort={handleSort} activeField={skuSort.field} dir={skuSort.dir} />
+                        <SortHeader field="profit" label="Profit" onSort={handleSort} activeField={skuSort.field} dir={skuSort.dir} />
+                        <SortHeader field="proceedsPerUnit" label="$/Unit" onSort={handleSort} activeField={skuSort.field} dir={skuSort.dir} />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-700/50">

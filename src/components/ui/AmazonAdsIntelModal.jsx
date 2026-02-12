@@ -1,7 +1,8 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { useState, useCallback } from 'react';
 import { Brain, X, Upload, FileSpreadsheet, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, Eye, ShoppingCart, Zap, Download, FileText, Loader2, Archive } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
-import { AI_DEFAULT_MODEL } from '../../utils/config';
+import { AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, getModelTier } from '../../utils/config';
 
 const REPORT_TYPES = [
   { key: 'dailyOverview', label: 'Daily Ads Overview', icon: TrendingUp, color: 'yellow', desc: 'Seller Central daily ads overview (recent 30d)' },
@@ -870,6 +871,23 @@ export const buildActionReportPrompt = (intelData) => {
   if (intelData.skuEconomics?.length) available.push(`SKU Economics (${intelData.skuEconomics.length} SKUs)`);
   if (intelData.dailyOverview?.days?.length) available.push(`Daily Overview (${intelData.dailyOverview.days.length} days)`);
   
+  const reportCoverage = [
+    { key: 'spSearchTerms', label: 'SP Search Terms', critical: true, present: !!intelData.spSearchTerms },
+    { key: 'spTargeting', label: 'SP Targeting', critical: true, present: !!intelData.spTargeting?.length },
+    { key: 'spPlacement', label: 'SP Placement', critical: true, present: !!intelData.spPlacement },
+    { key: 'dailyOverview', label: 'Daily Overview', critical: true, present: !!intelData.dailyOverview?.days?.length },
+    { key: 'spAdvertised', label: 'SP Advertised Products', critical: false, present: !!intelData.spAdvertised?.length },
+    { key: 'businessReport', label: 'Business Report', critical: false, present: !!intelData.businessReport?.length },
+    { key: 'searchQueryPerf', label: 'Search Query Performance', critical: false, present: !!intelData.searchQueryPerf?.length },
+    { key: 'sbSearchTerms', label: 'SB Search Terms', critical: false, present: !!intelData.sbSearchTerms?.length },
+    { key: 'sdCampaign', label: 'SD Campaigns', critical: false, present: !!intelData.sdCampaign?.length },
+    { key: 'skuEconomics', label: 'SKU Economics', critical: false, present: !!intelData.skuEconomics?.length },
+  ];
+  const coveredCount = reportCoverage.filter(r => r.present).length;
+  const completenessScore = Math.round((coveredCount / reportCoverage.length) * 100);
+  const missingCritical = reportCoverage.filter(r => r.critical && !r.present).map(r => r.label);
+  const missingRecommended = reportCoverage.filter(r => !r.critical && !r.present).map(r => r.label);
+  
   // ===== COMPUTE ADVANCED METRICS FOR AI =====
   let advancedContext = '';
   
@@ -1031,6 +1049,12 @@ FRAMEWORK 6: NEGATIVE KEYWORD RULES
 - NEVER negate terms with <$5 spend (insufficient data)
 - Flag terms with 10+ clicks and 0 orders as candidates even if spend is low
 
+ATTRIBUTION & DATA QUALITY RULES:
+- Amazon reports use mixed attribution windows (commonly SP 7-day, SB/SD 14-day). Do not compare them as if identical.
+- When mixing report types, normalize directionally: use spend/click efficiency for cross-report comparisons and clearly flag attribution-window risk.
+- Every major recommendation must include a confidence tag: High / Medium / Low, based on data completeness and attribution consistency.
+- If key reports are missing or date ranges do not overlap, explicitly downgrade confidence and explain why.
+
 FORMAT YOUR REPORT IN MARKDOWN. Be AGGRESSIVE and SPECIFIC. Every recommendation must include:
 1. The EXACT keyword, campaign name, ASIN, or target
 2. Current performance metrics from the data
@@ -1056,6 +1080,12 @@ You are not an advisor — you are the operator. Write as if you are the person 
 - Blended ACOS vs target (25%). How far off and trending which direction?
 - Top 3 biggest problems costing money right now
 - Top 3 biggest opportunities to capture more revenue
+
+## 🧪 DATA CONFIDENCE & ATTRIBUTION CHECK
+- Data completeness score (0-100) and why
+- Attribution-window normalization notes (SP vs SB/SD differences) and where comparison risk exists
+- Table: Metric/Conclusion | Data Source(s) | Attribution Window | Confidence (High/Medium/Low)
+- Every top recommendation must end with "Confidence: High/Medium/Low"
 `;
 
   if (hasSP) {
@@ -1137,6 +1167,9 @@ For EACH: 2-3 specific changes, exact bid amounts, keywords to negate/harvest, b
 DATE RANGE: ${dateRange}
 REPORTS AVAILABLE: ${available.join(', ')}
 ${available.length < 5 ? `\nNOTE: Only ${available.length} report types uploaded. Analyze what's available and note which missing reports would enable deeper analysis.` : ''}
+DATA COMPLETENESS SCORE: ${completenessScore}% (${coveredCount}/${reportCoverage.length} report groups present)
+${missingCritical.length > 0 ? `CRITICAL MISSING REPORTS: ${missingCritical.join(', ')}` : 'CRITICAL MISSING REPORTS: None'}
+${missingRecommended.length > 0 ? `RECOMMENDED MISSING REPORTS: ${missingRecommended.join(', ')}` : 'RECOMMENDED MISSING REPORTS: None'}
 
 PRODUCT CONTEXT:
 - Lip Balm 3-Pack (Parent ASIN B0CLHTF8YN) — highest volume SKU
@@ -1164,7 +1197,7 @@ const renderMarkdown = (md) => {
   var gt = new RegExp('>', 'g');
   var html = md.replace(lt, '&lt;').replace(gt, '&gt;');
   // Remove horizontal rules (--- or ___) to avoid empty spacing
-  html = html.replace(/^[\-_]{3,}\s*$/gm, '');
+  html = html.replace(/^[-_]{3,}\s*$/gm, '');
   // Headers
   html = html.replace(/^# (.*$)/gm, '&lt;h2&gt;$1&lt;/h2&gt;');
   html = html.replace(/^## (.*$)/gm, '&lt;h2&gt;$1&lt;/h2&gt;');
@@ -1416,9 +1449,17 @@ const AmazonAdsIntelModal = ({
             historicalLastUpdated: newIntel.historicalDaily ? new Date().toISOString() : currentCampaigns.historicalLastUpdated,
           };
           setAmazonCampaigns(newCampaigns);
-          try { localStorage.setItem('ecommerce_amazon_campaigns_v1', JSON.stringify(newCampaigns)); } catch(e) {}
+          try {
+            localStorage.setItem('ecommerce_amazon_campaigns_v1', JSON.stringify(newCampaigns));
+          } catch (e) {
+            // Ignore localStorage quota errors on non-critical cache writes.
+          }
         }
-        try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(currentDays)); } catch(e) {}
+        try {
+          localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(currentDays));
+        } catch (e) {
+          // Ignore localStorage quota errors on non-critical cache writes.
+        }
       }
       
       if (queueCloudSave) queueCloudSave();
@@ -1444,7 +1485,10 @@ const AmazonAdsIntelModal = ({
       const prompts = buildActionReportPrompt(adsIntelData);
       if (!prompts) throw new Error('No data available for report');
       
-      const response = await callAI(prompts.userPrompt, prompts.systemPrompt);
+      const selectedModel = (typeof window !== 'undefined' && window.__aiModelOverride) || AI_DEFAULT_MODEL;
+      const modelTier = getModelTier(selectedModel);
+      const tokenBudget = AI_TOKEN_BUDGETS[modelTier]?.report || 8000;
+      const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel, tokenBudget);
       setActionReport(response);
       // Save to report history
       if (saveReportToHistory) {
@@ -1452,13 +1496,13 @@ const AmazonAdsIntelModal = ({
         saveReportToHistory({
           type: 'amazon',
           content: response,
-          model: window.__aiModelOverride || AI_DEFAULT_MODEL,
+          model: selectedModel,
           metrics: {
             revenue: t.totalSales || 0,
             adSpend: t.totalSpend || 0,
             roas: t.totalSales && t.totalSpend ? (t.totalSales / t.totalSpend) : 0,
             acos: t.totalSpend && t.totalSales ? (t.totalSpend / t.totalSales * 100) : 0,
-            actionCount: (response.match(/^\d+[\.\)]/gm) || []).length,
+            actionCount: (response.match(/^\d+[.)]/gm) || []).length,
           },
         });
       }
@@ -1488,6 +1532,29 @@ const AmazonAdsIntelModal = ({
   const typeLabels = Object.fromEntries(REPORT_TYPES.map(r => [r.key, r.label]));
   const typeColors = Object.fromEntries(REPORT_TYPES.map(r => [r.key, r.color]));
   const showReportView = actionReport || generatingReport || reportError;
+  const hasStoredDataForType = (type) => {
+    const value = adsIntelData?.[type];
+    if (!value) return false;
+    if (Array.isArray(value)) return value.length > 0;
+    if (value.days && Array.isArray(value.days)) return value.days.length > 0;
+    if (value.byPlacement && Array.isArray(value.byPlacement)) return value.byPlacement.length > 0;
+    return true;
+  };
+  const hasCoverageForType = (type) => validFiles.some(d => d.type === type) || hasStoredDataForType(type);
+  const uploadBlueprint = [
+    { key: 'dailyOverview', label: 'Daily Ads Overview', priority: 'critical' },
+    { key: 'spSearchTerms', label: 'SP Search Terms', priority: 'critical' },
+    { key: 'spTargeting', label: 'SP Targeting', priority: 'critical' },
+    { key: 'spPlacement', label: 'SP Placement', priority: 'critical' },
+    { key: 'spAdvertised', label: 'SP Advertised', priority: 'recommended' },
+    { key: 'businessReport', label: 'Business Report', priority: 'recommended' },
+    { key: 'searchQueryPerf', label: 'Search Query Perf', priority: 'recommended' },
+    { key: 'sbSearchTerms', label: 'SB Search Terms', priority: 'recommended' },
+    { key: 'sdCampaign', label: 'SD Campaigns', priority: 'recommended' },
+    { key: 'skuEconomics', label: 'SKU Economics', priority: 'recommended' },
+  ];
+  const criticalBlueprint = uploadBlueprint.filter(item => item.priority === 'critical');
+  const criticalCovered = criticalBlueprint.filter(item => hasCoverageForType(item.key)).length;
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -1587,6 +1654,29 @@ const AmazonAdsIntelModal = ({
               </div>
             </div>
           )}
+          
+          <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-slate-200 text-sm font-semibold">Upload Blueprint</p>
+              <p className="text-xs text-slate-400">{criticalCovered}/{criticalBlueprint.length} core reports covered</p>
+            </div>
+            <p className="text-slate-400 text-xs mt-1">Best first import order: Daily Overview, SP Search Terms, SP Targeting, SP Placement. Add Business Report and Search Query Perf for higher-confidence recommendations.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+              {uploadBlueprint.map(item => {
+                const covered = hasCoverageForType(item.key);
+                return (
+                  <div
+                    key={item.key}
+                    className={`rounded-lg border px-2.5 py-2 text-xs flex items-center gap-2 ${covered ? 'border-emerald-500/30 bg-emerald-900/20 text-emerald-300' : item.priority === 'critical' ? 'border-amber-500/30 bg-amber-900/20 text-amber-200' : 'border-slate-700 bg-slate-900/40 text-slate-400'}`}
+                  >
+                    {covered ? <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />}
+                    <span className="truncate">{item.label}{item.priority === 'critical' ? ' (core)' : ''}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-slate-500 text-[11px] mt-2">Keep date ranges aligned across files when possible. Mixed windows reduce attribution confidence.</p>
+          </div>
 
           {/* DROP ZONE */}
           <div

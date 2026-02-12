@@ -9,14 +9,40 @@
 // - Syncs orders, SKU data, and tax information
 // - EXCLUDES Shop Pay orders from tax calculations (Shopify remits those automatically)
 // - Aggregates tax by state for sales tax filing
+import {
+  applyCors,
+  handlePreflight,
+  requireMethod,
+  enforceRateLimit,
+  enforceUserAuth,
+  getUserSecret,
+} from '../_lib/security.js';
 
 export default async function handler(req, res) {
-  // Only allow POST
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (!applyCors(req, res)) return res.status(403).json({ error: 'Origin not allowed' });
+  if (handlePreflight(req, res)) return;
+  if (!requireMethod(req, res, 'POST')) return;
+  if (!enforceRateLimit(req, res, 'shopify-sync', { max: 40, windowMs: 60_000 })) return;
 
-  const { storeUrl, accessToken, clientId, clientSecret, startDate, endDate, preview, test, syncType } = req.body;
+  const authUser = await enforceUserAuth(req, res);
+  if (!authUser && res.writableEnded) return;
+
+  let { storeUrl, accessToken, clientId, clientSecret, startDate, endDate, preview, test, syncType } = req.body || {};
+
+  if (!storeUrl || (!accessToken && !clientSecret)) {
+    try {
+      const record = authUser?.id ? await getUserSecret(authUser.id, 'shopify') : null;
+      const secret = record?.secret || null;
+      if (secret) {
+        storeUrl = storeUrl || secret.storeUrl;
+        accessToken = accessToken || secret.accessToken;
+        clientId = clientId || secret.clientId;
+        clientSecret = clientSecret || secret.clientSecret;
+      }
+    } catch {
+      // Ignore secret fetch failures and continue with request payload validation.
+    }
+  }
  
   // syncType can be: 'orders' (default), 'inventory', 'products', 'both'
   // Validate required fields

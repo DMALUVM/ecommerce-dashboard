@@ -1,5 +1,30 @@
 @import "tailwindcss";
 
+html, body, #root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #020617;
+  color: #f8fafc;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  padding-bottom: env(safe-area-inset-bottom);
+  overscroll-behavior-y: none;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+}
+
 /* Hide scrollbar for horizontal nav */
 .scrollbar-hide {
   -ms-overflow-style: none;
@@ -13,5 +38,10 @@
 @media (max-width: 640px) {
   button, a, label {
     -webkit-tap-highlight-color: transparent;
+  }
+  input,
+  select,
+  textarea {
+    font-size: 16px;
   }
 }

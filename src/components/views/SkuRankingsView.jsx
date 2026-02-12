@@ -1,9 +1,128 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React from 'react';
 import {
   AlertTriangle, Award, Database, DollarSign, Eye, Flame, List, Package, Search, Snowflake, TrendingDown, TrendingUp, Zap
 } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../../utils/format';
 import NavTabs from '../ui/NavTabs';
+
+const ALIGNMENT_CLASS = {
+  left: 'text-left',
+  right: 'text-right',
+  center: 'text-center',
+};
+
+const SortableHeader = ({ column, label, align = 'left', sortCol, sortDir, onSort }) => {
+  const alignClass = ALIGNMENT_CLASS[align] || ALIGNMENT_CLASS.left;
+  return (
+    <th
+      className={`${alignClass} text-slate-400 font-medium py-2 cursor-pointer hover:text-white transition-colors select-none`}
+      onClick={() => onSort(column)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {sortCol === column && (
+          <span className="text-cyan-400">{sortDir === 'desc' ? '↓' : '↑'}</span>
+        )}
+      </span>
+    </th>
+  );
+};
+
+const SkuTable = ({
+  color,
+  data,
+  icon,
+  savedProductNames,
+  showGrowth = false,
+  showProfit = false,
+  showProfitPerUnit = false,
+  sortable = false,
+  sortColumn,
+  sortDirection,
+  onSortColumn,
+  onSortDirection,
+  title,
+}) => {
+  const sortedData = sortable && sortColumn
+    ? [...data].sort((a, b) => {
+      const aVal = a[sortColumn] ?? 0;
+      const bVal = b[sortColumn] ?? 0;
+      return sortDirection === 'desc' ? bVal - aVal : aVal - bVal;
+    })
+    : data;
+
+  const handleSort = (column) => {
+    if (sortColumn === column) {
+      onSortDirection((direction) => (direction === 'desc' ? 'asc' : 'desc'));
+      return;
+    }
+    onSortColumn(column);
+    onSortDirection('desc');
+  };
+
+  const columnCount = 5 + (showProfit ? 1 : 0) + (showProfitPerUnit ? 2 : 0) + (showGrowth ? 1 : 0);
+
+  return (
+    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className={`text-lg font-semibold ${color} flex items-center gap-2`}>{icon}{title}</h3>
+        {sortable && (
+          <span className="text-xs text-slate-500">Click headers to sort</span>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-700">
+              <th className="text-left text-slate-400 font-medium py-2">#</th>
+              <th className="text-left text-slate-400 font-medium py-2">Product</th>
+              <th className="text-left text-slate-400 font-medium py-2">Channel</th>
+              {sortable ? (
+                <>
+                  <SortableHeader column="revenue" label="Revenue" align="right" sortCol={sortColumn} sortDir={sortDirection} onSort={handleSort} />
+                  <SortableHeader column="units" label="Units" align="right" sortCol={sortColumn} sortDir={sortDirection} onSort={handleSort} />
+                  {showProfit && <SortableHeader column="profit" label="Profit" align="right" sortCol={sortColumn} sortDir={sortDirection} onSort={handleSort} />}
+                  {showProfitPerUnit && <SortableHeader column="profitPerUnit" label="$/Unit" align="right" sortCol={sortColumn} sortDir={sortDirection} onSort={handleSort} />}
+                  {showProfitPerUnit && <SortableHeader column="margin" label="Margin" align="right" sortCol={sortColumn} sortDir={sortDirection} onSort={handleSort} />}
+                  {showGrowth && <SortableHeader column="growth" label="Growth" align="right" sortCol={sortColumn} sortDir={sortDirection} onSort={handleSort} />}
+                </>
+              ) : (
+                <>
+                  <th className="text-right text-slate-400 font-medium py-2">Revenue</th>
+                  <th className="text-right text-slate-400 font-medium py-2">Units</th>
+                  {showProfit && <th className="text-right text-slate-400 font-medium py-2">Profit</th>}
+                  {showProfitPerUnit && <th className="text-right text-slate-400 font-medium py-2">$/Unit</th>}
+                  {showProfitPerUnit && <th className="text-right text-slate-400 font-medium py-2">Margin</th>}
+                  {showGrowth && <th className="text-right text-slate-400 font-medium py-2">Growth</th>}
+                </>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedData.map((s, index) => (
+              <tr key={`${s.sku}-${s.channel}-${index}`} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors">
+                <td className="py-2.5 text-slate-500">{index + 1}</td>
+                <td className="py-2.5"><div className="max-w-[200px] truncate text-white font-medium" title={savedProductNames[s.sku] || s.name || s.sku}>{savedProductNames[s.sku] || s.name || s.sku}</div></td>
+                <td className="py-2.5"><span className={`text-xs px-2 py-0.5 rounded ${s.channel === 'Amazon' ? 'bg-orange-500/20 text-orange-400' : s.channel === 'Amazon + Shopify' ? 'bg-purple-500/20 text-purple-400' : 'bg-green-500/20 text-green-400'}`}>{s.channel}</span></td>
+                <td className="py-2.5 text-right text-white font-medium">{formatCurrency(s.revenue)}</td>
+                <td className="py-2.5 text-right text-white">{formatNumber(s.units)}</td>
+                {showProfit && <td className={`py-2.5 text-right font-medium ${s.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profit)}</td>}
+                {showProfitPerUnit && <td className={`py-2.5 text-right ${s.profitPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profitPerUnit)}</td>}
+                {showProfitPerUnit && <td className={`py-2.5 text-right ${s.margin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.margin.toFixed(1)}%</td>}
+                {showGrowth && <td className={`py-2.5 text-right font-medium ${s.growth >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.growth > 0 ? '+' : ''}{s.growth.toFixed(0)}%</td>}
+              </tr>
+            ))}
+            {sortedData.length === 0 && (
+              <tr>
+                <td colSpan={columnCount} className="py-8 text-center text-slate-500">No data available</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
 
 const SkuRankingsView = ({
   allDaysData,
@@ -37,8 +156,6 @@ const SkuRankingsView = ({
   view,
 }) => {
     const allWeeks = Object.keys(allWeeksData).sort();
-    const now = new Date();
-    const currentYear = now.getFullYear();
     
     // Helper to get base SKU - keep full SKU since both channels use same format
     const getBaseSku = (sku) => sku;
@@ -213,8 +330,8 @@ const SkuRankingsView = ({
     
     // Calculate profit per unit trends (recent 4 weeks vs prior 4 weeks)
     const skuProfitTrends = Object.entries(skuWeeklyData)
-      .filter(([key, data]) => Object.keys(data.weeks).length >= 2)
-      .map(([key, data]) => {
+      .filter(([, data]) => Object.keys(data.weeks).length >= 2)
+      .map(([, data]) => {
         const weekDates = Object.keys(data.weeks).sort();
         const recentWeekDates = weekDates.slice(-4);
         const olderWeekDates = weekDates.slice(-8, -4);
@@ -299,95 +416,6 @@ const SkuRankingsView = ({
       const noRecentSales = !skuRecentData[item.sku] && !skuRecentData['shop_' + item.sku];
       return hasStock && noRecentSales;
     }).slice(0, 10) : [];
-    
-    // Sortable header component
-    const SortableHeader = ({ column, label, align = 'left', sortCol, sortDir, onSort }) => (
-      <th 
-        className={`text-${align} text-slate-400 font-medium py-2 cursor-pointer hover:text-white transition-colors select-none`}
-        onClick={() => onSort(column)}
-      >
-        <span className="inline-flex items-center gap-1">
-          {label}
-          {sortCol === column && (
-            <span className="text-cyan-400">{sortDir === 'desc' ? '↓' : '↑'}</span>
-          )}
-        </span>
-      </th>
-    );
-    
-    const SkuTable = ({ data, title, icon, color, showProfit = false, showGrowth = false, showProfitPerUnit = false, sortable = false }) => {
-      // For sortable tables, use state-driven sorting
-      const sortedData = sortable && skuSortColumn ? [...data].sort((a, b) => {
-        const aVal = a[skuSortColumn] ?? 0;
-        const bVal = b[skuSortColumn] ?? 0;
-        return skuSortDirection === 'desc' ? bVal - aVal : aVal - bVal;
-      }) : data;
-      
-      const handleSort = (col) => {
-        if (skuSortColumn === col) {
-          setSkuSortDirection(d => d === 'desc' ? 'asc' : 'desc');
-        } else {
-          setSkuSortColumn(col);
-          setSkuSortDirection('desc');
-        }
-      };
-      
-      return (
-      <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className={`text-lg font-semibold ${color} flex items-center gap-2`}>{icon}{title}</h3>
-          {sortable && (
-            <span className="text-xs text-slate-500">Click headers to sort</span>
-          )}
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-700">
-                <th className="text-left text-slate-400 font-medium py-2">#</th>
-                <th className="text-left text-slate-400 font-medium py-2">Product</th>
-                <th className="text-left text-slate-400 font-medium py-2">Channel</th>
-                {sortable ? (
-                  <>
-                    <SortableHeader column="revenue" label="Revenue" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />
-                    <SortableHeader column="units" label="Units" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />
-                    {showProfit && <SortableHeader column="profit" label="Profit" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />}
-                    {showProfitPerUnit && <SortableHeader column="profitPerUnit" label="$/Unit" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />}
-                    {showProfitPerUnit && <SortableHeader column="margin" label="Margin" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />}
-                    {showGrowth && <SortableHeader column="growth" label="Growth" align="right" sortCol={skuSortColumn} sortDir={skuSortDirection} onSort={handleSort} />}
-                  </>
-                ) : (
-                  <>
-                    <th className="text-right text-slate-400 font-medium py-2">Revenue</th>
-                    <th className="text-right text-slate-400 font-medium py-2">Units</th>
-                    {showProfit && <th className="text-right text-slate-400 font-medium py-2">Profit</th>}
-                    {showProfitPerUnit && <th className="text-right text-slate-400 font-medium py-2">$/Unit</th>}
-                    {showProfitPerUnit && <th className="text-right text-slate-400 font-medium py-2">Margin</th>}
-                    {showGrowth && <th className="text-right text-slate-400 font-medium py-2">Growth</th>}
-                  </>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {sortedData.map((s, i) => (
-                <tr key={s.sku + s.channel + i} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors">
-                  <td className="py-2.5 text-slate-500">{i + 1}</td>
-                  <td className="py-2.5"><div className="max-w-[200px] truncate text-white font-medium" title={savedProductNames[s.sku] || s.name || s.sku}>{savedProductNames[s.sku] || s.name || s.sku}</div></td>
-                  <td className="py-2.5"><span className={`text-xs px-2 py-0.5 rounded ${s.channel === 'Amazon' ? 'bg-orange-500/20 text-orange-400' : s.channel === 'Amazon + Shopify' ? 'bg-purple-500/20 text-purple-400' : 'bg-green-500/20 text-green-400'}`}>{s.channel}</span></td>
-                  <td className="py-2.5 text-right text-white font-medium">{formatCurrency(s.revenue)}</td>
-                  <td className="py-2.5 text-right text-white">{formatNumber(s.units)}</td>
-                  {showProfit && <td className={`py-2.5 text-right font-medium ${s.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profit)}</td>}
-                  {showProfitPerUnit && <td className={`py-2.5 text-right ${s.profitPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(s.profitPerUnit)}</td>}
-                  {showProfitPerUnit && <td className={`py-2.5 text-right ${s.margin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.margin.toFixed(1)}%</td>}
-                  {showGrowth && <td className={`py-2.5 text-right font-medium ${s.growth >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{s.growth > 0 ? '+' : ''}{s.growth.toFixed(0)}%</td>}
-                </tr>
-              ))}
-              {sortedData.length === 0 && <tr><td colSpan={showProfit ? 6 : showProfitPerUnit ? 8 : showGrowth ? 6 : 5} className="py-8 text-center text-slate-500">No data available</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );};
     
     return (
       <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
@@ -520,18 +548,18 @@ const SkuRankingsView = ({
           
           {/* Top Tables */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <SkuTable data={topByRevenue} title="Top 10 by Revenue" icon={<DollarSign className="w-5 h-5" />} color="text-emerald-400" showProfitPerUnit />
-            <SkuTable data={topByUnits} title="Top 10 by Units" icon={<Package className="w-5 h-5" />} color="text-blue-400" showProfitPerUnit />
+            <SkuTable data={topByRevenue} title="Top 10 by Revenue" icon={<DollarSign className="w-5 h-5" />} color="text-emerald-400" showProfitPerUnit savedProductNames={savedProductNames} />
+            <SkuTable data={topByUnits} title="Top 10 by Units" icon={<Package className="w-5 h-5" />} color="text-blue-400" showProfitPerUnit savedProductNames={savedProductNames} />
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <SkuTable data={topByProfit} title="Top 10 Total Profit" icon={<Award className="w-5 h-5" />} color="text-amber-400" showProfit showProfitPerUnit />
-            <SkuTable data={topByProfitPerUnit} title="Top 10 Best $/Unit" icon={<Zap className="w-5 h-5" />} color="text-violet-400" showProfitPerUnit />
+            <SkuTable data={topByProfit} title="Top 10 Total Profit" icon={<Award className="w-5 h-5" />} color="text-amber-400" showProfit showProfitPerUnit savedProductNames={savedProductNames} />
+            <SkuTable data={topByProfitPerUnit} title="Top 10 Best $/Unit" icon={<Zap className="w-5 h-5" />} color="text-violet-400" showProfitPerUnit savedProductNames={savedProductNames} />
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <SkuTable data={risingStars} title="Rising Stars (4wk growth)" icon={<Flame className="w-5 h-5" />} color="text-orange-400" showGrowth showProfitPerUnit />
-            <SkuTable data={declining} title="Watch List (Declining)" icon={<TrendingDown className="w-5 h-5" />} color="text-rose-400" showGrowth showProfitPerUnit />
+            <SkuTable data={risingStars} title="Rising Stars (4wk growth)" icon={<Flame className="w-5 h-5" />} color="text-orange-400" showGrowth showProfitPerUnit savedProductNames={savedProductNames} />
+            <SkuTable data={declining} title="Watch List (Declining)" icon={<TrendingDown className="w-5 h-5" />} color="text-rose-400" showGrowth showProfitPerUnit savedProductNames={savedProductNames} />
           </div>
           
           {/* All Products - Searchable & Sortable */}

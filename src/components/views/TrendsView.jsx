@@ -6,6 +6,25 @@ import {
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import NavTabs from '../ui/NavTabs';
 
+const ChangeIndicator = ({ current, previous }) => {
+  if (!previous || previous === 0) {
+    return <span className="text-slate-500 text-sm">—</span>;
+  }
+
+  const change = ((current - previous) / previous) * 100;
+  const isPositive = change > 0;
+  const isNeutral = Math.abs(change) < 0.5;
+  const color = isNeutral ? 'text-slate-400' : isPositive ? 'text-emerald-400' : 'text-rose-400';
+  const Icon = isNeutral ? Minus : isPositive ? ArrowUpRight : ArrowDownRight;
+
+  return (
+    <span className={`flex items-center gap-1 text-sm ${color}`}>
+      <Icon className="w-4 h-4" />
+      {Math.abs(change).toFixed(1)}%
+    </span>
+  );
+};
+
 const TrendsView = ({
   adSpend,
   allDaysData,
@@ -758,26 +777,6 @@ const TrendsView = ({
       acc.units += getFilteredValue(d, 'units');
       return acc;
     }, { revenue: 0, profit: 0, units: 0 });
-    
-    const calcChange = (current, previous) => {
-      if (!previous || previous === 0) return null;
-      return ((current - previous) / previous) * 100;
-    };
-    
-    const ChangeIndicator = ({ current, previous }) => {
-      const change = calcChange(current, previous);
-      if (change === null) return <span className="text-slate-500 text-sm">—</span>;
-      const isPositive = change > 0;
-      const isNeutral = Math.abs(change) < 0.5;
-      const color = isNeutral ? 'text-slate-400' : isPositive ? 'text-emerald-400' : 'text-rose-400';
-      const Icon = isNeutral ? Minus : isPositive ? ArrowUpRight : ArrowDownRight;
-      return (
-        <span className={`flex items-center gap-1 text-sm ${color}`}>
-          <Icon className="w-4 h-4" />
-          {Math.abs(change).toFixed(1)}%
-        </span>
-      );
-    };
     
     // Find max values for chart scaling
     const maxRevenue = Math.max(...currentData.map(d => d.revenue || 0), 1);

@@ -73,7 +73,11 @@ const ProductCatalogModal = ({
   const saveCatalog = () => {
     if (!productCatalogFile) return;
     setSavedProductNames(productCatalogFile);
-    try { localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(productCatalogFile)); } catch(e) {}
+    try {
+      localStorage.setItem(PRODUCT_NAMES_KEY, JSON.stringify(productCatalogFile));
+    } catch (e) {
+      // Ignore localStorage quota errors; catalog is already in memory.
+    }
     setShowProductCatalog(false);
     setProductCatalogFile(null);
     setProductCatalogFileName('');

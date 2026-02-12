@@ -5,6 +5,74 @@ import {
 import { formatCurrency, formatNumber } from '../../utils/format';
 import NavTabs from '../ui/NavTabs';
 
+const ThreePLTrendChart = ({
+  data,
+  getValue,
+  title,
+  format = 'currency',
+  colorFn = null,
+  goodDirection = 'down',
+  timeView,
+  getLabel,
+}) => {
+  const values = data.map((d) => getValue(d) || 0);
+  const maxVal = Math.max(...values, 1);
+  const avgVal = values.reduce((a, b) => a + b, 0) / values.length;
+  const latestVal = values[values.length - 1];
+  const prevVal = values[values.length - 2];
+  const change = prevVal > 0 ? ((latestVal - prevVal) / prevVal) * 100 : 0;
+  const isGood = goodDirection === 'down' ? change <= 0 : change >= 0;
+
+  return (
+    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+      <div className="flex justify-between items-start mb-3">
+        <div>
+          <p className="text-slate-400 text-sm">{title}</p>
+          <p className="text-white font-bold text-xl">
+            {format === 'currency' ? formatCurrency(latestVal) : format === 'percent' ? `${latestVal.toFixed(1)}%` : latestVal.toFixed(0)}
+          </p>
+        </div>
+        <div className="text-right">
+          {change !== 0 && (
+            <div className={`px-2 py-1 rounded text-xs font-medium ${isGood ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+              {change > 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}%
+            </div>
+          )}
+          <p className="text-slate-500 text-xs mt-1">vs last {timeView === 'weekly' ? 'week' : 'month'}</p>
+        </div>
+      </div>
+      <div className="relative flex items-end gap-1 h-20">
+        {data.map((d, i) => {
+          const val = getValue(d) || 0;
+          const height = maxVal > 0 ? (val / maxVal) * 100 : 0;
+          const isLatest = i === data.length - 1;
+          const defaultColor = 'bg-slate-500';
+          const color = colorFn ? colorFn(val) : defaultColor;
+          return (
+            <div key={i} className="flex-1 flex flex-col items-center group relative">
+              <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-900 border border-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 shadow-lg pointer-events-none">
+                <p className="font-medium">{getLabel(d)}</p>
+                <p className="text-slate-300">{format === 'currency' ? formatCurrency(val) : format === 'percent' ? `${val.toFixed(1)}%` : val.toFixed(0)}</p>
+              </div>
+              <div
+                className={`w-full rounded-t transition-all hover:opacity-80 ${isLatest ? color : `${color}/60`}`}
+                style={{ height: `${Math.max(height, 4)}%` }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex justify-between text-[10px] text-slate-500 mt-1 px-1">
+        <span>{getLabel(data[0])}</span>
+        <span>{getLabel(data[data.length - 1])}</span>
+      </div>
+      <div className="mt-2 pt-2 border-t border-slate-700/50 text-xs text-slate-500">
+        Avg: {format === 'currency' ? formatCurrency(avgVal) : format === 'percent' ? `${avgVal.toFixed(1)}%` : avgVal.toFixed(0)}
+      </div>
+    </div>
+  );
+};
+
 const ThreePLView = ({
   allDaysData,
   allPeriodsData,
@@ -61,10 +129,11 @@ const ThreePLView = ({
         case 'month':
           startDate = new Date(today.getFullYear(), today.getMonth(), 1);
           break;
-        case 'quarter':
+        case 'quarter': {
           const quarter = Math.floor(today.getMonth() / 3);
           startDate = new Date(today.getFullYear(), quarter * 3, 1);
           break;
+        }
         case 'year':
           startDate = new Date(today.getFullYear(), 0, 1);
           break;
@@ -560,105 +629,58 @@ const ThreePLView = ({
               ? new Date(d.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
               : new Date(d.month + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
             
-            const TrendChart = ({ data, getValue, title, format = 'currency', colorFn = null, goodDirection = 'down', icon }) => {
-              const values = data.map(d => getValue(d) || 0);
-              const maxVal = Math.max(...values, 1);
-              const avgVal = values.reduce((a, b) => a + b, 0) / values.length;
-              const latestVal = values[values.length - 1];
-              const prevVal = values[values.length - 2];
-              const change = prevVal > 0 ? ((latestVal - prevVal) / prevVal) * 100 : 0;
-              const isGood = goodDirection === 'down' ? change <= 0 : change >= 0;
-              
-              return (
-                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
-                  <div className="flex justify-between items-start mb-3">
-                    <div>
-                      <p className="text-slate-400 text-sm">{title}</p>
-                      <p className="text-white font-bold text-xl">
-                        {format === 'currency' ? formatCurrency(latestVal) : format === 'percent' ? `${latestVal.toFixed(1)}%` : latestVal.toFixed(0)}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      {change !== 0 && (
-                        <div className={`px-2 py-1 rounded text-xs font-medium ${isGood ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-                          {change > 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}%
-                        </div>
-                      )}
-                      <p className="text-slate-500 text-xs mt-1">vs last {timeView === 'weekly' ? 'week' : 'month'}</p>
-                    </div>
-                  </div>
-                  <div className="relative flex items-end gap-1 h-20">
-                    {data.map((d, i) => {
-                      const val = getValue(d) || 0;
-                      const height = maxVal > 0 ? (val / maxVal) * 100 : 0;
-                      const isLatest = i === data.length - 1;
-                      const defaultColor = 'bg-slate-500';
-                      const color = colorFn ? colorFn(val) : defaultColor;
-                      return (
-                        <div key={i} className="flex-1 flex flex-col items-center group relative">
-                          <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 hidden group-hover:block bg-slate-900 border border-slate-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 shadow-lg pointer-events-none">
-                            <p className="font-medium">{getLabel(d)}</p>
-                            <p className="text-slate-300">{format === 'currency' ? formatCurrency(val) : format === 'percent' ? `${val.toFixed(1)}%` : val.toFixed(0)}</p>
-                          </div>
-                          <div 
-                            className={`w-full rounded-t transition-all hover:opacity-80 ${isLatest ? color : color + '/60'}`} 
-                            style={{ height: `${Math.max(height, 4)}%` }} 
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="flex justify-between text-[10px] text-slate-500 mt-1 px-1">
-                    <span>{getLabel(data[0])}</span>
-                    <span>{getLabel(data[data.length - 1])}</span>
-                  </div>
-                  <div className="mt-2 pt-2 border-t border-slate-700/50 text-xs text-slate-500">
-                    Avg: {format === 'currency' ? formatCurrency(avgVal) : format === 'percent' ? `${avgVal.toFixed(1)}%` : avgVal.toFixed(0)}
-                  </div>
-                </div>
-              );
-            };
-            
             return (
               <div className="mb-6">
                 <h3 className="text-lg font-semibold text-white mb-4">📈 Cost Trends</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <TrendChart 
+                  <ThreePLTrendChart 
                     data={chartData} 
                     getValue={d => d.totalCost} 
                     title="Total 3PL Cost"
                     colorFn={v => 'bg-violet-500'}
+                    timeView={timeView}
+                    getLabel={getLabel}
                   />
-                  <TrendChart 
+                  <ThreePLTrendChart 
                     data={chartData} 
                     getValue={d => d.avgCostPerOrder} 
                     title="Avg Cost Per Order"
                     colorFn={v => v <= 10 ? 'bg-emerald-500' : v <= 15 ? 'bg-amber-500' : 'bg-rose-500'}
+                    timeView={timeView}
+                    getLabel={getLabel}
                   />
-                  <TrendChart 
+                  <ThreePLTrendChart 
                     data={chartData} 
                     getValue={d => d.revenue > 0 ? (d.totalCost / d.revenue) * 100 : 0} 
                     title="3PL as % of Revenue"
                     format="percent"
                     colorFn={v => v <= 10 ? 'bg-emerald-500' : v <= 15 ? 'bg-amber-500' : 'bg-rose-500'}
+                    timeView={timeView}
+                    getLabel={getLabel}
                   />
-                  <TrendChart 
+                  <ThreePLTrendChart 
                     data={chartData} 
                     getValue={d => d.shipping} 
                     title="Shipping Costs"
                     colorFn={v => 'bg-blue-500'}
+                    timeView={timeView}
+                    getLabel={getLabel}
                   />
-                  <TrendChart 
+                  <ThreePLTrendChart 
                     data={chartData} 
                     getValue={d => d.pickFees} 
                     title="Pick Fees"
                     colorFn={v => 'bg-cyan-500'}
+                    timeView={timeView}
+                    getLabel={getLabel}
                   />
-                  <TrendChart 
+                  <ThreePLTrendChart 
                     data={chartData} 
                     getValue={d => d.storage} 
                     title="Storage Costs"
                     colorFn={v => 'bg-amber-500'}
+                    timeView={timeView}
+                    getLabel={getLabel}
                   />
                 </div>
               </div>

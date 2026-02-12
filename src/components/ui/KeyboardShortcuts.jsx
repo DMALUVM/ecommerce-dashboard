@@ -37,10 +37,6 @@ const KeyboardShortcuts = ({ setView, exportAll, setShowAdsAIChat, setToast }) =
     );
   }, [search]);
 
-  useEffect(() => {
-    setSelectedIdx(0);
-  }, [search]);
-
   const closePalette = useCallback(() => {
     setShowPalette(false);
     setSearch('');
@@ -159,7 +155,10 @@ const KeyboardShortcuts = ({ setView, exportAll, setShowAdsAIChat, setToast }) =
               ref={inputRef}
               type="text"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setSelectedIdx(0);
+              }}
               placeholder="Navigate to..."
               className="flex-1 bg-transparent text-white outline-none placeholder-slate-500 text-sm"
             />

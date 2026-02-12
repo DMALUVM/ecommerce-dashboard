@@ -185,7 +185,7 @@ export default async function handler(req, res) {
           const prompts = buildAmazonPrompt(appData.adsIntelData);
           if (prompts) {
             const content = await callAnthropicAPI(prompts.userPrompt, prompts.systemPrompt, model);
-            const actionCount = (content.match(/^\d+[\.\)]/gm) || []).length;
+            const actionCount = (content.match(/^\d+[.)]/gm) || []).length;
 
             const reportEntry = {
               id: `report_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -220,7 +220,7 @@ export default async function handler(req, res) {
           const prompts = buildDtcPrompt(appData.dtcIntelData);
           if (prompts) {
             const content = await callAnthropicAPI(prompts.userPrompt, prompts.systemPrompt, model);
-            const actionCount = (content.match(/^\d+[\.\)]/gm) || []).length;
+            const actionCount = (content.match(/^\d+[.)]/gm) || []).length;
 
             const reportEntry = {
               id: `report_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,

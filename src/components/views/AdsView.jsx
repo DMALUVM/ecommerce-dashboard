@@ -30,7 +30,7 @@ const markdownToHtml = (md) => {
     // Horizontal rules
     .replace(/^---$/gm, '<hr/>')
     // Unordered lists
-    .replace(/^[\-\*] (.+)$/gm, '<li>$1</li>')
+    .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
     // Numbered lists
     .replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
   
@@ -75,10 +75,10 @@ const AdsView = ({
   const [showDataSources, setShowDataSources] = useState(false);
   const fileInputRef = useRef(null);
 
-  const campaigns = amazonCampaigns?.campaigns || [];
+  const campaigns = useMemo(() => amazonCampaigns?.campaigns || [], [amazonCampaigns]);
   const hasCampaignData = campaigns.length > 0;
-  const campaignSummary = amazonCampaigns?.summary || {};
-  const historicalDaily = amazonCampaigns?.historicalDaily || {};
+  const campaignSummary = useMemo(() => amazonCampaigns?.summary || {}, [amazonCampaigns]);
+  const historicalDaily = useMemo(() => amazonCampaigns?.historicalDaily || {}, [amazonCampaigns]);
   const hasHistoricalData = Object.keys(historicalDaily).length > 0;
 
   // Count Tier 2 reports
