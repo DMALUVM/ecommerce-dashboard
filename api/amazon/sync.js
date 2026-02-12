@@ -610,6 +610,9 @@ export default async function handler(req, res) {
   // This data is LOWER priority than SKU Economics reports
   if (syncType === 'sales') {
     try {
+      // Get access token for Orders API
+      const accessToken = await getAccessToken(clientId, clientSecret, refreshToken);
+      
       const daysBack = parseInt(req.body.daysBack) || 7;
       const salesStartDate = startDate || new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
       const salesEndDate = endDate || new Date().toISOString();
