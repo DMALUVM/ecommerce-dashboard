@@ -50,17 +50,15 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Store URL is required' });
   }
  
-  // Support both legacy (Admin API access token / shpat_) and optional OAuth-style creds.
-  // IMPORTANT: Shopify Admin API calls require an Admin API access token (typically starts with "shpat_").
-  // Some users may paste that token into the UI field labeled "Client Secret".
+  // Shopify Admin API calls require an Admin API access token.
+  // Some users paste that token into the UI field currently labeled "Client Secret".
   const looksLikeAdminToken = (t) => typeof t === 'string' && t.trim().toLowerCase().startsWith('shpat_');
-  // Prefer explicit accessToken; fall back to clientSecret if it looks like an Admin API token.
-  const legacyToken = accessToken || (looksLikeAdminToken(clientSecret) ? clientSecret : null);
-  // Only treat clientId/clientSecret as OAuth credentials if clientSecret does NOT look like an Admin API token.
-  // (If it *does* look like shpat_, we should NOT try to exchange it via /admin/oauth/access_token.)
-  const useOAuth = !!(clientId && clientSecret && !looksLikeAdminToken(clientSecret));
-  if (!useOAuth && !legacyToken) {
-    return res.status(400).json({ error: 'Missing credentials. Provide an Admin API access token (shpat_) or OAuth credentials.' });
+  // Prefer explicit accessToken. If absent, fall back to clientSecret.
+  const tokenCandidate = typeof accessToken === 'string' && accessToken.trim()
+    ? accessToken.trim()
+    : (typeof clientSecret === 'string' ? clientSecret.trim() : '');
+  if (!tokenCandidate) {
+    return res.status(400).json({ error: 'Missing credentials. Enter your Shopify Admin API access token.' });
   }
   // Clean up store URL
   let cleanStoreUrl = storeUrl.trim().toLowerCase();
@@ -71,52 +69,15 @@ export default async function handler(req, res) {
   }
   const baseUrl = `https://${cleanStoreUrl}/admin/api/2026-01`;
  
-  // Helper function to get access token (handles both old and new auth)
-  const getAccessToken = async () => {
-    if (!useOAuth) {
-      // Legacy: Use static Admin API access token (shpat_ tokens)
-      return legacyToken;
-    }
-   
-    // New 2026 OAuth: Exchange client credentials for access token
-    try {
-      const tokenResponse = await fetch(`https://${cleanStoreUrl}/admin/oauth/access_token`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-          grant_type: 'client_credentials',
-          client_id: clientId,
-          client_secret: clientSecret,
-        }).toString(),
-      });
-     
-      if (!tokenResponse.ok) {
-        const errorText = await tokenResponse.text();
-        console.error('OAuth token error:', tokenResponse.status, errorText);
-       
-        if (tokenResponse.status === 401 || tokenResponse.status === 403) {
-          throw new Error('Invalid Client ID or Secret. Check your Dev Dashboard credentials.');
-        }
-        throw new Error(`Failed to get access token: ${tokenResponse.status}`);
-      }
-     
-      const tokenData = await tokenResponse.json();
-      return tokenData.access_token;
-    } catch (err) {
-      console.error('OAuth error:', err);
-      throw new Error(`Authentication failed: ${err.message}`);
-    }
-  };
+  if (!looksLikeAdminToken(tokenCandidate) && clientId) {
+    console.warn('Shopify token does not match shpat_ pattern; proceeding with direct API call');
+  }
   // Test connection
   if (test) {
     try {
-      const token = await getAccessToken();
-     
       const shopRes = await fetch(`${baseUrl}/shop.json`, {
         headers: {
-          'X-Shopify-Access-Token': token,
+          'X-Shopify-Access-Token': tokenCandidate,
           'Content-Type': 'application/json',
         },
       });
@@ -138,21 +99,15 @@ export default async function handler(req, res) {
         success: true,
         shopName: shopData.shop?.name || cleanStoreUrl,
         email: shopData.shop?.email,
-        authMethod: useOAuth ? 'oauth2026' : 'legacy',
+        authMethod: 'admin_token',
       });
     } catch (err) {
       console.error('Connection test error:', err);
-      return res.status(500).json({ error: err.message || 'Connection failed' });
+      return res.status(502).json({ error: err.message || 'Failed to reach Shopify API' });
     }
   }
- 
-  // Get access token for all other operations
-  let token;
-  try {
-    token = await getAccessToken();
-  } catch (err) {
-    return res.status(401).json({ error: err.message });
-  }
+
+  const token = tokenCandidate;
   // ============ PRODUCT CATALOG SYNC ============
   // Returns SKU -> product info mapping for the entire catalog
   if (syncType === 'products') {

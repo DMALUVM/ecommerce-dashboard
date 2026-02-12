@@ -805,23 +805,23 @@ const SettingsView = ({
                     <label className="block text-slate-300 text-sm font-medium mb-2">Client ID</label>
                     <input
                       type="text"
-                      placeholder="Your app's Client ID"
+                      placeholder="Optional for reference"
                       value={shopifyCredentials.clientId}
                       onChange={(e) => setShopifyCredentials(p => ({ ...p, clientId: e.target.value }))}
                       className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-green-500"
                     />
-                    <p className="text-slate-500 text-xs mt-1">From Dev Dashboard → Your App → Settings</p>
+                    <p className="text-slate-500 text-xs mt-1">Optional. Not required for token-based sync.</p>
                   </div>
                   <div>
-                    <label className="block text-slate-300 text-sm font-medium mb-2">Client Secret</label>
+                    <label className="block text-slate-300 text-sm font-medium mb-2">Admin API Access Token</label>
                     <input
                       type="password"
-                      placeholder="Your app's Client Secret"
+                      placeholder="shpat_..."
                       value={shopifyCredentials.clientSecret}
                       onChange={(e) => setShopifyCredentials(p => ({ ...p, clientSecret: e.target.value }))}
                       className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-green-500"
                     />
-                    <p className="text-slate-500 text-xs mt-1">Keep this secret! Never share it.</p>
+                    <p className="text-slate-500 text-xs mt-1">From Shopify Admin: Apps and sales channels → Develop apps → API credentials.</p>
                   </div>
                   <button
                     onClick={async () => {
@@ -891,13 +891,12 @@ const SettingsView = ({
                   How to get your credentials (Updated Jan 2026)
                 </h4>
                 <ol className="text-slate-300 text-sm space-y-2">
-                  <li>1. Go to <a href="https://partners.shopify.com" target="_blank" className="text-blue-400 underline">Shopify Partners</a> → Apps → Create app</li>
-                  <li>2. Or in your store: Settings → Apps → Develop apps → Create app</li>
-                  <li>3. Configure Admin API scopes: <code className="bg-slate-800 px-1 rounded">read_orders</code>, <code className="bg-slate-800 px-1 rounded">read_products</code>, <code className="bg-slate-800 px-1 rounded">read_inventory</code>, <code className="bg-slate-800 px-1 rounded">read_locations</code></li>
-                  <li>4. Go to app Settings to find your <strong>Client ID</strong> and <strong>Client Secret</strong></li>
-                  <li>5. Install the app on your store</li>
+                  <li>1. In Shopify Admin: Settings → Apps and sales channels → Develop apps</li>
+                  <li>2. Create/select your custom app, then configure Admin API scopes: <code className="bg-slate-800 px-1 rounded">read_orders</code>, <code className="bg-slate-800 px-1 rounded">read_products</code>, <code className="bg-slate-800 px-1 rounded">read_inventory</code>, <code className="bg-slate-800 px-1 rounded">read_locations</code></li>
+                  <li>3. Install/reinstall the app after changing scopes</li>
+                  <li>4. Copy <strong>Admin API access token</strong> (starts with <code className="bg-slate-800 px-1 rounded">shpat_</code>) into this form</li>
                 </ol>
-                <p className="text-slate-500 text-xs mt-3">Note: As of Jan 2026, Shopify uses OAuth. Tokens are generated automatically and refresh every 24 hours.</p>
+                <p className="text-slate-500 text-xs mt-3">The app uses your Admin API token directly for server-side sync.</p>
               </div>
             </div>
           )}
