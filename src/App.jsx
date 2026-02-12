@@ -7545,6 +7545,18 @@ const savePeriods = async (d) => {
         
         if (data.success && data.items) {
           amzSource = data.source || 'amazon-sp-api';
+          
+          // Log AWD data availability
+          const awdItems = data.items.filter(i => (i.awdQuantity || 0) > 0 || (i.awdInbound || 0) > 0);
+          console.log('[Inventory] Amazon API response:', { 
+            totalItems: data.items.length, 
+            awdItemCount: awdItems.length,
+            awdError: data.awdError || 'none',
+            awdErrorDetails: data.awdErrorDetails || '',
+            sampleAwdItem: awdItems[0] || 'no AWD items found',
+            syncType: data.syncType
+          });
+          
           const seenAmzSkus = new Set(); // Track duplicates
           data.items.forEach(item => {
             const sku = item.sku;
@@ -7602,6 +7614,7 @@ const savePeriods = async (d) => {
           
           // Update Amazon last sync time
           setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+          console.log('[Inventory] AWD extraction:', { awdSkuCount: Object.keys(awdData).length, awdTotal, awdValue: awdValue.toFixed(2) });
         }
       } catch (err) {
         devError('Amazon SP-API sync failed, falling back to file:', err);

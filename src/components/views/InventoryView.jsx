@@ -1118,23 +1118,24 @@ const InventoryView = ({
           )}
           
           <div className="overflow-x-auto">
-            <table className="w-full" style={{tableLayout: 'fixed', minWidth: '1280px'}}>
+            <table className="w-full" style={{tableLayout: 'fixed', minWidth: '1480px'}}>
               <colgroup>
-                <col style={{width: '185px'}} />
-                <col style={{width: '30px'}} />
+                <col style={{width: '180px'}} />
+                <col style={{width: '32px'}} />
+                <col style={{width: '70px'}} />
                 <col style={{width: '65px'}} />
                 <col style={{width: '60px'}} />
-                <col style={{width: '60px'}} />
                 <col style={{width: '65px'}} />
-                <col style={{width: '80px'}} />
+                <col style={{width: '75px'}} />
+                <col style={{width: '95px'}} />
                 <col style={{width: '55px'}} />
                 <col style={{width: '55px'}} />
                 <col style={{width: '55px'}} />
                 <col style={{width: '50px'}} />
-                <col style={{width: '45px'}} />
-                <col style={{width: '65px'}} />
-                <col style={{width: '65px'}} />
-                <col style={{width: '75px'}} />
+                <col style={{width: '55px'}} />
+                <col style={{width: '70px'}} />
+                <col style={{width: '70px'}} />
+                <col style={{width: '78px'}} />
                 <col style={{width: '35px'}} />
               </colgroup>
               <thead className="bg-slate-900/50"><tr>
@@ -1208,8 +1209,8 @@ const InventoryView = ({
                       <td className={`text-right px-2 py-2 text-sm ${settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty ? 'text-rose-400 font-bold' : 'text-violet-400'}`}>{formatNumber(item.threeplQty)}</td>
                       <td className="text-right px-2 py-2 text-amber-400 text-sm">{formatNumber(item.awdQty || 0)}</td>
                       <td className="text-right px-2 py-2 text-sky-400 text-sm">{formatNumber((item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0))}</td>
-                      <td className="text-right px-2 py-2 text-white text-sm font-medium">{formatNumber(item.totalQty)}</td>
-                      <td className="text-right px-2 py-2 text-white text-sm">{formatCurrency(item.totalValue)}</td>
+                      <td className="text-right px-2 py-2 text-white text-sm font-medium tabular-nums">{formatNumber(item.totalQty)}</td>
+                      <td className="text-right px-2 py-2 text-white text-sm tabular-nums overflow-hidden text-ellipsis whitespace-nowrap" title={formatCurrency(item.totalValue)}>{item.totalValue >= 10000 ? '$' + (item.totalValue / 1000).toFixed(1) + 'k' : formatCurrency(item.totalValue)}</td>
                       <td className="text-right px-2 py-2 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>
                       <td className="text-right px-2 py-2 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
                       <td className="text-right px-2 py-2 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
