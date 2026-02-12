@@ -11700,9 +11700,14 @@ const savePeriods = useCallback(async (d) => {
     console.log('[AutoSync] Starting...', { force, enabled: appSettings.autoSync?.enabled, running: autoSyncStatus.running });
     if (!appSettings.autoSync?.enabled && !force) { console.log('[AutoSync] Skipped — not enabled and not forced'); return; }
     if (autoSyncStatus.running) { console.log('[AutoSync] Skipped — already running'); return; }
+    if (!shouldUseLocalStorage && !secureSecretsLoaded && !force) {
+      console.log('[AutoSync] Skipped — waiting for secure credentials to load');
+      return;
+    }
     
     const threshold = appSettings.autoSync?.staleThresholdHours || 4;
     const results = [];
+    const canTrustCredentialState = shouldUseLocalStorage || secureSecretsLoaded;
     // Track latest inventory across sequential sync operations to prevent stale overwrites
     let latestInvHistory = invHistory;
     
@@ -11806,6 +11811,11 @@ const savePeriods = useCallback(async (d) => {
       
       // Check Shopify Sales - use /api/shopify/sync endpoint
       if (appSettings.autoSync?.shopify !== false && shopifyCredentials.connected) {
+        if (canTrustCredentialState && !shopifyCredentials.storeUrl) {
+          setShopifyCredentials(p => ({ ...p, connected: false, lastSync: null }));
+          results.push({ service: 'Shopify', success: false, error: 'Disconnected: missing store URL. Reconnect Shopify in Settings.' });
+          devWarn('Shopify auto-sync skipped: missing store URL');
+        } else {
         const shopifyStale = isServiceStale(shopifyCredentials.lastSync, threshold);
         
         if (shopifyStale || force) {
@@ -11971,13 +11981,25 @@ const savePeriods = useCallback(async (d) => {
               setShopifyCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               results.push({ service: 'Shopify', success: true, orders: data.orderCount || 0, days: syncedDayCount });
             } else {
+              const errorText = String(data?.error || '').toLowerCase();
+              const missingShopifyCredentials = res.status === 400 && (
+                errorText.includes('missing credentials') ||
+                errorText.includes('store url is required')
+              );
+              if (missingShopifyCredentials && canTrustCredentialState) {
+                setShopifyCredentials(p => ({ ...p, connected: false, clientSecret: '', lastSync: null }));
+                results.push({ service: 'Shopify', success: false, error: 'Disconnected: missing Shopify credentials. Reconnect in Settings.' });
+                devWarn('Shopify auto-sync disconnected integration due to missing credentials');
+              } else {
               results.push({ service: 'Shopify', success: false, error: data.error || `HTTP ${res.status}` });
               devWarn('Shopify auto-sync failed:', data.error || res.status);
+              }
             }
           } catch (err) {
             results.push({ service: 'Shopify', success: false, error: err.message });
             devWarn('Shopify auto-sync error:', err.message);
           }
+        }
         }
       }
       
@@ -12468,8 +12490,19 @@ const savePeriods = useCallback(async (d) => {
                 // Non-fatal - the API sync still succeeded
               }
             } else {
+              const errorText = String(data?.error || '').toLowerCase();
+              const missingPackiyoCredentials = res.status === 400 && (
+                errorText.includes('api key is required') ||
+                errorText.includes('customer id is required')
+              );
+              if (missingPackiyoCredentials && canTrustCredentialState) {
+                setPackiyoCredentials(p => ({ ...p, connected: false, apiKey: '', lastSync: null }));
+                results.push({ service: 'Packiyo', success: false, error: 'Disconnected: missing Packiyo credentials. Reconnect in Settings.' });
+                devWarn('Packiyo auto-sync disconnected integration due to missing credentials');
+              } else {
               results.push({ service: 'Packiyo', success: false, error: data.error || `HTTP ${res.status}` });
               devWarn('Packiyo auto-sync failed:', data.error || res.status);
+              }
             }
           } catch (err) {
             results.push({ service: 'Packiyo', success: false, error: err.message });
@@ -12630,6 +12663,11 @@ const savePeriods = useCallback(async (d) => {
       
       // Check QuickBooks Online
       if (appSettings.autoSync?.qbo !== false && qboCredentials.connected) {
+        if (canTrustCredentialState && !qboCredentials.realmId) {
+          setQboCredentials(p => ({ ...p, connected: false, accessToken: '', refreshToken: '', lastSync: null }));
+          results.push({ service: 'QuickBooks', success: false, error: 'Disconnected: missing QBO Company ID (realmId). Reconnect in Settings.' });
+          devWarn('QBO auto-sync skipped: missing realmId');
+        } else {
         const qboStale = isServiceStale(qboCredentials.lastSync, threshold);
         
         if (qboStale || force) {
@@ -12698,13 +12736,28 @@ const savePeriods = useCallback(async (d) => {
               const txnCount = data.transactions?.length || 0;
               results.push({ service: 'QuickBooks', success: true, transactions: txnCount });
             } else {
+              let errorText = '';
+              try {
+                const errData = await res.clone().json();
+                errorText = String(errData?.error || '');
+              } catch {
+                errorText = '';
+              }
+              const missingQboCredentials = res.status === 400 && errorText.toLowerCase().includes('missing required fields: accesstoken and realmid');
+              if (missingQboCredentials && canTrustCredentialState) {
+                setQboCredentials(p => ({ ...p, connected: false, accessToken: '', refreshToken: '', lastSync: null }));
+                results.push({ service: 'QuickBooks', success: false, error: 'Disconnected: missing QBO tokens. Reconnect in Settings.' });
+                devWarn('QBO auto-sync disconnected integration due to missing credentials');
+              } else {
               results.push({ service: 'QuickBooks', success: false, error: `HTTP ${res.status}` });
               devWarn('QBO auto-sync failed:', res.status);
+              }
             }
           } catch (err) {
             results.push({ service: 'QuickBooks', success: false, error: err.message });
             devWarn('QBO auto-sync error:', err.message);
           }
+        }
         }
       }
       
@@ -12761,7 +12814,7 @@ const savePeriods = useCallback(async (d) => {
         }
       }
     }
-  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, qboCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs, getCogsLookup, save, saveInv, savedProductNames]);
+  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, qboCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs, getCogsLookup, save, saveInv, savedProductNames, shouldUseLocalStorage, secureSecretsLoaded]);
   
   // Run auto-sync on app load (if enabled)
   const runAutoSyncRef = useRef(runAutoSync);
