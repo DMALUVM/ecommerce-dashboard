@@ -7587,7 +7587,8 @@ const savePeriods = async (d) => {
             
             // Track AWD separately
             if ((item.awdQuantity || 0) > 0 || (item.awdInbound || 0) > 0 || (item.awdReplenishment || 0) > 0) {
-              const awdCost = cogsLookup[item.sku] || cogsLookup[skuLower] || cogsLookup[skuUpper] || 0;
+              const awdCost = cogsLookup[item.sku] || cogsLookup[skuLower] || cogsLookup[skuUpper] || 
+                              cogsLookup[item.sku.replace(/Shop$/i, '')] || cogsLookup[item.sku.replace(/Shop$/i, '').toLowerCase()] || 0;
               awdData[skuUpper] = {
                 sku: skuUpper,
                 awdQuantity: item.awdQuantity || 0,
@@ -7863,7 +7864,9 @@ const savePeriods = async (d) => {
       const totalInbound = aInbound + awdInb + tInbound;
       const totalQty = aQty + tQty + hQty + awdQty + totalInbound;
       
-      const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || cogsLookup[skuLower] || 0;
+      const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || cogsLookup[skuLower] || 
+                   cogsLookup[sku.replace(/Shop$/i, '')] || cogsLookup[sku.replace(/Shop$/i, '').toLowerCase()] || 
+                   cogsLookup[sku.replace(/Shop$/i, '').toUpperCase()] || 0;
       
       // Get velocity from both weekly data AND Amazon inventory file
       // Priority: weekly sales data > t30 from inventory file

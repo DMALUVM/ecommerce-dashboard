@@ -1609,9 +1609,22 @@ const SettingsView = ({
                     const items = packiyoInventoryData.items || [];
                     const cogsLookup = getCogsLookup();
                     
+                    // Smart COGS lookup that handles SKU variants (e.g. DDPE0003Shop -> DDPE0003)
+                    const smartCogs = (sku) => {
+                      if (!sku) return 0;
+                      const s = sku.trim();
+                      const pick = (k) => { const v = cogsLookup[k]; return typeof v === 'number' ? v : (v?.cost || 0); };
+                      let c = pick(s); if (c) return c;
+                      const base = s.replace(/Shop$/i, '');
+                      for (const k of [base, base + 'Shop', s.toLowerCase(), base.toLowerCase(), s.toUpperCase(), base.toUpperCase()]) {
+                        c = pick(k); if (c) return c;
+                      }
+                      return 0;
+                    };
+                    
                     // Add COGS-based value to each item
                     const itemsWithValue = items.map(item => {
-                      const cogs = cogsLookup[item.sku] || 0;
+                      const cogs = smartCogs(item.sku);
                       return {
                         ...item,
                         cogs,
