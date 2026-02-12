@@ -22,9 +22,18 @@ export default async function handler(req, res) {
 
     // Validate required fields
     if (!accessToken || !realmId) {
+      // If we have a refresh token but no access token, hint the client to refresh first
+      if (!accessToken && refreshToken) {
+        return res.status(401).json({ 
+          error: 'Access token missing or expired',
+          needsRefresh: true,
+          message: 'Call /api/qbo/refresh with your refreshToken first, then retry with the new accessToken'
+        });
+      }
       return res.status(400).json({ 
         error: 'Missing required fields: accessToken and realmId',
-        received: { hasAccessToken: !!accessToken, hasRealmId: !!realmId }
+        received: { hasAccessToken: !!accessToken, hasRealmId: !!realmId, hasRefreshToken: !!refreshToken },
+        hint: !realmId ? 'realmId (Company ID) is missing. Please reconnect to QuickBooks.' : 'accessToken is missing. Try refreshing your token.'
       });
     }
 

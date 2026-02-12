@@ -284,13 +284,21 @@ export default async function handler(req, res) {
       let nextToken = null;
       
       do {
-        // AWD Inventory API endpoint
+        // AWD Inventory API endpoint - details=SHOW required for full quantity breakdown
         let endpoint = `/awd/2024-05-09/inventory`;
         const params = new URLSearchParams();
+        params.append('details', 'SHOW');
         if (nextToken) params.append('nextToken', nextToken);
-        if (params.toString()) endpoint += `?${params.toString()}`;
+        endpoint += `?${params.toString()}`;
 
+        console.log('AWD API request:', endpoint);
         const awdData = await spApiRequest(accessToken, endpoint);
+        console.log('AWD API response keys:', Object.keys(awdData), 'inventory count:', awdData.inventory?.length);
+        
+        // Log first item structure for debugging
+        if (awdData.inventory?.length > 0 && awdItems.length === 0) {
+          console.log('AWD first item structure:', JSON.stringify(awdData.inventory[0], null, 2));
+        }
         
         if (awdData.inventory) {
           awdItems.push(...awdData.inventory);
@@ -303,7 +311,9 @@ export default async function handler(req, res) {
         
       } while (nextToken);
 
-      // Process AWD inventory
+      console.log('AWD total items fetched:', awdItems.length);
+
+      // Process AWD inventory - handle multiple possible response formats
       const awdInventory = {};
       let awdTotalUnits = 0;
 
@@ -311,20 +321,61 @@ export default async function handler(req, res) {
         const sku = item.sku || item.sellerSku;
         if (!sku) return;
 
-        const onHand = item.totalInventory?.quantity || item.onHandQuantity || 0;
-        const inbound = item.inboundInventory?.quantity || 0;
+        // Try multiple field paths for on-hand quantity
+        const summary = item.inventorySummary || item.inventoryDetails || {};
+        const onHand = 
+          item.totalInventory?.quantity ||      // { totalInventory: { quantity: N } }
+          summary.totalQuantity?.quantity ||     // { inventorySummary: { totalQuantity: { quantity: N } } }
+          summary.totalQuantity ||              // { inventorySummary: { totalQuantity: N } }
+          summary.onHandQuantity?.quantity ||
+          summary.onHandQuantity ||
+          item.onHandQuantity ||
+          item.quantity ||
+          0;
         
-        awdTotalUnits += onHand;
+        // Try multiple field paths for inbound quantity
+        const inbound = 
+          item.totalInboundQuantity?.quantity || // { totalInboundQuantity: { quantity: N } }
+          item.totalInboundQuantity ||
+          item.inboundInventory?.quantity ||
+          summary.inboundQuantity?.quantity ||
+          summary.inboundQuantity ||
+          0;
+        
+        // Replenishment quantity (in transit from AWD to FBA)
+        const replenishment =
+          item.replenishmentQuantity?.quantity ||
+          item.replenishmentQuantity ||
+          summary.replenishmentQuantity?.quantity ||
+          summary.replenishmentQuantity ||
+          0;
+        
+        // Reserved quantity
+        const reserved =
+          summary.reservedQuantity?.quantity ||
+          summary.reservedQuantity ||
+          item.reservedQuantity?.quantity ||
+          item.reservedQuantity ||
+          0;
+        
+        const totalAwdQty = (typeof onHand === 'number' ? onHand : 0) + (typeof reserved === 'number' ? reserved : 0);
+        const totalInboundQty = (typeof inbound === 'number' ? inbound : 0);
+        const replenishmentQty = typeof replenishment === 'number' ? replenishment : 0;
+        
+        awdTotalUnits += totalAwdQty;
 
         awdInventory[sku] = {
           sku,
-          name: item.productName || sku,
-          awdQuantity: onHand,
-          awdInbound: inbound,
+          name: item.productName || item.name || sku,
+          awdQuantity: totalAwdQty,
+          awdInbound: totalInboundQty + replenishmentQty,
+          awdReplenishment: replenishmentQty,
           distributionCenterId: item.distributionCenterId || '',
           lastUpdated: new Date().toISOString(),
         };
       });
+
+      console.log('AWD processed:', Object.keys(awdInventory).length, 'SKUs,', awdTotalUnits, 'total units');
 
       // If this was 'all' sync, merge with FBA and return
       if (syncType === 'all') {
@@ -397,20 +448,26 @@ export default async function handler(req, res) {
       });
 
     } catch (err) {
-      // AWD might not be available for all sellers
-      console.error('AWD inventory sync error:', err);
+      // AWD might not be available - common reasons:
+      // 1. AWD role not assigned to app (requires re-authorization)
+      // 2. Seller not enrolled in AWD
+      // 3. Rate limiting
+      console.error('AWD inventory sync error:', err.message || err);
       
       if (syncType === 'all') {
-        // Return just FBA data if AWD fails
+        // Return FBA data with AWD error details for debugging
         const fbaInventory = req.fbaInventory || {};
         return res.status(200).json({
           success: true,
           syncType: 'fba',
           source: 'amazon-fba',
-          awdError: err.message,
+          awdError: err.message || 'AWD sync failed',
+          awdErrorDetails: 'AWD API call failed. Common fixes: 1) Add AWD role to your SP-API app in Developer Profile, 2) Re-authorize the app after adding the role, 3) Ensure seller is enrolled in AWD program.',
           summary: {
             totalSkus: Object.keys(fbaInventory).length,
             totalUnits: Object.values(fbaInventory).reduce((s, i) => s + (i.available || 0), 0),
+            awdSkus: 0,
+            awdUnits: 0,
           },
           items: Object.values(fbaInventory),
           inventoryBySku: fbaInventory,

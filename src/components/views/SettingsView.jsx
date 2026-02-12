@@ -2297,7 +2297,41 @@ const SettingsView = ({
                   let currentAccessToken = qboCredentials.accessToken;
                   
                   try {
-                    // First, try to sync with current token
+                    // If no access token but we have a refresh token, refresh first
+                    if (!currentAccessToken && qboCredentials.refreshToken) {
+                      setToast({ message: 'Refreshing QuickBooks token...', type: 'info' });
+                      const refreshRes = await fetch('/api/qbo/refresh', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ refreshToken: qboCredentials.refreshToken }),
+                      });
+                      if (refreshRes.ok) {
+                        const refreshData = await refreshRes.json();
+                        currentAccessToken = refreshData.accessToken;
+                        setQboCredentials(p => ({
+                          ...p,
+                          accessToken: refreshData.accessToken,
+                          refreshToken: refreshData.refreshToken || p.refreshToken,
+                        }));
+                      } else {
+                        const refreshError = await refreshRes.json().catch(() => ({}));
+                        if (refreshError.needsReauth) {
+                          setQboCredentials(p => ({ ...p, connected: false, accessToken: '', refreshToken: '' }));
+                          throw new Error('Session expired. Please reconnect to QuickBooks.');
+                        }
+                        throw new Error('Failed to refresh token. Please reconnect to QuickBooks.');
+                      }
+                    }
+                    
+                    if (!currentAccessToken) {
+                      throw new Error('No QuickBooks access token. Please connect to QuickBooks first.');
+                    }
+                    
+                    if (!qboCredentials.realmId) {
+                      throw new Error('No QuickBooks Company ID (realmId). Please reconnect to QuickBooks.');
+                    }
+                    
+                    // Sync with current (or refreshed) token
                     let res = await fetch('/api/qbo/sync', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },

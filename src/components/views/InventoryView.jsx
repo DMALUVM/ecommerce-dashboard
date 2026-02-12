@@ -409,20 +409,30 @@ const InventoryView = ({
   const itemAmazonUnits = items.reduce((s, i) => s + (i.amazonQty || 0), 0);
   const itemAmazonValue = items.reduce((s, i) => s + ((i.amazonValue ?? ((i.amazonQty || 0) * (i.cost || 0))) || 0), 0);
   
+  const itemAwdUnits = items.reduce((s, i) => s + (i.awdQty || 0), 0);
+  const itemAwdValue = items.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
+  const itemInboundUnits = items.reduce((s, i) => s + (i.amazonInbound || 0) + (i.awdInbound || 0) + (i.threeplInbound || 0), 0);
+  
   // Use item totals if available, otherwise fall back to snapshot summary
   const finalThreeplUnits = itemThreeplUnits > 0 ? itemThreeplUnits : (summary.threeplUnits || 0);
   const finalThreeplValue = itemThreeplValue > 0 ? itemThreeplValue : (summary.threeplValue || 0);
   const finalAmazonUnits = itemAmazonUnits > 0 ? itemAmazonUnits : (summary.amazonUnits || 0);
   const finalAmazonValue = itemAmazonValue > 0 ? itemAmazonValue : (summary.amazonValue || 0);
+  const finalAwdUnits = itemAwdUnits > 0 ? itemAwdUnits : (summary.awdUnits || 0);
+  const finalAwdValue = itemAwdValue > 0 ? itemAwdValue : (summary.awdValue || 0);
+  const finalInboundUnits = itemInboundUnits > 0 ? itemInboundUnits : (summary.amazonInbound || 0);
   
   const filteredSummary = {
     ...summary,
-    totalUnits: finalAmazonUnits + finalThreeplUnits + (summary.homeUnits || 0),
-    totalValue: finalAmazonValue + finalThreeplValue + (summary.homeValue || 0),
+    totalUnits: finalAmazonUnits + finalThreeplUnits + (summary.homeUnits || 0) + finalAwdUnits + finalInboundUnits,
+    totalValue: finalAmazonValue + finalThreeplValue + (summary.homeValue || 0) + finalAwdValue,
     amazonUnits: finalAmazonUnits,
     amazonValue: finalAmazonValue,
     threeplUnits: finalThreeplUnits,
     threeplValue: finalThreeplValue,
+    awdUnits: finalAwdUnits,
+    awdValue: finalAwdValue,
+    inboundUnits: finalInboundUnits,
     skuCount: items.length,
     critical: items.filter(i => i.health === 'critical').length,
     low: items.filter(i => i.health === 'low').length,
@@ -764,6 +774,8 @@ const InventoryView = ({
           <MetricCard label="Total Value (at cost)" value={formatCurrency(filteredSummary.totalValue)} sub="Units × COGS" icon={DollarSign} color="emerald" />
           <MetricCard label="Amazon FBA" value={formatNumber(filteredSummary.amazonUnits)} sub={formatCurrency(filteredSummary.amazonValue)} icon={ShoppingCart} color="orange" />
           <MetricCard label="3PL" value={formatNumber(filteredSummary.threeplUnits)} sub={formatCurrency(filteredSummary.threeplValue)} icon={Boxes} color="violet" />
+          <MetricCard label="AWD" value={formatNumber(filteredSummary.awdUnits || 0)} sub={formatCurrency(filteredSummary.awdValue || 0)} icon={Boxes} color="amber" />
+          <MetricCard label="Inbound" value={formatNumber(filteredSummary.inboundUnits || 0)} sub="In transit" icon={Package} color="sky" />
         </div>
         {data.velocitySource && <div className="bg-cyan-900/20 border border-cyan-500/30 rounded-xl p-3 mb-6"><p className="text-cyan-400 text-sm"><span className="font-semibold">Velocity:</span> {data.velocitySource}</p></div>}
         
@@ -1103,12 +1115,13 @@ const InventoryView = ({
           )}
           
           <div className="overflow-x-auto">
-            <table className="w-full" style={{tableLayout: 'fixed', minWidth: '1100px'}}>
+            <table className="w-full" style={{tableLayout: 'fixed', minWidth: '1280px'}}>
               <colgroup>
                 <col style={{width: '185px'}} />
                 <col style={{width: '30px'}} />
                 <col style={{width: '65px'}} />
-                <col style={{width: '65px'}} />
+                <col style={{width: '60px'}} />
+                <col style={{width: '60px'}} />
                 <col style={{width: '65px'}} />
                 <col style={{width: '80px'}} />
                 <col style={{width: '55px'}} />
@@ -1127,6 +1140,8 @@ const InventoryView = ({
                   { key: 'abcClass', label: 'ABC', align: 'center' },
                   { key: 'amazonQty', label: 'Amazon', align: 'right' },
                   { key: 'threeplQty', label: '3PL', align: 'right' },
+                  { key: 'awdQty', label: 'AWD', align: 'right' },
+                  { key: 'amazonInbound', label: 'Inbound', align: 'right' },
                   { key: 'totalQty', label: 'Total', align: 'right' },
                   { key: 'totalValue', label: 'Value', align: 'right' },
                   { key: 'amzWeeklyVel', label: 'AMZ Vel', align: 'right' },
@@ -1188,6 +1203,8 @@ const InventoryView = ({
                       </td>
                       <td className="text-right px-2 py-2 text-orange-400 text-sm">{formatNumber(item.amazonQty)}</td>
                       <td className={`text-right px-2 py-2 text-sm ${settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty ? 'text-rose-400 font-bold' : 'text-violet-400'}`}>{formatNumber(item.threeplQty)}</td>
+                      <td className="text-right px-2 py-2 text-amber-400 text-sm">{formatNumber(item.awdQty || 0)}</td>
+                      <td className="text-right px-2 py-2 text-sky-400 text-sm">{formatNumber((item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0))}</td>
                       <td className="text-right px-2 py-2 text-white text-sm font-medium">{formatNumber(item.totalQty)}</td>
                       <td className="text-right px-2 py-2 text-white text-sm">{formatCurrency(item.totalValue)}</td>
                       <td className="text-right px-2 py-2 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>

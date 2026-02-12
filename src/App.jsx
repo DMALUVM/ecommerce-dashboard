@@ -7009,7 +7009,7 @@ const savePeriods = async (d) => {
     
     // File is optional if Amazon SP-API is connected
     const hasAmazonFile = invFiles.amazon && invFiles.amazon.length > 0;
-    const hasAmazonApi = amazonCredentials.connected && amazonCredentials.refreshToken;
+    const hasAmazonApi = amazonCredentials.refreshToken;
     
     if (!hasAmazonFile && !hasAmazonApi) { 
       setToast({ message: 'Upload Amazon FBA file or connect Amazon SP-API', type: 'error' }); 
@@ -7516,9 +7516,10 @@ const savePeriods = async (d) => {
     let amzSource = 'file-upload';
     let awdData = {};
     let awdTotal = 0;
+    let awdValue = 0;
 
     // Try Amazon SP-API first if connected
-    if (amazonCredentials.connected && amazonCredentials.refreshToken) {
+    if (amazonCredentials.refreshToken) {
       try {
         const res = await fetch('/api/amazon/sync', {
           method: 'POST',
@@ -7577,13 +7578,16 @@ const savePeriods = async (d) => {
             amzInv[skuUpper] = itemData;
             
             // Track AWD separately
-            if (item.awdQuantity > 0) {
+            if ((item.awdQuantity || 0) > 0 || (item.awdInbound || 0) > 0 || (item.awdReplenishment || 0) > 0) {
+              const awdCost = cogsLookup[item.sku] || cogsLookup[skuLower] || cogsLookup[skuUpper] || 0;
               awdData[skuUpper] = {
                 sku: skuUpper,
-                awdQuantity: item.awdQuantity,
+                awdQuantity: item.awdQuantity || 0,
                 awdInbound: item.awdInbound || 0,
+                awdReplenishment: item.awdReplenishment || 0,
               };
-              awdTotal += item.awdQuantity;
+              awdTotal += (item.awdQuantity || 0);
+              awdValue += (item.awdQuantity || 0) * awdCost;
             }
           });
           
@@ -7839,11 +7843,17 @@ const savePeriods = async (d) => {
       const a = amzInv[sku] || amzInvLower[skuLower] || {};
       const t = tplInv[sku] || tplInvLower[skuLower] || {};
       const h = homeInv[sku] || homeInvLower[skuLower] || {};
+      const awdItem = awdData[sku] || awdData[skuLower] || awdData[sku.toUpperCase()] || {};
       
       const aQty = a.total || 0;
       const tQty = t.total || 0;
       const hQty = h.total || 0;
-      const totalQty = aQty + tQty + hQty;
+      const awdQty = awdItem.awdQuantity || 0;
+      const aInbound = a.inbound || 0;
+      const awdInb = awdItem.awdInbound || 0;
+      const tInbound = t.inbound || 0;
+      const totalInbound = aInbound + awdInb + tInbound;
+      const totalQty = aQty + tQty + hQty + awdQty + totalInbound;
       
       const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || cogsLookup[skuLower] || 0;
       
@@ -7945,6 +7955,8 @@ const savePeriods = async (d) => {
         amazonQty: aQty, 
         threeplQty: tQty,
         homeQty: hQty,
+        awdQty,
+        awdInbound: awdInb,
         totalQty, 
         cost, 
         totalValue: totalQty * cost, 
@@ -7960,8 +7972,8 @@ const savePeriods = async (d) => {
         daysUntilMustOrder,
         suggestedOrderQty,
         leadTimeDays,
-        amazonInbound: a.inbound || 0, 
-        threeplInbound: t.inbound || 0,
+        amazonInbound: aInbound, 
+        threeplInbound: tInbound,
         // Industry-standard demand metrics
         safetyStock,
         reorderPoint,
@@ -8144,12 +8156,13 @@ const savePeriods = async (d) => {
       velocitySource: velNote + learningNote,
       inventorySources: sourceNote,
       summary: { 
-        totalUnits: amzTotal + tplTotal + homeTotal, 
-        totalValue: amzValue + tplValue + homeValue, 
+        totalUnits: amzTotal + tplTotal + homeTotal + awdTotal + amzInbound + tplInbound, 
+        totalValue: amzValue + tplValue + homeValue + awdValue, 
         amazonUnits: amzTotal, 
         amazonValue: amzValue, 
         amazonInbound: amzInbound,
         awdUnits: awdTotal,
+        awdValue: awdValue,
         threeplUnits: tplTotal, 
         threeplValue: tplValue, 
         threeplInbound: tplInbound,
@@ -11195,7 +11208,7 @@ const savePeriods = async (d) => {
     
     try {
       // Check Amazon - use /api/amazon/sync endpoint
-      if (appSettings.autoSync?.amazon !== false && amazonCredentials.connected) {
+      if (appSettings.autoSync?.amazon !== false && (amazonCredentials.connected || amazonCredentials.refreshToken)) {
         const amazonStale = isServiceStale(amazonCredentials.lastSync, threshold);
         
         if (amazonStale || force) {
@@ -11262,6 +11275,54 @@ const savePeriods = async (d) => {
             results.push({ service: 'Shopify', success: false, error: err.message });
             devWarn('Shopify auto-sync error:', err.message);
           }
+        }
+      }
+      
+      // Fetch fresh Amazon FBA+AWD inventory for snapshot updates
+      let freshAmazonFbaData = null;
+      if (amazonCredentials.refreshToken) {
+        try {
+          console.log('[AutoSync] Fetching /api/amazon/sync with syncType: all (FBA + AWD)...');
+          const fbaRes = await fetch('/api/amazon/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              syncType: 'all',
+              refreshToken: amazonCredentials.refreshToken,
+              clientId: amazonCredentials.clientId,
+              clientSecret: amazonCredentials.clientSecret,
+              sellerId: amazonCredentials.sellerId,
+              marketplaceId: amazonCredentials.marketplaceId || 'ATVPDKIKX0DER',
+            }),
+          });
+          const fbaData = await fbaRes.json();
+          console.log('[AutoSync] Amazon FBA+AWD response:', { syncType: fbaData.syncType, itemCount: fbaData.items?.length, awdError: fbaData.awdError, summary: fbaData.summary });
+          
+          if (fbaData.awdError) {
+            console.warn('[AutoSync] AWD API failed:', fbaData.awdError, fbaData.awdErrorDetails || '');
+          }
+          
+          if (fbaData.success && fbaData.items) {
+            freshAmazonFbaData = {};
+            fbaData.items.forEach(item => {
+              if (!item.sku) return;
+              const skuUpper = item.sku.toUpperCase();
+              const baseSku = skuUpper.replace(/SHOP$/, '');
+              const fulfillable = item.fbaFulfillable || item.fulfillable || item.available || 0;
+              const reserved = item.fbaReserved || item.reserved || 0;
+              const inbound = item.fbaInbound || item.totalInbound || 0;
+              const total = fulfillable + reserved;
+              const awdQty = item.awdQuantity || 0;
+              const awdInbound = item.awdInbound || 0;
+              const entry = { fulfillable, reserved, inbound, total, awdQty, awdInbound, asin: item.asin || '' };
+              [item.sku, item.sku.toLowerCase(), skuUpper, baseSku, baseSku.toLowerCase(), baseSku + 'SHOP', baseSku.toLowerCase() + 'shop'].forEach(k => {
+                if (!freshAmazonFbaData[k]) freshAmazonFbaData[k] = entry;
+              });
+            });
+            console.log('[AutoSync] Fresh FBA+AWD data built:', { skuCount: fbaData.items.length, hasAwdData: fbaData.items.some(i => (i.awdQuantity || 0) > 0) });
+          }
+        } catch (err) {
+          console.warn('[AutoSync] FBA+AWD fetch failed:', err.message);
         }
       }
       
@@ -11485,7 +11546,14 @@ const savePeriods = async (d) => {
                       newTplTotal += newTplQty;
                       newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
                       
-                      const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
+                      // Use fresh Amazon data if available, otherwise keep existing
+                      const normalizedItemSku2 = (item.sku || '').toUpperCase();
+                      const freshAmz = freshAmazonFbaData?.[item.sku] || freshAmazonFbaData?.[normalizedItemSku2] || freshAmazonFbaData?.[(item.sku || '').toLowerCase()] || null;
+                      const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
+                      const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
+                      const newAwdQty = freshAmz ? (freshAmz.awdQty || 0) : (item.awdQty || 0);
+                      const newAwdInbound = freshAmz ? (freshAmz.awdInbound || 0) : (item.awdInbound || 0);
+                      const newTotalQty = newAmazonQty + newTplQty + (item.homeQty || 0) + newAwdQty + newAmazonInbound + newAwdInbound + newTplInbound;
                       
                       // Get velocity with corrections
                       const velocityData = getAutoVelocity(item.sku);
@@ -11538,6 +11606,10 @@ const savePeriods = async (d) => {
                       
                       return {
                         ...item,
+                        amazonQty: newAmazonQty,
+                        amazonInbound: newAmazonInbound,
+                        awdQty: newAwdQty,
+                        awdInbound: newAwdInbound,
                         threeplQty: newTplQty,
                         threeplInbound: newTplInbound,
                         totalQty: newTotalQty,
@@ -11587,15 +11659,29 @@ const savePeriods = async (d) => {
                       ? Math.round((itemsWithVel.filter(i => i.totalQty > 0).length / itemsWithVel.length) * 1000) / 10 : 100;
                     const abcCounts = updatedItems.reduce((acc, i) => { acc[i.abcClass] = (acc[i.abcClass] || 0) + 1; return acc; }, {});
                     
+                    // Recalculate Amazon totals from updated items if fresh data was used
+                    const newAmzTotal = updatedItems.reduce((s, i) => s + (i.amazonQty || 0), 0);
+                    const newAmzValue = updatedItems.reduce((s, i) => s + ((i.amazonQty || 0) * (i.cost || 0)), 0);
+                    const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
+                    const newAwdTotal = updatedItems.reduce((s, i) => s + (i.awdQty || 0), 0);
+                    const newAwdValue = updatedItems.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
+                    const homeUnits = currentSnapshot.summary?.homeUnits || 0;
+                    const homeValue = currentSnapshot.summary?.homeValue || 0;
+                    
                     const updatedSnapshot = {
                       ...currentSnapshot,
                       items: updatedItems,
                       summary: {
                         ...currentSnapshot.summary,
+                        amazonUnits: newAmzTotal,
+                        amazonValue: newAmzValue,
+                        amazonInbound: newAmzInbound,
+                        awdUnits: newAwdTotal,
+                        awdValue: newAwdValue,
                         threeplUnits: newTplTotal,
                         threeplValue: newTplValue,
-                        totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + newTplTotal + (currentSnapshot.summary?.homeUnits || 0),
-                        totalValue: (currentSnapshot.summary?.amazonValue || 0) + newTplValue + (currentSnapshot.summary?.homeValue || 0),
+                        totalUnits: newAmzTotal + newTplTotal + homeUnits + newAwdTotal + newAmzInbound,
+                        totalValue: newAmzValue + newTplValue + homeValue + newAwdValue,
                         skuCount: updatedItems.length,
                         // Recalculated supply chain KPIs
                         critical,
@@ -11613,6 +11699,8 @@ const savePeriods = async (d) => {
                         threepl: 'packiyo-auto-sync',
                         packiyoConnected: true,
                         lastPackiyoSync: new Date().toISOString(),
+                        amazon: freshAmazonFbaData ? 'amazon-fba-auto-sync' : (currentSnapshot.sources?.amazon || 'unknown'),
+                        lastAmazonFbaSync: freshAmazonFbaData ? new Date().toISOString() : (currentSnapshot.sources?.lastAmazonFbaSync || null),
                       },
                     };
                     
@@ -11639,12 +11727,38 @@ const savePeriods = async (d) => {
       }
       
       // Check QuickBooks Online
-      if (appSettings.autoSync?.qbo !== false && qboCredentials.connected) {
+      if (appSettings.autoSync?.qbo !== false && (qboCredentials.connected || qboCredentials.refreshToken)) {
         const qboStale = isServiceStale(qboCredentials.lastSync, threshold);
         
         if (qboStale || force) {
           try {
             let currentAccessToken = qboCredentials.accessToken;
+            
+            // Pre-refresh if no access token but refresh token exists
+            if (!currentAccessToken && qboCredentials.refreshToken) {
+              try {
+                const preRefreshRes = await fetch('/api/qbo/refresh', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ refreshToken: qboCredentials.refreshToken }),
+                });
+                if (preRefreshRes.ok) {
+                  const preRefreshData = await preRefreshRes.json();
+                  currentAccessToken = preRefreshData.accessToken;
+                  setQboCredentials(p => ({
+                    ...p,
+                    accessToken: preRefreshData.accessToken,
+                    refreshToken: preRefreshData.refreshToken || p.refreshToken,
+                  }));
+                }
+              } catch (preRefreshErr) {
+                devWarn('QBO pre-refresh failed:', preRefreshErr.message);
+              }
+            }
+            
+            if (!currentAccessToken || !qboCredentials.realmId) {
+              devWarn('QBO auto-sync skipped: missing accessToken or realmId');
+            } else {
             
             let res = await fetch('/api/qbo/sync', {
               method: 'POST',
@@ -11715,6 +11829,7 @@ const savePeriods = async (d) => {
               results.push({ service: 'QuickBooks', success: false, error: `HTTP ${res.status}` });
               devWarn('QBO auto-sync failed:', res.status);
             }
+            } // end else (has credentials)
           } catch (err) {
             results.push({ service: 'QuickBooks', success: false, error: err.message });
             devWarn('QBO auto-sync error:', err.message);
