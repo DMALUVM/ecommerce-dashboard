@@ -639,6 +639,33 @@ const safeLocalStorageSet = (key, value) => {
   }
 };
 
+const getCloudErrorText = (err) => {
+  if (!err) return 'Unknown cloud error';
+  const parts = [
+    err?.message,
+    err?.details,
+    err?.hint,
+    err?.error_description,
+    typeof err === 'string' ? err : '',
+  ]
+    .filter(Boolean)
+    .map(v => String(v).trim())
+    .filter(Boolean);
+  return parts.join(' | ') || 'Unknown cloud error';
+};
+
+const isSupabaseQuotaIssue = (err) => {
+  const text = getCloudErrorText(err).toLowerCase();
+  if (!text) return false;
+  return (
+    text.includes('exceeded your free plan quota') ||
+    text.includes('billing cycle') ||
+    text.includes('egress') ||
+    text.includes('insufficient_quota') ||
+    text.includes('quota')
+  );
+};
+
 // Normalize SKU keys for deduplication - strips trailing "Shop" suffix and uppercases
 const normalizeSkuKey = (sku) => (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
 
