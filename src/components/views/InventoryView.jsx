@@ -226,9 +226,12 @@ const InventoryView = ({
     const newDaysOfSupply = effectiveVel > 0 ? Math.round((adjustedTotalQty / effectiveVel) * 7) : 999;
     
     // Recalculate stockout and reorder dates from TODAY
-    const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
-    const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
-    const uiMinOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
+    // Lead time priority: per-SKU → category → item stored → global default
+    const recalcSkuCat = leadTimeSettings.skuCategories?.[item.sku] || leadTimeSettings.skuCategories?.[(item.sku || '').replace(/shop$/i, '').toUpperCase()] || '';
+    const recalcCatLT = recalcSkuCat && leadTimeSettings.categoryLeadTimes?.[recalcSkuCat];
+    const leadTimeDays = leadTimeSettings.skuSettings?.[item.sku]?.leadTime || recalcCatLT?.leadTimeDays || item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
+    const reorderTriggerDays = recalcCatLT?.reorderTriggerDays || leadTimeSettings.reorderTriggerDays || 60;
+    const uiMinOrderWeeks = recalcCatLT?.minOrderWeeks || leadTimeSettings.minOrderWeeks || 22;
     const uiOverstockThreshold = Math.max(90, (uiMinOrderWeeks * 7) + reorderTriggerDays + leadTimeDays);
     const uiLowThreshold = Math.max(30, leadTimeDays + 14);
     const uiCriticalThreshold = Math.max(14, leadTimeDays);
@@ -407,6 +410,48 @@ const InventoryView = ({
   
   // Export inventory to Excel
   const [exportingXlsx, setExportingXlsx] = useState(false);
+  const [editingCategoryName, setEditingCategoryName] = useState(null);
+  const [categoryForm, setCategoryForm] = useState({ name: '', leadTimeDays: 14, reorderTriggerDays: 60, minOrderWeeks: 22 });
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  
+  // Auto-categorize SKUs by product name keywords
+  const autoCategorizeSkus = () => {
+    const categories = Object.keys(leadTimeSettings.categoryLeadTimes || {});
+    if (categories.length === 0) return;
+    
+    const allItems = data?.items || [];
+    const updates = {};
+    let assigned = 0;
+    
+    allItems.forEach(item => {
+      const sku = item.sku;
+      // Skip if already assigned
+      if (leadTimeSettings.skuCategories?.[sku]) return;
+      
+      const name = (item.name || sku).toLowerCase();
+      for (const cat of categories) {
+        const catLower = cat.toLowerCase();
+        // Match category name or common keywords in product name
+        const keywords = catLower.split(/[\s&]+/).filter(w => w.length > 2);
+        const matches = keywords.some(kw => name.includes(kw));
+        if (matches) {
+          updates[sku] = cat;
+          assigned++;
+          break;
+        }
+      }
+    });
+    
+    if (assigned > 0) {
+      setLeadTimeSettings(prev => ({
+        ...prev,
+        skuCategories: { ...prev.skuCategories, ...updates }
+      }));
+      setToast({ message: `Auto-assigned ${assigned} SKUs to categories`, type: 'success' });
+    } else {
+      setToast({ message: 'No unassigned SKUs matched any category names', type: 'info' });
+    }
+  };
   const exportInventoryExcel = async () => {
     if (exportingXlsx || items.length === 0) return;
     setExportingXlsx(true);
@@ -638,6 +683,141 @@ const InventoryView = ({
           </div>
         </div>
         
+        {/* Category Lead Times */}
+        <div className="p-4 bg-slate-800/30 border-b border-slate-700">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-white font-semibold">📦 Category Lead Times</h3>
+            <div className="flex gap-2">
+              <button onClick={autoCategorizeSkus} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-white text-xs flex items-center gap-1" title="Auto-assign SKUs to categories based on product name keywords">
+                <Zap className="w-3 h-3" />Auto-Assign
+              </button>
+              <button onClick={() => { setShowAddCategory(true); setCategoryForm({ name: '', leadTimeDays: leadTimeSettings.defaultLeadTimeDays || 14, reorderTriggerDays: leadTimeSettings.reorderTriggerDays || 60, minOrderWeeks: leadTimeSettings.minOrderWeeks || 22 }); }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-xs flex items-center gap-1">
+                <Plus className="w-3 h-3" />Add Category
+              </button>
+            </div>
+          </div>
+          <p className="text-slate-500 text-xs mb-3">Set lead times per product category (e.g. lip balm, deodorant, soap). Assign SKUs to categories below. Per-SKU settings override category settings.</p>
+          
+          {/* Add category form */}
+          {showAddCategory && (
+            <div className="bg-slate-700/50 rounded-lg p-3 mb-3 flex flex-wrap gap-3 items-end">
+              <div>
+                <label className="text-slate-400 text-xs block mb-1">Category Name</label>
+                <input type="text" value={categoryForm.name} onChange={(e) => setCategoryForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Lip Balm" className="w-40 bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-white text-sm" autoFocus />
+              </div>
+              <div>
+                <label className="text-slate-400 text-xs block mb-1">Lead Time</label>
+                <div className="flex items-center gap-1"><input type="number" value={categoryForm.leadTimeDays} onChange={(e) => setCategoryForm(f => ({ ...f, leadTimeDays: parseInt(e.target.value) || 14 }))} className="w-16 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm text-center" /><span className="text-slate-500 text-xs">days</span></div>
+              </div>
+              <div>
+                <label className="text-slate-400 text-xs block mb-1">Reorder Trigger</label>
+                <div className="flex items-center gap-1"><input type="number" value={categoryForm.reorderTriggerDays} onChange={(e) => setCategoryForm(f => ({ ...f, reorderTriggerDays: parseInt(e.target.value) || 60 }))} className="w-16 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm text-center" /><span className="text-slate-500 text-xs">days</span></div>
+              </div>
+              <div>
+                <label className="text-slate-400 text-xs block mb-1">Min Order</label>
+                <div className="flex items-center gap-1"><input type="number" value={categoryForm.minOrderWeeks} onChange={(e) => setCategoryForm(f => ({ ...f, minOrderWeeks: parseInt(e.target.value) || 22 }))} className="w-16 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm text-center" /><span className="text-slate-500 text-xs">wks</span></div>
+              </div>
+              <button onClick={() => {
+                if (!categoryForm.name.trim()) return;
+                setLeadTimeSettings(prev => ({
+                  ...prev,
+                  categoryLeadTimes: {
+                    ...prev.categoryLeadTimes,
+                    [categoryForm.name.trim()]: {
+                      leadTimeDays: categoryForm.leadTimeDays,
+                      reorderTriggerDays: categoryForm.reorderTriggerDays,
+                      minOrderWeeks: categoryForm.minOrderWeeks,
+                    }
+                  }
+                }));
+                setShowAddCategory(false);
+                setCategoryForm({ name: '', leadTimeDays: 14, reorderTriggerDays: 60, minOrderWeeks: 22 });
+                setToast({ message: `Category "${categoryForm.name.trim()}" added`, type: 'success' });
+              }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-white text-xs">Save</button>
+              <button onClick={() => setShowAddCategory(false)} className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded text-white text-xs">Cancel</button>
+            </div>
+          )}
+          
+          {/* Category list */}
+          {Object.keys(leadTimeSettings.categoryLeadTimes || {}).length > 0 ? (
+            <div className="grid gap-2">
+              {Object.entries(leadTimeSettings.categoryLeadTimes).map(([catName, catSettings]) => {
+                const skuCount = Object.values(leadTimeSettings.skuCategories || {}).filter(c => c === catName).length;
+                const isEditing = editingCategoryName === catName;
+                
+                if (isEditing) {
+                  return (
+                    <div key={catName} className="bg-emerald-900/20 border border-emerald-700/50 rounded-lg p-3 flex flex-wrap gap-3 items-end">
+                      <div>
+                        <label className="text-slate-400 text-xs block mb-1">Category</label>
+                        <input type="text" value={categoryForm.name} onChange={(e) => setCategoryForm(f => ({ ...f, name: e.target.value }))} className="w-36 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 text-xs block mb-1">Lead Time</label>
+                        <div className="flex items-center gap-1"><input type="number" value={categoryForm.leadTimeDays} onChange={(e) => setCategoryForm(f => ({ ...f, leadTimeDays: parseInt(e.target.value) || 14 }))} className="w-16 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm text-center" /><span className="text-slate-500 text-xs">d</span></div>
+                      </div>
+                      <div>
+                        <label className="text-slate-400 text-xs block mb-1">Reorder</label>
+                        <div className="flex items-center gap-1"><input type="number" value={categoryForm.reorderTriggerDays} onChange={(e) => setCategoryForm(f => ({ ...f, reorderTriggerDays: parseInt(e.target.value) || 60 }))} className="w-16 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm text-center" /><span className="text-slate-500 text-xs">d</span></div>
+                      </div>
+                      <div>
+                        <label className="text-slate-400 text-xs block mb-1">Min Order</label>
+                        <div className="flex items-center gap-1"><input type="number" value={categoryForm.minOrderWeeks} onChange={(e) => setCategoryForm(f => ({ ...f, minOrderWeeks: parseInt(e.target.value) || 22 }))} className="w-16 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm text-center" /><span className="text-slate-500 text-xs">w</span></div>
+                      </div>
+                      <button onClick={() => {
+                        const newName = categoryForm.name.trim() || catName;
+                        setLeadTimeSettings(prev => {
+                          const updated = { ...prev };
+                          // If renamed, update the key and all SKU mappings
+                          const newCatLT = { ...prev.categoryLeadTimes };
+                          if (newName !== catName) delete newCatLT[catName];
+                          newCatLT[newName] = { leadTimeDays: categoryForm.leadTimeDays, reorderTriggerDays: categoryForm.reorderTriggerDays, minOrderWeeks: categoryForm.minOrderWeeks };
+                          updated.categoryLeadTimes = newCatLT;
+                          if (newName !== catName) {
+                            const newCats = { ...prev.skuCategories };
+                            Object.keys(newCats).forEach(sku => { if (newCats[sku] === catName) newCats[sku] = newName; });
+                            updated.skuCategories = newCats;
+                          }
+                          return updated;
+                        });
+                        setEditingCategoryName(null);
+                      }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-white text-xs">Save</button>
+                      <button onClick={() => setEditingCategoryName(null)} className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded text-white text-xs">Cancel</button>
+                    </div>
+                  );
+                }
+                
+                return (
+                  <div key={catName} className="bg-slate-700/30 rounded-lg px-4 py-2.5 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <span className="text-white font-medium text-sm min-w-[120px]">{catName}</span>
+                      <span className="text-emerald-400 text-xs">{catSettings.leadTimeDays}d lead</span>
+                      <span className="text-amber-400 text-xs">{catSettings.reorderTriggerDays}d trigger</span>
+                      <span className="text-cyan-400 text-xs">{catSettings.minOrderWeeks}w min order</span>
+                      <span className="text-slate-500 text-xs">{skuCount} SKU{skuCount !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => { setEditingCategoryName(catName); setCategoryForm({ name: catName, leadTimeDays: catSettings.leadTimeDays, reorderTriggerDays: catSettings.reorderTriggerDays, minOrderWeeks: catSettings.minOrderWeeks }); }} className="px-2 py-1 bg-slate-600 hover:bg-slate-500 rounded text-slate-300 text-xs">Edit</button>
+                      <button onClick={() => {
+                        if (!confirm(`Delete category "${catName}"? SKUs assigned to it will become uncategorized.`)) return;
+                        setLeadTimeSettings(prev => {
+                          const newCatLT = { ...prev.categoryLeadTimes };
+                          delete newCatLT[catName];
+                          const newCats = { ...prev.skuCategories };
+                          Object.keys(newCats).forEach(sku => { if (newCats[sku] === catName) delete newCats[sku]; });
+                          return { ...prev, categoryLeadTimes: newCatLT, skuCategories: newCats };
+                        });
+                      }} className="px-2 py-1 bg-rose-900/50 hover:bg-rose-800/50 rounded text-rose-400 text-xs">×</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-slate-500 text-sm text-center py-3 bg-slate-800/30 rounded-lg">No categories defined. Add categories like "Lip Balm", "Deodorant", "Tallow Balm" to set lead times by product type.</div>
+          )}
+        </div>
+        
         {/* Search and Filter */}
         <div className="p-4 border-b border-slate-700 flex gap-4 items-center">
           <input 
@@ -664,6 +844,7 @@ const InventoryView = ({
             <thead className="sticky top-0 bg-slate-900 z-10">
               <tr className="border-b border-slate-700">
                 <th className="text-left text-slate-400 py-2 px-2" style={{width: '200px'}}>SKU / Product</th>
+                <th className="text-center text-slate-400 py-2 px-2" style={{width: '120px'}}>Category</th>
                 <th className="text-right text-slate-400 py-2 px-2" style={{width: '80px'}}>Amazon</th>
                 <th className="text-right text-slate-400 py-2 px-2" style={{width: '80px'}}>3PL</th>
                 <th className="text-center text-slate-400 py-2 px-2" style={{width: '100px'}}>Lead Time</th>
@@ -686,6 +867,21 @@ const InventoryView = ({
                       <td className="py-3 px-2">
                         <p className="text-white font-medium">{item.sku}</p>
                         <p className="text-slate-500 text-xs truncate max-w-[180px]">{item.name}</p>
+                      </td>
+                      <td className="py-3 px-2 text-center">
+                        <select
+                          value={leadTimeSettings.skuCategories?.[item.sku] || ''}
+                          onChange={(e) => setLeadTimeSettings(prev => ({
+                            ...prev,
+                            skuCategories: { ...prev.skuCategories, [item.sku]: e.target.value || undefined }
+                          }))}
+                          className="w-full bg-slate-700 border border-slate-600 rounded px-1 py-1.5 text-white text-xs"
+                        >
+                          <option value="">—</option>
+                          {Object.keys(leadTimeSettings.categoryLeadTimes || {}).map(c => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
                       </td>
                       <td className="text-right py-3 px-2 text-orange-400 font-medium">{formatNumber(item.amazonQty || 0)}</td>
                       <td className="text-right py-3 px-2 text-violet-400 font-medium">{formatNumber(item.threeplQty || 0)}</td>
@@ -762,9 +958,28 @@ const InventoryView = ({
                         </div>
                       </div>
                     </td>
+                    <td className="py-2 px-2 text-center">
+                      <select
+                        value={leadTimeSettings.skuCategories?.[item.sku] || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setLeadTimeSettings(prev => {
+                            const newCats = { ...prev.skuCategories };
+                            if (val) newCats[item.sku] = val; else delete newCats[item.sku];
+                            return { ...prev, skuCategories: newCats };
+                          });
+                        }}
+                        className="w-full bg-slate-800 border border-slate-700 rounded px-1 py-1 text-xs text-slate-300 cursor-pointer"
+                      >
+                        <option value="">—</option>
+                        {Object.keys(leadTimeSettings.categoryLeadTimes || {}).map(c => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </td>
                     <td className="text-right py-2 px-2 text-orange-400">{formatNumber(item.amazonQty || 0)}</td>
                     <td className="text-right py-2 px-2 text-violet-400">{formatNumber(item.threeplQty || 0)}</td>
-                    <td className="text-center py-2 px-2">{settings.leadTime ? <span className="text-emerald-400">{settings.leadTime}d</span> : <span className="text-slate-500">{leadTimeSettings.defaultLeadTimeDays}d</span>}</td>
+                    <td className="text-center py-2 px-2">{settings.leadTime ? <span className="text-emerald-400">{settings.leadTime}d</span> : (() => { const cat = leadTimeSettings.skuCategories?.[item.sku]; const catLT = cat && leadTimeSettings.categoryLeadTimes?.[cat]?.leadTimeDays; return catLT ? <span className="text-cyan-400" title={`From category: ${cat}`}>{catLT}d</span> : <span className="text-slate-500">{leadTimeSettings.defaultLeadTimeDays}d</span>; })()}</td>
                     <td className="text-center py-2 px-2">{settings.reorderPoint ? <span className="text-emerald-400">{formatNumber(settings.reorderPoint)}</span> : <span className="text-slate-500">—</span>}</td>
                     <td className="text-center py-2 px-2">
                       {settings.threeplAlertQty ? <span className="text-amber-400">{formatNumber(settings.threeplAlertQty)}</span> : <span className="text-slate-500">—</span>}
@@ -801,7 +1016,7 @@ const InventoryView = ({
   
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 lg:p-6">
-      <div className="max-w-7xl mx-auto">{globalModals}
+      <div className="max-w-7xl mx-auto">{globalModals}{SkuSettingsModalJSX}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
           <div><h1 className="text-2xl lg:text-3xl font-bold text-white">📦 Inventory Management</h1><p className="text-slate-400">{new Date(selectedInvDate+'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} • {items.length} active SKUs</p></div>
           <div className="flex gap-2">

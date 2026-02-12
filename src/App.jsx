@@ -1965,6 +1965,10 @@ const handleLogout = async () => {
       },
       skuSettings: {}, // SKU-level settings: { [sku]: { leadTime, reorderPoint, targetDays, alertThreshold, alertEnabled } }
       storageCostAllocation: 'proportional',
+      // Category-based lead times: { "Lip Balm": { leadTimeDays: 14, reorderTriggerDays: 60, minOrderWeeks: 22 }, ... }
+      categoryLeadTimes: {},
+      // SKU → category mapping: { "DDPE0002Shop": "Lip Balm", ... }
+      skuCategories: {},
     };
     const saved = safeLocalStorageGet('ecommerce_lead_times_v1', null);
     if (!saved) return defaultSettings;
@@ -1977,6 +1981,8 @@ const handleLogout = async () => {
       channelRules: saved.channelRules || defaultSettings.channelRules,
       skuSettings: saved.skuSettings || {},
       storageCostAllocation: saved.storageCostAllocation || 'proportional',
+      categoryLeadTimes: saved.categoryLeadTimes || {},
+      skuCategories: saved.skuCategories || {},
     }; 
   });
   
@@ -4671,7 +4677,55 @@ const loadFromCloud = useCallback(async (storeId = null) => {
       return weekStart <= today;
     }).sort().reverse();
     if (w.length) { setSelectedWeek(w[0]); }
-    setInvHistory(cloud.inventory || {});
+    
+    // SMART INVENTORY MERGE: Cloud save race condition can cause stale cloud inventory
+    // (auto-sync saves fresh data to localStorage, but debounced cloud save gets cancelled
+    // by other state updates, so cloud can lag behind localStorage)
+    // Solution: Compare each snapshot's sync timestamps and keep the newer version
+    const cloudInv = cloud.inventory || {};
+    let localInv = {};
+    try {
+      const localInvRaw = lsGet(INVENTORY_KEY);
+      if (localInvRaw) localInv = JSON.parse(localInvRaw);
+    } catch (e) { /* use empty */ }
+    
+    const getSnapshotFreshness = (snapshot) => {
+      if (!snapshot?.sources) return 0;
+      return Math.max(
+        new Date(snapshot.sources.lastPackiyoSync || 0).getTime(),
+        new Date(snapshot.sources.lastAmazonFbaSync || 0).getTime(),
+        new Date(snapshot.sources.lastAmazonSync || 0).getTime(),
+        0
+      );
+    };
+    
+    const mergedInv = { ...cloudInv };
+    let localWins = 0;
+    Object.entries(localInv).forEach(([date, localSnapshot]) => {
+      const cloudSnapshot = cloudInv[date];
+      if (!cloudSnapshot) {
+        mergedInv[date] = localSnapshot; // Local has data cloud doesn't
+        localWins++;
+      } else {
+        const localFresh = getSnapshotFreshness(localSnapshot);
+        const cloudFresh = getSnapshotFreshness(cloudSnapshot);
+        // Also check if local has velocity data that cloud doesn't
+        const localHasVelocity = localSnapshot.items?.some(i => (i.weeklyVel || 0) > 0);
+        const cloudHasVelocity = cloudSnapshot.items?.some(i => (i.weeklyVel || 0) > 0);
+        
+        if (localFresh > cloudFresh || (localHasVelocity && !cloudHasVelocity)) {
+          mergedInv[date] = localSnapshot;
+          localWins++;
+        }
+      }
+    });
+    if (localWins > 0) {
+      console.log(`[loadFromCloud] Inventory merge: kept ${localWins} newer local snapshots over stale cloud`);
+    }
+    setInvHistory(mergedInv);
+    
+    // Also persist merged inventory back to localStorage in case cloud had dates local didn't
+    try { writeToLocal(INVENTORY_KEY, JSON.stringify(mergedInv)); } catch (e) { /* non-fatal */ }
     setSavedCogs(cloud.cogs?.lookup || {});
     setCogsLastUpdated(cloud.cogs?.updatedAt || null);
     setAllPeriodsData(cloud.periods || {});
@@ -8023,9 +8077,15 @@ const savePeriods = async (d) => {
       
       // Calculate stockout and reorder dates - simple math, no AI needed
       const today = new Date();
-      const leadTimeDays = leadTimeSettings.skuLeadTimes?.[sku] || leadTimeSettings.defaultLeadTimeDays || 14;
-      const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
-      const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
+      // Lead time priority: per-SKU setting → per-SKU leadTimes → category lead time → global default
+      const skuCategory = leadTimeSettings.skuCategories?.[sku] || leadTimeSettings.skuCategories?.[sku.replace(/shop$/i, '').toUpperCase()] || '';
+      const categoryLT = skuCategory && leadTimeSettings.categoryLeadTimes?.[skuCategory];
+      const leadTimeDays = leadTimeSettings.skuSettings?.[sku]?.leadTime 
+        || leadTimeSettings.skuLeadTimes?.[sku] 
+        || categoryLT?.leadTimeDays
+        || leadTimeSettings.defaultLeadTimeDays || 14;
+      const reorderTriggerDays = categoryLT?.reorderTriggerDays || leadTimeSettings.reorderTriggerDays || 60;
+      const minOrderWeeks = categoryLT?.minOrderWeeks || leadTimeSettings.minOrderWeeks || 22;
       
       // Get demand stats for this SKU (safety stock, seasonality, CV)
       const normalizedSkuForStats = sku.replace(/shop$/i, '').toUpperCase();
@@ -8092,6 +8152,7 @@ const savePeriods = async (d) => {
         daysUntilMustOrder,
         suggestedOrderQty,
         leadTimeDays,
+        category: skuCategory || '',
         amazonInbound: aInbound, 
         threeplInbound: tInbound,
         // Industry-standard demand metrics
@@ -11874,7 +11935,10 @@ const savePeriods = async (d) => {
                       const correctedVelForDOS = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
                       
                       const dos = correctedVelForDOS > 0 ? Math.round((newTotalQty / correctedVelForDOS) * 7) : 999;
-                      const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
+                      // Lead time: per-SKU → category → item stored → global default
+                      const itemSkuCat = leadTimeSettings.skuCategories?.[item.sku] || leadTimeSettings.skuCategories?.[(item.sku || '').replace(/shop$/i, '').toUpperCase()] || '';
+                      const itemCatLT = itemSkuCat && leadTimeSettings.categoryLeadTimes?.[itemSkuCat];
+                      const leadTimeDays = leadTimeSettings.skuSettings?.[item.sku]?.leadTime || itemCatLT?.leadTimeDays || item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
                       
                       let stockoutDate = null;
                       let reorderByDate = null;
@@ -12102,7 +12166,10 @@ const savePeriods = async (d) => {
               const correctedVelForDOS = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
               
               const dos = correctedVelForDOS > 0 ? Math.round((newTotalQty / correctedVelForDOS) * 7) : 999;
-              const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
+              // Lead time: per-SKU → category → item stored → global default
+              const fbaSkuCat = leadTimeSettings.skuCategories?.[item.sku] || leadTimeSettings.skuCategories?.[(item.sku || '').replace(/shop$/i, '').toUpperCase()] || '';
+              const fbaCatLT = fbaSkuCat && leadTimeSettings.categoryLeadTimes?.[fbaSkuCat];
+              const leadTimeDays = leadTimeSettings.skuSettings?.[item.sku]?.leadTime || fbaCatLT?.leadTimeDays || item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
               
               let stockoutDate = null, reorderByDate = null, daysUntilMustOrder = null;
               if (correctedVelForDOS > 0 && dos < 999) {
@@ -12409,6 +12476,28 @@ const savePeriods = async (d) => {
     } finally {
       audit('auto_sync', `${results.length} services: ${results.map(r => `${r.service}:${r.success ? 'ok' : 'fail'}`).join(', ')}`);
       setAutoSyncStatus(prev => ({ ...prev, running: false, results }));
+      
+      // CRITICAL: Force a cloud push AFTER all React state updates settle.
+      // The debounced queueCloudSave from saveInv() can get cancelled by other state change
+      // effects (e.g. allDaysData useEffect at line 4552), causing cloud to have stale inventory.
+      // This 2-second delay ensures all state has propagated before the final push.
+      setTimeout(() => {
+        if (session?.user?.id && supabase && !isLoadingDataRef.current) {
+          console.log('[AutoSync] Final cloud push to persist all synced data');
+          // Read fresh from localStorage as source of truth (not stale combinedData closure)
+          try {
+            const freshInvRaw = lsGet(INVENTORY_KEY);
+            const freshInv = freshInvRaw ? JSON.parse(freshInvRaw) : null;
+            if (freshInv) {
+              pushToCloudNow({ ...combinedData, inventory: freshInv });
+            } else {
+              pushToCloudNow(combinedData);
+            }
+          } catch (e) {
+            pushToCloudNow(combinedData);
+          }
+        }
+      }, 2000);
     }
   }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, qboCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs, getCogsLookup, queueCloudSave, combinedData]);
   
