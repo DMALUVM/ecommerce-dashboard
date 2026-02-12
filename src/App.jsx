@@ -1507,6 +1507,8 @@ const secureSecretSaveTimersRef = useRef({});
 const lastSavedRef = useRef(0);
 const saveTimerRef = useRef(null);
 const isLoadingDataRef = useRef(false);
+const exportAllRef = useRef(() => {});
+const importDataRef = useRef(() => {});
   const [dataLoading, setDataLoading] = useState(true); // Shows skeletons during initial load
 const skuDemandStatsRef = useRef({}); // Safety stock, seasonality, CV per SKU
 
@@ -3419,7 +3421,7 @@ allWeekKeys.forEach((weekKey) => {
     if (invoices.length > 0 || localStorage.getItem(INVOICES_KEY)) {
       queueCloudSave({ ...combinedData, invoices });
     }
-  }, [invoices, queueCloudSave, combinedData]);
+  }, [invoices]);
   
   // Save notes to localStorage and cloud
   useEffect(() => {
@@ -4383,7 +4385,7 @@ useEffect(() => {
     setAllWeeksData(updatedWeeks);
     save(updatedWeeks);
   }
-}, [threeplLedger, allWeeksData, save]); // Only re-run when threeplLedger changes
+}, [threeplLedger, allWeeksData]); // Only re-run when threeplLedger changes
 
 const saveGoals = useCallback((newGoals) => {
   setGoals(newGoals);
@@ -10818,9 +10820,7 @@ const savePeriods = useCallback(async (d) => {
     reader.readAsText(file); 
   };
 
-  const exportAllRef = useRef(exportAll);
   exportAllRef.current = exportAll;
-  const importDataRef = useRef(importData);
   importDataRef.current = importData;
 
   // 5. FORECASTING - Simple linear regression based forecast
