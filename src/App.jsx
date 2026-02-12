@@ -2148,11 +2148,6 @@ const handleLogout = async () => {
     safeLocalStorageSet('ecommerce_notifications_v1', JSON.stringify(notificationSettings));
   }, [notificationSettings]);
 
-  const exportAllRef = useRef(exportAll);
-  exportAllRef.current = exportAll;
-  const importDataRef = useRef(importData);
-  importDataRef.current = importData;
-
   // Backup reminder - prompt when data exists but no backup in 7+ days
   useEffect(() => {
     const hasData = Object.keys(allWeeksData).length > 0 || Object.keys(allDaysData).length > 0;
@@ -10822,6 +10817,11 @@ const savePeriods = useCallback(async (d) => {
     }; 
     reader.readAsText(file); 
   };
+
+  const exportAllRef = useRef(exportAll);
+  exportAllRef.current = exportAll;
+  const importDataRef = useRef(importData);
+  importDataRef.current = importData;
 
   // 5. FORECASTING - Simple linear regression based forecast
   const generateForecast = useMemo(() => {
