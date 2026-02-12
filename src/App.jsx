@@ -7174,7 +7174,20 @@ const savePeriods = async (d) => {
     if (datesWithSkuData.length > 0) {
       
       const last28 = datesWithSkuData.slice(0, 28);
-      const weeksEquiv = last28.length / 7;
+      
+      // BUG FIX: Calculate per-channel weeksEquiv to avoid cross-channel dilution
+      // If Amazon has 28 days of data but Shopify only 10, using combined count (28/7=4) 
+      // would understate Shopify velocity by ~3x
+      const amzDaysInWindow = last28.filter(d => {
+        const amzSku = legacyDailyData[d]?.amazon?.skuData;
+        return (Array.isArray(amzSku) && amzSku.length > 0) || (amzSku && typeof amzSku === 'object' && Object.keys(amzSku).length > 0);
+      }).length;
+      const shopDaysInWindow = last28.filter(d => {
+        const shopSku = legacyDailyData[d]?.shopify?.skuData;
+        return (Array.isArray(shopSku) && shopSku.length > 0) || (shopSku && typeof shopSku === 'object' && Object.keys(shopSku).length > 0);
+      }).length;
+      const amzWeeksEquiv = Math.max(amzDaysInWindow / 7, 0.14); // min ~1 day to avoid div/0
+      const shopWeeksEquiv = Math.max(shopDaysInWindow / 7, 0.14);
       
       last28.forEach(d => {
         const dayData = legacyDailyData[d];
@@ -7184,22 +7197,14 @@ const savePeriods = async (d) => {
         amazonSkuList.forEach(item => {
           if (!item.sku) return;
           const units = item.unitsSold || item.units || 0;
-          const velocity = units / weeksEquiv;
+          const velocity = units / amzWeeksEquiv;
           
-          // Store under original SKU
-          if (!amazonSkuVelocity[item.sku]) amazonSkuVelocity[item.sku] = 0;
-          amazonSkuVelocity[item.sku] += velocity;
-          
-          // Also store under normalized variants
-          const baseSku = item.sku.replace(/shop$/i, '').toUpperCase();
-          const skuLower = item.sku.toLowerCase();
-          const baseSkuLower = baseSku.toLowerCase();
-          if (!amazonSkuVelocity[baseSku]) amazonSkuVelocity[baseSku] = 0;
-          if (!amazonSkuVelocity[skuLower]) amazonSkuVelocity[skuLower] = 0;
-          if (!amazonSkuVelocity[baseSkuLower]) amazonSkuVelocity[baseSkuLower] = 0;
-          amazonSkuVelocity[baseSku] += velocity;
-          amazonSkuVelocity[skuLower] += velocity;
-          amazonSkuVelocity[baseSkuLower] += velocity;
+          // BUG FIX: Use Set to avoid double-counting when SKU variants resolve to same string
+          const keys = new Set([item.sku, item.sku.replace(/shop$/i, '').toUpperCase(), item.sku.toLowerCase(), item.sku.replace(/shop$/i, '').toLowerCase()]);
+          keys.forEach(k => {
+            if (!amazonSkuVelocity[k]) amazonSkuVelocity[k] = 0;
+            amazonSkuVelocity[k] += velocity;
+          });
         });
         // Shopify SKU data - store under multiple key variants for flexible matching
         const shopifySkuData = dayData?.shopify?.skuData;
@@ -7207,22 +7212,14 @@ const savePeriods = async (d) => {
         shopifySkuList.forEach(item => {
           if (!item.sku) return;
           const units = item.unitsSold || item.units || 0;
-          const velocity = units / weeksEquiv;
+          const velocity = units / shopWeeksEquiv;
           
-          // Store under original SKU
-          if (!shopifySkuVelocity[item.sku]) shopifySkuVelocity[item.sku] = 0;
-          shopifySkuVelocity[item.sku] += velocity;
-          
-          // Also store under normalized variants (without Shop suffix, uppercase, lowercase)
-          const baseSku = item.sku.replace(/shop$/i, '').toUpperCase();
-          const skuLower = item.sku.toLowerCase();
-          const baseSkuLower = baseSku.toLowerCase();
-          if (!shopifySkuVelocity[baseSku]) shopifySkuVelocity[baseSku] = 0;
-          if (!shopifySkuVelocity[skuLower]) shopifySkuVelocity[skuLower] = 0;
-          if (!shopifySkuVelocity[baseSkuLower]) shopifySkuVelocity[baseSkuLower] = 0;
-          shopifySkuVelocity[baseSku] += velocity;
-          shopifySkuVelocity[skuLower] += velocity;
-          shopifySkuVelocity[baseSkuLower] += velocity;
+          // BUG FIX: Use Set to avoid double-counting when SKU variants resolve to same string
+          const keys = new Set([item.sku, item.sku.replace(/shop$/i, '').toUpperCase(), item.sku.toLowerCase(), item.sku.replace(/shop$/i, '').toLowerCase()]);
+          keys.forEach(k => {
+            if (!shopifySkuVelocity[k]) shopifySkuVelocity[k] = 0;
+            shopifySkuVelocity[k] += velocity;
+          });
         });
       });
       

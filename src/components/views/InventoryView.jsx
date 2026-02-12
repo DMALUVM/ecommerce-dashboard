@@ -1,7 +1,7 @@
 import { devWarn, devError } from '../../utils/logger';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertCircle, AlertTriangle, Bell, Boxes, Brain, Check, CheckCircle, ChevronLeft, ChevronRight, Clock, DollarSign, Download, Edit, Filter, Flag, HelpCircle, Info, List, Loader2, Package, Plus, RefreshCw, Save, Search, Settings, ShoppingCart, Target, Trash2, TrendingUp, Truck, Upload, X, Zap
+  AlertCircle, AlertTriangle, Bell, Boxes, Brain, Check, CheckCircle, ChevronLeft, ChevronRight, Clock, DollarSign, Download, Edit, Eye, EyeOff, Filter, Flag, HelpCircle, Info, List, Loader2, Package, Plus, RefreshCw, Save, Search, Settings, ShoppingCart, Target, Trash2, TrendingUp, Truck, Upload, X, Zap
 } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
@@ -84,6 +84,50 @@ const InventoryView = ({
   const dates = Object.keys(invHistory).sort().reverse();
   const data = invHistory[selectedInvDate];
   const idx = dates.indexOf(selectedInvDate);
+  
+  // Column visibility - persisted to localStorage
+  const ALL_COLUMNS = [
+    { key: 'name', label: 'Product', align: 'left', alwaysVisible: true },
+    { key: 'abcClass', label: 'ABC', align: 'center' },
+    { key: 'amazonQty', label: 'Amazon', align: 'right' },
+    { key: 'threeplQty', label: '3PL', align: 'right' },
+    { key: 'awdQty', label: 'AWD', align: 'right' },
+    { key: 'amazonInbound', label: 'Inbound', align: 'right' },
+    { key: 'totalQty', label: 'Total', align: 'right' },
+    { key: 'totalValue', label: 'Value', align: 'right' },
+    { key: 'amzWeeklyVel', label: 'AMZ Vel', align: 'right' },
+    { key: 'shopWeeklyVel', label: 'Shop Vel', align: 'right' },
+    { key: 'weeklyVel', label: 'Tot Vel', align: 'right' },
+    { key: 'daysOfSupply', label: 'Days', align: 'right' },
+    { key: 'turnoverRate', label: 'Turn', align: 'right' },
+    { key: 'stockoutDate', label: 'Stockout', align: 'right' },
+    { key: 'reorderByDate', label: 'Order By', align: 'right' },
+    { key: 'health', label: 'Status', align: 'center', alwaysVisible: true },
+  ];
+  const [hiddenColumns, setHiddenColumns] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ecommerce_inv_hidden_cols');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const columnPickerRef = useRef(null);
+  
+  useEffect(() => {
+    localStorage.setItem('ecommerce_inv_hidden_cols', JSON.stringify(hiddenColumns));
+  }, [hiddenColumns]);
+  
+  // Close column picker on outside click
+  useEffect(() => {
+    const handler = (e) => { if (columnPickerRef.current && !columnPickerRef.current.contains(e.target)) setShowColumnPicker(false); };
+    if (showColumnPicker) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showColumnPicker]);
+  
+  const visibleColumns = ALL_COLUMNS.filter(c => c.alwaysVisible || !hiddenColumns.includes(c.key));
+  const toggleColumn = (key) => {
+    setHiddenColumns(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  };
   
   // Defensive defaults for summary
   const summary = data.summary || {
@@ -168,7 +212,9 @@ const InventoryView = ({
   
   const recalculatedItems = deduplicatedItems.map(item => {
     const weeklyVel = item.weeklyVel || 0;
-    const dailyVel = weeklyVel / 7;
+    // Use correctedVel (from forecast learning) if available, matching processInventory's dos calculation
+    const effectiveVel = item.correctedVel || weeklyVel;
+    const dailyVel = effectiveVel / 7;
     
     // Only adjust quantities if data is old (daysElapsed > 0)
     // If API sync is fresh (today), use quantities as-is
@@ -177,7 +223,7 @@ const InventoryView = ({
       : (item.totalQty || 0);
     
     // Recalculate days of supply from TODAY
-    const newDaysOfSupply = weeklyVel > 0 ? Math.round((adjustedTotalQty / weeklyVel) * 7) : 999;
+    const newDaysOfSupply = effectiveVel > 0 ? Math.round((adjustedTotalQty / effectiveVel) * 7) : 999;
     
     // Recalculate stockout and reorder dates from TODAY
     const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
@@ -191,7 +237,7 @@ const InventoryView = ({
     let newReorderByDate = null;
     let newDaysUntilMustOrder = null;
     
-    if (weeklyVel > 0 && newDaysOfSupply < 999) {
+    if (effectiveVel > 0 && newDaysOfSupply < 999) {
       const stockout = new Date(today);
       stockout.setDate(stockout.getDate() + newDaysOfSupply);
       newStockoutDate = stockout.toISOString().split('T')[0];
@@ -204,7 +250,7 @@ const InventoryView = ({
     
     // Recalculate health using dynamic thresholds based on reorder cycle
     let newHealth = 'unknown';
-    if (weeklyVel > 0) {
+    if (effectiveVel > 0) {
       if (newDaysUntilMustOrder !== null && newDaysUntilMustOrder < 0) {
         newHealth = 'critical'; // Past reorder date!
       } else if (newDaysOfSupply < uiCriticalThreshold || (newDaysUntilMustOrder !== null && newDaysUntilMustOrder < 7)) {
@@ -1044,6 +1090,36 @@ const InventoryView = ({
               >
                 <Download className="w-4 h-4" />{exportingXlsx ? 'Exporting...' : 'Export'}
               </button>
+              <div className="relative" ref={columnPickerRef}>
+                <button 
+                  onClick={() => setShowColumnPicker(!showColumnPicker)}
+                  className={`px-3 py-1.5 rounded-lg text-white text-sm flex items-center gap-1 ${hiddenColumns.length > 0 ? 'bg-amber-600 hover:bg-amber-500' : 'bg-slate-600 hover:bg-slate-500'}`}
+                  title="Show/hide columns"
+                >
+                  {hiddenColumns.length > 0 ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}{hiddenColumns.length > 0 ? `${hiddenColumns.length} hidden` : 'Columns'}
+                </button>
+                {showColumnPicker && (
+                  <div className="absolute right-0 top-full mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl z-50 py-2 w-48">
+                    <p className="text-xs text-slate-400 px-3 pb-2 border-b border-slate-700">Toggle columns</p>
+                    {ALL_COLUMNS.filter(c => !c.alwaysVisible).map(col => (
+                      <label key={col.key} className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-700/50 cursor-pointer text-sm">
+                        <input 
+                          type="checkbox" 
+                          checked={!hiddenColumns.includes(col.key)} 
+                          onChange={() => toggleColumn(col.key)}
+                          className="rounded bg-slate-700 border-slate-600 text-emerald-500"
+                        />
+                        <span className={hiddenColumns.includes(col.key) ? 'text-slate-500' : 'text-white'}>{col.label}</span>
+                      </label>
+                    ))}
+                    {hiddenColumns.length > 0 && (
+                      <button onClick={() => setHiddenColumns([])} className="text-xs text-amber-400 hover:text-amber-300 px-3 pt-2 border-t border-slate-700 w-full text-left mt-1">
+                        Show all columns
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
               <button onClick={() => setShowSkuSettings(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-1">
                 <Settings className="w-4 h-4" />Settings
               </button>
@@ -1118,45 +1194,16 @@ const InventoryView = ({
           )}
           
           <div className="overflow-x-auto">
-            <table className="w-full" style={{tableLayout: 'fixed', minWidth: '1480px'}}>
+            <table className="w-full" style={{tableLayout: 'fixed', minWidth: `${visibleColumns.length * 80 + 35}px`}}>
               <colgroup>
-                <col style={{width: '180px'}} />
-                <col style={{width: '32px'}} />
-                <col style={{width: '70px'}} />
-                <col style={{width: '65px'}} />
-                <col style={{width: '60px'}} />
-                <col style={{width: '65px'}} />
-                <col style={{width: '75px'}} />
-                <col style={{width: '95px'}} />
-                <col style={{width: '55px'}} />
-                <col style={{width: '55px'}} />
-                <col style={{width: '55px'}} />
-                <col style={{width: '50px'}} />
-                <col style={{width: '55px'}} />
-                <col style={{width: '70px'}} />
-                <col style={{width: '70px'}} />
-                <col style={{width: '78px'}} />
+                {visibleColumns.map(col => {
+                  const widths = { name: 180, abcClass: 32, amazonQty: 70, threeplQty: 65, awdQty: 60, amazonInbound: 65, totalQty: 75, totalValue: 95, amzWeeklyVel: 55, shopWeeklyVel: 55, weeklyVel: 55, daysOfSupply: 50, turnoverRate: 55, stockoutDate: 70, reorderByDate: 70, health: 78 };
+                  return <col key={col.key} style={{width: `${widths[col.key] || 70}px`}} />;
+                })}
                 <col style={{width: '35px'}} />
               </colgroup>
               <thead className="bg-slate-900/50"><tr>
-                {[
-                  { key: 'name', label: 'Product', align: 'left' },
-                  { key: 'abcClass', label: 'ABC', align: 'center' },
-                  { key: 'amazonQty', label: 'Amazon', align: 'right' },
-                  { key: 'threeplQty', label: '3PL', align: 'right' },
-                  { key: 'awdQty', label: 'AWD', align: 'right' },
-                  { key: 'amazonInbound', label: 'Inbound', align: 'right' },
-                  { key: 'totalQty', label: 'Total', align: 'right' },
-                  { key: 'totalValue', label: 'Value', align: 'right' },
-                  { key: 'amzWeeklyVel', label: 'AMZ Vel', align: 'right' },
-                  { key: 'shopWeeklyVel', label: 'Shop Vel', align: 'right' },
-                  { key: 'weeklyVel', label: 'Tot Vel', align: 'right' },
-                  { key: 'daysOfSupply', label: 'Days', align: 'right' },
-                  { key: 'turnoverRate', label: 'Turn', align: 'right' },
-                  { key: 'stockoutDate', label: 'Stockout', align: 'right' },
-                  { key: 'reorderByDate', label: 'Order By', align: 'right' },
-                  { key: 'health', label: 'Status', align: 'center' },
-                ].map(col => (
+                {visibleColumns.map(col => (
                   <th 
                     key={col.key}
                     onClick={() => {
@@ -1185,9 +1232,10 @@ const InventoryView = ({
                   const hasCustomSettings = settings.leadTime || settings.reorderPoint || settings.threeplAlertQty || settings.amazonAlertDays || settings.targetDays;
                   const isAlerted = customAlerts.some(a => a.sku === item.sku);
                   
-                  return (
-                    <tr key={item.sku} className={`hover:bg-slate-700/30 ${isAlerted ? 'bg-rose-950/30' : item.health === 'critical' ? 'bg-rose-950/20' : item.health === 'low' ? 'bg-amber-950/20' : ''}`}>
-                      <td className="px-3 py-2 overflow-hidden">
+                  // Cell renderers by column key
+                  const cellMap = {
+                    name: (
+                      <td key="name" className="px-3 py-2 overflow-hidden">
                         <div className="flex items-start gap-1">
                           {isAlerted && <Bell className="w-3 h-3 text-rose-400 flex-shrink-0 mt-1" />}
                           <div className="overflow-hidden">
@@ -1196,7 +1244,9 @@ const InventoryView = ({
                           </div>
                         </div>
                       </td>
-                      <td className="text-center px-1 py-2">
+                    ),
+                    abcClass: (
+                      <td key="abcClass" className="text-center px-1 py-2">
                         <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
                           item.abcClass === 'A' ? 'bg-emerald-900/50 text-emerald-400' :
                           item.abcClass === 'B' ? 'bg-blue-900/50 text-blue-400' :
@@ -1205,26 +1255,32 @@ const InventoryView = ({
                           {item.abcClass || '—'}
                         </span>
                       </td>
-                      <td className="text-right px-2 py-2 text-orange-400 text-sm">{formatNumber(item.amazonQty)}</td>
-                      <td className={`text-right px-2 py-2 text-sm ${settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty ? 'text-rose-400 font-bold' : 'text-violet-400'}`}>{formatNumber(item.threeplQty)}</td>
-                      <td className="text-right px-2 py-2 text-amber-400 text-sm">{formatNumber(item.awdQty || 0)}</td>
-                      <td className="text-right px-2 py-2 text-sky-400 text-sm">{formatNumber((item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0))}</td>
-                      <td className="text-right px-2 py-2 text-white text-sm font-medium tabular-nums">{formatNumber(item.totalQty)}</td>
-                      <td className="text-right px-2 py-2 text-white text-sm tabular-nums overflow-hidden text-ellipsis whitespace-nowrap" title={formatCurrency(item.totalValue)}>{item.totalValue >= 10000 ? '$' + (item.totalValue / 1000).toFixed(1) + 'k' : formatCurrency(item.totalValue)}</td>
-                      <td className="text-right px-2 py-2 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>
-                      <td className="text-right px-2 py-2 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>
-                      <td className="text-right px-2 py-2 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>
-                      <td className="text-right px-2 py-2" title={item.safetyStock > 0 ? `Safety Stock: ${item.safetyStock} units | Reorder Point: ${item.reorderPoint} units | CV: ${item.cv} (${item.demandClass}) | Season: ${item.seasonalFactor}x | EOQ: ${item.eoq} units | Carrying Cost: ${formatCurrency(item.annualCarryingCost || 0)}/yr` : ''}>
+                    ),
+                    amazonQty: <td key="amazonQty" className="text-right px-2 py-2 text-orange-400 text-sm">{formatNumber(item.amazonQty)}</td>,
+                    threeplQty: <td key="threeplQty" className={`text-right px-2 py-2 text-sm ${settings.threeplAlertQty && (item.threeplQty || 0) <= settings.threeplAlertQty ? 'text-rose-400 font-bold' : 'text-violet-400'}`}>{formatNumber(item.threeplQty)}</td>,
+                    awdQty: <td key="awdQty" className="text-right px-2 py-2 text-amber-400 text-sm">{formatNumber(item.awdQty || 0)}</td>,
+                    amazonInbound: <td key="amazonInbound" className="text-right px-2 py-2 text-sky-400 text-sm">{formatNumber((item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0))}</td>,
+                    totalQty: <td key="totalQty" className="text-right px-2 py-2 text-white text-sm font-medium tabular-nums">{formatNumber(item.totalQty)}</td>,
+                    totalValue: <td key="totalValue" className="text-right px-2 py-2 text-white text-sm tabular-nums overflow-hidden text-ellipsis whitespace-nowrap" title={formatCurrency(item.totalValue)}>{item.totalValue >= 10000 ? '$' + (item.totalValue / 1000).toFixed(1) + 'k' : formatCurrency(item.totalValue)}</td>,
+                    amzWeeklyVel: <td key="amzWeeklyVel" className="text-right px-2 py-2 text-orange-400 text-sm">{(item.amzWeeklyVel || 0).toFixed(1)}</td>,
+                    shopWeeklyVel: <td key="shopWeeklyVel" className="text-right px-2 py-2 text-blue-400 text-sm">{(item.shopWeeklyVel || 0).toFixed(1)}</td>,
+                    weeklyVel: <td key="weeklyVel" className="text-right px-2 py-2 text-white text-sm font-medium">{item.weeklyVel?.toFixed(1) || '0.0'}</td>,
+                    daysOfSupply: (
+                      <td key="daysOfSupply" className="text-right px-2 py-2" title={item.safetyStock > 0 ? `Safety Stock: ${item.safetyStock} units | Reorder Point: ${item.reorderPoint} units | CV: ${item.cv} (${item.demandClass}) | Season: ${item.seasonalFactor}x | EOQ: ${item.eoq} units | Carrying Cost: ${formatCurrency(item.annualCarryingCost || 0)}/yr` : ''}>
                         <span className="text-white text-sm">{item.daysOfSupply === 999 ? '—' : item.daysOfSupply}</span>
                         {item.safetyStock > 0 && <span className="block text-[10px] text-cyan-500">SS:{item.safetyStock}</span>}
                       </td>
-                      <td className="text-right px-2 py-2" title={`Turnover: ${item.turnoverRate}×/yr | Sell-Through: ${item.sellThroughRate}% | Stock:Sales: ${item.stockToSalesRatio === 999 ? '—' : item.stockToSalesRatio + ':1'} | Stockout Risk: ${item.stockoutRisk}/100`}>
+                    ),
+                    turnoverRate: (
+                      <td key="turnoverRate" className="text-right px-2 py-2" title={`Turnover: ${item.turnoverRate}×/yr | Sell-Through: ${item.sellThroughRate}% | Stock:Sales: ${item.stockToSalesRatio === 999 ? '—' : item.stockToSalesRatio + ':1'} | Stockout Risk: ${item.stockoutRisk}/100`}>
                         <span className={`text-sm ${item.turnoverRate >= 8 ? 'text-emerald-400' : item.turnoverRate >= 4 ? 'text-white' : item.turnoverRate > 0 ? 'text-amber-400' : 'text-slate-600'}`}>{item.turnoverRate > 0 ? `${item.turnoverRate}×` : '—'}</span>
                         {item.sellThroughRate > 0 && <span className={`block text-[10px] ${item.sellThroughRate >= 20 ? 'text-emerald-500' : item.sellThroughRate >= 10 ? 'text-slate-400' : 'text-amber-500'}`}>{item.sellThroughRate}%</span>}
                       </td>
-                      <td className="text-right px-2 py-2 text-slate-400 text-xs">{item.stockoutDate ? (() => { const d = new Date(item.stockoutDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>
-                      <td className={`text-right px-2 py-2 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? (() => { const d = new Date(item.reorderByDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>
-                      <td className="text-center px-2 py-2" title={`${item.demandClass !== 'unknown' ? `Demand: ${item.demandClass} (CV=${item.cv})` : ''} ${item.safetyStock > 0 ? `| SS: ${item.safetyStock}` : ''} ${item.seasonalFactor && item.seasonalFactor !== 1 ? `| Season: ${item.seasonalFactor}x` : ''}`}>
+                    ),
+                    stockoutDate: <td key="stockoutDate" className="text-right px-2 py-2 text-slate-400 text-xs">{item.stockoutDate ? (() => { const d = new Date(item.stockoutDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>,
+                    reorderByDate: <td key="reorderByDate" className={`text-right px-2 py-2 text-xs font-medium ${item.daysUntilMustOrder < 0 ? 'text-rose-400' : item.daysUntilMustOrder < 14 ? 'text-amber-400' : 'text-slate-400'}`}>{item.reorderByDate ? (() => { const d = new Date(item.reorderByDate); const thisYear = new Date().getFullYear(); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== thisYear ? { year: '2-digit' } : {}) }); })() : '—'}</td>,
+                    health: (
+                      <td key="health" className="text-center px-2 py-2" title={`${item.demandClass !== 'unknown' ? `Demand: ${item.demandClass} (CV=${item.cv})` : ''} ${item.safetyStock > 0 ? `| SS: ${item.safetyStock}` : ''} ${item.seasonalFactor && item.seasonalFactor !== 1 ? `| Season: ${item.seasonalFactor}x` : ''}`}>
                         <HealthBadge health={item.health} />
                         {item.demandClass && item.demandClass !== 'unknown' && (
                           <span className={`block text-[9px] mt-0.5 ${item.demandClass === 'smooth' ? 'text-emerald-500' : item.demandClass === 'lumpy' ? 'text-amber-500' : 'text-rose-500'}`}>
@@ -1232,6 +1288,12 @@ const InventoryView = ({
                           </span>
                         )}
                       </td>
+                    ),
+                  };
+                  
+                  return (
+                    <tr key={item.sku} className={`hover:bg-slate-700/30 ${isAlerted ? 'bg-rose-950/30' : item.health === 'critical' ? 'bg-rose-950/20' : item.health === 'low' ? 'bg-amber-950/20' : ''}`}>
+                      {visibleColumns.map(col => cellMap[col.key])}
                       <td className="text-center px-2 py-2">
                         <button 
                           onClick={() => { setShowSkuSettings(true); setSkuSettingsSearch(item.sku); setSkuSettingsEditItem(item.sku); setSkuSettingsEditForm(settings); }}
