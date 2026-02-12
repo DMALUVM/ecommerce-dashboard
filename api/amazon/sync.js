@@ -341,13 +341,15 @@ export default async function handler(req, res) {
         const summary = item.inventorySummary || item.inventoryDetails || item.summary || {};
         const inventoryDetails = item.inventoryDetails || {};
         
-        // AWD quantity parsing - try all known paths
+        // AWD quantity parsing - ordered by most likely API response format
         const onHand = 
-          item.totalQuantity ||                    // direct number
-          item.totalInventory?.quantity ||          // { totalInventory: { quantity: N } }
-          item.totalInventory ||                   // direct number
-          summary.totalQuantity?.quantity ||        // { inventorySummary: { totalQuantity: { quantity: N } } }
-          summary.totalQuantity ||                 // direct
+          summary.totalOnhandQuantity ||             // AWD API: inventorySummary.totalOnhandQuantity
+          inventoryDetails.availableDistributableQuantity || // AWD API: inventoryDetails.availableDistributableQuantity
+          item.totalQuantity ||                      // fallback: direct number
+          item.totalInventory?.quantity ||            // fallback: { totalInventory: { quantity: N } }
+          item.totalInventory ||                     // fallback: direct number
+          summary.totalQuantity?.quantity ||          // fallback
+          summary.totalQuantity ||                   
           summary.onHandQuantity?.quantity ||
           summary.onHandQuantity ||
           inventoryDetails.availableQuantity?.quantity ||
@@ -361,8 +363,8 @@ export default async function handler(req, res) {
         
         // Try multiple field paths for inbound quantity
         const inbound = 
-          item.totalInboundQuantity?.quantity || // { totalInboundQuantity: { quantity: N } }
-          item.totalInboundQuantity ||
+          item.totalInboundQuantity ||               // AWD API: top-level direct number
+          item.totalInboundQuantity?.quantity ||      // fallback: { quantity: N }
           item.inboundInventory?.quantity ||
           summary.inboundQuantity?.quantity ||
           summary.inboundQuantity ||
@@ -370,14 +372,15 @@ export default async function handler(req, res) {
         
         // Replenishment quantity (in transit from AWD to FBA)
         const replenishment =
-          item.replenishmentQuantity?.quantity ||
-          item.replenishmentQuantity ||
+          item.replenishmentQuantity ||               // AWD API: top-level direct number
+          item.replenishmentQuantity?.quantity ||      // fallback
           summary.replenishmentQuantity?.quantity ||
           summary.replenishmentQuantity ||
           0;
         
         // Reserved quantity
         const reserved =
+          inventoryDetails.reservedDistributableQuantity || // AWD API: inventoryDetails.reservedDistributableQuantity
           summary.reservedQuantity?.quantity ||
           summary.reservedQuantity ||
           item.reservedQuantity?.quantity ||
