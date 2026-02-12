@@ -293,18 +293,24 @@ export default async function handler(req, res) {
 
         console.log('AWD API request:', endpoint);
         const awdData = await spApiRequest(accessToken, endpoint);
-        console.log('AWD API response keys:', Object.keys(awdData), 'inventory count:', awdData.inventory?.length);
+        console.log('AWD API response keys:', Object.keys(awdData));
+        console.log('AWD API full response (first 2000 chars):', JSON.stringify(awdData).slice(0, 2000));
+        
+        // AWD API may return inventory under different keys depending on version
+        const inventoryArray = awdData.inventory || awdData.inventoryListings || awdData.payload?.inventory || awdData.payload?.inventoryListings || [];
+        console.log('AWD inventory array length:', inventoryArray.length, 'key used:', awdData.inventory ? 'inventory' : awdData.inventoryListings ? 'inventoryListings' : awdData.payload?.inventory ? 'payload.inventory' : 'unknown');
         
         // Log first item structure for debugging
-        if (awdData.inventory?.length > 0 && awdItems.length === 0) {
-          console.log('AWD first item structure:', JSON.stringify(awdData.inventory[0], null, 2));
+        if (inventoryArray.length > 0 && awdItems.length === 0) {
+          console.log('AWD first item keys:', Object.keys(inventoryArray[0]));
+          console.log('AWD first item structure:', JSON.stringify(inventoryArray[0], null, 2));
         }
         
-        if (awdData.inventory) {
-          awdItems.push(...awdData.inventory);
+        if (inventoryArray.length > 0) {
+          awdItems.push(...inventoryArray);
         }
         
-        nextToken = awdData.nextToken;
+        nextToken = awdData.nextToken || awdData.pagination?.nextToken;
         
         await new Promise(r => setTimeout(r, 200));
         if (awdItems.length > 5000) break;
@@ -318,17 +324,31 @@ export default async function handler(req, res) {
       let awdTotalUnits = 0;
 
       awdItems.forEach(item => {
-        const sku = item.sku || item.sellerSku;
-        if (!sku) return;
+        // AWD may use msku, sku, sellerSku, or merchantSku
+        const sku = item.sku || item.msku || item.sellerSku || item.merchantSku;
+        if (!sku) {
+          console.log('AWD item skipped (no SKU field), keys:', Object.keys(item));
+          return;
+        }
 
         // Try multiple field paths for on-hand quantity
-        const summary = item.inventorySummary || item.inventoryDetails || {};
+        const summary = item.inventorySummary || item.inventoryDetails || item.summary || {};
+        const inventoryDetails = item.inventoryDetails || {};
+        
+        // AWD quantity parsing - try all known paths
         const onHand = 
-          item.totalInventory?.quantity ||      // { totalInventory: { quantity: N } }
-          summary.totalQuantity?.quantity ||     // { inventorySummary: { totalQuantity: { quantity: N } } }
-          summary.totalQuantity ||              // { inventorySummary: { totalQuantity: N } }
+          item.totalQuantity ||                    // direct number
+          item.totalInventory?.quantity ||          // { totalInventory: { quantity: N } }
+          item.totalInventory ||                   // direct number
+          summary.totalQuantity?.quantity ||        // { inventorySummary: { totalQuantity: { quantity: N } } }
+          summary.totalQuantity ||                 // direct
           summary.onHandQuantity?.quantity ||
           summary.onHandQuantity ||
+          inventoryDetails.availableQuantity?.quantity ||
+          inventoryDetails.availableQuantity ||
+          item.availableQuantity?.quantity ||
+          item.availableQuantity ||
+          item.onHandQuantity?.quantity ||
           item.onHandQuantity ||
           item.quantity ||
           0;
@@ -363,6 +383,11 @@ export default async function handler(req, res) {
         const replenishmentQty = typeof replenishment === 'number' ? replenishment : 0;
         
         awdTotalUnits += totalAwdQty;
+
+        // Log first item parsing for debugging
+        if (Object.keys(awdInventory).length === 0) {
+          console.log('AWD first item parsed:', { sku, onHand, inbound, replenishment, reserved, totalAwdQty, totalInboundQty: totalInboundQty, replenishmentQty });
+        }
 
         awdInventory[sku] = {
           sku,
@@ -452,7 +477,9 @@ export default async function handler(req, res) {
       // 1. AWD role not assigned to app (requires re-authorization)
       // 2. Seller not enrolled in AWD
       // 3. Rate limiting
+      // 4. API version mismatch
       console.error('AWD inventory sync error:', err.message || err);
+      console.error('AWD full error:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
       
       if (syncType === 'all') {
         // Return FBA data with AWD error details for debugging
