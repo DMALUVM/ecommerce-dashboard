@@ -11456,9 +11456,9 @@ const savePeriods = async (d) => {
             if (!shopToken || shopToken.length < 5) {
               devWarn('[AutoSync] Shopify: credentials exist but token is too short, skipping');
             } else {
-            // Sync last 7 days of orders
+            // Sync last 30 days of orders (matches Amazon daysBack for velocity calc)
             const endDate = new Date().toISOString().split('T')[0];
-            const startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
             
             const res = await fetch('/api/shopify/sync', {
               method: 'POST',
@@ -11476,7 +11476,83 @@ const savePeriods = async (d) => {
             const data = await res.json();
             if (!data.error && res.ok) {
               setShopifyCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-              results.push({ service: 'Shopify', success: true, orders: data.orderCount || 0 });
+              
+              // Merge Shopify daily data into allDaysData
+              if (data.dailyData && Object.keys(data.dailyData).length > 0) {
+                let shopDaysAdded = 0, shopDaysUpdated = 0;
+                
+                setAllDaysData(prev => {
+                  const updated = { ...prev };
+                  Object.entries(data.dailyData).forEach(([date, apiDay]) => {
+                    const existing = updated[date];
+                    
+                    // Merge: preserve existing Amazon data, update Shopify
+                    if (existing) {
+                      updated[date] = {
+                        ...existing,
+                        date,
+                        shopify: apiDay.shopify,
+                        // Recalculate total
+                        total: {
+                          revenue: (existing.amazon?.revenue || 0) + (apiDay.shopify?.revenue || 0),
+                          units: (existing.amazon?.units || 0) + (apiDay.shopify?.units || 0),
+                        },
+                      };
+                      shopDaysUpdated++;
+                    } else {
+                      updated[date] = {
+                        date,
+                        shopify: apiDay.shopify,
+                        amazon: null,
+                        total: apiDay.total || { revenue: apiDay.shopify?.revenue || 0, units: apiDay.shopify?.units || 0 },
+                      };
+                      shopDaysAdded++;
+                    }
+                  });
+                  
+                  console.log(`[AutoSync] Shopify Sales: ${shopDaysAdded} days added, ${shopDaysUpdated} days updated`);
+                  try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('[AutoSync] Failed to persist Shopify daily data'); }
+                  return updated;
+                });
+              }
+              
+              // Merge Shopify weekly data into allWeeksData
+              if (data.weeklyData && Object.keys(data.weeklyData).length > 0) {
+                let shopWeeksUpdated = 0;
+                
+                setAllWeeksData(prev => {
+                  const updated = { ...prev };
+                  Object.entries(data.weeklyData).forEach(([weekKey, apiWeek]) => {
+                    const existing = updated[weekKey];
+                    
+                    if (existing) {
+                      // Preserve existing Amazon/other data, update Shopify
+                      updated[weekKey] = {
+                        ...existing,
+                        shopify: apiWeek.shopify,
+                        total: {
+                          ...existing.total,
+                          revenue: (existing.amazon?.revenue || 0) + (apiWeek.shopify?.revenue || 0),
+                          units: (existing.amazon?.units || 0) + (apiWeek.shopify?.units || 0),
+                        },
+                      };
+                    } else {
+                      updated[weekKey] = {
+                        shopify: apiWeek.shopify,
+                        total: apiWeek.total || { revenue: apiWeek.shopify?.revenue || 0, units: apiWeek.shopify?.units || 0 },
+                      };
+                    }
+                    shopWeeksUpdated++;
+                  });
+                  
+                  console.log(`[AutoSync] Shopify Weekly: ${shopWeeksUpdated} weeks merged`);
+                  try { writeToLocal(STORAGE_KEY, JSON.stringify(updated)); } catch (e) { devWarn('[AutoSync] Failed to persist Shopify weekly data'); }
+                  return updated;
+                });
+              }
+              
+              queueCloudSave({ ...combinedData });
+              results.push({ service: 'Shopify', success: true, orders: data.orderCount || 0, days: Object.keys(data.dailyData || {}).length });
             } else {
               results.push({ service: 'Shopify', success: false, error: data.error || `HTTP ${res.status}` });
               devWarn('Shopify auto-sync failed:', data.error || res.status);
