@@ -415,26 +415,62 @@ const InventoryView = ({
   const [showAddCategory, setShowAddCategory] = useState(false);
   
   // Auto-categorize SKUs by product name keywords
-  const autoCategorizeSkus = () => {
+  const autoCategorizeSkus = (reassignAll = false) => {
     const categories = Object.keys(leadTimeSettings.categoryLeadTimes || {});
-    if (categories.length === 0) return;
+    if (categories.length === 0) {
+      setToast({ message: 'Add categories first before auto-assigning', type: 'error' });
+      return;
+    }
     
-    const allItems = data?.items || [];
+    // Get ALL items — try multiple sources for maximum coverage
+    let allItems = items.length > 0 ? items : (data?.items || []);
+    // Fallback: pull from latest invHistory snapshot directly
+    if (allItems.length === 0 && invHistory) {
+      const latestKey = Object.keys(invHistory).sort().reverse()[0];
+      if (latestKey) allItems = invHistory[latestKey]?.items || [];
+    }
+    if (allItems.length === 0) {
+      setToast({ message: 'No inventory items found. Process inventory first.', type: 'error' });
+      return;
+    }
+    
     const updates = {};
     let assigned = 0;
+    let skipped = 0;
+    
+    // Sort categories by name length descending so more specific names match first
+    // e.g. "Athlete's Shield Soap" matches before "Tallow Soap"
+    const sortedCats = [...categories].sort((a, b) => b.length - a.length);
     
     allItems.forEach(item => {
       const sku = item.sku;
-      // Skip if already assigned
-      if (leadTimeSettings.skuCategories?.[sku]) return;
+      if (!sku) return;
+      // Skip if already assigned (unless reassigning all)
+      if (!reassignAll && leadTimeSettings.skuCategories?.[sku]) { skipped++; return; }
       
-      const name = (item.name || sku).toLowerCase();
-      for (const cat of categories) {
+      const name = (item.name || '').toLowerCase();
+      const skuLower = sku.toLowerCase();
+      const searchText = `${name} ${skuLower}`;
+      
+      for (const cat of sortedCats) {
         const catLower = cat.toLowerCase();
-        // Match category name or common keywords in product name
-        const keywords = catLower.split(/[\s&]+/).filter(w => w.length > 2);
-        const matches = keywords.some(kw => name.includes(kw));
-        if (matches) {
+        
+        // Strategy 1: Full category name as substring
+        if (searchText.includes(catLower)) {
+          updates[sku] = cat;
+          assigned++;
+          break;
+        }
+        
+        // Strategy 2: For multi-word categories, ALL significant keywords must appear
+        const keywords = catLower.split(/[\s'&,/]+/).filter(w => w.length >= 3);
+        if (keywords.length > 1 && keywords.every(kw => searchText.includes(kw))) {
+          updates[sku] = cat;
+          assigned++;
+          break;
+        }
+        // For single-word categories (4+ chars), any keyword match is fine
+        if (keywords.length === 1 && keywords[0].length >= 4 && searchText.includes(keywords[0])) {
           updates[sku] = cat;
           assigned++;
           break;
@@ -447,9 +483,12 @@ const InventoryView = ({
         ...prev,
         skuCategories: { ...prev.skuCategories, ...updates }
       }));
-      setToast({ message: `Auto-assigned ${assigned} SKUs to categories`, type: 'success' });
+      setToast({ message: `Auto-assigned ${assigned} SKU${assigned > 1 ? 's' : ''} to categories${skipped > 0 ? ` (${skipped} already assigned)` : ''}`, type: 'success' });
     } else {
-      setToast({ message: 'No unassigned SKUs matched any category names', type: 'info' });
+      const detail = skipped > 0 
+        ? `All ${skipped} SKUs already assigned. Click "Re-assign All" to override.`
+        : `No matches in ${allItems.length} SKUs for: ${categories.join(', ')}. Check product names contain category keywords.`;
+      setToast({ message: detail, type: 'info' });
     }
   };
   const exportInventoryExcel = async () => {
@@ -688,8 +727,11 @@ const InventoryView = ({
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-white font-semibold">📦 Category Lead Times</h3>
             <div className="flex gap-2">
-              <button onClick={autoCategorizeSkus} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-white text-xs flex items-center gap-1" title="Auto-assign SKUs to categories based on product name keywords">
+              <button onClick={() => autoCategorizeSkus(false)} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-white text-xs flex items-center gap-1" title="Auto-assign unassigned SKUs to categories based on product name keywords">
                 <Zap className="w-3 h-3" />Auto-Assign
+              </button>
+              <button onClick={() => autoCategorizeSkus(true)} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 rounded-lg text-white text-xs flex items-center gap-1" title="Re-assign ALL SKUs to categories (overrides existing assignments)">
+                <RefreshCw className="w-3 h-3" />Re-assign All
               </button>
               <button onClick={() => { setShowAddCategory(true); setCategoryForm({ name: '', leadTimeDays: leadTimeSettings.defaultLeadTimeDays || 14, reorderTriggerDays: leadTimeSettings.reorderTriggerDays || 60, minOrderWeeks: leadTimeSettings.minOrderWeeks || 22 }); }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-xs flex items-center gap-1">
                 <Plus className="w-3 h-3" />Add Category

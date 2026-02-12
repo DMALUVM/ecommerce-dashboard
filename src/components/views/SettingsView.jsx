@@ -1,7 +1,7 @@
 import { devWarn, devError } from '../../utils/logger';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertTriangle, BarChart3, Bell, Boxes, Check, Cloud, Copy, Database, Download, Eye, FileText, Filter, Globe, HelpCircle, Home, Info, Landmark, Loader2, Moon, Package, Plus, Receipt, RefreshCw, Save, Send, Settings, ShoppingBag, ShoppingCart, Sparkles, Store, Sun, Target, Trash2, TrendingUp, Truck, Upload, User, Users, X
+  AlertTriangle, BarChart3, Bell, Boxes, Check, Cloud, Copy, Database, Download, Eye, FileText, Filter, Globe, HelpCircle, Home, Info, Landmark, Loader2, Moon, Package, Plus, Receipt, RefreshCw, Save, Send, Settings, ShoppingBag, ShoppingCart, Sparkles, Store, Sun, Target, Trash2, TrendingUp, Truck, Upload, User, Users, X, Zap
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import { lsSet } from '../../utils/storage';
@@ -113,6 +113,9 @@ const SettingsView = ({
   pushToCloudNow,
   supabase
 }) => {
+  // Category lead time form state (local to settings page)
+  const [settingsCategoryForm, setSettingsCategoryForm] = useState({ name: '', leadTimeDays: 14, reorderTriggerDays: 60, minOrderWeeks: 22 });
+  
   // Default settings structure
   const defaultSettings = {
     inventoryDaysOptimal: 60,
@@ -647,6 +650,169 @@ const SettingsView = ({
               <p className="text-slate-500 text-xs mt-1">Minimum weeks of supply per order ({Math.round((leadTimeSettings.minOrderWeeks || 22) / 4.3)} months)</p>
             </div>
           </div>
+        </SettingSection>
+        
+        {/* Category Lead Times */}
+        <SettingSection title="📦 Category Lead Times">
+          <p className="text-slate-400 text-sm mb-4">Set different lead times per product category. Per-SKU overrides still take priority. Assign SKUs to categories in the Inventory Settings modal.</p>
+          
+          {/* Add new category */}
+          <div className="flex gap-3 items-end mb-4 flex-wrap">
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Category Name</label>
+              <input 
+                type="text" 
+                value={settingsCategoryForm?.name || ''} 
+                onChange={(e) => setSettingsCategoryForm(f => ({ ...f, name: e.target.value }))} 
+                placeholder="e.g. Lip Balm, Deodorant" 
+                className="w-44 px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm" 
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Lead Time</label>
+              <div className="flex items-center gap-1">
+                <input type="number" value={settingsCategoryForm?.leadTimeDays || 14} onChange={(e) => setSettingsCategoryForm(f => ({ ...f, leadTimeDays: parseInt(e.target.value) || 14 }))} className="w-16 px-2 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm text-center" />
+                <span className="text-slate-500 text-xs">days</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Reorder Trigger</label>
+              <div className="flex items-center gap-1">
+                <input type="number" value={settingsCategoryForm?.reorderTriggerDays || 60} onChange={(e) => setSettingsCategoryForm(f => ({ ...f, reorderTriggerDays: parseInt(e.target.value) || 60 }))} className="w-16 px-2 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm text-center" />
+                <span className="text-slate-500 text-xs">days</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Min Order</label>
+              <div className="flex items-center gap-1">
+                <input type="number" value={settingsCategoryForm?.minOrderWeeks || 22} onChange={(e) => setSettingsCategoryForm(f => ({ ...f, minOrderWeeks: parseInt(e.target.value) || 22 }))} className="w-16 px-2 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm text-center" />
+                <span className="text-slate-500 text-xs">wks</span>
+              </div>
+            </div>
+            <button 
+              onClick={() => {
+                const name = (settingsCategoryForm?.name || '').trim();
+                if (!name) { setToast({ message: 'Enter a category name', type: 'error' }); return; }
+                setLeadTimeSettings(prev => ({
+                  ...prev,
+                  categoryLeadTimes: {
+                    ...prev.categoryLeadTimes,
+                    [name]: {
+                      leadTimeDays: settingsCategoryForm?.leadTimeDays || 14,
+                      reorderTriggerDays: settingsCategoryForm?.reorderTriggerDays || 60,
+                      minOrderWeeks: settingsCategoryForm?.minOrderWeeks || 22,
+                    }
+                  }
+                }));
+                setSettingsCategoryForm({ name: '', leadTimeDays: 14, reorderTriggerDays: 60, minOrderWeeks: 22 });
+                setToast({ message: `Category "${name}" added`, type: 'success' });
+              }}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm"
+            >Add</button>
+            <button
+              onClick={() => {
+                const categories = Object.keys(leadTimeSettings.categoryLeadTimes || {});
+                if (categories.length === 0) { setToast({ message: 'Add categories first', type: 'error' }); return; }
+                const latestKey = Object.keys(invHistory).sort().reverse()[0];
+                const allItems = latestKey ? (invHistory[latestKey]?.items || []) : [];
+                if (allItems.length === 0) { setToast({ message: 'No inventory data. Process inventory first.', type: 'error' }); return; }
+                const updates = {};
+                let assigned = 0;
+                let skipped = 0;
+                const sortedCats = [...categories].sort((a, b) => b.length - a.length);
+                allItems.forEach(item => {
+                  const sku = item.sku;
+                  if (!sku) return;
+                  if (leadTimeSettings.skuCategories?.[sku]) { skipped++; return; }
+                  const searchText = `${(item.name || '').toLowerCase()} ${sku.toLowerCase()}`;
+                  for (const cat of sortedCats) {
+                    const catLower = cat.toLowerCase();
+                    if (searchText.includes(catLower)) { updates[sku] = cat; assigned++; break; }
+                    const keywords = catLower.split(/[\s'&,/]+/).filter(w => w.length >= 3);
+                    if (keywords.length > 1 && keywords.every(kw => searchText.includes(kw))) { updates[sku] = cat; assigned++; break; }
+                    if (keywords.length === 1 && keywords[0].length >= 4 && searchText.includes(keywords[0])) { updates[sku] = cat; assigned++; break; }
+                  }
+                });
+                if (assigned > 0) {
+                  setLeadTimeSettings(prev => ({ ...prev, skuCategories: { ...prev.skuCategories, ...updates } }));
+                  setToast({ message: `Auto-assigned ${assigned} SKUs${skipped > 0 ? ` (${skipped} already assigned)` : ''}`, type: 'success' });
+                } else {
+                  setToast({ message: skipped > 0 ? `All ${skipped} SKUs already assigned. Click Re-assign All to override.` : `No matches in ${allItems.length} SKUs for: ${categories.join(', ')}`, type: 'info' });
+                }
+              }}
+              className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white text-sm flex items-center gap-1"
+              title="Auto-assign unassigned SKUs to categories"
+            ><Zap className="w-3 h-3" />Auto-Assign</button>
+            <button
+              onClick={() => {
+                const categories = Object.keys(leadTimeSettings.categoryLeadTimes || {});
+                if (categories.length === 0) { setToast({ message: 'Add categories first', type: 'error' }); return; }
+                const latestKey = Object.keys(invHistory).sort().reverse()[0];
+                const allItems = latestKey ? (invHistory[latestKey]?.items || []) : [];
+                if (allItems.length === 0) { setToast({ message: 'No inventory data. Process inventory first.', type: 'error' }); return; }
+                const updates = {};
+                let assigned = 0;
+                const sortedCats = [...categories].sort((a, b) => b.length - a.length);
+                allItems.forEach(item => {
+                  const sku = item.sku;
+                  if (!sku) return;
+                  const searchText = `${(item.name || '').toLowerCase()} ${sku.toLowerCase()}`;
+                  for (const cat of sortedCats) {
+                    const catLower = cat.toLowerCase();
+                    if (searchText.includes(catLower)) { updates[sku] = cat; assigned++; break; }
+                    const keywords = catLower.split(/[\s'&,/]+/).filter(w => w.length >= 3);
+                    if (keywords.length > 1 && keywords.every(kw => searchText.includes(kw))) { updates[sku] = cat; assigned++; break; }
+                    if (keywords.length === 1 && keywords[0].length >= 4 && searchText.includes(keywords[0])) { updates[sku] = cat; assigned++; break; }
+                  }
+                });
+                if (assigned > 0) {
+                  setLeadTimeSettings(prev => ({ ...prev, skuCategories: { ...prev.skuCategories, ...updates } }));
+                  setToast({ message: `Re-assigned ${assigned} SKUs to categories`, type: 'success' });
+                } else {
+                  setToast({ message: `No matches in ${allItems.length} SKUs for: ${categories.join(', ')}`, type: 'info' });
+                }
+              }}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg text-white text-sm flex items-center gap-1"
+              title="Re-assign ALL SKUs (overrides existing)"
+            ><RefreshCw className="w-3 h-3" />Re-assign All</button>
+          </div>
+          
+          {/* Category list */}
+          {Object.keys(leadTimeSettings.categoryLeadTimes || {}).length > 0 ? (
+            <div className="space-y-2">
+              {Object.entries(leadTimeSettings.categoryLeadTimes).map(([catName, catSettings]) => {
+                const skuCount = Object.values(leadTimeSettings.skuCategories || {}).filter(c => c === catName).length;
+                return (
+                  <div key={catName} className="bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-3 flex items-center justify-between">
+                    <div className="flex items-center gap-4 flex-wrap">
+                      <span className="text-white font-medium min-w-[130px]">{catName}</span>
+                      <span className="text-emerald-400 text-sm">{catSettings.leadTimeDays}d lead time</span>
+                      <span className="text-amber-400 text-sm">{catSettings.reorderTriggerDays}d trigger</span>
+                      <span className="text-cyan-400 text-sm">{catSettings.minOrderWeeks}w min order</span>
+                      <span className="text-slate-500 text-sm">{skuCount} SKU{skuCount !== 1 ? 's' : ''}</span>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        if (!confirm(`Delete category "${catName}"?`)) return;
+                        setLeadTimeSettings(prev => {
+                          const newCatLT = { ...prev.categoryLeadTimes };
+                          delete newCatLT[catName];
+                          const newCats = { ...prev.skuCategories };
+                          Object.keys(newCats).forEach(sku => { if (newCats[sku] === catName) delete newCats[sku]; });
+                          return { ...prev, categoryLeadTimes: newCatLT, skuCategories: newCats };
+                        });
+                      }}
+                      className="px-2 py-1 bg-rose-900/50 hover:bg-rose-800/50 rounded text-rose-400 text-xs"
+                    >Remove</button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-center py-4 text-slate-500 text-sm bg-slate-800/30 rounded-lg">
+              No categories yet. Add categories like <span className="text-white">"Lip Balm"</span>, <span className="text-white">"Deodorant"</span>, <span className="text-white">"Tallow Balm"</span>, <span className="text-white">"Athlete's Shield Soap"</span>, <span className="text-white">"Tallow Soap"</span> to manage lead times by product type.
+            </div>
+          )}
         </SettingSection>
           </>
         )}
