@@ -11342,7 +11342,7 @@ const savePeriods = async (d) => {
           try {
             const amazonSyncBody = {
               syncType: 'sales',
-              daysBack: 7,
+              daysBack: 30,
               refreshToken: amazonCredentials.refreshToken,
               clientId: amazonCredentials.clientId,
               clientSecret: amazonCredentials.clientSecret,
@@ -11491,6 +11491,22 @@ const savePeriods = async (d) => {
       
       // Fetch fresh Amazon FBA+AWD inventory for snapshot updates
       let freshAmazonFbaData = null;
+      let fbaDataMergedIntoSnapshot = false;
+      
+      // Velocity lookups - built from daily+weekly data, used by both Packiyo and standalone FBA merge
+      const autoAmazonVelLookup = {};
+      const autoShopifyVelLookup = {};
+      const autoVelocityTrends = {};
+      
+      const storeAutoVelocity = (lookup, sku, velocity) => {
+        const baseSku = sku.replace(/shop$/i, '').toUpperCase();
+        const keys = new Set([sku, sku.toLowerCase(), sku.toUpperCase(), baseSku, baseSku.toLowerCase(),
+                   baseSku + 'Shop', baseSku.toLowerCase() + 'shop', baseSku + 'SHOP']);
+        keys.forEach(key => {
+          if (!lookup[key]) lookup[key] = 0;
+          lookup[key] = Math.max(lookup[key], velocity);
+        });
+      };
       if (amazonCredentials.refreshToken) {
         try {
           console.log('[AutoSync] Fetching /api/amazon/sync with syncType: all (FBA + AWD)...');
@@ -11531,10 +11547,135 @@ const savePeriods = async (d) => {
               });
             });
             console.log('[AutoSync] Fresh FBA+AWD data built:', { skuCount: fbaData.items.length, hasAwdData: fbaData.items.some(i => (i.awdQuantity || 0) > 0) });
+            
+            // Persist FBA+AWD data independently so it survives page reload
+            try {
+              const fbaSnapshot = {
+                items: fbaData.items,
+                fetchedAt: new Date().toISOString(),
+                hasAwdData: fbaData.items.some(i => (i.awdQuantity || 0) > 0),
+              };
+              localStorage.setItem('ecommerce_fba_awd_snapshot', JSON.stringify(fbaSnapshot));
+              console.log('[AutoSync] FBA+AWD snapshot persisted to localStorage');
+            } catch (e) { devWarn('[AutoSync] Failed to persist FBA+AWD snapshot:', e.message); }
           }
         } catch (err) {
           console.warn('[AutoSync] FBA+AWD fetch failed:', err.message);
         }
+      }
+      
+      // ========== BUILD VELOCITY LOOKUPS (independent of Packiyo) ==========
+      // These are used by both the Packiyo inventory merge AND the standalone FBA merge
+      try {
+        if (Object.keys(allDaysData).length > 0) {
+          const allDates = Object.keys(allDaysData).sort().reverse();
+          const last28Days = allDates.slice(0, 28);
+          const skuDailyUnits = {};
+          
+          let amzDaysRecent = 0, amzDaysPrior = 0;
+          let shopDaysRecent = 0, shopDaysPrior = 0;
+          
+          last28Days.forEach((date, dayIndex) => {
+            const day = allDaysData[date];
+            const isRecent = dayIndex < 14;
+            
+            const shopifySkuData = day?.shopify?.skuData;
+            const shopifyList = Array.isArray(shopifySkuData) ? shopifySkuData : Object.values(shopifySkuData || {});
+            const hasShopData = shopifyList.length > 0;
+            if (hasShopData) { if (isRecent) shopDaysRecent++; else shopDaysPrior++; }
+            
+            const amazonSkuData = day?.amazon?.skuData;
+            const amazonList = Array.isArray(amazonSkuData) ? amazonSkuData : Object.values(amazonSkuData || {});
+            const hasAmzData = amazonList.length > 0;
+            if (hasAmzData) { if (isRecent) amzDaysRecent++; else amzDaysPrior++; }
+            
+            shopifyList.forEach(item => {
+              if (!item.sku) return;
+              const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
+              const units = item.unitsSold || item.units || 0;
+              if (!skuDailyUnits[normalizedSku]) {
+                skuDailyUnits[normalizedSku] = { recentShopify: 0, priorShopify: 0, recentAmazon: 0, priorAmazon: 0 };
+              }
+              if (isRecent) skuDailyUnits[normalizedSku].recentShopify += units;
+              else skuDailyUnits[normalizedSku].priorShopify += units;
+            });
+            
+            amazonList.forEach(item => {
+              if (!item.sku) return;
+              const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
+              const units = item.unitsSold || item.units || 0;
+              if (!skuDailyUnits[normalizedSku]) {
+                skuDailyUnits[normalizedSku] = { recentShopify: 0, priorShopify: 0, recentAmazon: 0, priorAmazon: 0 };
+              }
+              if (isRecent) skuDailyUnits[normalizedSku].recentAmazon += units;
+              else skuDailyUnits[normalizedSku].priorAmazon += units;
+            });
+          });
+          
+          const amzWeeksEquiv = Math.max((amzDaysRecent * 2 + amzDaysPrior) / 7, 0.14);
+          const shopWeeksEquiv = Math.max((shopDaysRecent * 2 + shopDaysPrior) / 7, 0.14);
+          console.log(`[AutoSync] Velocity data: AMZ ${amzDaysRecent}+${amzDaysPrior} days (weeksEquiv=${amzWeeksEquiv.toFixed(1)}), Shop ${shopDaysRecent}+${shopDaysPrior} days (weeksEquiv=${shopWeeksEquiv.toFixed(1)})`);
+          
+          Object.entries(skuDailyUnits).forEach(([sku, d]) => {
+            const shopVel = shopWeeksEquiv > 0.14 ? ((d.recentShopify * 2) + d.priorShopify) / shopWeeksEquiv : 0;
+            const amzVel = amzWeeksEquiv > 0.14 ? ((d.recentAmazon * 2) + d.priorAmazon) / amzWeeksEquiv : 0;
+            storeAutoVelocity(autoShopifyVelLookup, sku, shopVel);
+            storeAutoVelocity(autoAmazonVelLookup, sku, amzVel);
+            
+            const recentWeeklyShop = shopDaysRecent > 0 ? d.recentShopify / (shopDaysRecent / 7) : 0;
+            const priorWeeklyShop = shopDaysPrior > 0 ? d.priorShopify / (shopDaysPrior / 7) : 0;
+            const recentWeeklyAmz = amzDaysRecent > 0 ? d.recentAmazon / (amzDaysRecent / 7) : 0;
+            const priorWeeklyAmz = amzDaysPrior > 0 ? d.priorAmazon / (amzDaysPrior / 7) : 0;
+            const shopTrend = priorWeeklyShop > 0 ? ((recentWeeklyShop - priorWeeklyShop) / priorWeeklyShop) : 0;
+            const amzTrend = priorWeeklyAmz > 0 ? ((recentWeeklyAmz - priorWeeklyAmz) / priorWeeklyAmz) : 0;
+            autoVelocityTrends[sku] = { totalTrend: Math.round(((shopTrend + amzTrend) / 2) * 100) };
+          });
+        }
+        
+        // Weekly supplement for slow-moving SKUs
+        const sortedWeeksForVel = Object.keys(allWeeksData).sort();
+        if (sortedWeeksForVel.length > 0) {
+          const weeklyShopVel = {};
+          const weeklyAmzVel = {};
+          
+          sortedWeeksForVel.forEach(w => {
+            const weekData = allWeeksData[w];
+            if (weekData.shopify?.skuData) {
+              const skuData = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
+              skuData.forEach(item => {
+                if (!item.sku) return;
+                const normalized = item.sku.replace(/shop$/i, '').toUpperCase();
+                if (!weeklyShopVel[normalized]) weeklyShopVel[normalized] = 0;
+                weeklyShopVel[normalized] += (item.unitsSold || item.units || 0);
+              });
+            }
+            if (weekData.amazon?.skuData) {
+              const skuData = Array.isArray(weekData.amazon.skuData) ? weekData.amazon.skuData : Object.values(weekData.amazon.skuData);
+              skuData.forEach(item => {
+                if (!item.sku) return;
+                const normalized = item.sku.replace(/shop$/i, '').toUpperCase();
+                if (!weeklyAmzVel[normalized]) weeklyAmzVel[normalized] = 0;
+                weeklyAmzVel[normalized] += (item.unitsSold || item.units || 0);
+              });
+            }
+          });
+          
+          const weekCount = sortedWeeksForVel.length;
+          Object.entries(weeklyShopVel).forEach(([sku, totalUnits]) => {
+            const weeklyAvg = totalUnits / weekCount;
+            if (weeklyAvg > 0 && (!autoShopifyVelLookup[sku] || autoShopifyVelLookup[sku] === 0)) {
+              storeAutoVelocity(autoShopifyVelLookup, sku, weeklyAvg);
+            }
+          });
+          Object.entries(weeklyAmzVel).forEach(([sku, totalUnits]) => {
+            const weeklyAvg = totalUnits / weekCount;
+            if (weeklyAvg > 0 && (!autoAmazonVelLookup[sku] || autoAmazonVelLookup[sku] === 0)) {
+              storeAutoVelocity(autoAmazonVelLookup, sku, weeklyAvg);
+            }
+          });
+        }
+      } catch (velErr) {
+        devWarn('[AutoSync] Velocity calculation error:', velErr.message);
       }
       
       // Check Packiyo - use /api/packiyo/sync endpoint
@@ -11561,127 +11702,9 @@ const savePeriods = async (d) => {
               setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               results.push({ service: 'Packiyo', success: true, skus: data.summary?.skuCount || data.products?.length || 0 });
               
-              // ========== AUTO-SYNC: VELOCITY CALC + INVENTORY UPDATE ==========
-              // This mirrors the manual Packiyo sync's processing so velocities and
-              // DOS/stockout dates are recalculated on auto-sync too
+              // ========== AUTO-SYNC: INVENTORY UPDATE ==========
+              // Velocity lookups are now built at parent scope (before Packiyo)
               try {
-                
-                // Build velocity lookups from daily data (weighted moving average)
-                const autoAmazonVelLookup = {};
-                const autoShopifyVelLookup = {};
-                const autoVelocityTrends = {};
-                
-                const storeAutoVelocity = (lookup, sku, velocity) => {
-                  const baseSku = sku.replace(/shop$/i, '').toUpperCase();
-                  [sku, sku.toLowerCase(), sku.toUpperCase(), baseSku, baseSku.toLowerCase(),
-                   baseSku + 'Shop', baseSku.toLowerCase() + 'shop', baseSku + 'SHOP'].forEach(key => {
-                    if (!lookup[key]) lookup[key] = 0;
-                    lookup[key] = Math.max(lookup[key], velocity);
-                  });
-                };
-                
-                if (Object.keys(allDaysData).length > 0) {
-                  const allDates = Object.keys(allDaysData).sort().reverse();
-                  const last28Days = allDates.slice(0, 28);
-                  const skuDailyUnits = {};
-                  
-                  last28Days.forEach((date, dayIndex) => {
-                    const day = allDaysData[date];
-                    const isRecent = dayIndex < 14;
-                    
-                    // Shopify SKU data
-                    const shopifySkuData = day?.shopify?.skuData;
-                    const shopifyList = Array.isArray(shopifySkuData) ? shopifySkuData : Object.values(shopifySkuData || {});
-                    shopifyList.forEach(item => {
-                      if (!item.sku) return;
-                      const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
-                      const units = item.unitsSold || item.units || 0;
-                      if (!skuDailyUnits[normalizedSku]) {
-                        skuDailyUnits[normalizedSku] = { recentShopify: 0, priorShopify: 0, recentAmazon: 0, priorAmazon: 0 };
-                      }
-                      if (isRecent) skuDailyUnits[normalizedSku].recentShopify += units;
-                      else skuDailyUnits[normalizedSku].priorShopify += units;
-                    });
-                    
-                    // Amazon SKU data
-                    const amazonSkuData = day?.amazon?.skuData;
-                    const amazonList = Array.isArray(amazonSkuData) ? amazonSkuData : Object.values(amazonSkuData || {});
-                    amazonList.forEach(item => {
-                      if (!item.sku) return;
-                      const normalizedSku = item.sku.replace(/shop$/i, '').toUpperCase();
-                      const units = item.unitsSold || item.units || 0;
-                      if (!skuDailyUnits[normalizedSku]) {
-                        skuDailyUnits[normalizedSku] = { recentShopify: 0, priorShopify: 0, recentAmazon: 0, priorAmazon: 0 };
-                      }
-                      if (isRecent) skuDailyUnits[normalizedSku].recentAmazon += units;
-                      else skuDailyUnits[normalizedSku].priorAmazon += units;
-                    });
-                  });
-                  
-                  // Calculate weighted velocity (recent 2x weight)
-                  const weeksEquiv = 6; // 3 periods × 2 weeks
-                  Object.entries(skuDailyUnits).forEach(([sku, d]) => {
-                    const shopVel = ((d.recentShopify * 2) + d.priorShopify) / weeksEquiv;
-                    const amzVel = ((d.recentAmazon * 2) + d.priorAmazon) / weeksEquiv;
-                    storeAutoVelocity(autoShopifyVelLookup, sku, shopVel);
-                    storeAutoVelocity(autoAmazonVelLookup, sku, amzVel);
-                    
-                    const recentWeeklyShop = d.recentShopify / 2;
-                    const priorWeeklyShop = d.priorShopify / 2;
-                    const recentWeeklyAmz = d.recentAmazon / 2;
-                    const priorWeeklyAmz = d.priorAmazon / 2;
-                    const shopTrend = priorWeeklyShop > 0 ? ((recentWeeklyShop - priorWeeklyShop) / priorWeeklyShop) : 0;
-                    const amzTrend = priorWeeklyAmz > 0 ? ((recentWeeklyAmz - priorWeeklyAmz) / priorWeeklyAmz) : 0;
-                    autoVelocityTrends[sku] = { totalTrend: Math.round(((shopTrend + amzTrend) / 2) * 100) };
-                  });
-                  
-                }
-                
-                // Weekly supplement for slow-moving SKUs
-                const sortedWeeks = Object.keys(allWeeksData).sort();
-                if (sortedWeeks.length > 0) {
-                  let supplementCount = 0;
-                  const weeklyShopVel = {};
-                  const weeklyAmzVel = {};
-                  
-                  sortedWeeks.forEach(w => {
-                    const weekData = allWeeksData[w];
-                    if (weekData.shopify?.skuData) {
-                      const skuData = Array.isArray(weekData.shopify.skuData) ? weekData.shopify.skuData : Object.values(weekData.shopify.skuData);
-                      skuData.forEach(item => {
-                        if (!item.sku) return;
-                        const normalized = item.sku.replace(/shop$/i, '').toUpperCase();
-                        if (!weeklyShopVel[normalized]) weeklyShopVel[normalized] = 0;
-                        weeklyShopVel[normalized] += (item.unitsSold || item.units || 0);
-                      });
-                    }
-                    if (weekData.amazon?.skuData) {
-                      const skuData = Array.isArray(weekData.amazon.skuData) ? weekData.amazon.skuData : Object.values(weekData.amazon.skuData);
-                      skuData.forEach(item => {
-                        if (!item.sku) return;
-                        const normalized = item.sku.replace(/shop$/i, '').toUpperCase();
-                        if (!weeklyAmzVel[normalized]) weeklyAmzVel[normalized] = 0;
-                        weeklyAmzVel[normalized] += (item.unitsSold || item.units || 0);
-                      });
-                    }
-                  });
-                  
-                  const weekCount = sortedWeeks.length;
-                  Object.entries(weeklyShopVel).forEach(([sku, totalUnits]) => {
-                    const weeklyAvg = totalUnits / weekCount;
-                    if (weeklyAvg > 0 && (!autoShopifyVelLookup[sku] || autoShopifyVelLookup[sku] === 0)) {
-                      storeAutoVelocity(autoShopifyVelLookup, sku, weeklyAvg);
-                      supplementCount++;
-                    }
-                  });
-                  Object.entries(weeklyAmzVel).forEach(([sku, totalUnits]) => {
-                    const weeklyAvg = totalUnits / weekCount;
-                    if (weeklyAvg > 0 && (!autoAmazonVelLookup[sku] || autoAmazonVelLookup[sku] === 0)) {
-                      storeAutoVelocity(autoAmazonVelLookup, sku, weeklyAvg);
-                    }
-                  });
-                  
-                }
                 
                 // Helper to get velocity with corrections
                 const getAutoVelocity = (sku) => {
@@ -11919,6 +11942,7 @@ const savePeriods = async (d) => {
                     setInvHistory(updatedHistory);
                     setSelectedInvDate(targetDate);
                     saveInv(updatedHistory);
+                    fbaDataMergedIntoSnapshot = true;
                     
                   }
                 }
@@ -11934,6 +11958,230 @@ const savePeriods = async (d) => {
             results.push({ service: 'Packiyo', success: false, error: err.message });
             devWarn('Packiyo auto-sync error:', err.message);
           }
+        }
+      }
+      
+      // ========== STANDALONE FBA+AWD MERGE (when Packiyo didn't run) ==========
+      // If we fetched fresh FBA+AWD data but Packiyo didn't merge it into the snapshot,
+      // do it now so AWD/FBA quantities are always persisted
+      if (freshAmazonFbaData && !fbaDataMergedIntoSnapshot) {
+        try {
+          const todayStr = new Date().toISOString().split('T')[0];
+          const targetDate = invHistory[todayStr] ? todayStr :
+            (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
+            Object.keys(invHistory).sort().reverse()[0];
+          
+          if (targetDate && invHistory[targetDate]) {
+            const currentSnapshot = invHistory[targetDate];
+            const today = new Date();
+            const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
+            const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
+            const liveLeadTimeDays = leadTimeSettings.defaultLeadTimeDays || 14;
+            const liveOverstockThreshold = Math.max(90, (minOrderWeeks * 7) + reorderTriggerDays + liveLeadTimeDays);
+            const liveLowThreshold = Math.max(30, liveLeadTimeDays + 14);
+            const liveCriticalThreshold = Math.max(14, liveLeadTimeDays);
+            
+            // Build velocity lookups (reuse auto-sync ones if available)
+            const getStandaloneVelocity = (sku) => {
+              if (!sku) return { amazon: 0, shopify: 0, total: 0, corrected: 0, correctionApplied: false, trend: 0 };
+              const normalizedSku = sku.replace(/shop$/i, '').toUpperCase();
+              const variants = [sku, sku.toLowerCase(), sku.toUpperCase(), normalizedSku, normalizedSku.toLowerCase(),
+                normalizedSku + 'Shop', normalizedSku.toLowerCase() + 'shop', normalizedSku + 'SHOP'];
+              let amazon = 0, shopify = 0;
+              for (const v of variants) {
+                if (autoAmazonVelLookup[v] > 0 && amazon === 0) amazon = autoAmazonVelLookup[v];
+                if (autoShopifyVelLookup[v] > 0 && shopify === 0) shopify = autoShopifyVelLookup[v];
+                if (amazon > 0 && shopify > 0) break;
+              }
+              const total = amazon + shopify;
+              let corrected = total;
+              let correctionApplied = false;
+              if (forecastCorrections?.confidence >= 30 && forecastCorrections?.samplesUsed >= 2) {
+                if (forecastCorrections.bySku?.[normalizedSku]?.samples >= 2) {
+                  corrected = total * (forecastCorrections.bySku[normalizedSku].units || 1);
+                  correctionApplied = true;
+                } else if (forecastCorrections.overall?.units) {
+                  corrected = total * forecastCorrections.overall.units;
+                  correctionApplied = true;
+                }
+              }
+              return { amazon, shopify, total, corrected, correctionApplied, trend: 0 };
+            };
+            
+            const updatedItems = currentSnapshot.items.map(item => {
+              const normalizedItemSku2 = (item.sku || '').toUpperCase();
+              const freshAmz = freshAmazonFbaData[item.sku] || freshAmazonFbaData[normalizedItemSku2] || freshAmazonFbaData[(item.sku || '').toLowerCase()] || null;
+              if (!freshAmz) return item; // No fresh FBA data for this SKU, keep as-is
+              
+              const newAmazonQty = freshAmz.total;
+              const newAmazonInbound = freshAmz.inbound;
+              const newAwdQty = freshAmz.awdQty || 0;
+              const newAwdInbound = freshAmz.awdInbound || 0;
+              const newTotalQty = newAmazonQty + (item.threeplQty || 0) + (item.homeQty || 0) + newAwdQty + newAmazonInbound + newAwdInbound + (item.threeplInbound || 0);
+              
+              const velocityData = getStandaloneVelocity(item.sku);
+              const amzWeeklyVel = velocityData.amazon > 0 ? velocityData.amazon : (item.amzWeeklyVel || 0);
+              const shopWeeklyVel = velocityData.shopify > 0 ? velocityData.shopify : (item.shopWeeklyVel || 0);
+              const rawWeeklyVel = amzWeeklyVel + shopWeeklyVel;
+              const correctedVelForDOS = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
+              
+              const dos = correctedVelForDOS > 0 ? Math.round((newTotalQty / correctedVelForDOS) * 7) : 999;
+              const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
+              
+              let stockoutDate = null, reorderByDate = null, daysUntilMustOrder = null;
+              if (correctedVelForDOS > 0 && dos < 999) {
+                const stockout = new Date(today);
+                stockout.setDate(stockout.getDate() + dos);
+                stockoutDate = stockout.toISOString().split('T')[0];
+                daysUntilMustOrder = dos - reorderTriggerDays - leadTimeDays;
+                const reorderBy = new Date(today);
+                reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
+                reorderByDate = reorderBy.toISOString().split('T')[0];
+              }
+              
+              let health = 'unknown';
+              if (rawWeeklyVel > 0) {
+                if (daysUntilMustOrder !== null && daysUntilMustOrder < 0) health = 'critical';
+                else if (dos < liveCriticalThreshold || (daysUntilMustOrder !== null && daysUntilMustOrder < 7)) health = 'critical';
+                else if (dos < liveLowThreshold || (daysUntilMustOrder !== null && daysUntilMustOrder < 14)) health = 'low';
+                else if (dos <= liveOverstockThreshold) health = 'healthy';
+                else health = 'overstock';
+              }
+              
+              return {
+                ...item,
+                amazonQty: newAmazonQty,
+                amazonInbound: newAmazonInbound,
+                awdQty: newAwdQty,
+                awdInbound: newAwdInbound,
+                totalQty: newTotalQty,
+                totalValue: newTotalQty * (item.cost || 0),
+                weeklyVel: rawWeeklyVel,
+                correctedVel: correctedVelForDOS,
+                amzWeeklyVel,
+                shopWeeklyVel,
+                daysOfSupply: dos,
+                stockoutDate,
+                reorderByDate,
+                daysUntilMustOrder,
+                health,
+              };
+            });
+            
+            // Recalculate summary
+            let critical = 0, low = 0, healthy = 0, overstock = 0;
+            updatedItems.forEach(item => {
+              if (item.health === 'critical') critical++;
+              else if (item.health === 'low') low++;
+              else if (item.health === 'healthy') healthy++;
+              else if (item.health === 'overstock') overstock++;
+            });
+            
+            const newAmzTotal = updatedItems.reduce((s, i) => s + (i.amazonQty || 0), 0);
+            const newAmzValue = updatedItems.reduce((s, i) => s + ((i.amazonQty || 0) * (i.cost || 0)), 0);
+            const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
+            const newAwdTotal = updatedItems.reduce((s, i) => s + (i.awdQty || 0), 0);
+            const newAwdValue = updatedItems.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
+            
+            const updatedSnapshot = {
+              ...currentSnapshot,
+              items: updatedItems,
+              summary: {
+                ...currentSnapshot.summary,
+                amazonUnits: newAmzTotal,
+                amazonValue: newAmzValue,
+                amazonInbound: newAmzInbound,
+                awdUnits: newAwdTotal,
+                awdValue: newAwdValue,
+                totalUnits: newAmzTotal + (currentSnapshot.summary?.threeplUnits || 0) + (currentSnapshot.summary?.homeUnits || 0) + newAwdTotal + newAmzInbound,
+                totalValue: newAmzValue + (currentSnapshot.summary?.threeplValue || 0) + (currentSnapshot.summary?.homeValue || 0) + newAwdValue,
+                critical, low, healthy, overstock,
+              },
+              sources: {
+                ...currentSnapshot.sources,
+                amazon: 'amazon-fba-auto-sync',
+                lastAmazonFbaSync: new Date().toISOString(),
+              },
+            };
+            
+            const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+            setInvHistory(updatedHistory);
+            setSelectedInvDate(targetDate);
+            saveInv(updatedHistory);
+            fbaDataMergedIntoSnapshot = true;
+            console.log('[AutoSync] FBA+AWD data merged into snapshot independently (no Packiyo)');
+          } else if (freshAmazonFbaData) {
+            // No existing snapshot — create a minimal one from FBA+AWD data
+            const todayStr2 = new Date().toISOString().split('T')[0];
+            const cogsLookup = getCogsLookup();
+            const newItems = [];
+            const seenSkus = new Set();
+            
+            Object.entries(freshAmazonFbaData).forEach(([sku, entry]) => {
+              const normalizedSku = sku.replace(/shop$/i, '').toUpperCase();
+              if (seenSkus.has(normalizedSku)) return;
+              seenSkus.add(normalizedSku);
+              
+              const cost = cogsLookup[sku] || cogsLookup[normalizedSku] || cogsLookup[normalizedSku.toLowerCase()] || 0;
+              if (cost === 0) return; // Skip SKUs without COGS
+              
+              const totalQty = (entry.total || 0) + (entry.awdQty || 0) + (entry.inbound || 0) + (entry.awdInbound || 0);
+              newItems.push({
+                sku: normalizedSku + 'Shop',
+                name: normalizedSku,
+                asin: entry.asin || '',
+                amazonQty: entry.total || 0,
+                threeplQty: 0,
+                homeQty: 0,
+                awdQty: entry.awdQty || 0,
+                awdInbound: entry.awdInbound || 0,
+                amazonInbound: entry.inbound || 0,
+                threeplInbound: 0,
+                totalQty,
+                cost,
+                totalValue: totalQty * cost,
+                weeklyVel: 0,
+                correctedVel: 0,
+                amzWeeklyVel: 0,
+                shopWeeklyVel: 0,
+                daysOfSupply: 999,
+                health: 'unknown',
+                stockoutDate: null,
+                reorderByDate: null,
+                daysUntilMustOrder: null,
+                suggestedOrderQty: 0,
+                leadTimeDays: leadTimeSettings.defaultLeadTimeDays || 14,
+                safetyStock: 0,
+                reorderPoint: 0,
+              });
+            });
+            
+            if (newItems.length > 0) {
+              const snapshot = {
+                items: newItems,
+                summary: {
+                  skuCount: newItems.length,
+                  totalUnits: newItems.reduce((s, i) => s + i.totalQty, 0),
+                  totalValue: newItems.reduce((s, i) => s + i.totalValue, 0),
+                  amazonUnits: newItems.reduce((s, i) => s + i.amazonQty, 0),
+                  amazonValue: newItems.reduce((s, i) => s + (i.amazonQty * i.cost), 0),
+                  awdUnits: newItems.reduce((s, i) => s + (i.awdQty || 0), 0),
+                  awdValue: newItems.reduce((s, i) => s + ((i.awdQty || 0) * i.cost), 0),
+                  threeplUnits: 0, threeplValue: 0,
+                  critical: 0, low: 0, healthy: 0, overstock: 0,
+                },
+                sources: { amazon: 'amazon-fba-auto-sync', lastAmazonFbaSync: new Date().toISOString() },
+              };
+              const updatedHistory = { ...invHistory, [todayStr2]: snapshot };
+              setInvHistory(updatedHistory);
+              setSelectedInvDate(todayStr2);
+              saveInv(updatedHistory);
+              fbaDataMergedIntoSnapshot = true;
+              console.log('[AutoSync] Created new inventory snapshot from FBA+AWD data:', newItems.length, 'SKUs');
+            }
+          }
+        } catch (e) {
+          devWarn('[AutoSync] Standalone FBA+AWD merge failed:', e.message);
         }
       }
       
