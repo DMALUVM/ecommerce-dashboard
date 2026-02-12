@@ -719,7 +719,7 @@ const SettingsView = ({
                   <div>
                     <label className="block text-slate-300 text-sm font-medium mb-2">Client Secret</label>
                     <input
-                      type="password"
+                      type="text" style={{WebkitTextSecurity: "disc"}}
                       placeholder="Your app's Client Secret"
                       value={shopifyCredentials.clientSecret}
                       onChange={(e) => setShopifyCredentials(p => ({ ...p, clientSecret: e.target.value }))}
@@ -1683,7 +1683,7 @@ const SettingsView = ({
                   <div>
                     <label className="block text-slate-300 text-sm font-medium mb-2">API Token</label>
                     <input
-                      type="password"
+                      type="text" style={{WebkitTextSecurity: "disc"}}
                       placeholder="Your Packiyo API token"
                       value={packiyoCredentials.apiKey}
                       onChange={(e) => setPackiyoCredentials(p => ({ ...p, apiKey: e.target.value }))}
@@ -1880,7 +1880,7 @@ const SettingsView = ({
                   <div>
                     <label className="block text-slate-300 text-sm mb-1">LWA Client Secret</label>
                     <input
-                      type="password"
+                      type="text" style={{WebkitTextSecurity: "disc"}}
                       value={amazonCredentials.clientSecret}
                       onChange={(e) => setAmazonCredentials(p => ({ ...p, clientSecret: e.target.value }))}
                       placeholder="Enter client secret"
@@ -1890,7 +1890,7 @@ const SettingsView = ({
                   <div>
                     <label className="block text-slate-300 text-sm mb-1">Refresh Token</label>
                     <input
-                      type="password"
+                      type="text" style={{WebkitTextSecurity: "disc"}}
                       value={amazonCredentials.refreshToken}
                       onChange={(e) => setAmazonCredentials(p => ({ ...p, refreshToken: e.target.value }))}
                       placeholder="Atzr|xxx"
@@ -2544,7 +2544,7 @@ const SettingsView = ({
                   <div>
                     <label className="block text-slate-300 text-sm font-medium mb-2">Client Secret</label>
                     <input
-                      type="password"
+                      type="text" style={{WebkitTextSecurity: "disc"}}
                       placeholder="Your QBO app Client Secret"
                       value={qboCredentials.clientSecret}
                       onChange={(e) => setQboCredentials(p => ({ ...p, clientSecret: e.target.value }))}

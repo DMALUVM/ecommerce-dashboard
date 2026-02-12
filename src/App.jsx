@@ -4340,6 +4340,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   saveInProgressRef.current = true;
   setCloudStatus('Saving…');
   
+  try {
   // CRITICAL SAFETY CHECK: Never overwrite populated data with empty data
   // This prevents accidental data loss from race conditions
   const localSalesCount = Object.keys(dataObj.sales || {}).length;
@@ -4478,6 +4479,13 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   setCloudStatus('Saved');
   setTimeout(() => setCloudStatus(''), 1500);
   saveInProgressRef.current = false;
+  } catch (networkErr) {
+    // Handle CORS or network errors gracefully (e.g. Supabase unreachable)
+    console.warn('[CloudSave] Network error (CORS or connectivity):', networkErr.message || networkErr);
+    setCloudStatus('Save failed - network error');
+    setTimeout(() => setCloudStatus(''), 5000);
+    saveInProgressRef.current = false;
+  }
 }, [session, stores, activeStoreId, loadedCloudVersion]);
 
 const queueCloudSave = useCallback((nextDataObj) => {
@@ -11241,11 +11249,16 @@ const savePeriods = async (d) => {
       }
       
       // Check Shopify Sales - use /api/shopify/sync endpoint
-      if (appSettings.autoSync?.shopify !== false && shopifyCredentials.connected) {
+      if (appSettings.autoSync?.shopify !== false && shopifyCredentials.connected && shopifyCredentials.storeUrl && (shopifyCredentials.clientSecret || shopifyCredentials.accessToken)) {
         const shopifyStale = isServiceStale(shopifyCredentials.lastSync, threshold);
         
         if (shopifyStale || force) {
           try {
+            // Validate we have real credentials before calling API
+            const shopToken = shopifyCredentials.accessToken || shopifyCredentials.clientSecret;
+            if (!shopToken || shopToken.length < 5) {
+              devWarn('[AutoSync] Shopify: credentials exist but token is too short, skipping');
+            } else {
             // Sync last 7 days of orders
             const endDate = new Date().toISOString().split('T')[0];
             const startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
@@ -11271,6 +11284,7 @@ const savePeriods = async (d) => {
               results.push({ service: 'Shopify', success: false, error: data.error || `HTTP ${res.status}` });
               devWarn('Shopify auto-sync failed:', data.error || res.status);
             }
+            } // end else (has valid token)
           } catch (err) {
             results.push({ service: 'Shopify', success: false, error: err.message });
             devWarn('Shopify auto-sync error:', err.message);
@@ -11327,7 +11341,7 @@ const savePeriods = async (d) => {
       }
       
       // Check Packiyo - use /api/packiyo/sync endpoint
-      if (appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected) {
+      if (appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected && packiyoCredentials.apiKey && packiyoCredentials.customerId) {
         const packiyoStale = isServiceStale(packiyoCredentials.lastSync, threshold);
         
         if (packiyoStale || force) {
