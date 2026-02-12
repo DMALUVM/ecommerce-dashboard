@@ -2334,11 +2334,48 @@ const SettingsView = ({
                       setConfirmDialog({
                         show: true,
                         title: 'Disconnect QuickBooks?',
-                        message: 'Your synced transactions will remain, but auto-sync will stop.',
-                        confirmText: 'Disconnect',
+                        message: 'Your synced transactions will remain, but auto-sync will stop until you reconnect.',
                         destructive: true,
-                        onConfirm: () => {
-                          setQboCredentials({ clientId: '', clientSecret: '', realmId: '', accessToken: '', refreshToken: '', connected: false, lastSync: null, syncFrequency: 'daily', autoSync: false });
+                        confirmText: 'Disconnect',
+                        onConfirm: async () => {
+                          // Optimistic local disconnect so the UI updates immediately.
+                          setQboCredentials({
+                            clientId: '',
+                            clientSecret: '',
+                            realmId: '',
+                            accessToken: '',
+                            refreshToken: '',
+                            connected: false,
+                            lastSync: null,
+                            syncFrequency: 'daily',
+                            autoSync: false,
+                          });
+                          try { sessionStorage.removeItem('qbo_oauth_state'); } catch {}
+
+                          // Clear encrypted server-side secret/metadata so it stays disconnected after reload.
+                          if (session?.access_token) {
+                            try {
+                              const res = await fetch('/api/secrets/save', {
+                                method: 'POST',
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                  Authorization: `Bearer ${session.access_token}`,
+                                },
+                                body: JSON.stringify({
+                                  provider: 'qbo',
+                                  secret: {},
+                                  metadata: { connected: false, lastSync: null, syncFrequency: 'daily', autoSync: false },
+                                }),
+                              });
+                              if (!res.ok) {
+                                setToast({ message: 'QuickBooks disconnected locally. Cloud credential cleanup failed; reconnect may still appear after refresh.', type: 'warning' });
+                                return;
+                              }
+                            } catch {
+                              // Local disconnect is already applied; ignore remote cleanup errors.
+                            }
+                          }
+
                           setToast({ message: 'QuickBooks disconnected', type: 'success' });
                         }
                       });
