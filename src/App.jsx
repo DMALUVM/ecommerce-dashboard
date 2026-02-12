@@ -6504,22 +6504,39 @@ const savePeriods = async (d) => {
     });
     
     // Merge with existing weekly data - daily aggregates fill gaps in weekly data
+    // CRITICAL: Never let API-only daily data overwrite SKU Economics weekly data
     let needsUpdate = false;
     const updatedWeeks = { ...allWeeksData };
     
     Object.entries(dailyByWeek).forEach(([weekKey, dailyAgg]) => {
       const existingWeek = updatedWeeks[weekKey];
       
+      // Check if existing week's Amazon data is from SKU Economics (authoritative)
+      const existingAmzIsSkuEcon = existingWeek?.amazon?.source === 'sku-economics' || 
+        (existingWeek?.amazon?.fees > 0 && !existingWeek?.aggregatedFrom);
+      
+      // Check if daily Amazon data is ALL from API (not SKU Economics)
+      const dailyAmzAllApi = dailyAgg.days.every(dayKey => {
+        const dayAmz = allDaysData[dayKey]?.amazon;
+        return !dayAmz || dayAmz.source === 'amazon-orders-api';
+      });
+      
+      // Don't overwrite SKU Economics Amazon data with API-only daily data
+      const skipAmazonMerge = existingAmzIsSkuEcon && dailyAmzAllApi;
+      
       // If no existing week or existing week is missing data, update it
       const shouldUpdate = !existingWeek || 
         // Update if daily has ads but weekly doesn't
         ((dailyAgg.shopify.metaSpend > 0 || dailyAgg.shopify.googleSpend > 0) && 
          !(existingWeek?.shopify?.metaSpend > 0 || existingWeek?.shopify?.googleSpend > 0)) ||
-        // Update if daily has Amazon SKU data but weekly doesn't
-        (Object.keys(dailyAgg.amazon.skuData).length > 0 && 
+        // Update if daily has Amazon SKU data but weekly doesn't (and we're not protecting SKU Economics)
+        (!skipAmazonMerge && Object.keys(dailyAgg.amazon.skuData).length > 0 && 
          !(existingWeek?.amazon?.skuData?.length > 0)) ||
-        // Update if daily has more days than what was aggregated before
-        (dailyAgg.days.length > (existingWeek?.aggregatedFrom?.length || 0));
+        // Update if daily has Shopify SKU data but weekly doesn't
+        (Object.keys(dailyAgg.shopify.skuData).length > 0 && 
+         !(existingWeek?.shopify?.skuData?.length > 0)) ||
+        // Update if daily has more days than what was aggregated before (but not if SKU Economics is being protected)
+        (!skipAmazonMerge && dailyAgg.days.length > (existingWeek?.aggregatedFrom?.length || 0));
       
       if (shouldUpdate) {
         needsUpdate = true;
@@ -6530,8 +6547,8 @@ const savePeriods = async (d) => {
         const existAmz = existingWeek?.amazon || {};
         const existShop = existingWeek?.shopify || {};
         
-        // Use daily data if it has values, otherwise use existing
-        const mergedAmz = {
+        // For Amazon: if SKU Economics is protected, keep existing data entirely
+        const mergedAmz = skipAmazonMerge ? { ...existAmz } : {
           revenue: amz.revenue > 0 ? amz.revenue : (existAmz.revenue || 0),
           units: amz.units > 0 ? amz.units : (existAmz.units || 0),
           returns: amz.returns > 0 ? amz.returns : (existAmz.returns || 0),
@@ -6542,6 +6559,8 @@ const savePeriods = async (d) => {
           skuData: Object.keys(amz.skuData).length > 0 
             ? Object.values(amz.skuData).sort((a, b) => (b.netSales || 0) - (a.netSales || 0))
             : (existAmz.skuData || []),
+          // Propagate source tag
+          source: amz.fees > 0 ? 'sku-economics' : (existAmz.source || 'daily-aggregation'),
         };
         
         const mergedShop = {
@@ -6623,9 +6642,9 @@ const savePeriods = async (d) => {
           monthKey,
           monthName,
           weeks: [],
-          amazon: { revenue: 0, units: 0, profit: 0, adSpend: 0 },
-          shopify: { revenue: 0, units: 0, profit: 0, adSpend: 0, metaSpend: 0, googleSpend: 0 },
-          total: { revenue: 0, units: 0, profit: 0, adSpend: 0 },
+          amazon: { revenue: 0, units: 0, profit: 0, adSpend: 0, cogs: 0, returns: 0, fees: 0 },
+          shopify: { revenue: 0, units: 0, profit: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, cogs: 0, discounts: 0 },
+          total: { revenue: 0, units: 0, profit: 0, adSpend: 0, cogs: 0 },
         };
       }
       
@@ -6636,6 +6655,9 @@ const savePeriods = async (d) => {
       monthlyAgg[monthKey].amazon.units += weekData.amazon?.units || 0;
       monthlyAgg[monthKey].amazon.profit += getProfit(weekData.amazon);
       monthlyAgg[monthKey].amazon.adSpend += weekData.amazon?.adSpend || 0;
+      monthlyAgg[monthKey].amazon.cogs += weekData.amazon?.cogs || 0;
+      monthlyAgg[monthKey].amazon.returns += weekData.amazon?.returns || 0;
+      monthlyAgg[monthKey].amazon.fees += weekData.amazon?.fees || 0;
       
       // Aggregate Shopify
       monthlyAgg[monthKey].shopify.revenue += weekData.shopify?.revenue || 0;
@@ -6644,22 +6666,26 @@ const savePeriods = async (d) => {
       monthlyAgg[monthKey].shopify.adSpend += weekData.shopify?.adSpend || 0;
       monthlyAgg[monthKey].shopify.metaSpend += weekData.shopify?.metaSpend || 0;
       monthlyAgg[monthKey].shopify.googleSpend += weekData.shopify?.googleSpend || 0;
+      monthlyAgg[monthKey].shopify.cogs += weekData.shopify?.cogs || 0;
+      monthlyAgg[monthKey].shopify.discounts += weekData.shopify?.discounts || 0;
       
       // Aggregate totals
       monthlyAgg[monthKey].total.revenue += weekData.total?.revenue || 0;
       monthlyAgg[monthKey].total.units += weekData.total?.units || 0;
       monthlyAgg[monthKey].total.profit += getProfit(weekData.total);
       monthlyAgg[monthKey].total.adSpend += weekData.total?.adSpend || 0;
+      monthlyAgg[monthKey].total.cogs += (weekData.amazon?.cogs || 0) + (weekData.shopify?.cogs || 0);
     });
     
     // Check if any monthly periods need updating
     let needsUpdate = false;
     const updatedPeriods = { ...allPeriodsData };
     
-    // Only update months in 2025 and 2026 (recent data)
+    // Only auto-aggregate recent months (last 2 years) - older data is already in period data
+    const cutoffYear = new Date().getFullYear() - 1;
     Object.entries(monthlyAgg).forEach(([monthKey, monthData]) => {
       const year = parseInt(monthKey.slice(0, 4));
-      if (year < 2025) return; // Skip older data - it's already in period data
+      if (year < cutoffYear) return; // Skip older data - it's already in period data
       
       const monthNum = parseInt(monthKey.slice(5, 7));
       const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
@@ -6685,6 +6711,9 @@ const savePeriods = async (d) => {
             units: monthData.amazon.units,
             profit: monthData.amazon.profit,
             adSpend: monthData.amazon.adSpend,
+            cogs: monthData.amazon.cogs,
+            returns: monthData.amazon.returns,
+            fees: monthData.amazon.fees,
           },
           shopify: {
             revenue: monthData.shopify.revenue,
@@ -6693,12 +6722,15 @@ const savePeriods = async (d) => {
             adSpend: monthData.shopify.adSpend,
             metaSpend: monthData.shopify.metaSpend,
             googleSpend: monthData.shopify.googleSpend,
+            cogs: monthData.shopify.cogs,
+            discounts: monthData.shopify.discounts,
           },
           total: {
             revenue: monthData.total.revenue,
             units: monthData.total.units,
             profit: monthData.total.profit,
             adSpend: monthData.total.adSpend,
+            cogs: monthData.total.cogs,
             margin: monthData.total.revenue > 0 ? (monthData.total.profit / monthData.total.revenue * 100) : 0,
           },
           aggregatedFromWeekly: true,
