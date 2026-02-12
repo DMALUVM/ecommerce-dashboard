@@ -1553,7 +1553,9 @@ const handleLogout = async () => {
   setIsLocked(false);
   
   // CRITICAL: Clear localStorage to prevent data leakage between users
-  const keysToKeep = ['ecommerce_theme']; // Only keep theme preference
+  const keysToKeep = ['ecommerce_theme',
+    'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
+    'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1']; // Keep theme + API credentials
   const allKeys = Object.keys(localStorage).filter(k => k.startsWith('ecommerce_'));
   allKeys.forEach(k => {
     if (!keysToKeep.includes(k)) {
@@ -4262,6 +4264,37 @@ const loadFromLocal = useCallback(() => {
   } catch (e) { if (e.message) devWarn("[init]", e.message); }
 }, []);
 
+// ALWAYS load API credentials from localStorage on mount, even when Supabase is configured.
+// This ensures credentials survive CORS failures, cloud outages, and session changes.
+// Cloud data will override these if it has newer values (via loadFromCloud).
+useEffect(() => {
+  const credKeys = [
+    { key: 'ecommerce_shopify_creds_v1', setter: setShopifyCredentials },
+    { key: 'ecommerce_packiyo_creds_v1', setter: setPackiyoCredentials },
+    { key: 'ecommerce_amazon_creds_v1', setter: setAmazonCredentials },
+    { key: 'ecommerce_qbo_creds_v1', setter: setQboCredentials },
+  ];
+  credKeys.forEach(({ key, setter }) => {
+    try {
+      const raw = lsGet(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        // Only apply if it has real data (not empty defaults)
+        const hasData = parsed.connected || parsed.storeUrl || parsed.apiKey || 
+                        parsed.refreshToken || parsed.accessToken || parsed.clientId;
+        if (hasData) {
+          setter(prev => {
+            // Don't overwrite if state already has more complete data (from cloud)
+            const prevHasData = prev.connected || prev.storeUrl || prev.apiKey || 
+                               prev.refreshToken || prev.accessToken || prev.clientId;
+            return prevHasData ? prev : parsed;
+          });
+        }
+      }
+    } catch (e) { if (e?.message) devWarn("[cred-restore]", e.message); }
+  });
+}, []);
+
 // Sync 3PL ledger costs to weekly data when ledger changes
 // This ensures profit calculations are accurate even if 3PL data was uploaded separately
 useEffect(() => {
@@ -4690,10 +4723,11 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages) setAiMessages(cloud.aiMessages);
     if (cloud.bankingData) setBankingData(cloud.bankingData);
     if (cloud.confirmedRecurring) setConfirmedRecurring(cloud.confirmedRecurring);
-    if (cloud.shopifyCredentials) setShopifyCredentials(cloud.shopifyCredentials);
-    if (cloud.packiyoCredentials) setPackiyoCredentials(cloud.packiyoCredentials);
-    if (cloud.amazonCredentials) setAmazonCredentials(cloud.amazonCredentials);
-    if (cloud.qboCredentials) setQboCredentials(cloud.qboCredentials);
+    // Load credentials from cloud - only if cloud has real data (don't overwrite localStorage creds with empty defaults)
+    if (cloud.shopifyCredentials && (cloud.shopifyCredentials.connected || cloud.shopifyCredentials.storeUrl || cloud.shopifyCredentials.clientSecret)) setShopifyCredentials(cloud.shopifyCredentials);
+    if (cloud.packiyoCredentials && (cloud.packiyoCredentials.connected || cloud.packiyoCredentials.apiKey)) setPackiyoCredentials(cloud.packiyoCredentials);
+    if (cloud.amazonCredentials && (cloud.amazonCredentials.connected || cloud.amazonCredentials.refreshToken || cloud.amazonCredentials.clientId)) setAmazonCredentials(cloud.amazonCredentials);
+    if (cloud.qboCredentials && (cloud.qboCredentials.connected || cloud.qboCredentials.accessToken || cloud.qboCredentials.clientId)) setQboCredentials(cloud.qboCredentials);
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
@@ -4729,10 +4763,10 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages && cloud.aiMessages.length > 0) writeToLocal('ecommerce_ai_chat_history_v1', JSON.stringify(cloud.aiMessages));
     if (cloud.bankingData) writeToLocal('ecommerce_banking_v1', JSON.stringify(cloud.bankingData));
     if (cloud.confirmedRecurring) writeToLocal('ecommerce_recurring_v1', JSON.stringify(cloud.confirmedRecurring));
-    if (cloud.shopifyCredentials) writeToLocal('ecommerce_shopify_creds_v1', JSON.stringify(cloud.shopifyCredentials));
-    if (cloud.packiyoCredentials) writeToLocal('ecommerce_packiyo_creds_v1', JSON.stringify(cloud.packiyoCredentials));
-    if (cloud.amazonCredentials) writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify(cloud.amazonCredentials));
-    if (cloud.qboCredentials) writeToLocal('ecommerce_qbo_creds_v1', JSON.stringify(cloud.qboCredentials));
+    if (cloud.shopifyCredentials && (cloud.shopifyCredentials.connected || cloud.shopifyCredentials.storeUrl)) writeToLocal('ecommerce_shopify_creds_v1', JSON.stringify(cloud.shopifyCredentials));
+    if (cloud.packiyoCredentials && (cloud.packiyoCredentials.connected || cloud.packiyoCredentials.apiKey)) writeToLocal('ecommerce_packiyo_creds_v1', JSON.stringify(cloud.packiyoCredentials));
+    if (cloud.amazonCredentials && (cloud.amazonCredentials.connected || cloud.amazonCredentials.refreshToken)) writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify(cloud.amazonCredentials));
+    if (cloud.qboCredentials && (cloud.qboCredentials.connected || cloud.qboCredentials.accessToken)) writeToLocal('ecommerce_qbo_creds_v1', JSON.stringify(cloud.qboCredentials));
 
     setCloudStatus('');
     return { ok: true, reason: 'success', stores: loadedStores };
@@ -5003,6 +5037,7 @@ useEffect(() => {
       return;
     }
 
+    try {
     const { data } = await supabase.auth.getSession();
     const initialSession = data?.session || null;
     
@@ -5010,8 +5045,10 @@ useEffect(() => {
     if (initialSession?.user?.id) {
       const lastUserId = localStorage.getItem('ecommerce_last_user_id');
       if (lastUserId && lastUserId !== initialSession.user.id) {
-        // Different user - clear localStorage
-        const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id'];
+        // Different user - clear localStorage (but keep credentials and theme)
+        const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id',
+          'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
+          'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1'];
         Object.keys(localStorage).filter(k => k.startsWith('ecommerce_')).forEach(k => {
           if (!keysToKeep.includes(k)) localStorage.removeItem(k);
         });
@@ -5027,8 +5064,10 @@ useEffect(() => {
       const newUserId = nextSession?.user?.id;
       
       if (newUserId && lastUserId && newUserId !== lastUserId) {
-        // Different user logging in - clear previous user's localStorage
-        const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id'];
+        // Different user logging in - clear previous user's localStorage (keep credentials)
+        const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id',
+          'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
+          'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1'];
         const allKeys = Object.keys(localStorage).filter(k => k.startsWith('ecommerce_'));
         allKeys.forEach(k => {
           if (!keysToKeep.includes(k)) {
@@ -5048,6 +5087,13 @@ useEffect(() => {
     }).data?.subscription;
 
     setIsAuthReady(true);
+    } catch (bootErr) {
+      // CORS or network failure - fall back to localStorage so app isn't stuck
+      console.warn('[Boot] Supabase auth failed (CORS/network), falling back to localStorage:', bootErr.message || bootErr);
+      setSession(null);
+      setIsAuthReady(true);
+      loadFromLocal();
+    }
   };
 
   boot();
