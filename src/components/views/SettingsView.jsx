@@ -860,13 +860,53 @@ const SettingsView = ({
                         const data = await res.json();
                         if (data.error) throw new Error(data.error);
                         if (data.success) {
-                          const updatedCreds = { ...shopifyCredentials, connected: true };
+                          const updatedCreds = {
+                            ...shopifyCredentials,
+                            connected: true,
+                            lastSync: shopifyCredentials.lastSync || null,
+                          };
                           setShopifyCredentials(updatedCreds);
+
+                          // Persist encrypted Shopify credentials immediately so reconnect is not required after refresh.
+                          let securePersistOk = true;
+                          if (session?.access_token) {
+                            try {
+                              const secretRes = await fetch('/api/secrets/save', {
+                                method: 'POST',
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                  Authorization: `Bearer ${session.access_token}`,
+                                },
+                                body: JSON.stringify({
+                                  provider: 'shopify',
+                                  secret: {
+                                    storeUrl: updatedCreds.storeUrl,
+                                    clientId: updatedCreds.clientId,
+                                    clientSecret: updatedCreds.clientSecret,
+                                    accessToken: updatedCreds.clientSecret,
+                                  },
+                                  metadata: {
+                                    storeUrl: updatedCreds.storeUrl,
+                                    connected: true,
+                                    lastSync: updatedCreds.lastSync || null,
+                                  },
+                                }),
+                              });
+                              securePersistOk = secretRes.ok;
+                            } catch {
+                              securePersistOk = false;
+                            }
+                          }
+
                           // IMMEDIATELY save to cloud to persist across sessions
                           if (session?.user?.id && supabase) {
                             pushToCloudNow({ ...combinedData, shopifyCredentials: updatedCreds }, true);
                           }
-                          setToast({ message: `Connected to ${data.shopName || 'Shopify'}!`, type: 'success' });
+                          if (!securePersistOk && session?.access_token) {
+                            setToast({ message: `Connected to ${data.shopName || 'Shopify'}, but secure credential save failed. Reconnect may be required after refresh.`, type: 'warning' });
+                          } else {
+                            setToast({ message: `Connected to ${data.shopName || 'Shopify'}!`, type: 'success' });
+                          }
                         }
                       } catch (err) {
                         clearTimeout(timeoutId);
