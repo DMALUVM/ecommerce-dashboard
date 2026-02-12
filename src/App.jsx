@@ -13422,7 +13422,7 @@ Keep insights brief and actionable. Format as numbered list.`;
           body: JSON.stringify({
             system: systemPrompt,
             messages: [{ role: 'user', content: prompt }],
-            model: AI_DEFAULT_MODEL,
+            model: aiChatModel || AI_DEFAULT_MODEL,
             max_tokens: 4000,
           }),
         });
@@ -13621,7 +13621,7 @@ Respond with ONLY this JSON (no markdown):
           ...forecast,
           generatedAt: new Date().toISOString(),
           source: 'claude-ai',
-          model: AI_DEFAULT_MODEL,
+          model: aiChatModel || AI_DEFAULT_MODEL,
           calculatedSignals: {
             dailyAvg7: avg7Day,
             dailyAvg14: avg14Day,
@@ -14004,7 +14004,12 @@ Respond with ONLY this JSON:
           currentStock,
           amazonStock: item.amazonQty || 0,
           threeplStock: item.threeplQty || 0,
+          awdStock: item.awdQty || 0,
+          awdInbound: item.awdInbound || 0,
+          amazonInbound: item.amazonInbound || 0,
           weeklyVelocity: Math.round(weeklyVelocity * 10) / 10,
+          amzWeeklyVel: Math.round((item.amzWeeklyVel || 0) * 10) / 10,
+          shopWeeklyVel: Math.round((item.shopWeeklyVel || 0) * 10) / 10,
           dailyVelocity: Math.round(dailyVelocity * 10) / 10,
           daysOfSupply,
           stockoutDate,
@@ -15066,6 +15071,9 @@ Analyze the data and respond with ONLY this JSON:
       totalValue: latestInv.summary?.totalValue || 0,
       amazonUnits: latestInv.summary?.amazonUnits || 0,
       threeplUnits: latestInv.summary?.threeplUnits || 0,
+      awdUnits: latestInv.summary?.awdUnits || 0,
+      awdValue: latestInv.summary?.awdValue || 0,
+      amazonInbound: latestInv.summary?.amazonInbound || 0,
       healthBreakdown: {
         critical: latestInv.summary?.critical || 0,
         low: latestInv.summary?.low || 0,
@@ -16186,13 +16194,10 @@ Analyze the data and respond with ONLY this JSON:
         alertsSummary.push(`LOW STOCK ALERT: ${ctx.inventory.lowStockItems.length} products need reorder (${ctx.inventory.lowStockItems.map(i => i.sku).join(', ')})`);
       }
       // Add critical reorder deadline alerts
-      const criticalReorders = inventoryItems.filter(i => 
-        i.daysUntilMustOrder !== null && i.daysUntilMustOrder !== undefined && 
-        i.daysUntilMustOrder <= 14 && i.weeklyVelocity > 0
-      );
+      const criticalReorders = [...(ctx.inventory?.urgentReorder || []), ...(ctx.inventory?.needsReorderSoon || [])];
       if (criticalReorders.length > 0) {
         alertsSummary.push(`🚨 REORDER DEADLINES: ${criticalReorders.map(i => 
-          `${i.sku} (${i.daysUntilMustOrder <= 0 ? 'OVERDUE' : i.daysUntilMustOrder + ' days left'})`
+          `${i.sku} (${i.daysUntilMustOrder !== undefined && i.daysUntilMustOrder <= 0 ? 'OVERDUE' : (i.daysUntilMustOrder || '?') + ' days left'}${i.daysOverdue ? ', ' + i.daysOverdue + ' days overdue' : ''})`
         ).join(', ')}`);
       }
       if (ctx.salesTax?.nexusStates?.length > 0) {
@@ -16738,7 +16743,7 @@ ${JSON.stringify(ctx.improvingSkus)}
 
 === INVENTORY STATUS ===
 ${ctx.inventory ? `As of ${ctx.inventory.asOfDate}: ${ctx.inventory.totalUnits?.toLocaleString() || 0} total units, $${ctx.inventory.totalValue?.toLocaleString() || 0} value
-Amazon: ${ctx.inventory.amazonUnits?.toLocaleString() || 0} units | 3PL: ${ctx.inventory.threeplUnits?.toLocaleString() || 0} units
+Amazon FBA: ${ctx.inventory.amazonUnits?.toLocaleString() || 0} units | AWD: ${ctx.inventory.awdUnits?.toLocaleString() || 0} units ($${ctx.inventory.awdValue?.toLocaleString() || 0}) | 3PL: ${ctx.inventory.threeplUnits?.toLocaleString() || 0} units | Inbound to FBA: ${ctx.inventory.amazonInbound?.toLocaleString() || 0} units
 
 HEALTH BREAKDOWN:
 - Critical (will stock out soon): ${ctx.inventory.healthBreakdown?.critical || 0} SKUs
@@ -17279,7 +17284,12 @@ The goal is for you to learn from the forecast vs actual comparisons over time a
       setAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
     } catch (error) {
       devError('AI Chat error:', error);
-      setAiMessages(prev => [...prev, { role: 'assistant', content: 'Error processing request. Check /api/chat endpoint.' }]);
+      const errorMsg = error.message?.includes('API error') 
+        ? `API Error: ${error.message}` 
+        : error.message?.includes('API_KEY') 
+          ? 'ANTHROPIC_API_KEY not configured on server. Add it to Vercel Environment Variables.'
+          : `Error: ${error.message || 'Unknown error'}. Check browser console for details.`;
+      setAiMessages(prev => [...prev, { role: 'assistant', content: errorMsg }]);
     } finally {
       setAiLoading(false);
     }
@@ -18033,6 +18043,16 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <select 
+              value={aiChatModel} 
+              onChange={(e) => setAiChatModel(e.target.value)}
+              className="bg-white/20 text-white text-xs rounded-lg px-2 py-1.5 border border-white/30 focus:outline-none cursor-pointer appearance-none"
+              style={{ maxWidth: '130px' }}
+            >
+              {AI_MODEL_OPTIONS.map(m => (
+                <option key={m.value} value={m.value} className="bg-slate-800 text-white">{m.label}</option>
+              ))}
+            </select>
             {aiMessages.length > 0 && (
               <button 
                 onClick={() => { if (confirm('Clear chat history?')) setAiMessages([]); }} 

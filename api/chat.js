@@ -5,31 +5,40 @@ export const config = {
   maxDuration: 60,
 };
 
+// Valid model prefixes we accept
+const VALID_MODEL_PREFIXES = ['claude-sonnet', 'claude-opus', 'claude-haiku'];
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { system, messages, model = 'claude-sonnet-4-20250514', max_tokens = 4000 } = req.body || {};
+    const { system, messages, model = 'claude-sonnet-4-5-20250929', max_tokens = 4000 } = req.body || {};
 
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Messages array required' });
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'Messages array required and must not be empty' });
     }
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+      return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured. Add it to Vercel Environment Variables.' });
     }
 
-    console.log('[chat.js] Calling Anthropic with', messages.length, 'messages');
+    // Validate model string
+    const isValidModel = VALID_MODEL_PREFIXES.some(prefix => model.startsWith(prefix));
+    const safeModel = isValidModel ? model : 'claude-sonnet-4-5-20250929';
+
+    // Estimate input size for logging
+    const inputChars = JSON.stringify(messages).length + (system?.length || 0);
+    console.log(`[chat.js] model=${safeModel}, messages=${messages.length}, ~${Math.round(inputChars/4)}tok input, max_tokens=${max_tokens}`);
 
     // Set headers for SSE streaming
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     
-    // Send first byte immediately
+    // Send first byte immediately to satisfy Vercel's 25s first-byte requirement
     res.write(': connected\n\n');
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -40,7 +49,7 @@ export default async function handler(req, res) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model,
+        model: safeModel,
         max_tokens,
         messages,
         stream: true,
@@ -50,8 +59,16 @@ export default async function handler(req, res) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[chat.js] Anthropic error:', response.status);
-      res.write(`data: ${JSON.stringify({ type: 'error', error: errorText })}\n\n`);
+      console.error(`[chat.js] Anthropic error ${response.status}: ${errorText.slice(0, 500)}`);
+      
+      // Parse Anthropic error for user-friendly message
+      let userError = `Anthropic API error (${response.status})`;
+      try {
+        const errObj = JSON.parse(errorText);
+        if (errObj.error?.message) userError = errObj.error.message;
+      } catch (e) { /* use generic */ }
+      
+      res.write(`data: ${JSON.stringify({ type: 'error', error: userError })}\n\n`);
       return res.end();
     }
 
@@ -77,9 +94,14 @@ export default async function handler(req, res) {
             if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
               fullText += parsed.delta.text;
               res.write(`data: ${JSON.stringify({ type: 'delta', text: parsed.delta.text })}\n\n`);
+            } else if (parsed.type === 'message_stop') {
+              // Stream complete
+            } else if (parsed.type === 'error') {
+              console.error('[chat.js] Stream error:', parsed.error);
+              res.write(`data: ${JSON.stringify({ type: 'error', error: parsed.error?.message || 'Stream error' })}\n\n`);
             }
           } catch (e) {
-            // Skip parse errors
+            // Skip parse errors for incomplete JSON chunks
           }
         }
       }
@@ -87,11 +109,11 @@ export default async function handler(req, res) {
 
     // Send final message
     res.write(`data: ${JSON.stringify({ type: 'complete', content: [{ type: 'text', text: fullText }] })}\n\n`);
-    console.log('[chat.js] Done, length:', fullText.length);
+    console.log(`[chat.js] Done, ${fullText.length} chars output`);
     return res.end();
 
   } catch (error) {
-    console.error('[chat.js] Error:', error.message);
+    console.error('[chat.js] Error:', error.message, error.stack?.split('\n').slice(0, 3).join(' '));
     
     // If headers not sent yet, send JSON error
     if (!res.headersSent) {
