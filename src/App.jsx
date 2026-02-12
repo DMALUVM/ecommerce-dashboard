@@ -11355,10 +11355,10 @@ const savePeriods = async (d) => {
             
             let data = null;
             let retries = 0;
-            const maxRetries = 3;
+            const maxRetries = 5; // First call polls ~90s server-side; retries are quick status checks
             
             // Reports API may need polling: request → pending → retry with reportId
-            while (retries <= maxRetries) {
+            while (retries < maxRetries) {
               const res = await fetch('/api/amazon/sync', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

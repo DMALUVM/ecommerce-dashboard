@@ -758,8 +758,9 @@ export default async function handler(req, res) {
       console.log('[Sales] Report requested:', newReportId);
 
       // Step C: Poll for completion (short ranges usually complete in <30s)
+      // With Vercel Pro 120s timeout, we can poll for ~100s leaving 20s for download+parse
       let attempts = 0;
-      const maxAttempts = 25; // ~50s of polling (within Vercel Pro 60s limit)
+      const maxAttempts = 45; // ~90s of polling
 
       while (attempts < maxAttempts) {
         attempts++;
