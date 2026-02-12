@@ -13,6 +13,9 @@ import SettingRow from '../ui/SettingRow';
 import SettingSection from '../ui/SettingSection';
 import Toggle from '../ui/Toggle';
 
+// SKU normalization helper - strips Shop suffix and uppercases
+const normalizeSkuKey = (sku) => (sku || '').trim().toUpperCase().replace(/SHOP$/i, '');
+
 const SettingsView = ({
   actionItems,
   activeStoreId,

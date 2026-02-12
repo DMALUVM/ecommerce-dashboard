@@ -605,6 +605,151 @@ export default async function handler(req, res) {
     }
   }
 
+  // ============ SALES SYNC (Orders API - SKU level daily) ============
+  // Fetches recent orders with SKU-level detail for inventory velocity calculations
+  // This data is LOWER priority than SKU Economics reports
+  if (syncType === 'sales') {
+    try {
+      const daysBack = parseInt(req.body.daysBack) || 7;
+      const salesStartDate = startDate || new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+      const salesEndDate = endDate || new Date().toISOString();
+      
+      console.log('[Sales] Fetching orders from', salesStartDate, 'to', salesEndDate);
+      
+      // Step 1: Fetch orders
+      const allOrders = [];
+      let nextToken = null;
+      let pageCount = 0;
+      const maxPages = 10; // Safety limit
+      
+      do {
+        let ordersEndpoint = `/orders/v0/orders?MarketplaceIds=${marketplaceId}&CreatedAfter=${encodeURIComponent(salesStartDate)}&CreatedBefore=${encodeURIComponent(salesEndDate)}&OrderStatuses=Shipped,Unshipped`;
+        if (nextToken) {
+          ordersEndpoint = `/orders/v0/orders?NextToken=${encodeURIComponent(nextToken)}`;
+        }
+        
+        const ordersData = await spApiRequest(accessToken, ordersEndpoint);
+        const orders = ordersData.payload?.Orders || ordersData.Orders || [];
+        allOrders.push(...orders);
+        
+        nextToken = ordersData.payload?.NextToken || ordersData.NextToken || null;
+        pageCount++;
+        
+        await new Promise(r => setTimeout(r, 1000)); // Rate limit: 1 req/sec
+        if (pageCount >= maxPages) break;
+      } while (nextToken);
+      
+      console.log('[Sales] Fetched', allOrders.length, 'orders across', pageCount, 'pages');
+      
+      // Step 2: Get order items for each order (batch to avoid timeout)
+      // Group orders by date first
+      const ordersByDate = {};
+      allOrders.forEach(order => {
+        const purchaseDate = (order.PurchaseDate || '').split('T')[0];
+        if (!purchaseDate) return;
+        if (!ordersByDate[purchaseDate]) ordersByDate[purchaseDate] = [];
+        ordersByDate[purchaseDate].push(order);
+      });
+      
+      // Step 3: Fetch order items (limit to avoid timeout - max ~50 orders)
+      const dailySales = {};
+      let itemsFetched = 0;
+      const maxItemFetches = 50;
+      
+      for (const order of allOrders) {
+        if (itemsFetched >= maxItemFetches) break;
+        
+        const purchaseDate = (order.PurchaseDate || '').split('T')[0];
+        if (!purchaseDate) continue;
+        
+        try {
+          const itemsEndpoint = `/orders/v0/orders/${order.AmazonOrderId}/orderItems`;
+          const itemsData = await spApiRequest(accessToken, itemsEndpoint);
+          const items = itemsData.payload?.OrderItems || itemsData.OrderItems || [];
+          
+          if (!dailySales[purchaseDate]) {
+            dailySales[purchaseDate] = { skuData: {}, totalUnits: 0, totalRevenue: 0 };
+          }
+          
+          items.forEach(item => {
+            const sku = item.SellerSKU || '';
+            if (!sku) return;
+            
+            const qty = item.QuantityOrdered || 0;
+            const priceAmount = parseFloat(item.ItemPrice?.Amount || 0);
+            const taxAmount = parseFloat(item.ItemTax?.Amount || 0);
+            const promoDiscount = parseFloat(item.PromotionDiscount?.Amount || 0);
+            const revenue = priceAmount; // Gross revenue before fees
+            
+            if (!dailySales[purchaseDate].skuData[sku]) {
+              dailySales[purchaseDate].skuData[sku] = {
+                sku,
+                name: item.Title || sku,
+                asin: item.ASIN || '',
+                unitsSold: 0,
+                returns: 0,
+                netSales: 0,
+                netProceeds: 0,
+                adSpend: 0,
+                cogs: 0,
+              };
+            }
+            
+            dailySales[purchaseDate].skuData[sku].unitsSold += qty;
+            dailySales[purchaseDate].skuData[sku].netSales += revenue;
+            dailySales[purchaseDate].totalUnits += qty;
+            dailySales[purchaseDate].totalRevenue += revenue;
+          });
+          
+          itemsFetched++;
+          await new Promise(r => setTimeout(r, 500)); // Rate limit
+        } catch (itemErr) {
+          console.warn('[Sales] Failed to fetch items for order', order.AmazonOrderId, itemErr.message);
+        }
+      }
+      
+      // Step 4: Build response in daily format
+      const dailyResults = {};
+      Object.entries(dailySales).forEach(([date, dayData]) => {
+        const skuArray = Object.values(dayData.skuData).sort((a, b) => b.netSales - a.netSales);
+        dailyResults[date] = {
+          date,
+          source: 'amazon-orders-api',
+          amazon: {
+            revenue: dayData.totalRevenue,
+            units: dayData.totalUnits,
+            returns: 0, // Not available from Orders API
+            cogs: 0, // Calculated client-side
+            fees: 0, // Not available from Orders API (use Finance API for this)
+            adSpend: 0, // Comes from Ads API separately
+            netProfit: 0, // Calculated client-side
+            skuData: skuArray,
+          },
+        };
+      });
+      
+      console.log('[Sales] Processed', Object.keys(dailyResults).length, 'days,', itemsFetched, 'orders with items');
+      
+      return res.status(200).json({
+        success: true,
+        syncType: 'sales',
+        source: 'amazon-orders-api',
+        daysBack,
+        summary: {
+          daysWithData: Object.keys(dailyResults).length,
+          totalOrders: allOrders.length,
+          ordersWithItems: itemsFetched,
+          dateRange: { start: salesStartDate.split('T')[0], end: salesEndDate.split('T')[0] },
+        },
+        dailySales: dailyResults,
+      });
+      
+    } catch (err) {
+      console.error('[Sales] Amazon sales sync error:', err);
+      return res.status(500).json({ error: `Sales sync failed: ${err.message}` });
+    }
+  }
+
   // ============ SALES VELOCITY (from Reports API) ============
   if (syncType === 'velocity') {
     try {
@@ -633,6 +778,6 @@ export default async function handler(req, res) {
   }
 
   return res.status(400).json({ 
-    error: 'Invalid syncType. Use: test, fba, awd, inventory, all, ads, velocity' 
+    error: 'Invalid syncType. Use: test, fba, awd, inventory, all, ads, sales, velocity' 
   });
 }

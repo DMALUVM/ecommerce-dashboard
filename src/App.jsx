@@ -5609,7 +5609,7 @@ const savePeriods = async (d) => {
         storageCost: amzStorageCost, // Proportional storage share
         netProfit: adjustedAmzProfit, 
         margin: amzRev > 0 ? (adjustedAmzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
-        returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
+        returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus, source: 'sku-economics' },
       shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, 
         threeplCosts: shopThreeplCost, // Fulfillment + proportional storage
         fulfillmentCost, storageCost: shopStorageCost, // Breakdown for display
@@ -6001,7 +6001,7 @@ const savePeriods = async (d) => {
       amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, 
         storageCost: amzStorageCost, netProfit: adjustedAmzProfit, 
         margin: amzRev > 0 ? (adjustedAmzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
-        returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
+        returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus, source: 'sku-economics' },
       shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, 
         threeplCosts: shopThreeplCost, fulfillmentCost, storageCost: shopStorageCost,
         threeplBreakdown, threeplMetrics, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
@@ -6108,7 +6108,8 @@ const savePeriods = async (d) => {
         amazon: dailyFiles.amazon ? {
           revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, netProfit: amzProfit,
           margin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
-          returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus
+          returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus,
+          source: 'sku-economics', // Marks this as authoritative - API sync will not overwrite
         } : null,
         shopify: dailyFiles.shopify ? {
           revenue: shopRev, units: shopUnits, cogs: shopCogs, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS,
@@ -6763,7 +6764,7 @@ const savePeriods = async (d) => {
           weekEnding: weekEnd, createdAt: new Date().toISOString(),
           amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, netProfit: amzProfit, 
             margin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
-            returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
+            returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus, source: 'sku-economics' },
           shopify: { revenue: 0, units: 0, cogs: 0, threeplCosts: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, discounts: 0, netProfit: 0, netMargin: 0, aov: 0, roas: 0, skuData: [] },
           total: { revenue: amzRev, units: amzUnits, cogs: amzCogs, adSpend: amzAds, netProfit: amzProfit, netMargin: amzRev > 0 ? (amzProfit/amzRev)*100 : 0, roas: amzAds > 0 ? amzRev/amzAds : 0, amazonShare: 100, shopifyShare: 0 }
         };
@@ -6953,7 +6954,7 @@ const savePeriods = async (d) => {
       amazon: { revenue: amzRev, units: amzUnits, returns: amzRet, cogs: amzCogs, fees: amzFees, adSpend: amzAds, 
         storageCost: amzStorageCost, netProfit: adjustedAmzProfit, 
         margin: amzRev > 0 ? (adjustedAmzProfit/amzRev)*100 : 0, aov: amzUnits > 0 ? amzRev/amzUnits : 0, roas: amzAds > 0 ? amzRev/amzAds : 0,
-        returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus },
+        returnRate: amzUnits > 0 ? (amzRet/amzUnits)*100 : 0, skuData: amazonSkus, source: 'sku-economics' },
       shopify: { revenue: shopRev, units: shopUnits, cogs: shopCogs, 
         threeplCosts: shopThreeplCost, fulfillmentCost, storageCost: shopStorageCost,
         threeplBreakdown, threeplMetrics, adSpend: shopAds, metaSpend: metaS, googleSpend: googleS, discounts: shopDisc, netProfit: shopProfit, 
@@ -11277,7 +11278,7 @@ const savePeriods = async (d) => {
     setAutoSyncStatus(prev => ({ ...prev, running: true, lastCheck: new Date().toISOString() }));
     
     try {
-      // Check Amazon - use /api/amazon/sync endpoint
+      // Check Amazon Sales - use /api/amazon/sync with sales type for SKU-level daily data
       if (appSettings.autoSync?.amazon !== false && (amazonCredentials.connected || amazonCredentials.refreshToken)) {
         const amazonStale = isServiceStale(amazonCredentials.lastSync, threshold);
         
@@ -11287,7 +11288,8 @@ const savePeriods = async (d) => {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                syncType: 'velocity', // Use velocity for auto-sync (gets sales data)
+                syncType: 'sales',
+                daysBack: 7,
                 refreshToken: amazonCredentials.refreshToken,
                 clientId: amazonCredentials.clientId,
                 clientSecret: amazonCredentials.clientSecret,
@@ -11296,16 +11298,74 @@ const savePeriods = async (d) => {
               }),
             });
             const data = await res.json();
-            if (!data.error && res.ok) {
+            if (!data.error && res.ok && data.dailySales) {
+              // Merge API sales into allDaysData — NEVER overwrite days with SKU Economics data
+              const cogsLookup = getCogsLookup();
+              let daysAdded = 0, daysSkipped = 0;
+              
+              setAllDaysData(prev => {
+                const updated = { ...prev };
+                Object.entries(data.dailySales).forEach(([date, apiDay]) => {
+                  const existing = updated[date];
+                  
+                  // RULE 1: Never overwrite a day that has SKU Economics data
+                  // SKU Economics is tagged with source='sku-economics' or has detailed fee data
+                  const hasSkuEconomics = existing?.amazon?.skuData?.length > 0 && 
+                    (existing?.amazon?.source === 'sku-economics' || 
+                     (existing?.amazon?.source !== 'amazon-orders-api' && existing?.amazon?.fees > 0));
+                  
+                  if (hasSkuEconomics) {
+                    daysSkipped++;
+                    return; // Skip - SKU Economics is more accurate
+                  }
+                  
+                  // Fill COGS from our lookup for each SKU
+                  const enrichedSkuData = (apiDay.amazon?.skuData || []).map(sku => ({
+                    ...sku,
+                    cogs: (cogsLookup[sku.sku] || cogsLookup[sku.sku?.replace(/Shop$/i, '')] || 
+                           cogsLookup[sku.sku?.toUpperCase()] || cogsLookup[sku.sku?.toLowerCase()] || 0) * (sku.unitsSold || 0),
+                  }));
+                  
+                  const totalCogs = enrichedSkuData.reduce((s, sk) => s + (sk.cogs || 0), 0);
+                  const revenue = apiDay.amazon?.revenue || 0;
+                  
+                  const amazonData = {
+                    ...apiDay.amazon,
+                    cogs: totalCogs,
+                    netProfit: revenue - totalCogs, // Rough estimate (no fee data from Orders API)
+                    skuData: enrichedSkuData,
+                    source: 'amazon-orders-api', // Tag so SKU Economics can override later
+                  };
+                  
+                  // Preserve existing Shopify data if present
+                  updated[date] = {
+                    ...(existing || {}),
+                    date,
+                    amazon: amazonData,
+                    // Preserve shopify/ads data from existing
+                    shopify: existing?.shopify || null,
+                  };
+                  daysAdded++;
+                });
+                
+                console.log(`[AutoSync] Amazon Sales: ${daysAdded} days added, ${daysSkipped} days skipped (have SKU Economics)`);
+                // Persist to localStorage so velocity calculations pick it up
+                try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('[AutoSync] Failed to persist daily data to localStorage'); }
+                return updated;
+              });
+              
+              // Trigger cloud save with updated data
+              queueCloudSave({ ...combinedData });
+              
               setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-              results.push({ service: 'Amazon', success: true, message: 'Synced successfully' });
+              results.push({ service: 'Amazon Sales', success: true, days: Object.keys(data.dailySales).length, orders: data.summary?.totalOrders || 0 });
             } else {
-              results.push({ service: 'Amazon', success: false, error: data.error || `HTTP ${res.status}` });
-              devWarn('Amazon auto-sync failed:', data.error || res.status);
+              results.push({ service: 'Amazon Sales', success: false, error: data.error || `HTTP ${res.status}` });
+              devWarn('Amazon sales auto-sync failed:', data.error || res.status);
             }
           } catch (err) {
-            results.push({ service: 'Amazon', success: false, error: err.message });
-            devWarn('Amazon auto-sync error:', err.message);
+            results.push({ service: 'Amazon Sales', success: false, error: err.message });
+            devWarn('Amazon sales auto-sync error:', err.message);
           }
         }
       }
@@ -11951,7 +12011,7 @@ const savePeriods = async (d) => {
       audit('auto_sync', `${results.length} services: ${results.map(r => `${r.service}:${r.success ? 'ok' : 'fail'}`).join(', ')}`);
       setAutoSyncStatus(prev => ({ ...prev, running: false, results }));
     }
-  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, qboCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs]);
+  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, qboCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs, getCogsLookup, queueCloudSave, combinedData]);
   
   // Run auto-sync on app load (if enabled)
   const runAutoSyncRef = useRef(runAutoSync);
