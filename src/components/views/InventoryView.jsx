@@ -372,6 +372,8 @@ const InventoryView = ({
         'ABC': item.abcClass || '',
         'Amazon': item.amazonQty || 0,
         '3PL': item.threeplQty || 0,
+        'AWD': item.awdQty || 0,
+        'Inbound': (item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0),
         'Total Units': item.totalQty || 0,
         'Value': Math.round((item.totalValue || 0) * 100) / 100,
         'AMZ Velocity': Math.round((item.amzWeeklyVel || 0) * 10) / 10,
@@ -387,8 +389,9 @@ const InventoryView = ({
       // Set column widths
       ws['!cols'] = [
         { wch: 35 }, { wch: 20 }, { wch: 5 }, { wch: 10 }, { wch: 10 },
-        { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
-        { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
+        { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 },
+        { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 14 },
+        { wch: 14 }, { wch: 12 },
       ];
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
