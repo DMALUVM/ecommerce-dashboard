@@ -16378,6 +16378,9 @@ Analyze the data and respond with ONLY this JSON:
       // Include week notes
       const notesData = Object.entries(weekNotes).filter(([k, v]) => v).map(([week, note]) => ({ week, note }));
       
+      // Re-derive sortedDays for use in system prompt (prepareDataContext's sortedDays is out of scope)
+      const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
+      
       const systemPrompt = `You are an expert e-commerce analyst and business advisor for "${ctx.storeName}". You have access to ALL uploaded sales data and can answer questions about any aspect of the business.
 
 🚨🚨🚨 CRITICAL DATA AVAILABILITY RULES - READ FIRST 🚨🚨🚨
