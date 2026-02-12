@@ -1,7 +1,7 @@
 import { devWarn, devError } from '../../utils/logger';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertTriangle, BarChart3, Bell, Boxes, Check, Cloud, Copy, Database, Download, Eye, FileText, Filter, Globe, HelpCircle, Home, Info, Landmark, Loader2, Moon, Package, Plus, Receipt, RefreshCw, Save, Send, Settings, ShoppingBag, ShoppingCart, Sparkles, Store, Sun, Target, Trash2, TrendingUp, Truck, Upload, User, Users, X, Zap
+  AlertTriangle, BarChart3, Bell, Boxes, Check, ChevronRight, Cloud, Copy, Database, Download, Eye, FileText, Filter, Globe, HelpCircle, Home, Info, Landmark, Loader2, Moon, Package, Plus, Receipt, RefreshCw, Save, Send, Settings, ShoppingBag, ShoppingCart, Sparkles, Store, Sun, Target, Trash2, TrendingUp, Truck, Upload, User, Users, X, Zap
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import { lsSet } from '../../utils/storage';
@@ -115,6 +115,19 @@ const SettingsView = ({
 }) => {
   // Category lead time form state (local to settings page)
   const [settingsCategoryForm, setSettingsCategoryForm] = useState({ name: '', leadTimeDays: 14, reorderTriggerDays: 60, minOrderWeeks: 22 });
+  const [expandedSettingsCategories, setExpandedSettingsCategories] = useState({});
+  
+  // Build SKU name lookup from invHistory
+  const settingsSkuNameLookup = useMemo(() => {
+    const lookup = {};
+    if (invHistory) {
+      const latestKey = Object.keys(invHistory).sort().reverse()[0];
+      if (latestKey) {
+        (invHistory[latestKey]?.items || []).forEach(i => { if (i.sku) lookup[i.sku] = i.name || i.sku; });
+      }
+    }
+    return lookup;
+  }, [invHistory]);
   
   // Default settings structure
   const defaultSettings = {
@@ -735,6 +748,8 @@ const SettingsView = ({
                 });
                 if (assigned > 0) {
                   setLeadTimeSettings(prev => ({ ...prev, skuCategories: { ...prev.skuCategories, ...updates } }));
+                  const affectedCats = [...new Set(Object.values(updates))];
+                  setExpandedSettingsCategories(prev => { const exp = { ...prev }; affectedCats.forEach(c => { exp[c] = true; }); return exp; });
                   setToast({ message: `Auto-assigned ${assigned} SKUs${skipped > 0 ? ` (${skipped} already assigned)` : ''}`, type: 'success' });
                 } else {
                   setToast({ message: skipped > 0 ? `All ${skipped} SKUs already assigned. Click Re-assign All to override.` : `No matches in ${allItems.length} SKUs for: ${categories.join(', ')}`, type: 'info' });
@@ -767,6 +782,8 @@ const SettingsView = ({
                 });
                 if (assigned > 0) {
                   setLeadTimeSettings(prev => ({ ...prev, skuCategories: { ...prev.skuCategories, ...updates } }));
+                  const affectedCats = [...new Set(Object.values(updates))];
+                  setExpandedSettingsCategories(prev => { const exp = { ...prev }; affectedCats.forEach(c => { exp[c] = true; }); return exp; });
                   setToast({ message: `Re-assigned ${assigned} SKUs to categories`, type: 'success' });
                 } else {
                   setToast({ message: `No matches in ${allItems.length} SKUs for: ${categories.join(', ')}`, type: 'info' });
@@ -781,32 +798,113 @@ const SettingsView = ({
           {Object.keys(leadTimeSettings.categoryLeadTimes || {}).length > 0 ? (
             <div className="space-y-2">
               {Object.entries(leadTimeSettings.categoryLeadTimes).map(([catName, catSettings]) => {
-                const skuCount = Object.values(leadTimeSettings.skuCategories || {}).filter(c => c === catName).length;
+                const assignedSkus = Object.entries(leadTimeSettings.skuCategories || {}).filter(([, c]) => c === catName).map(([sku]) => sku);
+                const skuCount = assignedSkus.length;
+                const categories = Object.keys(leadTimeSettings.categoryLeadTimes || {});
+                const isExpanded = expandedSettingsCategories[catName];
                 return (
-                  <div key={catName} className="bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-3 flex items-center justify-between">
-                    <div className="flex items-center gap-4 flex-wrap">
-                      <span className="text-white font-medium min-w-[130px]">{catName}</span>
-                      <span className="text-emerald-400 text-sm">{catSettings.leadTimeDays}d lead time</span>
-                      <span className="text-amber-400 text-sm">{catSettings.reorderTriggerDays}d trigger</span>
-                      <span className="text-cyan-400 text-sm">{catSettings.minOrderWeeks}w min order</span>
-                      <span className="text-slate-500 text-sm">{skuCount} SKU{skuCount !== 1 ? 's' : ''}</span>
+                  <div key={catName} className="bg-slate-800/50 border border-slate-700 rounded-lg overflow-hidden">
+                    <div className="px-4 py-3 flex items-center justify-between">
+                      <div className="flex items-center gap-4 flex-wrap flex-1 cursor-pointer" onClick={() => setExpandedSettingsCategories(prev => ({ ...prev, [catName]: !prev[catName] }))}>
+                        <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                        <span className="text-white font-medium min-w-[130px]">{catName}</span>
+                        <span className="text-emerald-400 text-sm">{catSettings.leadTimeDays}d lead time</span>
+                        <span className="text-amber-400 text-sm">{catSettings.reorderTriggerDays}d trigger</span>
+                        <span className="text-cyan-400 text-sm">{catSettings.minOrderWeeks}w min order</span>
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${skuCount > 0 ? 'bg-emerald-900/50 text-emerald-400' : 'bg-slate-600/50 text-slate-400'}`}>{skuCount} SKU{skuCount !== 1 ? 's' : ''}</span>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          if (!confirm(`Delete category "${catName}"?`)) return;
+                          setLeadTimeSettings(prev => {
+                            const newCatLT = { ...prev.categoryLeadTimes };
+                            delete newCatLT[catName];
+                            const newCats = { ...prev.skuCategories };
+                            Object.keys(newCats).forEach(sku => { if (newCats[sku] === catName) delete newCats[sku]; });
+                            return { ...prev, categoryLeadTimes: newCatLT, skuCategories: newCats };
+                          });
+                        }}
+                        className="px-2 py-1 bg-rose-900/50 hover:bg-rose-800/50 rounded text-rose-400 text-xs ml-2"
+                      >Remove</button>
                     </div>
-                    <button 
-                      onClick={() => {
-                        if (!confirm(`Delete category "${catName}"?`)) return;
-                        setLeadTimeSettings(prev => {
-                          const newCatLT = { ...prev.categoryLeadTimes };
-                          delete newCatLT[catName];
-                          const newCats = { ...prev.skuCategories };
-                          Object.keys(newCats).forEach(sku => { if (newCats[sku] === catName) delete newCats[sku]; });
-                          return { ...prev, categoryLeadTimes: newCatLT, skuCategories: newCats };
-                        });
-                      }}
-                      className="px-2 py-1 bg-rose-900/50 hover:bg-rose-800/50 rounded text-rose-400 text-xs"
-                    >Remove</button>
+                    {isExpanded && (
+                      <div className="border-t border-slate-700/50 bg-slate-900/30 px-4 py-2">
+                        {assignedSkus.length > 0 ? (
+                          <div className="space-y-1 max-h-60 overflow-y-auto">
+                            {assignedSkus.map(sku => (
+                              <div key={sku} className="flex items-center justify-between py-1 px-2 rounded hover:bg-slate-700/30 group">
+                                <div className="flex-1 min-w-0">
+                                  <span className="text-white text-xs font-mono">{sku}</span>
+                                  <span className="text-slate-500 text-xs ml-2">{settingsSkuNameLookup[sku] || ''}</span>
+                                </div>
+                                <select
+                                  value={catName}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setLeadTimeSettings(prev => {
+                                      const newCats = { ...prev.skuCategories };
+                                      if (val) newCats[sku] = val; else delete newCats[sku];
+                                      return { ...prev, skuCategories: newCats };
+                                    });
+                                  }}
+                                  className="bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs text-slate-300 opacity-70 group-hover:opacity-100"
+                                >
+                                  <option value="">Unassign</option>
+                                  {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-slate-500 text-xs py-1">No SKUs assigned. Use Auto-Assign or set per-SKU in the Inventory Settings modal.</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
+              
+              {/* Unassigned SKUs */}
+              {(() => {
+                const latestKey = Object.keys(invHistory || {}).sort().reverse()[0];
+                const allSkus = latestKey ? (invHistory[latestKey]?.items || []) : [];
+                const unassigned = allSkus.filter(i => i.sku && !leadTimeSettings.skuCategories?.[i.sku]);
+                const categories = Object.keys(leadTimeSettings.categoryLeadTimes || {});
+                if (unassigned.length === 0) return null;
+                const isExpanded = expandedSettingsCategories.__unassigned;
+                return (
+                  <div className="mt-3">
+                    <div className="flex items-center gap-2 cursor-pointer" onClick={() => setExpandedSettingsCategories(prev => ({ ...prev, __unassigned: !prev.__unassigned }))}>
+                      <ChevronRight className={`w-4 h-4 text-amber-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                      <span className="text-amber-400 text-sm font-medium">{unassigned.length} unassigned SKU{unassigned.length !== 1 ? 's' : ''}</span>
+                      <span className="text-slate-500 text-xs">— click to assign individually</span>
+                    </div>
+                    {isExpanded && (
+                      <div className="mt-2 bg-amber-900/10 border border-amber-700/30 rounded-lg px-4 py-2 space-y-1 max-h-60 overflow-y-auto">
+                        {unassigned.map(item => (
+                          <div key={item.sku} className="flex items-center justify-between py-1 px-2 rounded hover:bg-slate-700/30">
+                            <div className="flex-1 min-w-0">
+                              <span className="text-white text-xs font-mono">{item.sku}</span>
+                              <span className="text-slate-500 text-xs ml-2">{item.name || ''}</span>
+                            </div>
+                            <select
+                              value=""
+                              onChange={(e) => {
+                                if (!e.target.value) return;
+                                setLeadTimeSettings(prev => ({ ...prev, skuCategories: { ...prev.skuCategories, [item.sku]: e.target.value } }));
+                              }}
+                              className="bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs text-slate-300"
+                            >
+                              <option value="">Assign to...</option>
+                              {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           ) : (
             <div className="text-center py-4 text-slate-500 text-sm bg-slate-800/30 rounded-lg">

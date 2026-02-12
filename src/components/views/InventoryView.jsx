@@ -413,6 +413,22 @@ const InventoryView = ({
   const [editingCategoryName, setEditingCategoryName] = useState(null);
   const [categoryForm, setCategoryForm] = useState({ name: '', leadTimeDays: 14, reorderTriggerDays: 60, minOrderWeeks: 22 });
   const [showAddCategory, setShowAddCategory] = useState(false);
+  const [expandedCategories, setExpandedCategories] = useState({});
+  
+  // Build SKU name lookup from current inventory data
+  const skuNameLookup = useMemo(() => {
+    const lookup = {};
+    const allItems = items.length > 0 ? items : (data?.items || []);
+    // Also check invHistory for items not in current filtered view
+    if (invHistory) {
+      const latestKey = Object.keys(invHistory).sort().reverse()[0];
+      if (latestKey) {
+        (invHistory[latestKey]?.items || []).forEach(i => { if (i.sku) lookup[i.sku] = i.name || i.sku; });
+      }
+    }
+    allItems.forEach(i => { if (i.sku) lookup[i.sku] = i.name || i.sku; });
+    return lookup;
+  }, [items, data, invHistory]);
   
   // Auto-categorize SKUs by product name keywords
   const autoCategorizeSkus = (reassignAll = false) => {
@@ -483,6 +499,13 @@ const InventoryView = ({
         ...prev,
         skuCategories: { ...prev.skuCategories, ...updates }
       }));
+      // Auto-expand all categories that received assignments so user can see results
+      const affectedCats = [...new Set(Object.values(updates))];
+      setExpandedCategories(prev => {
+        const expanded = { ...prev };
+        affectedCats.forEach(c => { expanded[c] = true; });
+        return expanded;
+      });
       setToast({ message: `Auto-assigned ${assigned} SKU${assigned > 1 ? 's' : ''} to categories${skipped > 0 ? ` (${skipped} already assigned)` : ''}`, type: 'success' });
     } else {
       const detail = skipped > 0 
@@ -830,27 +853,69 @@ const InventoryView = ({
                 }
                 
                 return (
-                  <div key={catName} className="bg-slate-700/30 rounded-lg px-4 py-2.5 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <span className="text-white font-medium text-sm min-w-[120px]">{catName}</span>
-                      <span className="text-emerald-400 text-xs">{catSettings.leadTimeDays}d lead</span>
-                      <span className="text-amber-400 text-xs">{catSettings.reorderTriggerDays}d trigger</span>
-                      <span className="text-cyan-400 text-xs">{catSettings.minOrderWeeks}w min order</span>
-                      <span className="text-slate-500 text-xs">{skuCount} SKU{skuCount !== 1 ? 's' : ''}</span>
+                  <div key={catName} className="bg-slate-700/30 rounded-lg overflow-hidden">
+                    <div className="px-4 py-2.5 flex items-center justify-between">
+                      <div className="flex items-center gap-4 flex-1 cursor-pointer" onClick={() => setExpandedCategories(prev => ({ ...prev, [catName]: !prev[catName] }))}>
+                        <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${expandedCategories[catName] ? 'rotate-90' : ''}`} />
+                        <span className="text-white font-medium text-sm min-w-[120px]">{catName}</span>
+                        <span className="text-emerald-400 text-xs">{catSettings.leadTimeDays}d lead</span>
+                        <span className="text-amber-400 text-xs">{catSettings.reorderTriggerDays}d trigger</span>
+                        <span className="text-cyan-400 text-xs">{catSettings.minOrderWeeks}w min order</span>
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${skuCount > 0 ? 'bg-emerald-900/50 text-emerald-400' : 'bg-slate-600/50 text-slate-400'}`}>{skuCount} SKU{skuCount !== 1 ? 's' : ''}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => { setEditingCategoryName(catName); setCategoryForm({ name: catName, leadTimeDays: catSettings.leadTimeDays, reorderTriggerDays: catSettings.reorderTriggerDays, minOrderWeeks: catSettings.minOrderWeeks }); }} className="px-2 py-1 bg-slate-600 hover:bg-slate-500 rounded text-slate-300 text-xs">Edit</button>
+                        <button onClick={() => {
+                          if (!confirm(`Delete category "${catName}"? SKUs assigned to it will become uncategorized.`)) return;
+                          setLeadTimeSettings(prev => {
+                            const newCatLT = { ...prev.categoryLeadTimes };
+                            delete newCatLT[catName];
+                            const newCats = { ...prev.skuCategories };
+                            Object.keys(newCats).forEach(sku => { if (newCats[sku] === catName) delete newCats[sku]; });
+                            return { ...prev, categoryLeadTimes: newCatLT, skuCategories: newCats };
+                          });
+                        }} className="px-2 py-1 bg-rose-900/50 hover:bg-rose-800/50 rounded text-rose-400 text-xs">×</button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => { setEditingCategoryName(catName); setCategoryForm({ name: catName, leadTimeDays: catSettings.leadTimeDays, reorderTriggerDays: catSettings.reorderTriggerDays, minOrderWeeks: catSettings.minOrderWeeks }); }} className="px-2 py-1 bg-slate-600 hover:bg-slate-500 rounded text-slate-300 text-xs">Edit</button>
-                      <button onClick={() => {
-                        if (!confirm(`Delete category "${catName}"? SKUs assigned to it will become uncategorized.`)) return;
-                        setLeadTimeSettings(prev => {
-                          const newCatLT = { ...prev.categoryLeadTimes };
-                          delete newCatLT[catName];
-                          const newCats = { ...prev.skuCategories };
-                          Object.keys(newCats).forEach(sku => { if (newCats[sku] === catName) delete newCats[sku]; });
-                          return { ...prev, categoryLeadTimes: newCatLT, skuCategories: newCats };
-                        });
-                      }} className="px-2 py-1 bg-rose-900/50 hover:bg-rose-800/50 rounded text-rose-400 text-xs">×</button>
-                    </div>
+                    {expandedCategories[catName] && (() => {
+                      const assignedSkus = Object.entries(leadTimeSettings.skuCategories || {}).filter(([, c]) => c === catName).map(([sku]) => sku);
+                      const categories = Object.keys(leadTimeSettings.categoryLeadTimes || {});
+                      return (
+                        <div className="border-t border-slate-700/50 bg-slate-800/30 px-4 py-2">
+                          {assignedSkus.length > 0 ? (
+                            <div className="space-y-1">
+                              {assignedSkus.map(sku => (
+                                <div key={sku} className="flex items-center justify-between py-1 px-2 rounded hover:bg-slate-700/30 group">
+                                  <div className="flex-1 min-w-0">
+                                    <span className="text-white text-xs font-mono">{sku}</span>
+                                    <span className="text-slate-500 text-xs ml-2 truncate">{skuNameLookup[sku] || ''}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2 opacity-70 group-hover:opacity-100">
+                                    <select
+                                      value={catName}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setLeadTimeSettings(prev => {
+                                          const newCats = { ...prev.skuCategories };
+                                          if (val) newCats[sku] = val; else delete newCats[sku];
+                                          return { ...prev, skuCategories: newCats };
+                                        });
+                                      }}
+                                      className="bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs text-slate-300"
+                                    >
+                                      <option value="">Unassign</option>
+                                      {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-slate-500 text-xs py-1">No SKUs assigned. Use Auto-Assign or set per-SKU in the table below.</p>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })}
@@ -858,6 +923,48 @@ const InventoryView = ({
           ) : (
             <div className="text-slate-500 text-sm text-center py-3 bg-slate-800/30 rounded-lg">No categories defined. Add categories like "Lip Balm", "Deodorant", "Tallow Balm" to set lead times by product type.</div>
           )}
+          
+          {/* Unassigned SKUs */}
+          {Object.keys(leadTimeSettings.categoryLeadTimes || {}).length > 0 && (() => {
+            const allSkus = items.length > 0 ? items : (data?.items || []);
+            const fallbackSkus = (!allSkus.length && invHistory) ? (invHistory[Object.keys(invHistory).sort().reverse()[0]]?.items || []) : [];
+            const sourceSkus = allSkus.length > 0 ? allSkus : fallbackSkus;
+            const unassigned = sourceSkus.filter(i => i.sku && !leadTimeSettings.skuCategories?.[i.sku]);
+            const categories = Object.keys(leadTimeSettings.categoryLeadTimes || {});
+            if (unassigned.length === 0) return null;
+            return (
+              <div className="mt-3">
+                <div className="flex items-center gap-2 mb-2 cursor-pointer" onClick={() => setExpandedCategories(prev => ({ ...prev, __unassigned: !prev.__unassigned }))}>
+                  <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${expandedCategories.__unassigned ? 'rotate-90' : ''}`} />
+                  <span className="text-amber-400 text-xs font-medium">{unassigned.length} unassigned SKU{unassigned.length !== 1 ? 's' : ''}</span>
+                  <span className="text-slate-500 text-xs">— click to assign individually</span>
+                </div>
+                {expandedCategories.__unassigned && (
+                  <div className="bg-amber-900/10 border border-amber-700/30 rounded-lg px-4 py-2 space-y-1 max-h-48 overflow-y-auto">
+                    {unassigned.map(item => (
+                      <div key={item.sku} className="flex items-center justify-between py-1 px-2 rounded hover:bg-slate-700/30">
+                        <div className="flex-1 min-w-0">
+                          <span className="text-white text-xs font-mono">{item.sku}</span>
+                          <span className="text-slate-500 text-xs ml-2 truncate">{item.name || ''}</span>
+                        </div>
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            if (!e.target.value) return;
+                            setLeadTimeSettings(prev => ({ ...prev, skuCategories: { ...prev.skuCategories, [item.sku]: e.target.value } }));
+                          }}
+                          className="bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs text-slate-300"
+                        >
+                          <option value="">Assign to...</option>
+                          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
         
         {/* Search and Filter */}
