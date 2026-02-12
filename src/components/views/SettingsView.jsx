@@ -2247,21 +2247,17 @@ const SettingsView = ({
                       {qboCredentials.lastSync && (
                         <p className="text-slate-500 text-xs">Last sync: {new Date(qboCredentials.lastSync).toLocaleString()}</p>
                       )}
+                      {!qboCredentials.accessToken && qboCredentials.refreshToken && (
+                        <p className="text-amber-400 text-xs mt-1">⚠️ Token expired — will auto-refresh on next sync</p>
+                      )}
                     </div>
                   </div>
                   <button
                     onClick={() => {
-                      setConfirmDialog({
-                        show: true,
-                        title: 'Disconnect QuickBooks?',
-                        message: 'Your synced transactions will remain, but auto-sync will stop.',
-                        confirmText: 'Disconnect',
-                        destructive: true,
-                        onConfirm: () => {
-                          setQboCredentials({ clientId: '', clientSecret: '', realmId: '', accessToken: '', refreshToken: '', connected: false, lastSync: null, syncFrequency: 'daily', autoSync: false });
-                          setToast({ message: 'QuickBooks disconnected', type: 'success' });
-                        }
-                      });
+                      if (window.confirm('Disconnect QuickBooks? Your synced transactions will remain.')) {
+                        setQboCredentials({ clientId: '', clientSecret: '', realmId: '', accessToken: '', refreshToken: '', connected: false, lastSync: null, syncFrequency: 'daily', autoSync: false });
+                        setToast({ message: 'QuickBooks disconnected', type: 'success' });
+                      }
                     }}
                     className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300"
                   >
@@ -2637,6 +2633,19 @@ const SettingsView = ({
                   <span>QBO API requires a backend server to handle OAuth. If you're running this locally, you can still use CSV uploads on the Banking page.</span>
                 </p>
               </div>
+              
+              {/* Reset button for stuck QBO state */}
+              {(qboCredentials.refreshToken || qboCredentials.accessToken || qboCredentials.realmId) && (
+                <button
+                  onClick={() => {
+                    setQboCredentials({ clientId: '', clientSecret: '', realmId: '', accessToken: '', refreshToken: '', connected: false, lastSync: null, syncFrequency: 'daily', autoSync: false });
+                    setToast({ message: 'QBO connection reset. You can reconnect now.', type: 'success' });
+                  }}
+                  className="w-full px-4 py-2 bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded-lg text-sm text-slate-300 flex items-center justify-center gap-2"
+                >
+                  <RefreshCw className="w-3 h-3" />Reset QBO Connection
+                </button>
+              )}
             </div>
           )}
         </SettingSection>
