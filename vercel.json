@@ -1,4 +1,10 @@
 {
+  "functions": {
+    "api/amazon/sync.js": {
+      "maxDuration": 120,
+      "memory": 1024
+    }
+  },
   "crons": [
     {
       "path": "/api/cron/sync",

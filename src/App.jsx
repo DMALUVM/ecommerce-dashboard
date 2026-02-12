@@ -11337,27 +11337,47 @@ const savePeriods = async (d) => {
     setAutoSyncStatus(prev => ({ ...prev, running: true, lastCheck: new Date().toISOString() }));
     
     try {
-      // Check Amazon Sales - use /api/amazon/sync with sales type for SKU-level daily data
+      // Check Amazon Sales - use /api/amazon/sync with Reports API for bulk SKU-level daily data
       if (appSettings.autoSync?.amazon !== false && (amazonCredentials.connected || amazonCredentials.refreshToken)) {
         const amazonStale = isServiceStale(amazonCredentials.lastSync, threshold);
         
         if (amazonStale || force) {
           try {
-            const res = await fetch('/api/amazon/sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                syncType: 'sales',
-                daysBack: 7,
-                refreshToken: amazonCredentials.refreshToken,
-                clientId: amazonCredentials.clientId,
-                clientSecret: amazonCredentials.clientSecret,
-                sellerId: amazonCredentials.sellerId,
-                marketplaceId: amazonCredentials.marketplaceId || 'ATVPDKIKX0DER',
-              }),
-            });
-            const data = await res.json();
-            if (!data.error && res.ok && data.dailySales) {
+            const amazonSyncBody = {
+              syncType: 'sales',
+              daysBack: 7,
+              refreshToken: amazonCredentials.refreshToken,
+              clientId: amazonCredentials.clientId,
+              clientSecret: amazonCredentials.clientSecret,
+              sellerId: amazonCredentials.sellerId,
+              marketplaceId: amazonCredentials.marketplaceId || 'ATVPDKIKX0DER',
+            };
+            
+            let data = null;
+            let retries = 0;
+            const maxRetries = 3;
+            
+            // Reports API may need polling: request → pending → retry with reportId
+            while (retries <= maxRetries) {
+              const res = await fetch('/api/amazon/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(amazonSyncBody),
+              });
+              data = await res.json();
+              
+              if (data.status === 'pending' && data.reportId) {
+                // Report still generating — wait and retry with reportId
+                console.log(`[AutoSync] Amazon report pending (${data.reportId}), retry ${retries + 1}/${maxRetries}...`);
+                amazonSyncBody.reportId = data.reportId;
+                retries++;
+                await new Promise(r => setTimeout(r, 10000)); // Wait 10s before retry
+                continue;
+              }
+              break; // Got final result (complete or error)
+            }
+            
+            if (!data.error && data.dailySales) {
               // Merge API sales into allDaysData — NEVER overwrite days with SKU Economics data
               const cogsLookup = getCogsLookup();
               let daysAdded = 0, daysSkipped = 0;
@@ -11391,7 +11411,7 @@ const savePeriods = async (d) => {
                   const amazonData = {
                     ...apiDay.amazon,
                     cogs: totalCogs,
-                    netProfit: revenue - totalCogs, // Rough estimate (no fee data from Orders API)
+                    netProfit: revenue - totalCogs, // Rough estimate (no fee data from reports)
                     skuData: enrichedSkuData,
                     source: 'amazon-orders-api', // Tag so SKU Economics can override later
                   };
@@ -11401,26 +11421,25 @@ const savePeriods = async (d) => {
                     ...(existing || {}),
                     date,
                     amazon: amazonData,
-                    // Preserve shopify/ads data from existing
                     shopify: existing?.shopify || null,
                   };
                   daysAdded++;
                 });
                 
                 console.log(`[AutoSync] Amazon Sales: ${daysAdded} days added, ${daysSkipped} days skipped (have SKU Economics)`);
-                // Persist to localStorage so velocity calculations pick it up
                 try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('[AutoSync] Failed to persist daily data to localStorage'); }
                 return updated;
               });
               
-              // Trigger cloud save with updated data
               queueCloudSave({ ...combinedData });
               
               setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               results.push({ service: 'Amazon Sales', success: true, days: Object.keys(data.dailySales).length, orders: data.summary?.totalOrders || 0 });
+            } else if (data.status === 'pending') {
+              results.push({ service: 'Amazon Sales', success: false, error: 'Report still generating - will complete on next sync' });
             } else {
-              results.push({ service: 'Amazon Sales', success: false, error: data.error || `HTTP ${res.status}` });
-              devWarn('Amazon sales auto-sync failed:', data.error || res.status);
+              results.push({ service: 'Amazon Sales', success: false, error: data.error || `Sync failed` });
+              devWarn('Amazon sales auto-sync failed:', data.error);
             }
           } catch (err) {
             results.push({ service: 'Amazon Sales', success: false, error: err.message });

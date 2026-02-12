@@ -15,6 +15,12 @@
 
 import crypto from 'crypto';
 
+// Extend Vercel timeout for Orders API (which requires sequential calls)
+export const config = {
+  maxDuration: 120, // Vercel Pro: 120 seconds for report polling
+  memory: 1024,
+};
+
 export default async function handler(req, res) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -605,151 +611,188 @@ export default async function handler(req, res) {
     }
   }
 
-  // ============ SALES SYNC (Orders API - SKU level daily) ============
-  // Fetches recent orders with SKU-level detail for inventory velocity calculations
+  // ============ SALES SYNC (Reports API - bulk SKU-level daily) ============
+  // Uses GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL for efficient bulk fetch
+  // Single report request → poll → download TSV → parse (no per-order API calls)
   // This data is LOWER priority than SKU Economics reports
   if (syncType === 'sales') {
     try {
-      // Get access token for Orders API
-      const accessToken = await getAccessToken(clientId, clientSecret, refreshToken);
+      const daysBack = Math.min(parseInt(req.body.daysBack) || 7, 30);
+      const existingReportId = req.body.reportId; // For 2-step polling
       
-      const daysBack = parseInt(req.body.daysBack) || 7;
-      const salesStartDate = startDate || new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
-      const salesEndDate = endDate || new Date().toISOString();
+      const endDateObj = endDate ? new Date(endDate) : new Date();
+      const startDateObj = startDate ? new Date(startDate) : new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
       
-      console.log('[Sales] Fetching orders from', salesStartDate, 'to', salesEndDate);
-      
-      // Step 1: Fetch orders
-      const allOrders = [];
-      let nextToken = null;
-      let pageCount = 0;
-      const maxPages = 10; // Safety limit
-      
-      do {
-        let ordersEndpoint = `/orders/v0/orders?MarketplaceIds=${marketplaceId}&CreatedAfter=${encodeURIComponent(salesStartDate)}&CreatedBefore=${encodeURIComponent(salesEndDate)}&OrderStatuses=Shipped,Unshipped`;
-        if (nextToken) {
-          ordersEndpoint = `/orders/v0/orders?NextToken=${encodeURIComponent(nextToken)}`;
+      console.log('[Sales] Report range:', startDateObj.toISOString().split('T')[0], 'to', endDateObj.toISOString().split('T')[0]);
+
+      // Helper: download and parse a completed report
+      const downloadAndParseReport = async (reportDocumentId) => {
+        const docInfo = await spApiRequest(accessToken, `/reports/2021-06-30/documents/${reportDocumentId}`);
+        const reportRes = await fetch(docInfo.url);
+        if (!reportRes.ok) throw new Error('Failed to download report document');
+
+        let reportText;
+        if (docInfo.compressionAlgorithm === 'GZIP') {
+          const { gunzipSync } = await import('zlib');
+          const buffer = await reportRes.arrayBuffer();
+          reportText = gunzipSync(Buffer.from(buffer)).toString('utf8');
+        } else {
+          reportText = await reportRes.text();
         }
-        
-        const ordersData = await spApiRequest(accessToken, ordersEndpoint);
-        const orders = ordersData.payload?.Orders || ordersData.Orders || [];
-        allOrders.push(...orders);
-        
-        nextToken = ordersData.payload?.NextToken || ordersData.NextToken || null;
-        pageCount++;
-        
-        await new Promise(r => setTimeout(r, 1000)); // Rate limit: 1 req/sec
-        if (pageCount >= maxPages) break;
-      } while (nextToken);
-      
-      console.log('[Sales] Fetched', allOrders.length, 'orders across', pageCount, 'pages');
-      
-      // Step 2: Get order items for each order (batch to avoid timeout)
-      // Group orders by date first
-      const ordersByDate = {};
-      allOrders.forEach(order => {
-        const purchaseDate = (order.PurchaseDate || '').split('T')[0];
-        if (!purchaseDate) return;
-        if (!ordersByDate[purchaseDate]) ordersByDate[purchaseDate] = [];
-        ordersByDate[purchaseDate].push(order);
-      });
-      
-      // Step 3: Fetch order items (limit to avoid timeout - max ~50 orders)
-      const dailySales = {};
-      let itemsFetched = 0;
-      const maxItemFetches = 50;
-      
-      for (const order of allOrders) {
-        if (itemsFetched >= maxItemFetches) break;
-        
-        const purchaseDate = (order.PurchaseDate || '').split('T')[0];
-        if (!purchaseDate) continue;
-        
-        try {
-          const itemsEndpoint = `/orders/v0/orders/${order.AmazonOrderId}/orderItems`;
-          const itemsData = await spApiRequest(accessToken, itemsEndpoint);
-          const items = itemsData.payload?.OrderItems || itemsData.OrderItems || [];
-          
-          if (!dailySales[purchaseDate]) {
-            dailySales[purchaseDate] = { skuData: {}, totalUnits: 0, totalRevenue: 0 };
+
+        // Parse TSV
+        const lines = reportText.split('\n').filter(l => l.trim());
+        if (lines.length < 2) return [];
+
+        const headers = lines[0].split('\t').map(h => h.trim().toLowerCase().replace(/[- ]/g, '_'));
+        return lines.slice(1).map(line => {
+          const values = line.split('\t');
+          const row = {};
+          headers.forEach((h, i) => { row[h] = values[i]?.trim() || ''; });
+          return row;
+        });
+      };
+
+      // Helper: aggregate rows into daily SKU data
+      const aggregateRows = (rows) => {
+        const dailySales = {};
+        let totalOrders = 0;
+
+        rows.forEach(row => {
+          const sku = row.sku || row.seller_sku || row.merchant_sku || '';
+          if (!sku) return;
+
+          const orderDate = (row.purchase_date || row.order_date || '').split('T')[0].split(' ')[0];
+          if (!orderDate) return;
+
+          const qty = parseInt(row.quantity || row.item_quantity || 1) || 1;
+          const price = parseFloat(row.item_price || row.price || 0) || 0;
+          const status = (row.order_status || row.item_status || '').toLowerCase();
+
+          // Skip cancelled orders
+          if (status.includes('cancel')) return;
+
+          if (!dailySales[orderDate]) {
+            dailySales[orderDate] = { skuData: {}, totalUnits: 0, totalRevenue: 0 };
           }
+
+          if (!dailySales[orderDate].skuData[sku]) {
+            dailySales[orderDate].skuData[sku] = {
+              sku,
+              name: row.product_name || row.title || sku,
+              asin: row.asin || '',
+              unitsSold: 0,
+              returns: 0,
+              netSales: 0,
+              netProceeds: 0,
+              adSpend: 0,
+              cogs: 0,
+            };
+          }
+
+          dailySales[orderDate].skuData[sku].unitsSold += qty;
+          dailySales[orderDate].skuData[sku].netSales += price;
+          dailySales[orderDate].totalUnits += qty;
+          dailySales[orderDate].totalRevenue += price;
+          totalOrders++;
+        });
+
+        // Convert to response format
+        const dailyResults = {};
+        Object.entries(dailySales).forEach(([date, dayData]) => {
+          const skuArray = Object.values(dayData.skuData).sort((a, b) => b.netSales - a.netSales);
+          dailyResults[date] = {
+            date,
+            source: 'amazon-orders-api',
+            amazon: {
+              revenue: dayData.totalRevenue,
+              units: dayData.totalUnits,
+              returns: 0,
+              cogs: 0,    // Calculated client-side from COGS lookup
+              fees: 0,    // Not in orders report (use SKU Economics for fees)
+              adSpend: 0, // Not in orders report (use SKU Economics for ads)
+              netProfit: 0, // Calculated client-side
+              skuData: skuArray,
+            },
+          };
+        });
+
+        return { dailyResults, totalOrders };
+      };
+
+      // Step A: If we have a pending reportId, check its status
+      if (existingReportId) {
+        const statusRes = await spApiRequest(accessToken, `/reports/2021-06-30/reports/${existingReportId}`);
+        
+        if (statusRes.processingStatus === 'DONE') {
+          const rows = await downloadAndParseReport(statusRes.reportDocumentId);
+          const { dailyResults, totalOrders } = aggregateRows(rows);
           
-          items.forEach(item => {
-            const sku = item.SellerSKU || '';
-            if (!sku) return;
-            
-            const qty = item.QuantityOrdered || 0;
-            const priceAmount = parseFloat(item.ItemPrice?.Amount || 0);
-            const taxAmount = parseFloat(item.ItemTax?.Amount || 0);
-            const promoDiscount = parseFloat(item.PromotionDiscount?.Amount || 0);
-            const revenue = priceAmount; // Gross revenue before fees
-            
-            if (!dailySales[purchaseDate].skuData[sku]) {
-              dailySales[purchaseDate].skuData[sku] = {
-                sku,
-                name: item.Title || sku,
-                asin: item.ASIN || '',
-                unitsSold: 0,
-                returns: 0,
-                netSales: 0,
-                netProceeds: 0,
-                adSpend: 0,
-                cogs: 0,
-              };
-            }
-            
-            dailySales[purchaseDate].skuData[sku].unitsSold += qty;
-            dailySales[purchaseDate].skuData[sku].netSales += revenue;
-            dailySales[purchaseDate].totalUnits += qty;
-            dailySales[purchaseDate].totalRevenue += revenue;
+          console.log('[Sales] Report ready:', Object.keys(dailyResults).length, 'days,', totalOrders, 'order lines');
+          return res.status(200).json({
+            success: true, syncType: 'sales', source: 'amazon-orders-api', status: 'complete',
+            summary: { daysWithData: Object.keys(dailyResults).length, totalOrders, reportId: existingReportId },
+            dailySales: dailyResults,
           });
-          
-          itemsFetched++;
-          await new Promise(r => setTimeout(r, 500)); // Rate limit
-        } catch (itemErr) {
-          console.warn('[Sales] Failed to fetch items for order', order.AmazonOrderId, itemErr.message);
+        } else if (statusRes.processingStatus === 'FATAL' || statusRes.processingStatus === 'CANCELLED') {
+          return res.status(200).json({ success: false, error: `Report ${statusRes.processingStatus}`, reportId: existingReportId });
+        } else {
+          return res.status(200).json({
+            success: true, syncType: 'sales', status: 'pending', reportId: existingReportId,
+            message: `Report still processing (${statusRes.processingStatus}). Will retry automatically.`,
+          });
         }
       }
-      
-      // Step 4: Build response in daily format
-      const dailyResults = {};
-      Object.entries(dailySales).forEach(([date, dayData]) => {
-        const skuArray = Object.values(dayData.skuData).sort((a, b) => b.netSales - a.netSales);
-        dailyResults[date] = {
-          date,
-          source: 'amazon-orders-api',
-          amazon: {
-            revenue: dayData.totalRevenue,
-            units: dayData.totalUnits,
-            returns: 0, // Not available from Orders API
-            cogs: 0, // Calculated client-side
-            fees: 0, // Not available from Orders API (use Finance API for this)
-            adSpend: 0, // Comes from Ads API separately
-            netProfit: 0, // Calculated client-side
-            skuData: skuArray,
-          },
-        };
-      });
-      
-      console.log('[Sales] Processed', Object.keys(dailyResults).length, 'days,', itemsFetched, 'orders with items');
-      
+
+      // Step B: Request a new report
+      const reportSpec = {
+        reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
+        marketplaceIds: [marketplaceId],
+        dataStartTime: startDateObj.toISOString(),
+        dataEndTime: endDateObj.toISOString(),
+      };
+
+      console.log('[Sales] Requesting report:', reportSpec.reportType);
+      const createResponse = await spApiRequest(accessToken, '/reports/2021-06-30/reports', 'POST', reportSpec);
+      const newReportId = createResponse.reportId;
+      console.log('[Sales] Report requested:', newReportId);
+
+      // Step C: Poll for completion (short ranges usually complete in <30s)
+      let attempts = 0;
+      const maxAttempts = 25; // ~50s of polling (within Vercel Pro 60s limit)
+
+      while (attempts < maxAttempts) {
+        attempts++;
+        await new Promise(r => setTimeout(r, 2000));
+
+        const statusRes = await spApiRequest(accessToken, `/reports/2021-06-30/reports/${newReportId}`);
+
+        if (statusRes.processingStatus === 'DONE') {
+          const rows = await downloadAndParseReport(statusRes.reportDocumentId);
+          const { dailyResults, totalOrders } = aggregateRows(rows);
+
+          console.log('[Sales] Report complete:', Object.keys(dailyResults).length, 'days,', totalOrders, 'order lines, polled', attempts, 'times');
+          return res.status(200).json({
+            success: true, syncType: 'sales', source: 'amazon-orders-api', status: 'complete',
+            summary: { daysWithData: Object.keys(dailyResults).length, totalOrders, reportId: newReportId },
+            dailySales: dailyResults,
+          });
+        } else if (statusRes.processingStatus === 'FATAL' || statusRes.processingStatus === 'CANCELLED') {
+          throw new Error(`Report generation failed: ${statusRes.processingStatus}`);
+        }
+        // IN_QUEUE or IN_PROGRESS - keep polling
+      }
+
+      // If we timed out waiting, return the reportId so client can retry
+      console.log('[Sales] Report not ready after', attempts, 'attempts, returning reportId for retry');
       return res.status(200).json({
-        success: true,
-        syncType: 'sales',
-        source: 'amazon-orders-api',
-        daysBack,
-        summary: {
-          daysWithData: Object.keys(dailyResults).length,
-          totalOrders: allOrders.length,
-          ordersWithItems: itemsFetched,
-          dateRange: { start: salesStartDate.split('T')[0], end: salesEndDate.split('T')[0] },
-        },
-        dailySales: dailyResults,
+        success: true, syncType: 'sales', status: 'pending', reportId: newReportId,
+        message: 'Report is generating. Will retry automatically.',
       });
-      
+
     } catch (err) {
-      console.error('[Sales] Amazon sales sync error:', err);
-      return res.status(500).json({ error: `Sales sync failed: ${err.message}` });
+      console.error('[Sales] Amazon sales sync error:', err?.message || err);
+      return res.status(500).json({ error: `Sales sync failed: ${err?.message || 'Unknown error'}` });
     }
   }
 
