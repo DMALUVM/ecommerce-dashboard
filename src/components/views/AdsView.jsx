@@ -137,10 +137,12 @@ const AdsView = ({
       daysWithAds.forEach(d => {
         const day = allDaysData[d];
         const spend = day?.amazon?.adSpend || day?.amazonAdsMetrics?.spend || 0;
-        const rev = day?.amazon?.adRevenue || day?.amazonAdsMetrics?.totalRevenue || day?.amazon?.revenue || 0;
+        const adRev = day?.amazon?.adRevenue || day?.amazonAdsMetrics?.totalRevenue || 0;
+        const totalDayRev = day?.amazon?.revenue || adRev || 0;
         totalSpend += spend;
-        totalRev += rev;
-        intel.trendData.push({ date: d, spend, rev, acos: rev > 0 ? (spend / rev) * 100 : 0, roas: spend > 0 ? rev / spend : 0 });
+        totalRev += totalDayRev;
+        const tacos = totalDayRev > 0 ? (spend / totalDayRev) * 100 : (spend > 0 ? 100 : 0);
+        intel.trendData.push({ date: d, spend, rev: totalDayRev, adRev, tacos, acos: adRev > 0 ? (spend / adRev) * 100 : 0, roas: spend > 0 ? totalDayRev / spend : 0 });
       });
       
       intel.dateRange = { earliest: daysWithAds[0], latest: daysWithAds[daysWithAds.length - 1], daysAvailable: daysWithAds.length };
@@ -182,9 +184,11 @@ const AdsView = ({
         .sort((a, b) => b.spend - a.spend);
       
       // Stale campaign warning: all campaigns paused/archived with $0 spend but daily data shows active spend
+      // Suppress if API-synced data exists in adsIntelData (user has Amazon Ads API connected)
       const allCampsZeroSpend = campaigns.every(c => (c.spend || 0) === 0);
       const hasRecentAdSpend = daysWithAds.length > 0;
-      intel.staleCampaignWarning = allCampsZeroSpend && hasRecentAdSpend;
+      const hasApiData = adsIntelData && (adsIntelData._apiSpCampaigns?.length > 0 || adsIntelData.amazon?.sp_campaigns?.records?.length > 0 || adsIntelData._apiSpSearchTerms?.length > 0 || adsIntelData.amazon?.sp_search_terms?.records?.length > 0);
+      intel.staleCampaignWarning = allCampsZeroSpend && hasRecentAdSpend && !hasApiData;
     }
     
     // ─── ACTIONABLE: Zero-sale days & ACOS spikes (last 14d from allDaysData) ───
@@ -786,15 +790,15 @@ const AdsView = ({
               {amazonAdsInsights.summary && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
-                    <p className="text-slate-500 text-xs uppercase">Search ROAS</p>
+                    <p className="text-slate-500 text-xs uppercase">ROAS</p>
                     <p className={`text-xl font-bold ${amazonAdsInsights.summary.overallRoas >= 4 ? 'text-emerald-400' : amazonAdsInsights.summary.overallRoas >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{amazonAdsInsights.summary.overallRoas.toFixed(2)}x</p>
                   </div>
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
-                    <p className="text-slate-500 text-xs uppercase">Search ACOS</p>
-                    <p className={`text-xl font-bold ${amazonAdsInsights.summary.overallRoas > 0 ? ((1/amazonAdsInsights.summary.overallRoas)*100 <= 25 ? 'text-emerald-400' : (1/amazonAdsInsights.summary.overallRoas)*100 <= 40 ? 'text-amber-400' : 'text-rose-400') : 'text-slate-400'}`}>{amazonAdsInsights.summary.overallRoas > 0 ? ((1/amazonAdsInsights.summary.overallRoas)*100).toFixed(1) + '%' : '—'}</p>
+                    <p className="text-slate-500 text-xs uppercase">TACOS</p>
+                    <p className={`text-xl font-bold ${amazonAdsInsights.summary.totalSales > 0 ? ((amazonAdsInsights.summary.totalSpend / amazonAdsInsights.summary.totalSales)*100 <= 10 ? 'text-emerald-400' : (amazonAdsInsights.summary.totalSpend / amazonAdsInsights.summary.totalSales)*100 <= 20 ? 'text-amber-400' : 'text-rose-400') : 'text-slate-400'}`}>{amazonAdsInsights.summary.totalSales > 0 ? ((amazonAdsInsights.summary.totalSpend / amazonAdsInsights.summary.totalSales)*100).toFixed(1) + '%' : '—'}</p>
                   </div>
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
-                    <p className="text-slate-500 text-xs uppercase">Ad Sales</p>
+                    <p className="text-slate-500 text-xs uppercase">Total Revenue</p>
                     <p className="text-xl font-bold text-emerald-400">{formatCurrency(amazonAdsInsights.summary.totalSales)}</p>
                   </div>
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
@@ -875,36 +879,40 @@ const AdsView = ({
                 </div>
               )}
 
-              {/* ACOS Trend Chart — last 30 days from allDaysData */}
+              {/* TACOS Trend Chart — last 30 days from allDaysData */}
               {amazonAdsInsights.trendData.length > 2 && (() => {
                 const trend = amazonAdsInsights.trendData.slice(-30);
-                const maxSpend = Math.max(...trend.map(d => d.spend), 1);
+                // Use TACOS for bar height (meaningful variation vs flat spend bars)
+                const tacosValues = trend.map(d => d.tacos).filter(t => t > 0 && t < 200);
+                const maxTacos = tacosValues.length > 0 ? Math.max(...tacosValues) : 50;
                 const last7 = trend.slice(-7);
                 const prev7 = trend.slice(-14, -7);
-                const last7Acos = (() => { const s = last7.reduce((a, d) => a + d.spend, 0); const r = last7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
-                const prev7Acos = (() => { const s = prev7.reduce((a, d) => a + d.spend, 0); const r = prev7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
-                const delta = prev7Acos > 0 ? last7Acos - prev7Acos : 0;
+                const last7Tacos = (() => { const s = last7.reduce((a, d) => a + d.spend, 0); const r = last7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
+                const prev7Tacos = (() => { const s = prev7.reduce((a, d) => a + d.spend, 0); const r = prev7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
+                const delta = prev7Tacos > 0 ? last7Tacos - prev7Tacos : 0;
                 return (
                   <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
                     <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-white font-semibold text-sm flex items-center gap-2"><BarChart3 className="w-4 h-4 text-cyan-400"/>ACOS Trend — Last {trend.length} Days</h3>
+                      <h3 className="text-white font-semibold text-sm flex items-center gap-2"><BarChart3 className="w-4 h-4 text-cyan-400"/>TACOS Trend — Last {trend.length} Days</h3>
                       <div className="flex items-center gap-3 text-xs">
-                        <span className="text-slate-400">7d ACOS: <span className={`font-bold ${last7Acos <= 25 ? 'text-emerald-400' : last7Acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>{last7Acos.toFixed(1)}%</span></span>
+                        <span className="text-slate-400">7d TACOS: <span className={`font-bold ${last7Tacos <= 10 ? 'text-emerald-400' : last7Tacos <= 20 ? 'text-amber-400' : 'text-rose-400'}`}>{last7Tacos.toFixed(1)}%</span></span>
                         {delta !== 0 && <span className={`flex items-center gap-0.5 ${delta < 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{delta < 0 ? <TrendingDown className="w-3 h-3"/> : <TrendingUp className="w-3 h-3"/>}{Math.abs(delta).toFixed(1)}pp WoW</span>}
                       </div>
                     </div>
-                    <div className="flex items-end gap-px h-20">
+                    <div className="flex items-end gap-px h-24">
                       {trend.map((d, i) => {
-                        const h = maxSpend > 0 ? Math.max((d.spend / maxSpend) * 100, 3) : 3;
-                        const color = d.acos <= 25 ? 'bg-emerald-500' : d.acos <= 40 ? 'bg-amber-500' : 'bg-rose-500';
+                        const t = d.tacos;
+                        const h = maxTacos > 0 ? Math.min(Math.max((t / maxTacos) * 100, 4), 100) : 4;
+                        const color = t <= 10 ? 'bg-emerald-500' : t <= 20 ? 'bg-amber-500' : 'bg-rose-500';
                         return (
                           <div key={i} className="flex-1 flex flex-col items-center justify-end group relative">
-                            <div className={`w-full rounded-t ${color} opacity-80 hover:opacity-100 transition-opacity cursor-default`} style={{ height: `${h}%`, minHeight: '2px' }}/>
+                            <div className={`w-full rounded-t ${color} opacity-80 hover:opacity-100 transition-opacity cursor-default`} style={{ height: `${h}%` }}/>
                             <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 pointer-events-none">
                               <div className="bg-slate-900 border border-slate-600 rounded-lg p-2 text-xs whitespace-nowrap shadow-xl">
                                 <p className="text-slate-400">{fmtDate(d.date)}</p>
                                 <p className="text-white">Spend: {formatCurrency(d.spend)}</p>
-                                <p className={`font-bold ${d.acos <= 25 ? 'text-emerald-400' : d.acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>ACOS: {d.acos.toFixed(1)}%</p>
+                                <p className="text-emerald-400">Revenue: {formatCurrency(d.rev)}</p>
+                                <p className={`font-bold ${t <= 10 ? 'text-emerald-400' : t <= 20 ? 'text-amber-400' : 'text-rose-400'}`}>TACOS: {t.toFixed(1)}%</p>
                               </div>
                             </div>
                           </div>
@@ -914,9 +922,9 @@ const AdsView = ({
                     <div className="flex justify-between text-xs text-slate-600 mt-1">
                       <span>{fmtDate(trend[0].date)}</span>
                       <div className="flex items-center gap-3">
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"/>≤25%</span>
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500"/>≤40%</span>
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500"/>&gt;40%</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"/>≤10%</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500"/>≤20%</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500"/>&gt;20%</span>
                       </div>
                       <span>{fmtDate(trend[trend.length - 1].date)}</span>
                     </div>
