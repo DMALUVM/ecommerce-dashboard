@@ -53,6 +53,7 @@ const SettingsView = ({
   runAutoSync,
   savedCogs,
   savedProductNames,
+  saveInv,
   selectedInvDate,
   session,
   setAllDaysData,

@@ -17348,6 +17348,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       runAutoSync={runAutoSync}
       savedCogs={savedCogs}
       savedProductNames={savedProductNames}
+      saveInv={saveInv}
       selectedInvDate={selectedInvDate}
       session={session}
       setAllDaysData={setAllDaysData}
