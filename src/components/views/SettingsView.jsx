@@ -2378,6 +2378,27 @@ const SettingsView = ({
                             if (data.skuSummary) updated.skuAdPerformance = data.skuSummary;
                             if (data.campaigns) updated.campaignSummary = data.campaigns;
                             updated.apiSyncSummary = data.summary;
+                            
+                            // ALSO store in nested format the UI Deep Analysis tab reads
+                            const toIntelFormat = (rows, label) => {
+                              if (!rows || !rows.length) return null;
+                              return {
+                                records: rows,
+                                headers: Object.keys(rows[0] || {}),
+                                meta: { label, uploadedAt: new Date().toISOString(), source: 'amazon-ads-api', rowCount: rows.length }
+                              };
+                            };
+                            
+                            if (!updated.amazon) updated.amazon = {};
+                            const rpts = data.reports;
+                            if (rpts.spSearchTerms?.length) updated.amazon.sp_search_terms = toIntelFormat(rpts.spSearchTerms, 'SP Search Terms (API)');
+                            if (rpts.spAdvertised?.length) updated.amazon.sp_advertised_product = toIntelFormat(rpts.spAdvertised, 'SP Advertised Product (API)');
+                            if (rpts.spPlacement?.length) updated.amazon.sp_placement = toIntelFormat(rpts.spPlacement, 'SP Placement (API)');
+                            if (rpts.spTargeting?.length) updated.amazon.sp_targeting = toIntelFormat(rpts.spTargeting, 'SP Targeting (API)');
+                            if (rpts.sbSearchTerms?.length) updated.amazon.sb_search_terms = toIntelFormat(rpts.sbSearchTerms, 'SB Search Terms (API)');
+                            if (rpts.sdCampaign?.length) updated.amazon.sd_campaigns = toIntelFormat(rpts.sdCampaign, 'SD Campaigns (API)');
+                            if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
+                            
                             return updated;
                           });
                         }

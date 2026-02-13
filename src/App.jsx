@@ -11639,6 +11639,7 @@ const savePeriods = async (d) => {
                 if (adsData.reports) {
                   setAdsIntelData(prev => {
                     const updated = { ...(prev || {}), lastUpdated: new Date().toISOString(), source: 'amazon-ads-api' };
+                    // Keep raw API data for AI context
                     if (adsData.reports.dailyOverview) updated._apiDailyOverview = adsData.reports.dailyOverview;
                     if (adsData.reports.spSearchTerms) updated._apiSpSearchTerms = adsData.reports.spSearchTerms;
                     if (adsData.reports.spAdvertised) updated._apiSpAdvertised = adsData.reports.spAdvertised;
@@ -11649,6 +11650,29 @@ const savePeriods = async (d) => {
                     if (adsData.skuSummary) updated.skuAdPerformance = adsData.skuSummary;
                     if (adsData.campaigns) updated.campaignSummary = adsData.campaigns;
                     updated.apiSyncSummary = adsData.summary;
+                    
+                    // ALSO store in nested format the UI Deep Analysis tab reads
+                    // UI expects: adsIntelData.amazon.<report_type> = { records, headers, meta }
+                    const toIntelFormat = (rows, label) => {
+                      if (!rows || !rows.length) return null;
+                      return {
+                        records: rows,
+                        headers: Object.keys(rows[0] || {}),
+                        meta: { label, uploadedAt: new Date().toISOString(), source: 'amazon-ads-api', rowCount: rows.length }
+                      };
+                    };
+                    
+                    if (!updated.amazon) updated.amazon = {};
+                    const rpts = adsData.reports;
+                    if (rpts.spSearchTerms?.length) updated.amazon.sp_search_terms = toIntelFormat(rpts.spSearchTerms, 'SP Search Terms (API)');
+                    if (rpts.spAdvertised?.length) updated.amazon.sp_advertised_product = toIntelFormat(rpts.spAdvertised, 'SP Advertised Product (API)');
+                    if (rpts.spPlacement?.length) updated.amazon.sp_placement = toIntelFormat(rpts.spPlacement, 'SP Placement (API)');
+                    if (rpts.spTargeting?.length) updated.amazon.sp_targeting = toIntelFormat(rpts.spTargeting, 'SP Targeting (API)');
+                    if (rpts.sbSearchTerms?.length) updated.amazon.sb_search_terms = toIntelFormat(rpts.sbSearchTerms, 'SB Search Terms (API)');
+                    if (rpts.sdCampaign?.length) updated.amazon.sd_campaigns = toIntelFormat(rpts.sdCampaign, 'SD Campaigns (API)');
+                    // SP Campaigns from dailyOverview
+                    if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
+                    
                     return updated;
                   });
                 }

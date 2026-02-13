@@ -1,8 +1,8 @@
 import React, { useState, useRef, useMemo, useCallback } from 'react';
 import {
   AlertTriangle, BarChart3, Brain, Check, ChevronLeft, ChevronRight, Clock,
-  Database, DollarSign, FileSpreadsheet, Loader2, RefreshCw, Search,
-  Send, Target, TrendingUp, Trophy, Upload, X, Zap
+  Database, DollarSign, FileSpreadsheet, Flame, Loader2, RefreshCw, Search,
+  Send, ShieldAlert, Sparkles, Target, TrendingDown, TrendingUp, Trophy, Upload, X, Zap
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from '../../utils/ads';
@@ -113,6 +113,130 @@ const AdsView = ({
     }
     return insights;
   }, [campaigns, campaignSummary, hasCampaignData]);
+
+  // ═══ AMAZON ADS INTELLIGENCE (from API sync data) ═══
+  const amazonAdsInsights = useMemo(() => {
+    const intel = { hasData: false, wastedSpend: [], topWinners: [], topCampaigns: [], skuPerformance: [], placementInsights: null, negativeKeywords: [], summary: null };
+    const amz = adsIntelData?.amazon;
+    if (!amz) return intel;
+    
+    // --- Search Terms Analysis ---
+    const searchTerms = amz.sp_search_terms?.records;
+    if (searchTerms?.length > 0) {
+      intel.hasData = true;
+      // Aggregate by search term (API gives daily rows)
+      const termMap = {};
+      searchTerms.forEach(r => {
+        const term = r['Customer Search Term'] || '';
+        if (!term) return;
+        if (!termMap[term]) termMap[term] = { term, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+        termMap[term].spend += Number(r['Spend'] || 0);
+        termMap[term].sales += Number(r['7 Day Total Sales'] || 0);
+        termMap[term].clicks += Number(r['Clicks'] || 0);
+        termMap[term].impressions += Number(r['Impressions'] || 0);
+        termMap[term].orders += Number(r['7 Day Total Orders (#)'] || 0);
+      });
+      const terms = Object.values(termMap);
+      
+      // Wasted spend: $5+ spend, zero sales
+      intel.wastedSpend = terms
+        .filter(t => t.spend >= 5 && t.sales === 0)
+        .sort((a, b) => b.spend - a.spend)
+        .slice(0, 10);
+      
+      // Top winners: highest ROAS with meaningful spend
+      intel.topWinners = terms
+        .filter(t => t.spend >= 3 && t.sales > 0)
+        .map(t => ({ ...t, roas: t.sales / t.spend, acos: t.spend / t.sales * 100 }))
+        .sort((a, b) => b.roas - a.roas)
+        .slice(0, 10);
+      
+      // Negative keyword candidates: 10+ clicks, zero orders
+      intel.negativeKeywords = terms
+        .filter(t => t.clicks >= 10 && t.orders === 0)
+        .sort((a, b) => b.spend - a.spend)
+        .slice(0, 10);
+      
+      // Summary
+      const totalSearchSpend = terms.reduce((s, t) => s + t.spend, 0);
+      const totalSearchSales = terms.reduce((s, t) => s + t.sales, 0);
+      const wastedTotal = intel.wastedSpend.reduce((s, t) => s + t.spend, 0);
+      intel.summary = {
+        totalTerms: terms.length,
+        totalSpend: totalSearchSpend,
+        totalSales: totalSearchSales,
+        overallRoas: totalSearchSpend > 0 ? totalSearchSales / totalSearchSpend : 0,
+        wastedTotal,
+        wastedPct: totalSearchSpend > 0 ? (wastedTotal / totalSearchSpend) * 100 : 0
+      };
+    }
+    
+    // --- Campaign Analysis ---
+    const dailyOverview = amz.sp_campaigns?.records;
+    if (dailyOverview?.length > 0) {
+      intel.hasData = true;
+      const campMap = {};
+      dailyOverview.forEach(r => {
+        const name = r['Campaign Name'] || r['campaignName'] || '';
+        if (!name) return;
+        if (!campMap[name]) campMap[name] = { name, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+        campMap[name].spend += Number(r['Spend'] || r['spend'] || 0);
+        campMap[name].sales += Number(r['Sales'] || r['sales'] || r['7 Day Total Sales'] || 0);
+        campMap[name].clicks += Number(r['Clicks'] || r['clicks'] || 0);
+        campMap[name].impressions += Number(r['Impressions'] || r['impressions'] || 0);
+        campMap[name].orders += Number(r['Orders'] || r['orders'] || r['7 Day Total Orders (#)'] || 0);
+      });
+      intel.topCampaigns = Object.values(campMap)
+        .filter(c => c.spend > 0)
+        .map(c => ({ ...c, roas: c.spend > 0 ? c.sales / c.spend : 0, acos: c.sales > 0 ? (c.spend / c.sales) * 100 : 999 }))
+        .sort((a, b) => b.spend - a.spend)
+        .slice(0, 10);
+    }
+    
+    // --- SKU Performance ---
+    const skuData = amz.sp_advertised_product?.records;
+    if (skuData?.length > 0) {
+      intel.hasData = true;
+      const skuMap = {};
+      skuData.forEach(r => {
+        const sku = r['Advertised SKU'] || r['SKU'] || '';
+        if (!sku) return;
+        if (!skuMap[sku]) skuMap[sku] = { sku, asin: r['Advertised ASIN'] || '', spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+        skuMap[sku].spend += Number(r['Spend'] || 0);
+        skuMap[sku].sales += Number(r['7 Day Total Sales'] || 0);
+        skuMap[sku].clicks += Number(r['Clicks'] || 0);
+        skuMap[sku].impressions += Number(r['Impressions'] || 0);
+        skuMap[sku].orders += Number(r['7 Day Total Orders (#)'] || r['7 Day Total Units (#)'] || 0);
+      });
+      intel.skuPerformance = Object.values(skuMap)
+        .filter(s => s.spend > 0)
+        .map(s => ({ ...s, roas: s.spend > 0 ? s.sales / s.spend : 0, acos: s.sales > 0 ? (s.spend / s.sales) * 100 : 999 }))
+        .sort((a, b) => b.spend - a.spend)
+        .slice(0, 10);
+    }
+    
+    // --- Placement Insights ---
+    const placementData = amz.sp_placement?.records;
+    if (placementData?.length > 0) {
+      intel.hasData = true;
+      const placeMap = {};
+      placementData.forEach(r => {
+        const place = r['Placement'] || '';
+        if (!place) return;
+        if (!placeMap[place]) placeMap[place] = { placement: place, spend: 0, sales: 0, clicks: 0, impressions: 0 };
+        placeMap[place].spend += Number(r['Spend'] || 0);
+        placeMap[place].sales += Number(r['7 Day Total Sales'] || 0);
+        placeMap[place].clicks += Number(r['Clicks'] || 0);
+        placeMap[place].impressions += Number(r['Impressions'] || 0);
+      });
+      const placements = Object.values(placeMap).map(p => ({
+        ...p, roas: p.spend > 0 ? p.sales / p.spend : 0, cpc: p.clicks > 0 ? p.spend / p.clicks : 0, ctr: p.impressions > 0 ? (p.clicks / p.impressions) * 100 : 0
+      }));
+      intel.placementInsights = placements;
+    }
+    
+    return intel;
+  }, [adsIntelData]);
 
   // Period navigation constants
   const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -385,6 +509,174 @@ const AdsView = ({
               </div>:<p className="text-slate-500 text-xs">No data • <button onClick={()=>setAdsViewMode('upload')} className="text-blue-400 hover:underline">Upload</button></p>}
             </div>
           </div>
+
+          {/* ═══ AMAZON ADS INTELLIGENCE ═══ */}
+          {amazonAdsInsights.hasData && (
+            <div className="mb-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2"><Flame className="w-5 h-5 text-orange-400"/>Amazon Ads Intelligence</h2>
+                {amazonAdsInsights.summary && <span className="text-xs text-slate-500">{amazonAdsInsights.summary.totalTerms.toLocaleString()} search terms analyzed</span>}
+              </div>
+              
+              {/* Alert Banner: Wasted Spend */}
+              {amazonAdsInsights.summary && amazonAdsInsights.summary.wastedTotal > 10 && (
+                <div className="bg-gradient-to-r from-red-900/30 to-amber-900/20 rounded-xl border border-red-500/40 p-4 flex items-center gap-4">
+                  <div className="p-2 bg-red-500/20 rounded-lg"><ShieldAlert className="w-6 h-6 text-red-400"/></div>
+                  <div className="flex-1">
+                    <p className="text-white font-semibold">{formatCurrency(amazonAdsInsights.summary.wastedTotal)} wasted on zero-sale search terms</p>
+                    <p className="text-slate-400 text-sm">{amazonAdsInsights.wastedSpend.length} terms with ${'>'}5 spend and no conversions — {amazonAdsInsights.summary.wastedPct.toFixed(1)}% of total search spend</p>
+                  </div>
+                  <button onClick={() => { setAdsAiInput('Analyze my wasted ad spend on search terms with zero sales. Which should be added as negative keywords?'); setShowAdsAIChat(true); }} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 border border-red-500/30 rounded-lg text-red-300 text-xs font-medium whitespace-nowrap">AI Analysis →</button>
+                </div>
+              )}
+              
+              {/* Summary KPIs */}
+              {amazonAdsInsights.summary && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
+                    <p className="text-slate-500 text-xs uppercase">Search ROAS</p>
+                    <p className={`text-xl font-bold ${amazonAdsInsights.summary.overallRoas >= 4 ? 'text-emerald-400' : amazonAdsInsights.summary.overallRoas >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{amazonAdsInsights.summary.overallRoas.toFixed(2)}x</p>
+                  </div>
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
+                    <p className="text-slate-500 text-xs uppercase">Search ACOS</p>
+                    <p className={`text-xl font-bold ${amazonAdsInsights.summary.overallRoas > 0 ? ((1/amazonAdsInsights.summary.overallRoas)*100 <= 25 ? 'text-emerald-400' : (1/amazonAdsInsights.summary.overallRoas)*100 <= 40 ? 'text-amber-400' : 'text-rose-400') : 'text-slate-400'}`}>{amazonAdsInsights.summary.overallRoas > 0 ? ((1/amazonAdsInsights.summary.overallRoas)*100).toFixed(1) + '%' : '—'}</p>
+                  </div>
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
+                    <p className="text-slate-500 text-xs uppercase">Ad Sales</p>
+                    <p className="text-xl font-bold text-emerald-400">{formatCurrency(amazonAdsInsights.summary.totalSales)}</p>
+                  </div>
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
+                    <p className="text-slate-500 text-xs uppercase">Ad Spend</p>
+                    <p className="text-xl font-bold text-white">{formatCurrency(amazonAdsInsights.summary.totalSpend)}</p>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Wasted Spend — Zero-Sale Search Terms */}
+                {amazonAdsInsights.wastedSpend.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><TrendingDown className="w-4 h-4 text-red-400"/>Wasted Spend — Zero-Sale Terms</h3>
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {amazonAdsInsights.wastedSpend.map((t, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className="text-slate-500 w-5">{i + 1}.</span>
+                          <span className="text-white flex-1 truncate" title={t.term}>{t.term}</span>
+                          <span className="text-slate-400">{t.clicks} clicks</span>
+                          <span className="text-red-400 font-semibold w-16 text-right">{formatCurrency(t.spend)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-slate-500 text-xs mt-2 pt-2 border-t border-slate-700/50">💡 Consider adding these as negative keywords</p>
+                  </div>
+                )}
+
+                {/* Top Winners — High ROAS Terms */}
+                {amazonAdsInsights.topWinners.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Sparkles className="w-4 h-4 text-emerald-400"/>Top Winners — Highest ROAS Terms</h3>
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {amazonAdsInsights.topWinners.map((t, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className="text-slate-500 w-5">{i + 1}.</span>
+                          <span className="text-white flex-1 truncate" title={t.term}>{t.term}</span>
+                          <span className="text-slate-400">{formatCurrency(t.spend)}</span>
+                          <span className={`font-semibold w-14 text-right ${t.roas >= 5 ? 'text-emerald-400' : t.roas >= 3 ? 'text-cyan-400' : 'text-amber-400'}`}>{t.roas.toFixed(1)}x</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-slate-500 text-xs mt-2 pt-2 border-t border-slate-700/50">🚀 Scale budget on these winning terms</p>
+                  </div>
+                )}
+
+                {/* Campaign Performance */}
+                {amazonAdsInsights.topCampaigns.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Target className="w-4 h-4 text-violet-400"/>Campaign Performance</h3>
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {amazonAdsInsights.topCampaigns.map((c, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${c.roas >= 3 ? 'bg-emerald-500' : c.roas >= 1.5 ? 'bg-amber-500' : 'bg-red-500'}`}/>
+                          <span className="text-white flex-1 truncate" title={c.name}>{c.name}</span>
+                          <span className="text-slate-400 w-16 text-right">{formatCurrency(c.spend)}</span>
+                          <span className={`font-semibold w-12 text-right ${c.acos <= 25 ? 'text-emerald-400' : c.acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>{c.acos < 999 ? c.acos.toFixed(0) + '%' : '—'}</span>
+                          <span className={`font-semibold w-12 text-right ${c.roas >= 3 ? 'text-emerald-400' : c.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{c.roas.toFixed(1)}x</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-slate-500 mt-2 pt-2 border-t border-slate-700/50">
+                      <span>Sorted by spend</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"/>ROAS{'>'}3x</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500"/>1.5-3x</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500"/>{'<'}1.5x</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* SKU Ad Performance */}
+                {amazonAdsInsights.skuPerformance.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><DollarSign className="w-4 h-4 text-cyan-400"/>SKU Ad Performance</h3>
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {amazonAdsInsights.skuPerformance.map((s, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${s.roas >= 3 ? 'bg-emerald-500' : s.roas >= 1.5 ? 'bg-amber-500' : 'bg-red-500'}`}/>
+                          <span className="text-white flex-1 truncate font-mono" title={s.sku}>{s.sku}</span>
+                          <span className="text-slate-400 w-16 text-right">{formatCurrency(s.spend)}</span>
+                          <span className="text-emerald-400 w-16 text-right">{formatCurrency(s.sales)}</span>
+                          <span className={`font-semibold w-12 text-right ${s.acos <= 25 ? 'text-emerald-400' : s.acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>{s.acos < 999 ? s.acos.toFixed(0) + '%' : '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-slate-500 mt-2 pt-2 border-t border-slate-700/50">
+                      <span>Cols: SKU · Spend · Sales · ACOS</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Placement Performance */}
+              {amazonAdsInsights.placementInsights && amazonAdsInsights.placementInsights.length > 0 && (
+                <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                  <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-amber-400"/>Placement Performance</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {amazonAdsInsights.placementInsights.map((p, i) => {
+                      const isTopSearch = /top/i.test(p.placement);
+                      const isProduct = /product|detail/i.test(p.placement);
+                      return (
+                        <div key={i} className={`rounded-xl p-3 border ${isTopSearch ? 'bg-amber-900/15 border-amber-500/30' : isProduct ? 'bg-cyan-900/15 border-cyan-500/30' : 'bg-slate-800/50 border-slate-700'}`}>
+                          <p className={`text-xs font-semibold uppercase mb-2 ${isTopSearch ? 'text-amber-400' : isProduct ? 'text-cyan-400' : 'text-slate-400'}`}>{p.placement}</p>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div><span className="text-slate-500">Spend</span><p className="text-white font-medium">{formatCurrency(p.spend)}</p></div>
+                            <div><span className="text-slate-500">ROAS</span><p className={`font-bold ${p.roas >= 3 ? 'text-emerald-400' : p.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{p.roas.toFixed(2)}x</p></div>
+                            <div><span className="text-slate-500">CPC</span><p className="text-white">{formatCurrency(p.cpc)}</p></div>
+                            <div><span className="text-slate-500">CTR</span><p className="text-white">{p.ctr.toFixed(2)}%</p></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Negative Keyword Opportunities */}
+              {amazonAdsInsights.negativeKeywords.length > 0 && (
+                <div className="bg-gradient-to-r from-slate-800/50 to-slate-800/30 rounded-xl border border-amber-500/20 p-4">
+                  <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-400"/>Negative Keyword Opportunities <span className="text-xs font-normal text-slate-500">— 10+ clicks, zero orders</span></h3>
+                  <div className="flex flex-wrap gap-2">
+                    {amazonAdsInsights.negativeKeywords.map((t, i) => (
+                      <span key={i} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-700/50 rounded-lg text-xs border border-slate-600/50">
+                        <span className="text-white">{t.term}</span>
+                        <span className="text-red-400">{formatCurrency(t.spend)}</span>
+                        <span className="text-slate-500">{t.clicks}c</span>
+                      </span>
+                    ))}
+                  </div>
+                  <button onClick={() => { setAdsAiInput('Generate a list of negative keywords I should add based on my search term data. Show me the exact keywords and which campaigns they should be added to.'); setShowAdsAIChat(true); }} className="mt-3 px-3 py-1.5 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/30 rounded-lg text-amber-300 text-xs font-medium">Generate Negative Keyword List →</button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* DETAIL TABLES */}
           {useDailyData && dailyTableData.length>1 && (
