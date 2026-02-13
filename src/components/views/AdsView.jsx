@@ -166,10 +166,12 @@ const AdsView = ({
         .map(c => ({ name: c.name || '', spend: c.spend || 0, clicks: c.clicks || 0, type: c.type || 'SP' }))
         .sort((a, b) => b.spend - a.spend);
 
-      // Stale warning: suppress when API data exists
+      // Stale warning: only show if CSV is the ONLY data source and it's all $0
+      // Suppress when: API data exists OR daily data already covers ad spend well
       const allZero = campaigns.every(c => (c.spend || 0) === 0);
       const hasApiData = adsIntelData && (adsIntelData._apiSpCampaigns?.length > 0 || adsIntelData.amazon?.sp_campaigns?.records?.length > 0 || adsIntelData._apiSpSearchTerms?.length > 0 || adsIntelData.amazon?.sp_search_terms?.records?.length > 0);
-      intel.staleCampaignWarning = allZero && daysWithAds.length > 0 && !hasApiData;
+      const hasSufficientDailyData = daysWithAds.length >= 7 && totalSpend > 100;
+      intel.staleCampaignWarning = allZero && daysWithAds.length > 0 && !hasApiData && !hasSufficientDailyData;
     }
 
     // ACTIONABLE: Zero-sale days & spikes (last 14d)
