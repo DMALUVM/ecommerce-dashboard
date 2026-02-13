@@ -2285,8 +2285,12 @@ const SettingsView = ({
               {/* Manual Sync Button */}
               <SettingRow label="Sync Campaign Data" desc="Pull 30 days of SP/SB/SD campaigns, search terms, SKU-level spend, targeting, placements">
                 <button
-                  onClick={async () => {
-                    setToast({ message: 'Syncing Amazon Ads data (8 report types)...', type: 'info' });
+                  onClick={async (e) => {
+                    const btn = e.currentTarget;
+                    btn.disabled = true;
+                    btn.classList.add('opacity-60');
+                    const startTime = Date.now();
+                    setToast({ message: '📊 Creating 8 report requests...', type: 'info', duration: 60000 });
                     try {
                       let data = null;
                       let retries = 0;
@@ -2300,6 +2304,14 @@ const SettingsView = ({
                       };
 
                       while (retries < 5) {
+                        const elapsed = Math.round((Date.now() - startTime) / 1000);
+                        if (retries === 0) {
+                          setToast({ message: `📊 Waiting for Amazon to generate reports... (${elapsed}s)`, type: 'info', duration: 60000 });
+                        } else {
+                          const completed = data?.completedCount || 0;
+                          const total = data?.totalCount || 8;
+                          setToast({ message: `⏳ Reports generating... ${completed}/${total} ready (retry ${retries}/5, ${elapsed}s)`, type: 'info', duration: 60000 });
+                        }
                         const r = await fetch('/api/amazon/ads-sync', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
@@ -2308,7 +2320,6 @@ const SettingsView = ({
                         data = await r.json();
 
                         if (data.status === 'pending' && data.pendingReports) {
-                          setToast({ message: `${data.message || 'Reports generating...'} (retry ${retries + 1})`, type: 'info' });
                           syncBody.pendingReports = data.pendingReports;
                           retries++;
                           await new Promise(r => setTimeout(r, 8000));
@@ -2375,16 +2386,20 @@ const SettingsView = ({
                         if (queueCloudSave) queueCloudSave();
                         
                         const rc = data.summary.reportCounts || {};
+                        const elapsed = Math.round((Date.now() - startTime) / 1000);
                         const parts = [`${data.summary.daysWithData} days`, `$${data.summary.totalSpend.toFixed(0)} spend`, `${data.summary.campaignCount} campaigns`, `${data.summary.skuCount || 0} SKUs`];
                         if (rc.spSearchTerms) parts.push(`${rc.spSearchTerms} search terms`);
-                        setToast({ message: `Synced: ${parts.join(' · ')}`, type: 'success' });
+                        setToast({ message: `✅ Ads synced in ${elapsed}s: ${parts.join(' · ')}`, type: 'success' });
                       } else if (data?.status === 'pending') {
-                        setToast({ message: 'Reports still generating — will complete on next sync', type: 'info' });
+                        setToast({ message: '⏳ Reports still generating — will complete on next sync', type: 'info' });
                       } else {
-                        setToast({ message: data?.error || 'Ads sync failed', type: 'error' });
+                        setToast({ message: '❌ ' + (data?.error || 'Ads sync failed'), type: 'error' });
                       }
                     } catch (err) {
-                      setToast({ message: `Ads sync error: ${err.message}`, type: 'error' });
+                      setToast({ message: `❌ Ads sync error: ${err.message}`, type: 'error' });
+                    } finally {
+                      btn.disabled = false;
+                      btn.classList.remove('opacity-60');
                     }
                   }}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm text-white font-medium flex items-center gap-2"

@@ -13,7 +13,7 @@ const Toast = ({ toast, setToast, showSaveConfirm }) => {
       queueRef.current = [...queueRef.current, newToast].slice(-4); // Keep max 4
       setToastQueue([...queueRef.current]);
       
-      const duration = toast.action ? 10000 : 3500;
+      const duration = toast.duration || (toast.action ? 10000 : 3500);
       const timer = setTimeout(() => {
         queueRef.current = queueRef.current.filter(t => t.id !== id);
         setToastQueue([...queueRef.current]);

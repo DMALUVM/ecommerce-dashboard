@@ -89,6 +89,14 @@ export default async function handler(req, res) {
     const response = await fetch(`${ADS_BASE}${endpoint}`, opts);
     if (!response.ok) {
       const errText = await response.text();
+      // 425 = duplicate report already exists — extract reportId and treat as success
+      if (response.status === 425) {
+        const dupMatch = errText.match(/duplicate of\s*:\s*([a-f0-9-]+)/i);
+        if (dupMatch) {
+          console.log(`[AdsSync] 425 duplicate — reusing existing report ${dupMatch[1]}`);
+          return { reportId: dupMatch[1], status: 'PROCESSING' };
+        }
+      }
       throw new Error(`Ads API ${response.status}: ${errText.slice(0, 2000)}`);
     }
     const ct = response.headers.get('content-type') || '';
@@ -264,7 +272,7 @@ export default async function handler(req, res) {
             'date', 'impressions', 'clicks', 'cost',
             'purchasesClicks14d', 'salesClicks14d', 'unitsSoldClicks14d'],
         },
-        // --- SD Reports (v3 column names — different from SP & SB) ---
+        // --- SD Reports (v3 column names — NO attribution window suffix) ---
         {
           key: 'sdCampaigns',
           label: 'SD Campaigns',
@@ -273,8 +281,8 @@ export default async function handler(req, res) {
           groupBy: ['campaign'],
           columns: ['campaignName', 'campaignId', 'campaignStatus', 'campaignBudgetAmount',
             'date', 'impressions', 'clicks', 'cost',
-            'purchasesClicks14d', 'salesClicks14d', 'unitsSoldClicks14d',
-            'detailPageViewsClicks14d'],
+            'purchasesClicks', 'salesClicks', 'unitsSold',
+            'detailPageViewsClicks'],
         },
       ];
 
@@ -411,6 +419,8 @@ export default async function handler(req, res) {
       return res.status(200).json({
         success: true, status: 'pending',
         message: `${completed.length} ready, ${pending.length} generating`,
+        completedCount: completed.length,
+        totalCount: completed.length + pending.length,
         pendingReports: [...pending, ...completed].map(r => ({
           reportId: r.reportId, reportKey: r.reportKey, label: r.label,
           status: r.status, downloadUrl: r.downloadUrl,
@@ -464,9 +474,12 @@ export default async function handler(req, res) {
     let totalRows = 0;
 
     // Helper: get value from row using v3 column names (with fallback to v2 names)
-    const getSales = (r, w) => parseFloat(r[`salesClicks${w}`] || r[`sales${w}`]) || 0;
-    const getPurchases = (r, w) => parseInt(r[`purchasesClicks${w}`] || r[`purchases${w}`]) || 0;
-    const getUnits = (r, w) => parseInt(r[`unitsSoldClicks${w}`] || r[`unitsSold${w}`]) || 0;
+    // SD uses no suffix (salesClicks, purchasesClicks, unitsSold)
+    // SB uses 14d suffix (salesClicks14d, purchasesClicks14d, unitsSoldClicks14d)
+    // SP uses 7d suffix (sales7d, purchases7d, unitsSoldClicks7d)
+    const getSales = (r, w) => parseFloat(r[`salesClicks${w}`] || r[`sales${w}`] || r.salesClicks || r.sales) || 0;
+    const getPurchases = (r, w) => parseInt(r[`purchasesClicks${w}`] || r[`purchases${w}`] || r.purchasesClicks || r.purchases) || 0;
+    const getUnits = (r, w) => parseInt(r[`unitsSoldClicks${w}`] || r[`unitsSold${w}`] || r.unitsSold) || 0;
 
     // --- Daily Overview (combine SP+SB+SD campaigns) ---
     {
@@ -603,7 +616,7 @@ export default async function handler(req, res) {
         'Spend': parseFloat(r.cost) || 0,
         '14 Day Total Sales': getSales(r, '14d'),
         '14 Day Total Orders (#)': getPurchases(r, '14d'),
-        '14 Day Detail Page Views (DPV)': parseInt(r.detailPageViewsClicks14d || r.dpv14d) || 0,
+        '14 Day Detail Page Views (DPV)': parseInt(r.detailPageViewsClicks14d || r.detailPageViewsClicks || r.dpv14d) || 0,
         '14 Day New-to-brand Orders (#)': 0,
         '14 Day New-to-brand Sales': 0,
       }));
@@ -710,7 +723,7 @@ export default async function handler(req, res) {
         campMap[key].units += getUnits(r, attrWindow);
         campMap[key].impressions += parseInt(r.impressions) || 0;
         campMap[key].clicks += parseInt(r.clicks) || 0;
-        campMap[key].dpv += parseInt(r.detailPageViewsClicks14d || r.dpv14d || 0) || 0;
+        campMap[key].dpv += parseInt(r.detailPageViewsClicks14d || r.detailPageViewsClicks || r.dpv14d || 0) || 0;
         if (r.date) campMap[key].days.add(r.date);
         if (r.campaignStatus) campMap[key].status = r.campaignStatus;
       }
