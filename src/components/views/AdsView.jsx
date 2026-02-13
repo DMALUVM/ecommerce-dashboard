@@ -117,7 +117,7 @@ const AdsView = ({
 
   // ═══ AMAZON ADS INTELLIGENCE (from allDaysData + amazonCampaigns + adsIntelData) ═══
   const amazonAdsInsights = useMemo(() => {
-    const intel = { hasData: false, wastedSpend: [], topWinners: [], topCampaigns: [], skuPerformance: [], placementInsights: null, negativeKeywords: [], summary: null, dateRange: { earliest: null, latest: null, daysAvailable: 0 }, trendData: [] };
+    const intel = { hasData: false, wastedSpend: [], topWinners: [], topCampaigns: [], skuPerformance: [], placementInsights: null, negativeKeywords: [], summary: null, dateRange: { earliest: null, latest: null, daysAvailable: 0 }, trendData: [], zeroSaleCampaigns: [], zeroSaleDays: [], acosSpikeDays: [], staleCampaignWarning: false };
     
     // Date cutoff
     const cutoffDate = intelDateRange === 'all' ? null : (() => { const d = new Date(); d.setDate(d.getDate() - intelDateRange); return d.toISOString().slice(0, 10); })();
@@ -158,8 +158,8 @@ const AdsView = ({
     // ─── CAMPAIGNS: from amazonCampaigns prop (CSV imports) ───
     if (hasCampaignData) {
       intel.hasData = true;
-      intel.topCampaigns = campaigns
-        .filter(c => (c.spend || 0) > 0)
+      const activeCamps = campaigns.filter(c => (c.spend || 0) > 0);
+      intel.topCampaigns = activeCamps
         .map(c => ({
           name: c.name || '',
           spend: c.spend || 0,
@@ -174,7 +174,44 @@ const AdsView = ({
         }))
         .sort((a, b) => b.spend - a.spend)
         .slice(0, 12);
+      
+      // Zero-sale campaigns: spend > $1 but $0 sales
+      intel.zeroSaleCampaigns = activeCamps
+        .filter(c => (c.spend || 0) > 1 && (c.sales || 0) === 0)
+        .map(c => ({ name: c.name || '', spend: c.spend || 0, clicks: c.clicks || 0, type: c.type || 'SP', state: c.state || '' }))
+        .sort((a, b) => b.spend - a.spend);
+      
+      // Stale campaign warning: all campaigns paused/archived with $0 spend but daily data shows active spend
+      const allCampsZeroSpend = campaigns.every(c => (c.spend || 0) === 0);
+      const hasRecentAdSpend = daysWithAds.length > 0;
+      intel.staleCampaignWarning = allCampsZeroSpend && hasRecentAdSpend;
     }
+    
+    // ─── ACTIONABLE: Zero-sale days & ACOS spikes (last 14d from allDaysData) ───
+    const last14Cutoff = (() => { const d = new Date(); d.setDate(d.getDate() - 14); return d.toISOString().slice(0, 10); })();
+    const last14Days = sortedDays.filter(d => d >= last14Cutoff);
+    
+    last14Days.forEach(d => {
+      const day = allDaysData[d];
+      if (!day) return;
+      const spend = day?.amazon?.adSpend || 0;
+      const rev = day?.amazon?.adRevenue || day?.amazon?.revenue || 0;
+      if (spend > 5 && rev === 0) {
+        intel.zeroSaleDays.push({ date: d, spend, platform: 'Amazon' });
+      }
+      const gSpend = day?.shopify?.googleSpend || day?.googleSpend || 0;
+      const mSpend = day?.shopify?.metaSpend || day?.metaSpend || 0;
+      const sRev = day?.shopify?.revenue || 0;
+      if (gSpend > 5 && sRev === 0) intel.zeroSaleDays.push({ date: d, spend: gSpend, platform: 'Google' });
+      if (mSpend > 5 && sRev === 0) intel.zeroSaleDays.push({ date: d, spend: mSpend, platform: 'Meta' });
+      
+      // ACOS spike: any day where ACOS > 50% with meaningful spend
+      const acos = rev > 0 ? (spend / rev) * 100 : (spend > 10 ? 999 : 0);
+      if (spend > 20 && acos > 50) {
+        intel.acosSpikeDays.push({ date: d, spend, rev, acos: acos > 999 ? 999 : acos });
+      }
+    });
+    intel.zeroSaleDays.sort((a, b) => b.spend - a.spend);
     
     // ─── ENRICHMENT: Overlay adsIntelData (API sync / deep analysis uploads) ───
     if (adsIntelData) {
@@ -698,6 +735,77 @@ const AdsView = ({
                   <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
                     <p className="text-slate-500 text-xs uppercase">Ad Spend</p>
                     <p className="text-xl font-bold text-white">{formatCurrency(amazonAdsInsights.summary.totalSpend)}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* ═══ ACTIONABLE ALERTS ═══ */}
+              
+              {/* Stale Campaign Data Warning */}
+              {amazonAdsInsights.staleCampaignWarning && (
+                <div className="bg-gradient-to-r from-amber-900/30 to-orange-900/20 rounded-xl border border-amber-500/40 p-4 flex items-center gap-4">
+                  <div className="p-2 bg-amber-500/20 rounded-lg"><AlertTriangle className="w-6 h-6 text-amber-400"/></div>
+                  <div className="flex-1">
+                    <p className="text-white font-semibold">Campaign CSV Is Stale</p>
+                    <p className="text-slate-400 text-sm">All {campaigns.length} campaigns show $0 spend, but your daily data shows active ad spend of {formatCurrency(amazonAdsInsights.summary?.totalSpend || 0)} over {amazonAdsInsights.summary?.daysCount || 0} days. Upload a fresh Campaign Report from Amazon Ads Console for accurate campaign-level insights.</p>
+                  </div>
+                  <button onClick={() => setAdsViewMode('upload')} className="px-3 py-2 bg-amber-600/40 hover:bg-amber-600/60 border border-amber-500/30 rounded-lg text-amber-300 text-xs font-medium whitespace-nowrap">Upload Fresh Data →</button>
+                </div>
+              )}
+              
+              {/* Zero-Sale Campaigns */}
+              {amazonAdsInsights.zeroSaleCampaigns.length > 0 && (
+                <div className="bg-gradient-to-r from-red-900/20 to-slate-800/30 rounded-xl border border-red-500/30 p-4">
+                  <h3 className="text-white font-semibold text-sm mb-2 flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-red-400"/>Campaigns With Zero Sales</h3>
+                  <p className="text-slate-400 text-xs mb-3">{amazonAdsInsights.zeroSaleCampaigns.length} campaign{amazonAdsInsights.zeroSaleCampaigns.length !== 1 ? 's' : ''} spent money but generated $0 in sales — total wasted: {formatCurrency(amazonAdsInsights.zeroSaleCampaigns.reduce((s, c) => s + c.spend, 0))}</p>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {amazonAdsInsights.zeroSaleCampaigns.map((c, i) => (
+                      <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg bg-red-900/10 border border-red-500/10">
+                        <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"/>
+                        <span className="text-white flex-1 truncate" title={c.name}>{c.name}</span>
+                        <span className="text-slate-500">{c.type}</span>
+                        <span className="text-slate-400">{c.clicks} clicks</span>
+                        <span className="text-red-400 font-semibold">{formatCurrency(c.spend)} → $0</span>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={() => { setAdsAiInput(`These campaigns spent money with zero sales: ${amazonAdsInsights.zeroSaleCampaigns.map(c => `${c.name} ($${c.spend.toFixed(2)}, ${c.clicks} clicks)`).join(', ')}. Should I pause them? What's wrong with each one? Give me specific action for each.`); setShowAdsAIChat(true); }}
+                    className="mt-3 px-3 py-1.5 bg-red-600/30 hover:bg-red-600/50 border border-red-500/30 rounded-lg text-red-300 text-xs font-medium">Diagnose With AI →</button>
+                </div>
+              )}
+
+              {/* Zero-Sale Days (Last 14 Days) */}
+              {amazonAdsInsights.zeroSaleDays.length > 0 && (
+                <div className="bg-gradient-to-r from-orange-900/15 to-slate-800/30 rounded-xl border border-orange-500/20 p-4">
+                  <h3 className="text-white font-semibold text-sm mb-2 flex items-center gap-2"><TrendingDown className="w-4 h-4 text-orange-400"/>Zero-Revenue Ad Days <span className="text-xs font-normal text-slate-500">— Last 14 Days</span></h3>
+                  <p className="text-slate-400 text-xs mb-3">{amazonAdsInsights.zeroSaleDays.length} instance{amazonAdsInsights.zeroSaleDays.length !== 1 ? 's' : ''} of ad spend with $0 attributed revenue — {formatCurrency(amazonAdsInsights.zeroSaleDays.reduce((s, d) => s + d.spend, 0))} potentially wasted</p>
+                  <div className="flex flex-wrap gap-2">
+                    {amazonAdsInsights.zeroSaleDays.map((d, i) => (
+                      <div key={i} className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg text-xs border border-orange-500/10">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${d.platform === 'Amazon' ? 'bg-orange-500' : d.platform === 'Google' ? 'bg-red-500' : 'bg-blue-500'}`}/>
+                        <span className="text-slate-300">{fmtDate(d.date)}</span>
+                        <span className="text-slate-500">{d.platform}</span>
+                        <span className="text-orange-400 font-semibold">{formatCurrency(d.spend)} → $0</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ACOS Spike Days (Last 14 Days) */}
+              {amazonAdsInsights.acosSpikeDays.length > 0 && (
+                <div className="bg-slate-800/30 rounded-xl border border-rose-500/20 p-4">
+                  <h3 className="text-white font-semibold text-sm mb-2 flex items-center gap-2"><Flame className="w-4 h-4 text-rose-400"/>ACOS Spike Days <span className="text-xs font-normal text-slate-500">— Last 14 Days, Amazon ACOS &gt; 50%</span></h3>
+                  <div className="flex flex-wrap gap-2">
+                    {amazonAdsInsights.acosSpikeDays.map((d, i) => (
+                      <div key={i} className="inline-flex items-center gap-2 px-3 py-1.5 bg-rose-900/15 rounded-lg text-xs border border-rose-500/15">
+                        <span className="text-slate-300">{fmtDate(d.date)}</span>
+                        <span className="text-white">{formatCurrency(d.spend)} spend</span>
+                        <span className="text-slate-500">→</span>
+                        <span className="text-rose-400 font-bold">{d.acos >= 999 ? '∞' : d.acos.toFixed(0) + '%'} ACOS</span>
+                        {d.rev > 0 && <span className="text-slate-500">(${d.rev.toFixed(0)} rev)</span>}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

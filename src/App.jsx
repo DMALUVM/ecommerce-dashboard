@@ -15462,7 +15462,11 @@ Reference the full data from the prior analysis. Be concise but still specific w
         const sourcesList = [];
         const sortedDaysLocal = Object.keys(allDaysData || {}).sort();
         if (sortedDaysLocal.length > 0) sourcesList.push(`• Dashboard Daily KPIs: ${sortedDaysLocal.length} days (${sortedDaysLocal[0]} to ${sortedDaysLocal[sortedDaysLocal.length-1]}) — SP-API + Shopify`);
-        if (amazonCampaigns?.campaigns?.length > 0) sourcesList.push(`• Amazon SP-API Campaigns: ${amazonCampaigns.campaigns.length} campaigns (live data)`);
+        if (amazonCampaigns?.campaigns?.length > 0) {
+          const activeCamps = amazonCampaigns.campaigns.filter(c => c.state === 'ENABLED' && (c.spend || 0) > 0);
+          const lastUpdated = amazonCampaigns.lastUpdated ? ` (uploaded ${amazonCampaigns.lastUpdated.slice(0, 10)})` : '';
+          sourcesList.push(`• Amazon Campaign CSV${lastUpdated}: ${amazonCampaigns.campaigns.length} campaigns (${activeCamps.length} active with spend)`);
+        }
         if (adsIntelData) {
           ['amazon','google','meta','shopify'].forEach(plat => {
             if (!adsIntelData[plat] || typeof adsIntelData[plat] !== 'object') return;

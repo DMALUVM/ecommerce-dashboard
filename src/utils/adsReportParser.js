@@ -1053,11 +1053,18 @@ export const buildComprehensiveAdsPrompt = (adsIntelData, dailySalesSnippet, ama
     sections.push(`\n## LAST 30 DAYS OVERVIEW (from daily sales data)\n- Amazon: $${amzSpend.toFixed(0)} ad spend → $${amzRev.toFixed(0)} revenue (TACOS: ${amzRev > 0 ? ((amzSpend/amzRev)*100).toFixed(1) : 'N/A'}%)\n- Google: $${googleSpend.toFixed(0)} ad spend\n- Meta: $${metaSpend.toFixed(0)} ad spend\n- Shopify Revenue: $${shopRev.toFixed(0)}\n- Total Ad Spend: $${(amzSpend+googleSpend+metaSpend).toFixed(0)}\n- Total Revenue: $${(amzRev+shopRev).toFixed(0)}\n- Combined ROAS: ${(amzSpend+googleSpend+metaSpend) > 0 ? ((amzRev+shopRev)/(amzSpend+googleSpend+metaSpend)).toFixed(2) : 'N/A'}x`);
   }
   
-  // ── Amazon SP-API campaign data ──
+  // ── Amazon campaign data (from CSV upload, not live API) ──
   if (amazonCampaigns?.campaigns?.length > 0) {
     const camps = amazonCampaigns.campaigns;
-    const active = camps.filter(c => c.state === 'ENABLED');
-    sections.push(`\n## AMAZON CAMPAIGNS (SP-API)\n${camps.length} total campaigns (${active.length} enabled)\n${camps.slice(0, 20).map(c => `- ${c.name}: ${c.state} | Budget: $${c.budget || 0} | Spend: $${(c.spend || 0).toFixed(2)} | ROAS: ${(c.roas || 0).toFixed(2)}x`).join('\n')}`);
+    const active = camps.filter(c => c.state === 'ENABLED' && (c.spend || 0) > 0);
+    const paused = camps.filter(c => c.state !== 'ENABLED');
+    const lastUpdated = amazonCampaigns.lastUpdated ? ` (uploaded ${amazonCampaigns.lastUpdated.slice(0, 10)})` : '';
+    
+    if (active.length > 0) {
+      sections.push(`\n## AMAZON CAMPAIGNS (from CSV upload${lastUpdated})\n${camps.length} total campaigns (${active.length} active with spend, ${paused.length} paused/archived)\n\nACTIVE CAMPAIGNS:\n${active.sort((a, b) => (b.spend || 0) - (a.spend || 0)).slice(0, 20).map(c => `- ${c.name}: ${c.type || 'SP'} | Spend: $${(c.spend || 0).toFixed(2)} | Sales: $${(c.sales || 0).toFixed(2)} | ROAS: ${(c.roas || 0).toFixed(2)}x | ACOS: ${c.acos ? c.acos.toFixed(1) + '%' : 'N/A'} | Orders: ${c.orders || 0}`).join('\n')}`);
+    } else {
+      sections.push(`\n## AMAZON CAMPAIGNS (from CSV upload${lastUpdated})\n⚠️ NOTE: All ${camps.length} campaigns show as paused/archived/$0 spend. This CSV may be outdated. The daily sales data shows active ad spend, so live campaigns exist but are not reflected in this CSV export. User should upload a fresh campaign report from Amazon Ads Console.\n\nArchived/Paused campaigns for reference:\n${camps.slice(0, 10).map(c => `- ${c.name}: ${c.state} | Type: ${c.type || '?'}`).join('\n')}`);
+    }
   }
   
   // ── Tier 2: Deep analysis data ──
