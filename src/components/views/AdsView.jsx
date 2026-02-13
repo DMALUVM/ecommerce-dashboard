@@ -73,6 +73,7 @@ const AdsView = ({
   const [uploadStatus, setUploadStatus] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [showDataSources, setShowDataSources] = useState(false);
+  const [intelDateRange, setIntelDateRange] = useState(30);
   const fileInputRef = useRef(null);
 
   const campaigns = amazonCampaigns?.campaigns || [];
@@ -116,13 +117,35 @@ const AdsView = ({
 
   // ═══ AMAZON ADS INTELLIGENCE (from API sync data) ═══
   const amazonAdsInsights = useMemo(() => {
-    const intel = { hasData: false, wastedSpend: [], topWinners: [], topCampaigns: [], skuPerformance: [], placementInsights: null, negativeKeywords: [], summary: null };
+    const intel = { hasData: false, wastedSpend: [], topWinners: [], topCampaigns: [], skuPerformance: [], placementInsights: null, negativeKeywords: [], summary: null, dateRange: { earliest: null, latest: null, daysAvailable: 0 } };
     const amz = adsIntelData?.amazon;
     if (!amz) return intel;
     
+    // Date range filter
+    const cutoffDate = intelDateRange === 'all' ? null : (() => {
+      const d = new Date(); d.setDate(d.getDate() - intelDateRange); return d.toISOString().slice(0, 10);
+    })();
+    const inRange = (r) => {
+      if (!cutoffDate) return true;
+      const d = r['Date'] || r['date'] || '';
+      return d >= cutoffDate;
+    };
+    
+    // Detect date range of available data
+    const allDates = new Set();
+    ['sp_search_terms', 'sp_campaigns', 'sp_advertised_product', 'sp_placement', 'sp_targeting'].forEach(key => {
+      (amz[key]?.records || []).forEach(r => { const d = r['Date'] || r['date']; if (d) allDates.add(d); });
+    });
+    if (allDates.size > 0) {
+      const sorted = [...allDates].sort();
+      intel.dateRange.earliest = sorted[0];
+      intel.dateRange.latest = sorted[sorted.length - 1];
+      intel.dateRange.daysAvailable = sorted.length;
+    }
+    
     // --- Search Terms Analysis ---
-    const searchTerms = amz.sp_search_terms?.records;
-    if (searchTerms?.length > 0) {
+    const searchTerms = (amz.sp_search_terms?.records || []).filter(inRange);
+    if (searchTerms.length > 0) {
       intel.hasData = true;
       // Aggregate by search term (API gives daily rows)
       const termMap = {};
@@ -172,8 +195,8 @@ const AdsView = ({
     }
     
     // --- Campaign Analysis ---
-    const dailyOverview = amz.sp_campaigns?.records;
-    if (dailyOverview?.length > 0) {
+    const dailyOverview = (amz.sp_campaigns?.records || []).filter(inRange);
+    if (dailyOverview.length > 0) {
       intel.hasData = true;
       const campMap = {};
       dailyOverview.forEach(r => {
@@ -194,8 +217,8 @@ const AdsView = ({
     }
     
     // --- SKU Performance ---
-    const skuData = amz.sp_advertised_product?.records;
-    if (skuData?.length > 0) {
+    const skuData = (amz.sp_advertised_product?.records || []).filter(inRange);
+    if (skuData.length > 0) {
       intel.hasData = true;
       const skuMap = {};
       skuData.forEach(r => {
@@ -216,8 +239,8 @@ const AdsView = ({
     }
     
     // --- Placement Insights ---
-    const placementData = amz.sp_placement?.records;
-    if (placementData?.length > 0) {
+    const placementData = (amz.sp_placement?.records || []).filter(inRange);
+    if (placementData.length > 0) {
       intel.hasData = true;
       const placeMap = {};
       placementData.forEach(r => {
@@ -236,7 +259,7 @@ const AdsView = ({
     }
     
     return intel;
-  }, [adsIntelData]);
+  }, [adsIntelData, intelDateRange]);
 
   // Period navigation constants
   const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -514,8 +537,24 @@ const AdsView = ({
           {amazonAdsInsights.hasData && (
             <div className="mb-6 space-y-4">
               <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-3">
                 <h2 className="text-lg font-bold text-white flex items-center gap-2"><Flame className="w-5 h-5 text-orange-400"/>Amazon Ads Intelligence</h2>
-                {amazonAdsInsights.summary && <span className="text-xs text-slate-500">{amazonAdsInsights.summary.totalTerms.toLocaleString()} search terms analyzed</span>}
+                <div className="flex items-center gap-2">
+                  {[7, 14, 30, 60, 90, 'all'].map(range => (
+                    <button key={range} onClick={() => setIntelDateRange(range)}
+                      className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${intelDateRange === range ? 'bg-orange-600 text-white shadow-lg shadow-orange-500/20' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
+                      {range === 'all' ? 'All' : `${range}d`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {amazonAdsInsights.dateRange.earliest && (
+                <p className="text-xs text-slate-500 mt-1">
+                  {intelDateRange === 'all' ? `All data: ${amazonAdsInsights.dateRange.earliest} → ${amazonAdsInsights.dateRange.latest}` : `Last ${intelDateRange} days`}
+                  {amazonAdsInsights.summary ? ` · ${amazonAdsInsights.summary.totalTerms.toLocaleString()} search terms` : ''}
+                  {` · ${amazonAdsInsights.dateRange.daysAvailable} days available`}
+                </p>
+              )}
               </div>
               
               {/* Alert Banner: Wasted Spend */}

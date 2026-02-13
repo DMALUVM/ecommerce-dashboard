@@ -2296,7 +2296,7 @@ const SettingsView = ({
                       let retries = 0;
                       const syncBody = {
                         syncType: 'daily',
-                        daysBack: 30,
+                        daysBack: 60,
                         adsClientId: amazonCredentials.adsClientId,
                         adsClientSecret: amazonCredentials.adsClientSecret,
                         adsRefreshToken: amazonCredentials.adsRefreshToken,

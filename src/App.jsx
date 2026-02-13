@@ -11560,7 +11560,7 @@ const savePeriods = async (d) => {
               console.log('[AutoSync] Amazon Ads: starting background sync (non-blocking)...');
               const adsSyncBody = {
                 syncType: 'daily',
-                daysBack: 30,
+                daysBack: 60,
                 adsClientId: amazonCredentials.adsClientId,
                 adsClientSecret: amazonCredentials.adsClientSecret,
                 adsRefreshToken: amazonCredentials.adsRefreshToken,
