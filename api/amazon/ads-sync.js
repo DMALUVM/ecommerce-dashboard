@@ -89,7 +89,7 @@ export default async function handler(req, res) {
     const response = await fetch(`${ADS_BASE}${endpoint}`, opts);
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`Ads API ${response.status}: ${errText.slice(0, 200)}`);
+      throw new Error(`Ads API ${response.status}: ${errText.slice(0, 2000)}`);
     }
     const ct = response.headers.get('content-type') || '';
     return ct.includes('application/json') ? response.json() : response.text();
@@ -189,7 +189,7 @@ export default async function handler(req, res) {
 
       // ---- Create all 8 report types ----
       const REPORT_SPECS = [
-        // --- SP Reports ---
+        // --- SP Reports (v3 column names) ---
         {
           key: 'spCampaigns',
           label: 'SP Campaigns',
@@ -197,7 +197,7 @@ export default async function handler(req, res) {
           reportTypeId: 'spCampaigns',
           groupBy: ['campaign'],
           columns: ['campaignName', 'campaignId', 'campaignStatus', 'campaignBudgetAmount', 'campaignBudgetType',
-            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSold7d',
+            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSoldClicks7d',
             'costPerClick', 'clickThroughRate'],
         },
         {
@@ -208,7 +208,7 @@ export default async function handler(req, res) {
           groupBy: ['advertiser'],
           columns: ['campaignName', 'campaignId', 'adGroupName', 'adGroupId',
             'advertisedAsin', 'advertisedSku',
-            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSold7d',
+            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSoldClicks7d',
             'costPerClick', 'clickThroughRate'],
         },
         {
@@ -219,7 +219,7 @@ export default async function handler(req, res) {
           groupBy: ['searchTerm'],
           columns: ['campaignName', 'campaignId', 'adGroupName', 'adGroupId',
             'keyword', 'keywordType', 'searchTerm', 'matchType',
-            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSold7d',
+            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSoldClicks7d',
             'costPerClick', 'clickThroughRate'],
         },
         {
@@ -229,8 +229,8 @@ export default async function handler(req, res) {
           reportTypeId: 'spTargeting',
           groupBy: ['targeting'],
           columns: ['campaignName', 'campaignId', 'adGroupName', 'adGroupId',
-            'targetingExpression', 'targetingType', 'keywordType',
-            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSold7d',
+            'keywordType', 'keyword',
+            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSoldClicks7d',
             'costPerClick', 'clickThroughRate', 'topOfSearchImpressionShare'],
         },
         {
@@ -240,9 +240,9 @@ export default async function handler(req, res) {
           reportTypeId: 'spCampaigns',
           groupBy: ['campaignPlacement'],
           columns: ['campaignName', 'campaignId', 'placementClassification',
-            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSold7d'],
+            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSoldClicks7d'],
         },
-        // --- SB Reports ---
+        // --- SB Reports (v3 column names — different from SP) ---
         {
           key: 'sbCampaigns',
           label: 'SB Campaigns',
@@ -250,8 +250,8 @@ export default async function handler(req, res) {
           reportTypeId: 'sbCampaigns',
           groupBy: ['campaign'],
           columns: ['campaignName', 'campaignId', 'campaignStatus', 'campaignBudgetAmount',
-            'date', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d', 'unitsSold14d',
-            'costPerClick', 'clickThroughRate'],
+            'date', 'impressions', 'clicks', 'cost',
+            'purchasesClicks14d', 'salesClicks14d', 'unitsSoldClicks14d'],
         },
         {
           key: 'sbSearchTerms',
@@ -260,11 +260,11 @@ export default async function handler(req, res) {
           reportTypeId: 'sbSearchTerm',
           groupBy: ['searchTerm'],
           columns: ['campaignName', 'campaignId',
-            'searchTerm', 'matchType',
-            'date', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d', 'unitsSold14d',
-            'costPerClick', 'clickThroughRate'],
+            'searchTerm',
+            'date', 'impressions', 'clicks', 'cost',
+            'purchasesClicks14d', 'salesClicks14d', 'unitsSoldClicks14d'],
         },
-        // --- SD Reports ---
+        // --- SD Reports (v3 column names — different from SP & SB) ---
         {
           key: 'sdCampaigns',
           label: 'SD Campaigns',
@@ -272,8 +272,9 @@ export default async function handler(req, res) {
           reportTypeId: 'sdCampaigns',
           groupBy: ['campaign'],
           columns: ['campaignName', 'campaignId', 'campaignStatus', 'campaignBudgetAmount',
-            'date', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d', 'unitsSold14d',
-            'dpv14d', 'costPerClick', 'clickThroughRate'],
+            'date', 'impressions', 'clicks', 'cost',
+            'purchasesClicks14d', 'salesClicks14d', 'unitsSoldClicks14d',
+            'detailPageViewsClicks14d'],
         },
       ];
 
@@ -294,7 +295,47 @@ export default async function handler(req, res) {
             },
           };
 
-          const created = await adsRequest(token, '/reporting/reports', 'POST', body);
+          let created;
+          try {
+            created = await adsRequest(token, '/reporting/reports', 'POST', body);
+          } catch (firstErr) {
+            const errMsg = firstErr.message || '';
+            // If invalid columns, parse allowed values and retry with only valid ones
+            if (errMsg.includes('invalid values') && errMsg.includes('Allowed values')) {
+              const allowedMatch = errMsg.match(/Allowed values:\s*\(([^)]+)\)/);
+              if (allowedMatch) {
+                const allowed = new Set(allowedMatch[1].split(',').map(s => s.trim()));
+                const validColumns = spec.columns.filter(c => allowed.has(c));
+                if (validColumns.length >= 3) { // Need at least date + a couple metrics
+                  console.log(`[AdsSync] ${spec.label}: retrying with ${validColumns.length}/${spec.columns.length} valid columns`);
+                  body.configuration.columns = validColumns;
+                  created = await adsRequest(token, '/reporting/reports', 'POST', body);
+                } else {
+                  // Try with just the core columns that should always work
+                  const coreColumns = ['date', 'impressions', 'clicks', 'cost', 'campaignName', 'campaignId']
+                    .filter(c => allowed.has(c));
+                  // Add any sales/purchases columns available
+                  for (const col of allowed) {
+                    if (col.startsWith('sales') || col.startsWith('purchases') || col.startsWith('unitsSold') || col.startsWith('dpv') || col.startsWith('detailPage')) {
+                      coreColumns.push(col);
+                    }
+                  }
+                  if (coreColumns.length >= 3) {
+                    console.log(`[AdsSync] ${spec.label}: fallback with ${coreColumns.length} core columns from allowed set`);
+                    body.configuration.columns = coreColumns;
+                    created = await adsRequest(token, '/reporting/reports', 'POST', body);
+                  } else {
+                    throw firstErr;
+                  }
+                }
+              } else {
+                throw firstErr;
+              }
+            } else {
+              throw firstErr;
+            }
+          }
+
           createdReports.push({
             reportId: created.reportId,
             reportKey: spec.key,
@@ -422,6 +463,11 @@ export default async function handler(req, res) {
     const transformedReports = {};
     let totalRows = 0;
 
+    // Helper: get value from row using v3 column names (with fallback to v2 names)
+    const getSales = (r, w) => parseFloat(r[`salesClicks${w}`] || r[`sales${w}`]) || 0;
+    const getPurchases = (r, w) => parseInt(r[`purchasesClicks${w}`] || r[`purchases${w}`]) || 0;
+    const getUnits = (r, w) => parseInt(r[`unitsSoldClicks${w}`] || r[`unitsSold${w}`]) || 0;
+
     // --- Daily Overview (combine SP+SB+SD campaigns) ---
     {
       const dailyMap = {};
@@ -431,9 +477,9 @@ export default async function handler(req, res) {
           if (!d) continue;
           if (!dailyMap[d]) dailyMap[d] = { Spend: 0, Revenue: 0, Orders: 0, Impressions: 0, Clicks: 0, Units: 0 };
           dailyMap[d].Spend += parseFloat(r.cost) || 0;
-          dailyMap[d].Revenue += parseFloat(r[`sales${attrWindow}`]) || 0;
-          dailyMap[d].Orders += parseInt(r[`purchases${attrWindow}`]) || 0;
-          dailyMap[d].Units += parseInt(r[`unitsSold${attrWindow}`]) || 0;
+          dailyMap[d].Revenue += getSales(r, attrWindow);
+          dailyMap[d].Orders += getPurchases(r, attrWindow);
+          dailyMap[d].Units += getUnits(r, attrWindow);
           dailyMap[d].Impressions += parseInt(r.impressions) || 0;
           dailyMap[d].Clicks += parseInt(r.clicks) || 0;
         }
@@ -469,9 +515,9 @@ export default async function handler(req, res) {
         'Impressions': parseInt(r.impressions) || 0,
         'Clicks': parseInt(r.clicks) || 0,
         'Spend': parseFloat(r.cost) || 0,
-        '7 Day Total Sales': parseFloat(r.sales7d) || 0,
-        '7 Day Total Orders (#)': parseInt(r.purchases7d) || 0,
-        '7 Day Total Units (#)': parseInt(r.unitsSold7d) || 0,
+        '7 Day Total Sales': getSales(r, '7d'),
+        '7 Day Total Orders (#)': getPurchases(r, '7d'),
+        '7 Day Total Units (#)': getUnits(r, '7d'),
       }));
       totalRows += transformedReports.spAdvertised.length;
     }
@@ -488,9 +534,9 @@ export default async function handler(req, res) {
         'Impressions': parseInt(r.impressions) || 0,
         'Clicks': parseInt(r.clicks) || 0,
         'Spend': parseFloat(r.cost) || 0,
-        '7 Day Total Sales': parseFloat(r.sales7d) || 0,
-        '7 Day Total Orders (#)': parseInt(r.purchases7d) || 0,
-        '7 Day Total Units (#)': parseInt(r.unitsSold7d) || 0,
+        '7 Day Total Sales': getSales(r, '7d'),
+        '7 Day Total Orders (#)': getPurchases(r, '7d'),
+        '7 Day Total Units (#)': getUnits(r, '7d'),
       }));
       totalRows += transformedReports.spSearchTerms.length;
     }
@@ -501,14 +547,14 @@ export default async function handler(req, res) {
         'Date': r.date,
         'Campaign Name': r.campaignName || '',
         'Ad Group Name': r.adGroupName || '',
-        'Targeting': r.targetingExpression || '',
+        'Targeting': r.keyword || r.targetingExpression || '',
         'Match Type': r.keywordType || r.targetingType || '',
         'Impressions': parseInt(r.impressions) || 0,
         'Clicks': parseInt(r.clicks) || 0,
         'Spend': parseFloat(r.cost) || 0,
-        '7 Day Total Sales': parseFloat(r.sales7d) || 0,
-        '7 Day Total Orders (#)': parseInt(r.purchases7d) || 0,
-        '7 Day Total Units (#)': parseInt(r.unitsSold7d) || 0,
+        '7 Day Total Sales': getSales(r, '7d'),
+        '7 Day Total Orders (#)': getPurchases(r, '7d'),
+        '7 Day Total Units (#)': getUnits(r, '7d'),
         'Top-of-search Impression Share': parseFloat(r.topOfSearchImpressionShare) || 0,
       }));
       totalRows += transformedReports.spTargeting.length;
@@ -523,9 +569,9 @@ export default async function handler(req, res) {
         'Impressions': parseInt(r.impressions) || 0,
         'Clicks': parseInt(r.clicks) || 0,
         'Spend': parseFloat(r.cost) || 0,
-        '7 Day Total Sales': parseFloat(r.sales7d) || 0,
-        '7 Day Total Orders (#)': parseInt(r.purchases7d) || 0,
-        '7 Day Total Units (#)': parseInt(r.unitsSold7d) || 0,
+        '7 Day Total Sales': getSales(r, '7d'),
+        '7 Day Total Orders (#)': getPurchases(r, '7d'),
+        '7 Day Total Units (#)': getUnits(r, '7d'),
       }));
       totalRows += transformedReports.spPlacement.length;
     }
@@ -540,8 +586,8 @@ export default async function handler(req, res) {
         'Impressions': parseInt(r.impressions) || 0,
         'Clicks': parseInt(r.clicks) || 0,
         'Spend': parseFloat(r.cost) || 0,
-        '14 Day Total Sales': parseFloat(r.sales14d) || 0,
-        '14 Day Total Orders (#)': parseInt(r.purchases14d) || 0,
+        '14 Day Total Sales': getSales(r, '14d'),
+        '14 Day Total Orders (#)': getPurchases(r, '14d'),
       }));
       totalRows += transformedReports.sbSearchTerms.length;
     }
@@ -555,9 +601,9 @@ export default async function handler(req, res) {
         'Impressions': parseInt(r.impressions) || 0,
         'Clicks': parseInt(r.clicks) || 0,
         'Spend': parseFloat(r.cost) || 0,
-        '14 Day Total Sales': parseFloat(r.sales14d) || 0,
-        '14 Day Total Orders (#)': parseInt(r.purchases14d) || 0,
-        '14 Day Detail Page Views (DPV)': parseInt(r.dpv14d) || 0,
+        '14 Day Total Sales': getSales(r, '14d'),
+        '14 Day Total Orders (#)': getPurchases(r, '14d'),
+        '14 Day Detail Page Views (DPV)': parseInt(r.detailPageViewsClicks14d || r.dpv14d) || 0,
         '14 Day New-to-brand Orders (#)': 0,
         '14 Day New-to-brand Sales': 0,
       }));
@@ -659,12 +705,12 @@ export default async function handler(req, res) {
           campMap[key] = { name, id: r.campaignId || '', type: adType, status: r.campaignStatus || '', budget: parseFloat(r.campaignBudgetAmount) || 0, spend: 0, revenue: 0, orders: 0, units: 0, impressions: 0, clicks: 0, dpv: 0, days: new Set() };
         }
         campMap[key].spend += parseFloat(r.cost) || 0;
-        campMap[key].revenue += parseFloat(r[`sales${attrWindow}`]) || 0;
-        campMap[key].orders += parseInt(r[`purchases${attrWindow}`]) || 0;
-        campMap[key].units += parseInt(r[`unitsSold${attrWindow}`]) || 0;
+        campMap[key].revenue += getSales(r, attrWindow);
+        campMap[key].orders += getPurchases(r, attrWindow);
+        campMap[key].units += getUnits(r, attrWindow);
         campMap[key].impressions += parseInt(r.impressions) || 0;
         campMap[key].clicks += parseInt(r.clicks) || 0;
-        campMap[key].dpv += parseInt(r.dpv14d || 0) || 0;
+        campMap[key].dpv += parseInt(r.detailPageViewsClicks14d || r.dpv14d || 0) || 0;
         if (r.date) campMap[key].days.add(r.date);
         if (r.campaignStatus) campMap[key].status = r.campaignStatus;
       }
