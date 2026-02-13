@@ -18,6 +18,7 @@ import {
   LZCompress, COMPRESSED_KEYS, lsGet, lsSet, trimIntelData
 } from './utils/storage';
 import { AI_MODELS, AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, AI_MODEL_OPTIONS, getModelTier, getModelLabel } from './utils/config';
+import { sanitizeHtml } from './utils/sanitize';
 
 // Extracted UI components
 import NotificationCenter from './components/ui/NotificationCenter';
@@ -2072,6 +2073,8 @@ const handleLogout = async () => {
   // Listen for QBO OAuth callback from popup window
   useEffect(() => {
     const handleQBOMessage = (event) => {
+      // SEC-007: Only accept messages from our own origin (popup is same domain)
+      if (event.origin !== window.location.origin) return;
       if (event.data?.type === 'QBO_AUTH_SUCCESS') {
         setQboCredentials(prev => ({
           ...prev,
@@ -4468,6 +4471,23 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   if (cloudDataObj.adsIntelData) cloudDataObj.adsIntelData = trimIntelData(cloudDataObj.adsIntelData, 150);
   if (cloudDataObj.dtcIntelData) cloudDataObj.dtcIntelData = trimIntelData(cloudDataObj.dtcIntelData, 150);
   
+  // SEC-003: Strip integration credentials from cloud saves
+  // Credentials stay in memory + localStorage for sync; they never go to Supabase
+  const CREDENTIAL_KEYS = ['shopifyCredentials', 'packiyoCredentials', 'amazonCredentials', 'qboCredentials'];
+  CREDENTIAL_KEYS.forEach(key => {
+    if (cloudDataObj[key]) {
+      // Keep only non-sensitive fields (connected status, storeUrl, etc.)
+      const cred = cloudDataObj[key];
+      cloudDataObj[key] = {
+        connected: cred.connected || false,
+        lastSync: cred.lastSync || null,
+        ...(cred.storeUrl && { storeUrl: cred.storeUrl }),
+        ...(cred.realmId && { realmId: cred.realmId }),
+        ...(cred.customerId && { customerId: cred.customerId }),
+      };
+    }
+  });
+  
   const payload = {
     user_id: session.user.id,
     data: { 
@@ -4817,10 +4837,25 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages && cloud.aiMessages.length > 0) writeToLocal('ecommerce_ai_chat_history_v1', JSON.stringify(cloud.aiMessages));
     if (cloud.bankingData) writeToLocal('ecommerce_banking_v1', JSON.stringify(cloud.bankingData));
     if (cloud.confirmedRecurring) writeToLocal('ecommerce_recurring_v1', JSON.stringify(cloud.confirmedRecurring));
-    if (cloud.shopifyCredentials && (cloud.shopifyCredentials.connected || cloud.shopifyCredentials.storeUrl)) writeToLocal('ecommerce_shopify_creds_v1', JSON.stringify(cloud.shopifyCredentials));
-    if (cloud.packiyoCredentials && (cloud.packiyoCredentials.connected || cloud.packiyoCredentials.apiKey)) writeToLocal('ecommerce_packiyo_creds_v1', JSON.stringify(cloud.packiyoCredentials));
-    if (cloud.amazonCredentials && (cloud.amazonCredentials.connected || cloud.amazonCredentials.refreshToken)) writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify(cloud.amazonCredentials));
-    if (cloud.qboCredentials && (cloud.qboCredentials.connected || cloud.qboCredentials.accessToken)) writeToLocal('ecommerce_qbo_creds_v1', JSON.stringify(cloud.qboCredentials));
+    // SEC-003: Cloud saves no longer contain secrets, so only restore connection status
+    // Actual credentials remain in localStorage from the original connection flow
+    // Only set connected status if we don't already have full credentials locally
+    if (cloud.shopifyCredentials?.connected) {
+      const local = JSON.parse(lsGet('ecommerce_shopify_creds_v1') || '{}');
+      if (!local.clientSecret && !local.storeUrl) writeToLocal('ecommerce_shopify_creds_v1', JSON.stringify({ ...local, connected: cloud.shopifyCredentials.connected, lastSync: cloud.shopifyCredentials.lastSync }));
+    }
+    if (cloud.packiyoCredentials?.connected) {
+      const local = JSON.parse(lsGet('ecommerce_packiyo_creds_v1') || '{}');
+      if (!local.apiKey) writeToLocal('ecommerce_packiyo_creds_v1', JSON.stringify({ ...local, connected: cloud.packiyoCredentials.connected, lastSync: cloud.packiyoCredentials.lastSync }));
+    }
+    if (cloud.amazonCredentials?.connected) {
+      const local = JSON.parse(lsGet('ecommerce_amazon_creds_v1') || '{}');
+      if (!local.refreshToken) writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify({ ...local, connected: cloud.amazonCredentials.connected, lastSync: cloud.amazonCredentials.lastSync }));
+    }
+    if (cloud.qboCredentials?.connected) {
+      const local = JSON.parse(lsGet('ecommerce_qbo_creds_v1') || '{}');
+      if (!local.accessToken) writeToLocal('ecommerce_qbo_creds_v1', JSON.stringify({ ...local, connected: cloud.qboCredentials.connected, lastSync: cloud.qboCredentials.lastSync }));
+    }
 
     setCloudStatus('');
     return { ok: true, reason: 'success', stores: loadedStores };
@@ -18083,7 +18118,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
                   // Double newlines to breaks
                   html = html.replace(/\n\n/g, '<br/>');
                   
-                  return html;
+                  return sanitizeHtml(html);
                 })()
               }} />
             </div>

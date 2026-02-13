@@ -7,6 +7,8 @@ export const config = {
 
 // Valid model prefixes we accept
 const VALID_MODEL_PREFIXES = ['claude-sonnet', 'claude-opus', 'claude-haiku'];
+const MAX_TOKENS_CEILING = 16000; // Hard ceiling — client cannot exceed this
+const MAX_PAYLOAD_BYTES = 1_500_000; // ~1.5 MB max request body
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -14,6 +16,12 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Enforce payload size limit
+    const rawBody = JSON.stringify(req.body || {});
+    if (rawBody.length > MAX_PAYLOAD_BYTES) {
+      return res.status(413).json({ error: `Request too large (${Math.round(rawBody.length / 1024)}KB). Max ${Math.round(MAX_PAYLOAD_BYTES / 1024)}KB.` });
+    }
+
     const { system, messages, model = 'claude-sonnet-4-5-20250929', max_tokens = 4000 } = req.body || {};
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -25,13 +33,19 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured. Add it to Vercel Environment Variables.' });
     }
 
-    // Validate model string
+    // Validate model string — reject unknown models
     const isValidModel = VALID_MODEL_PREFIXES.some(prefix => model.startsWith(prefix));
-    const safeModel = isValidModel ? model : 'claude-sonnet-4-5-20250929';
+    if (!isValidModel) {
+      return res.status(400).json({ error: `Invalid model "${model}". Allowed prefixes: ${VALID_MODEL_PREFIXES.join(', ')}` });
+    }
+    const safeModel = model;
+
+    // Clamp max_tokens to ceiling — never trust client value
+    const safeMaxTokens = Math.min(Math.max(1, parseInt(max_tokens) || 4000), MAX_TOKENS_CEILING);
 
     // Estimate input size for logging
     const inputChars = JSON.stringify(messages).length + (system?.length || 0);
-    console.log(`[chat.js] model=${safeModel}, messages=${messages.length}, ~${Math.round(inputChars/4)}tok input, max_tokens=${max_tokens}`);
+    console.log(`[chat.js] model=${safeModel}, messages=${messages.length}, ~${Math.round(inputChars/4)}tok input, max_tokens=${safeMaxTokens}${safeMaxTokens !== max_tokens ? ` (clamped from ${max_tokens})` : ''}`);
 
     // Set headers for SSE streaming
     res.setHeader('Content-Type', 'text/event-stream');
@@ -50,7 +64,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: safeModel,
-        max_tokens,
+        max_tokens: safeMaxTokens,
         messages,
         stream: true,
         ...(system && { system }),

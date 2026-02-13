@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { Brain, X, Upload, FileSpreadsheet, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, Eye, ShoppingCart, Zap, Download, FileText, Loader2, Archive } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
 import { AI_DEFAULT_MODEL } from '../../utils/config';
+import { sanitizeHtml } from '../../utils/sanitize';
 
 const REPORT_TYPES = [
   { key: 'dailyOverview', label: 'Daily Ads Overview', icon: TrendingUp, color: 'yellow', desc: 'Seller Central daily ads overview (recent 30d)' },
@@ -1583,7 +1584,7 @@ const AmazonAdsIntelModal = ({
                 [&_code]:bg-slate-800 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-emerald-400 [&_code]:text-xs
                 [&_blockquote]:border-l-2 [&_blockquote]:border-amber-500 [&_blockquote]:pl-4 [&_blockquote]:text-amber-200
               ">
-                <div dangerouslySetInnerHTML={{ __html: renderMarkdown(actionReport) }} />
+                <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(renderMarkdown(actionReport)) }} />
               </div>
             </div>
           )}
@@ -1767,7 +1768,7 @@ const AmazonAdsIntelModal = ({
                         </div>
                       </div>
                       <div className="bg-slate-950 border border-slate-700 rounded-xl p-5 max-h-[50vh] overflow-y-auto prose prose-invert prose-sm max-w-none">
-                        <div dangerouslySetInnerHTML={{ __html: renderMarkdown(actionReport) }} />
+                        <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(renderMarkdown(actionReport)) }} />
                       </div>
                     </div>
                   )}

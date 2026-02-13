@@ -4,6 +4,7 @@
 // ============================================================
 import React, { useState, useMemo } from 'react';
 import { Clock, FileText, ChevronDown, ChevronUp, CheckCircle2, Circle, ArrowRight, Play, Trash2, Filter, Download, CheckSquare } from 'lucide-react';
+import { sanitizeHtml } from './utils/sanitize';
 
 // ============ REPORT HISTORY LIST ============
 const ReportHistoryPanel = ({ reportHistory, onSelect, onCompare, selectedId, theme }) => {
@@ -499,7 +500,7 @@ const ReportsAndActionsView = ({
               </div>
               {selectedReport.content && (
                 <div className={`prose prose-sm max-w-none ${light ? '' : 'prose-invert'} max-h-96 overflow-y-auto rounded-lg p-4 ${light ? 'bg-slate-50' : 'bg-slate-900/50'}`}
-                  dangerouslySetInnerHTML={{ __html: selectedReport.contentHtml || selectedReport.content.replace(/\n/g, '<br/>') }} />
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(selectedReport.contentHtml || selectedReport.content.replace(/\n/g, '<br/>')) }} />
               )}
             </div>
           )}

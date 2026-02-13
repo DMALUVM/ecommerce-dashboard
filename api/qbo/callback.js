@@ -133,7 +133,7 @@ export default async function handler(req, res) {
                 realmId: '${realmId}',
                 expiresIn: ${tokens.expires_in || 3600},
                 tokenType: '${tokens.token_type || 'bearer'}'
-              }, '*');
+              }, window.location.origin);
               
               // Close this window after a brief delay
               setTimeout(() => window.close(), 1500);

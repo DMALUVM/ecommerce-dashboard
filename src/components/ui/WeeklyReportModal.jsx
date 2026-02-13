@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, Download, RefreshCw, AlertTriangle, FileText, Zap } from 'lucide-react';
+import { sanitizeHtml } from '../../utils/sanitize';
 
 const WeeklyReportModal = ({
   showWeeklyReport,
@@ -178,7 +179,7 @@ const WeeklyReportModal = ({
                 .report-content a { color: #60a5fa; }
                 .report-content code { background: rgba(51, 65, 85, 0.5); padding: 0.125rem 0.375rem; border-radius: 0.25rem; color: #fbbf24; }
               `}</style>
-              <div dangerouslySetInnerHTML={{ __html: renderMarkdown(currentReport.content) }} />
+              <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(renderMarkdown(currentReport.content)) }} />
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-20">

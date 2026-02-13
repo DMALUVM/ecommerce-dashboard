@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Upload, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, ShoppingCart, Zap, Download, FileText, Globe, Instagram, Archive, Loader2 } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
 import { AI_DEFAULT_MODEL } from '../../utils/config';
+import { sanitizeHtml } from '../../utils/sanitize';
 
 // ============ REPORT TYPES ============
 
@@ -1458,7 +1459,7 @@ const DtcAdsIntelModal = ({
                 [&_table]:w-full [&_th]:text-left [&_th]:text-slate-300 [&_th]:pb-2 [&_th]:pr-3 [&_td]:py-1 [&_td]:pr-3 [&_td]:text-slate-400
                 [&_code]:bg-slate-800 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-emerald-400 [&_code]:text-xs
               ">
-                <div dangerouslySetInnerHTML={{ __html: renderMarkdown(actionReport) }} />
+                <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(renderMarkdown(actionReport)) }} />
               </div>
             </div>
           )}
