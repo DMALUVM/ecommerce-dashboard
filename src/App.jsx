@@ -11418,20 +11418,44 @@ const savePeriods = async (d) => {
                   const totalCogs = enrichedSkuData.reduce((s, sk) => s + (sk.cogs || 0), 0);
                   const revenue = apiDay.amazon?.revenue || 0;
                   
+                  // Orders API doesn't include fees — estimate using typical Amazon fee structure
+                  // (referral ~15% + FBA ~15% = ~30% of revenue as fees)
+                  const estimatedFees = revenue * 0.30;
+                  const estimatedAds = apiDay.amazon?.adSpend || 0;
+                  const amzNetProfit = revenue - totalCogs - estimatedFees - estimatedAds;
+                  
                   const amazonData = {
                     ...apiDay.amazon,
                     cogs: totalCogs,
-                    netProfit: revenue - totalCogs, // Rough estimate (no fee data from reports)
+                    netProfit: amzNetProfit,
                     skuData: enrichedSkuData,
                     source: 'amazon-orders-api', // Tag so SKU Economics can override later
                   };
                   
-                  // Preserve existing Shopify data if present
+                  // Preserve existing Shopify data and build proper total
+                  const existingShopify = existing?.shopify || null;
+                  const shopRev = existingShopify?.revenue || 0;
+                  const shopProfit = existingShopify?.netProfit || 0;
+                  const totalRev = revenue + shopRev;
+                  const totalProfit = amzNetProfit + shopProfit;
+                  const totalAdSpend = estimatedAds + (existingShopify?.adSpend || 0);
+                  
                   updated[date] = {
                     ...(existing || {}),
                     date,
                     amazon: amazonData,
-                    shopify: existing?.shopify || null,
+                    shopify: existingShopify,
+                    total: {
+                      revenue: totalRev,
+                      units: (apiDay.amazon?.units || 0) + (existingShopify?.units || 0),
+                      cogs: totalCogs + (existingShopify?.cogs || 0),
+                      adSpend: totalAdSpend,
+                      netProfit: totalProfit,
+                      netMargin: totalRev > 0 ? (totalProfit / totalRev) * 100 : 0,
+                      roas: totalAdSpend > 0 ? totalRev / totalAdSpend : 0,
+                      amazonShare: totalRev > 0 ? (revenue / totalRev) * 100 : 0,
+                      shopifyShare: totalRev > 0 ? (shopRev / totalRev) * 100 : 0,
+                    },
                   };
                   daysAdded++;
                 });
@@ -11490,6 +11514,32 @@ const savePeriods = async (d) => {
             if (!data.error && res.ok) {
               setShopifyCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               
+              // Get COGS lookup once for all Shopify merges (daily + weekly)
+              const shopCogsLookup = getCogsLookup();
+              
+              // Helper: enrich Shopify data with COGS from uploaded COGS file
+              const enrichShopify = (shopifyData) => {
+                if (!shopifyData) return shopifyData;
+                let calculatedCogs = 0;
+                const enrichedSkuData = (shopifyData.skuData || []).map(sku => {
+                  const unitCost = shopCogsLookup[sku.sku] || shopCogsLookup[sku.sku?.replace(/Shop$/i, '')] || 
+                                   shopCogsLookup[sku.sku?.toUpperCase()] || shopCogsLookup[sku.sku?.toLowerCase()] || 0;
+                  const skuCogs = unitCost * (sku.unitsSold || sku.units || 0);
+                  calculatedCogs += skuCogs;
+                  return { ...sku, cogs: skuCogs };
+                });
+                const revenue = shopifyData.revenue || 0;
+                const adSpend = (shopifyData.adSpend || 0) + (shopifyData.metaSpend || 0) + (shopifyData.googleSpend || 0);
+                const netProfit = revenue - calculatedCogs - (shopifyData.threeplCosts || 0) - adSpend;
+                return {
+                  ...shopifyData,
+                  skuData: enrichedSkuData,
+                  cogs: calculatedCogs,
+                  netProfit,
+                  netMargin: revenue > 0 ? (netProfit / revenue) * 100 : 0,
+                };
+              };
+              
               // Merge Shopify daily data into allDaysData
               if (data.dailyData && Object.keys(data.dailyData).length > 0) {
                 let shopDaysAdded = 0, shopDaysUpdated = 0;
@@ -11498,26 +11548,73 @@ const savePeriods = async (d) => {
                   const updated = { ...prev };
                   Object.entries(data.dailyData).forEach(([date, apiDay]) => {
                     const existing = updated[date];
+                    const enrichedShopify = enrichShopify(apiDay.shopify);
+                    
+                    // Preserve existing ad data (from Meta/Google bulk uploads)
+                    const existingMeta = existing?.metaSpend || existing?.shopify?.metaSpend || 0;
+                    const existingGoogle = existing?.googleSpend || existing?.shopify?.googleSpend || 0;
+                    const existingDtcAds = existingMeta + existingGoogle;
+                    
+                    // Merge ad data into enriched shopify
+                    if (existingDtcAds > 0 && enrichedShopify) {
+                      enrichedShopify.metaSpend = existingMeta;
+                      enrichedShopify.metaAds = existingMeta;
+                      enrichedShopify.googleSpend = existingGoogle;
+                      enrichedShopify.googleAds = existingGoogle;
+                      enrichedShopify.adSpend = existingDtcAds;
+                      // Recalculate profit with ad spend
+                      enrichedShopify.netProfit = (enrichedShopify.revenue || 0) - (enrichedShopify.cogs || 0) - (enrichedShopify.threeplCosts || 0) - existingDtcAds;
+                      enrichedShopify.netMargin = enrichedShopify.revenue > 0 ? (enrichedShopify.netProfit / enrichedShopify.revenue) * 100 : 0;
+                    }
+                    
+                    const shopRev = enrichedShopify?.revenue || 0;
+                    const shopProfit = enrichedShopify?.netProfit || 0;
+                    const shopCogs = enrichedShopify?.cogs || 0;
+                    const shopAds = enrichedShopify?.adSpend || 0;
                     
                     // Merge: preserve existing Amazon data, update Shopify
                     if (existing) {
+                      const amzRev = existing.amazon?.revenue || 0;
+                      const amzProfit = existing.amazon?.netProfit || 0;
+                      const amzAds = existing.amazon?.adSpend || 0;
+                      const amzCogs = existing.amazon?.cogs || 0;
+                      const totalRev = amzRev + shopRev;
+                      const totalProfit = amzProfit + shopProfit;
+                      const totalAds = amzAds + shopAds;
+                      
                       updated[date] = {
                         ...existing,
                         date,
-                        shopify: apiDay.shopify,
-                        // Recalculate total
+                        shopify: enrichedShopify,
                         total: {
-                          revenue: (existing.amazon?.revenue || 0) + (apiDay.shopify?.revenue || 0),
-                          units: (existing.amazon?.units || 0) + (apiDay.shopify?.units || 0),
+                          revenue: totalRev,
+                          units: (existing.amazon?.units || 0) + (enrichedShopify?.units || 0),
+                          cogs: amzCogs + shopCogs,
+                          adSpend: totalAds,
+                          netProfit: totalProfit,
+                          netMargin: totalRev > 0 ? (totalProfit / totalRev) * 100 : 0,
+                          roas: totalAds > 0 ? totalRev / totalAds : 0,
+                          amazonShare: totalRev > 0 ? (amzRev / totalRev) * 100 : 0,
+                          shopifyShare: totalRev > 0 ? (shopRev / totalRev) * 100 : 0,
                         },
                       };
                       shopDaysUpdated++;
                     } else {
                       updated[date] = {
                         date,
-                        shopify: apiDay.shopify,
+                        shopify: enrichedShopify,
                         amazon: null,
-                        total: apiDay.total || { revenue: apiDay.shopify?.revenue || 0, units: apiDay.shopify?.units || 0 },
+                        total: {
+                          revenue: shopRev,
+                          units: enrichedShopify?.units || 0,
+                          cogs: shopCogs,
+                          adSpend: shopAds,
+                          netProfit: shopProfit,
+                          netMargin: shopRev > 0 ? (shopProfit / shopRev) * 100 : 0,
+                          roas: shopAds > 0 ? shopRev / shopAds : 0,
+                          amazonShare: 0,
+                          shopifyShare: 100,
+                        },
                       };
                       shopDaysAdded++;
                     }
@@ -11537,22 +11634,50 @@ const savePeriods = async (d) => {
                   const updated = { ...prev };
                   Object.entries(data.weeklyData).forEach(([weekKey, apiWeek]) => {
                     const existing = updated[weekKey];
+                    const enrichedShopifyWeek = enrichShopify(apiWeek.shopify);
+                    const shopRev = enrichedShopifyWeek?.revenue || 0;
+                    const shopProfit = enrichedShopifyWeek?.netProfit || 0;
+                    const shopCogs = enrichedShopifyWeek?.cogs || 0;
+                    const shopAds = enrichedShopifyWeek?.adSpend || 0;
                     
                     if (existing) {
-                      // Preserve existing Amazon/other data, update Shopify
+                      const amzRev = existing.amazon?.revenue || 0;
+                      const amzProfit = existing.amazon?.netProfit || 0;
+                      const amzCogs = existing.amazon?.cogs || 0;
+                      const amzAds = existing.amazon?.adSpend || 0;
+                      const totalRev = amzRev + shopRev;
+                      const totalProfit = amzProfit + shopProfit;
+                      const totalAds = amzAds + shopAds;
+                      
                       updated[weekKey] = {
                         ...existing,
-                        shopify: apiWeek.shopify,
+                        shopify: enrichedShopifyWeek,
                         total: {
                           ...existing.total,
-                          revenue: (existing.amazon?.revenue || 0) + (apiWeek.shopify?.revenue || 0),
-                          units: (existing.amazon?.units || 0) + (apiWeek.shopify?.units || 0),
+                          revenue: totalRev,
+                          units: (existing.amazon?.units || 0) + (enrichedShopifyWeek?.units || 0),
+                          cogs: amzCogs + shopCogs,
+                          adSpend: totalAds,
+                          netProfit: totalProfit,
+                          netMargin: totalRev > 0 ? (totalProfit / totalRev) * 100 : 0,
+                          roas: totalAds > 0 ? totalRev / totalAds : 0,
+                          amazonShare: totalRev > 0 ? (amzRev / totalRev) * 100 : 0,
+                          shopifyShare: totalRev > 0 ? (shopRev / totalRev) * 100 : 0,
                         },
                       };
                     } else {
                       updated[weekKey] = {
-                        shopify: apiWeek.shopify,
-                        total: apiWeek.total || { revenue: apiWeek.shopify?.revenue || 0, units: apiWeek.shopify?.units || 0 },
+                        shopify: enrichedShopifyWeek,
+                        total: {
+                          revenue: shopRev,
+                          units: enrichedShopifyWeek?.units || 0,
+                          cogs: shopCogs,
+                          adSpend: shopAds,
+                          netProfit: shopProfit,
+                          netMargin: shopRev > 0 ? (shopProfit / shopRev) * 100 : 0,
+                          amazonShare: 0,
+                          shopifyShare: 100,
+                        },
                       };
                     }
                     shopWeeksUpdated++;
@@ -13154,12 +13279,18 @@ Keep insights brief and actionable. Format as numbered list.`;
         // 3. It's before 2024 (pre-ecommerce era)
         const isComplete = amazonRevenue > 0 || date < amazonStartDate || date < new Date('2024-01-01');
         
+        // Profit: prefer total.netProfit, fallback to summing channel profits
+        let dayProfit = getProfit(data?.total);
+        if (dayProfit === 0 && (amazonRevenue > 0 || shopifyRevenue > 0)) {
+          dayProfit = (data?.amazon?.netProfit || 0) + (data?.shopify?.netProfit || 0);
+        }
+        
         return {
           date: d,
           dayOfWeek: date.toLocaleDateString('en-US', { weekday: 'long' }),
           dayNum: date.getDay(),
-          revenue: data?.total?.revenue || 0,
-          profit: getProfit(data?.total),
+          revenue: data?.total?.revenue || (amazonRevenue + shopifyRevenue),
+          profit: dayProfit,
           units: data?.total?.units || 0,
           amazonRevenue,
           shopifyRevenue,
@@ -13202,12 +13333,17 @@ Keep insights brief and actionable. Format as numbered list.`;
       // ==================== WEEKLY DATA ANALYSIS ====================
       const weeklyData = sortedWeeks.slice(-12).map(w => {
         const data = allWeeksData[w];
+        // Profit: prefer total.netProfit, fallback to summing channel profits
+        let weekProfit = getProfit(data?.total);
+        if (weekProfit === 0 && (data?.amazon?.revenue || data?.shopify?.revenue)) {
+          weekProfit = (data?.amazon?.netProfit || 0) + (data?.shopify?.netProfit || 0);
+        }
         return {
           weekEnding: w,
           revenue: data?.total?.revenue || 0,
-          profit: getProfit(data?.total),
+          profit: weekProfit,
           units: data?.total?.units || 0,
-          margin: data?.total?.revenue > 0 ? (data?.total?.netProfit / data?.total?.revenue * 100) : 0,
+          margin: data?.total?.revenue > 0 ? (weekProfit / data?.total?.revenue * 100) : 0,
           amazonRevenue: data?.amazon?.revenue || 0,
           shopifyRevenue: data?.shopify?.revenue || 0,
           adSpend: data?.total?.adSpend || 0,
@@ -13360,7 +13496,14 @@ Keep insights brief and actionable. Format as numbered list.`;
         // Fall back to weekly data
         const recentWeeks = sortedWeeks.slice(-8);
         const weeklyTotalRevenue = recentWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.revenue || 0), 0);
-        const weeklyTotalProfit = recentWeeks.reduce((s, w) => s + (getProfit(allWeeksData[w]?.total)), 0);
+        const weeklyTotalProfit = recentWeeks.reduce((s, w) => {
+          const wd = allWeeksData[w];
+          let wp = getProfit(wd?.total);
+          if (wp === 0 && (wd?.amazon?.revenue || wd?.shopify?.revenue)) {
+            wp = (wd?.amazon?.netProfit || 0) + (wd?.shopify?.netProfit || 0);
+          }
+          return s + wp;
+        }, 0);
         
         if (weeklyTotalRevenue > 0 && weeklyTotalProfit !== 0) {
           avgProfitMargin = weeklyTotalProfit / weeklyTotalRevenue;
@@ -13737,23 +13880,35 @@ Respond with ONLY this JSON (no markdown):
       const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
       
       // Prepare historical data
-      const weeklyHistory = sortedWeeks.slice(-12).map(w => ({
-        weekEnding: w,
-        revenue: allWeeksData[w]?.total?.revenue || 0,
-        profit: getProfit(allWeeksData[w]?.total),
-        units: allWeeksData[w]?.total?.units || 0,
-        amazonRevenue: allWeeksData[w]?.amazon?.revenue || 0,
-        shopifyRevenue: allWeeksData[w]?.shopify?.revenue || 0,
-      }));
+      const weeklyHistory = sortedWeeks.slice(-12).map(w => {
+        const wd = allWeeksData[w];
+        let wp = getProfit(wd?.total);
+        if (wp === 0 && (wd?.amazon?.revenue || wd?.shopify?.revenue)) {
+          wp = (wd?.amazon?.netProfit || 0) + (wd?.shopify?.netProfit || 0);
+        }
+        return {
+          weekEnding: w,
+          revenue: wd?.total?.revenue || 0,
+          profit: wp,
+          units: wd?.total?.units || 0,
+          amazonRevenue: wd?.amazon?.revenue || 0,
+          shopifyRevenue: wd?.shopify?.revenue || 0,
+        };
+      });
       
       const dailyHistory = sortedDays.slice(-30).map(d => {
         const date = new Date(d + 'T12:00:00');
+        const dd = allDaysData[d];
+        let dp = getProfit(dd?.total);
+        if (dp === 0 && (dd?.amazon?.revenue || dd?.shopify?.revenue)) {
+          dp = (dd?.amazon?.netProfit || 0) + (dd?.shopify?.netProfit || 0);
+        }
         return {
           date: d,
           dayOfWeek: date.toLocaleDateString('en-US', { weekday: 'short' }),
-          revenue: allDaysData[d]?.total?.revenue || 0,
-          profit: getProfit(allDaysData[d]?.total),
-          units: allDaysData[d]?.total?.units || 0,
+          revenue: dd?.total?.revenue || (dd?.amazon?.revenue || 0) + (dd?.shopify?.revenue || 0),
+          profit: dp,
+          units: dd?.total?.units || 0,
         };
       });
       
