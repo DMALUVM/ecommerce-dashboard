@@ -10,7 +10,10 @@ const AIChatPanel = ({
   setAiInput,
   aiLoading,
   sendAIMessage,
-  generateReport
+  generateReport,
+  aiChatModel,
+  setAiChatModel,
+  aiModelOptions,
 }) => {
   const messagesEndRef = useRef(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -50,6 +53,18 @@ const AIChatPanel = ({
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {aiModelOptions && (
+                <select 
+                  value={aiChatModel || ''} 
+                  onChange={(e) => setAiChatModel(e.target.value)}
+                  className="bg-white/20 text-white text-xs rounded-lg px-2 py-1.5 border border-white/30 focus:outline-none cursor-pointer appearance-none"
+                  style={{ maxWidth: '130px' }}
+                >
+                  {aiModelOptions.map(m => (
+                    <option key={m.value} value={m.value} className="bg-slate-800 text-white">{m.label}</option>
+                  ))}
+                </select>
+              )}
               {aiMessages.length > 0 && (
                 confirmingClear ? (
                   <div className="flex items-center gap-1">

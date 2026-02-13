@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertTriangle, BarChart3, Boxes, Brain, Check, Edit, Lightbulb, Loader2, Megaphone, Settings, ShoppingBag, Store, Target, TrendingUp, Upload, Zap
+  AlertTriangle, BarChart3, Boxes, Brain, Check, Edit, Lightbulb, Loader2, Megaphone, Settings, ShoppingBag, Store, Target, TrendingUp, Upload, X, Zap
 } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../../utils/format';
 import NavTabs from '../ui/NavTabs';

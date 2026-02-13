@@ -20,6 +20,7 @@ import {
 import { AI_MODELS, AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, AI_MODEL_OPTIONS, getModelTier, getModelLabel } from './utils/config';
 import { callAI } from './utils/ai';
 import { sanitizeHtml } from './utils/sanitize';
+import { validateSaveData, checkConflict, upsertCloudData } from './utils/cloudSync';
 import { prepareDataContext } from './utils/aiContextBuilder';
 import { buildChatSystemPrompt } from './utils/aiPromptBuilder';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -35,6 +36,8 @@ import HealthBadge from './components/ui/HealthBadge';
 import SettingSection from './components/ui/SettingSection';
 import SettingRow from './components/ui/SettingRow';
 import Toggle from './components/ui/Toggle';
+import AIChatPanel from './components/ui/AIChatPanel';
+import WeeklyReportModal from './components/ui/WeeklyReportModal';
 import NumberInput from './components/ui/NumberInput';
 import Toast from './components/ui/Toast';
 import ValidationModal from './components/ui/ValidationModal';
@@ -15504,324 +15507,45 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     setToast({ message: 'Report downloaded', type: 'success' });
   };
 
-  // Weekly Report UI Modal
+  // Weekly Report — extracted to WeeklyReportModal component
   const weeklyReportUI = showWeeklyReport && (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-        <div className={`p-6 flex items-center justify-between flex-shrink-0 ${
-          reportType === 'weekly' ? 'bg-gradient-to-r from-emerald-600 to-teal-600' :
-          reportType === 'monthly' ? 'bg-gradient-to-r from-blue-600 to-indigo-600' :
-          reportType === 'quarterly' ? 'bg-gradient-to-r from-violet-600 to-purple-600' :
-          'bg-gradient-to-r from-amber-600 to-orange-600'
-        }`}>
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl">
-              {reportType === 'weekly' ? '📅' : reportType === 'monthly' ? '📊' : reportType === 'quarterly' ? '📈' : '🏆'}
-            </div>
-            <div>
-              <h2 className="text-white text-xl font-bold">{reportType.charAt(0).toUpperCase() + reportType.slice(1)} Intelligence Report</h2>
-              <p className="text-white/70 text-sm">{currentReport?.periodLabel || 'AI-powered business analysis'}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {currentReport && (
-              <button onClick={() => downloadReport(currentReport)} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-white text-sm flex items-center gap-2">
-                <Download className="w-4 h-4" />Download
-              </button>
-            )}
-            <button onClick={() => { setShowWeeklyReport(false); setCurrentReport(null); setReportError(null); }} className="p-2 hover:bg-white/20 rounded-lg text-white">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-
-        <div className="bg-slate-800/50 border-b border-slate-700 px-4 py-2 flex flex-wrap gap-2 items-center justify-between">
-          <div className="flex gap-2">
-            {['weekly', 'monthly', 'quarterly', 'annual'].map(type => (
-              <button
-                key={type}
-                onClick={() => { setReportType(type); setSelectedReportPeriod(null); setCurrentReport(weeklyReports[type]?.reports?.[0] || null); setReportError(null); }}
-                className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5 ${reportType === type ? 'bg-white/20 text-white font-medium' : 'text-slate-400 hover:bg-white/10'}`}
-              >
-                {type === 'weekly' ? '📅' : type === 'monthly' ? '📊' : type === 'quarterly' ? '📈' : '🏆'}
-                {type.charAt(0).toUpperCase() + type.slice(1)}
-                {weeklyReports[type]?.reports?.length > 0 && <span className="w-2 h-2 rounded-full bg-emerald-400"></span>}
-              </button>
-            ))}
-          </div>
-          
-          {/* Period Selector */}
-          {(() => {
-            const sortedWeeks = Object.keys(allWeeksData).sort().reverse();
-            const sortedPeriods = Object.keys(allPeriodsData).sort().reverse();
-            
-            let availablePeriods = [];
-            if (reportType === 'weekly') {
-              // Filter to weeks with actual data (revenue > $100)
-              availablePeriods = sortedWeeks.filter(w => (allWeeksData[w]?.total?.revenue || 0) > 100).slice(0, 12);
-            } else if (reportType === 'monthly') {
-              const monthPeriods = sortedPeriods.filter(p => /^\d{4}-\d{2}$/.test(p) || /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}$/i.test(p));
-              const monthsFromWeeks = [...new Set(sortedWeeks.map(w => w.substring(0, 7)))].sort().reverse();
-              availablePeriods = monthPeriods.length > 0 ? monthPeriods.slice(0, 12) : monthsFromWeeks.slice(0, 12);
-            } else if (reportType === 'quarterly') {
-              const quarterPeriods = sortedPeriods.filter(p => /Q[1-4]/i.test(p));
-              if (quarterPeriods.length > 0) {
-                availablePeriods = quarterPeriods.slice(0, 8);
-              } else {
-                const getQuarter = (dateStr) => Math.ceil(parseInt(dateStr.substring(5, 7)) / 3);
-                const getYear = (dateStr) => dateStr.substring(0, 4);
-                availablePeriods = [...new Set(sortedWeeks.map(w => `${getYear(w)}-Q${getQuarter(w)}`))].slice(0, 8);
-              }
-            } else if (reportType === 'annual') {
-              const yearPeriods = sortedPeriods.filter(p => /^\d{4}$/.test(p));
-              const yearsFromWeeks = [...new Set(sortedWeeks.map(w => w.substring(0, 4)))].sort().reverse();
-              availablePeriods = yearPeriods.length > 0 ? yearPeriods.slice(0, 5) : yearsFromWeeks.slice(0, 5);
-            }
-            
-            if (availablePeriods.length === 0) return null;
-            
-            return (
-              <div className="flex items-center gap-2">
-                <span className="text-slate-400 text-sm">Period:</span>
-                <select 
-                  value={selectedReportPeriod || ''} 
-                  onChange={(e) => setSelectedReportPeriod(e.target.value || null)}
-                  className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm min-w-[160px]"
-                >
-                  <option value="">Latest Complete</option>
-                  {availablePeriods.map(p => {
-                    let label = p;
-                    if (reportType === 'weekly') {
-                      const rev = allWeeksData[p]?.total?.revenue || 0;
-                      label = `Week ${p} (${formatCurrency(rev)})`;
-                    }
-                    return <option key={p} value={p}>{label}</option>;
-                  })}
-                </select>
-                <button 
-                  onClick={() => generateReport(reportType, true, selectedReportPeriod)}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white text-sm flex items-center gap-1"
-                >
-                  <Zap className="w-3 h-3" />Generate
-                </button>
-              </div>
-            );
-          })()}
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6">
-          {generatingReport ? (
-            <div className="flex flex-col items-center justify-center py-20">
-              <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-6" />
-              <h3 className="text-white text-lg font-semibold mb-2">Generating Report...</h3>
-              <p className="text-slate-400 text-sm">Analyzing your business data...</p>
-            </div>
-          ) : reportError ? (
-            <div className="flex flex-col items-center justify-center py-20">
-              <AlertTriangle className="w-16 h-16 text-rose-400 mb-6" />
-              <h3 className="text-white text-lg font-semibold mb-2">Unable to Generate Report</h3>
-              <p className="text-slate-400 text-sm mb-6">{reportError}</p>
-              <button onClick={() => generateReport(reportType, true, selectedReportPeriod)} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-white">Try Again</button>
-            </div>
-          ) : currentReport ? (
-            <div className="report-content text-slate-200">
-              <style>{`
-                .report-content { color: #e2e8f0; line-height: 1.7; }
-                .report-content h1 { color: #ffffff; font-size: 1.5rem; font-weight: bold; border-bottom: 1px solid #475569; padding-bottom: 0.75rem; margin: 1.5rem 0 1rem 0; }
-                .report-content h2 { color: #34d399; font-size: 1.25rem; font-weight: 600; margin: 2rem 0 1rem 0; }
-                .report-content h3 { color: #22d3ee; font-size: 1.1rem; font-weight: 500; margin: 1.5rem 0 0.75rem 0; }
-                .report-content p { color: #e2e8f0; margin: 0.75rem 0; }
-                .report-content strong, .report-content b { color: #ffffff; font-weight: 600; }
-                .report-content li { color: #e2e8f0; margin: 0.5rem 0 0.5rem 1.5rem; }
-                .report-content ul, .report-content ol { margin: 0.5rem 0; }
-                .report-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; background: rgba(51, 65, 85, 0.3); border-radius: 0.5rem; overflow: hidden; }
-                .report-content th { color: #cbd5e1; font-weight: 600; text-align: left; padding: 0.75rem; border-bottom: 1px solid #475569; background: rgba(51, 65, 85, 0.5); }
-                .report-content td { color: #e2e8f0; padding: 0.75rem; border-bottom: 1px solid rgba(71, 85, 105, 0.5); }
-                .report-content tr:nth-child(even) { background: rgba(51, 65, 85, 0.2); }
-                .report-content tr:hover { background: rgba(51, 65, 85, 0.4); }
-                .report-content a { color: #60a5fa; }
-                .report-content code { background: rgba(51, 65, 85, 0.5); padding: 0.125rem 0.375rem; border-radius: 0.25rem; color: #fbbf24; }
-              `}</style>
-              <div dangerouslySetInnerHTML={{ 
-                __html: (() => {
-                  let html = currentReport.content;
-                  
-                  // Convert markdown tables to HTML tables
-                  const tableRegex = /\|(.+)\|\n\|[-:\s|]+\|\n((?:\|.+\|\n?)+)/g;
-                  html = html.replace(tableRegex, (match, headerRow, bodyRows) => {
-                    const headers = headerRow.split('|').filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join('');
-                    const rows = bodyRows.trim().split('\n').map(row => {
-                      const cells = row.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('');
-                      return `<tr>${cells}</tr>`;
-                    }).join('');
-                    return `<table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
-                  });
-                  
-                  // Headings
-                  html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-                  html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-                  html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
-                  
-                  // Bold
-                  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-                  
-                  // Lists
-                  html = html.replace(/^- (.*$)/gim, '<li>$1</li>');
-                  html = html.replace(/^\d+\. (.*$)/gim, '<li>$1</li>');
-                  
-                  // Wrap consecutive li elements in ul
-                  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-                  
-                  // Paragraphs - wrap lines that aren't already wrapped
-                  html = html.replace(/^(?!<[hultdp]|<\/)(.*\S.*)$/gim, '<p>$1</p>');
-                  
-                  // Clean up empty paragraphs
-                  html = html.replace(/<p>\s*<\/p>/g, '');
-                  
-                  // Double newlines to breaks
-                  html = html.replace(/\n\n/g, '<br/>');
-                  
-                  return sanitizeHtml(html);
-                })()
-              }} />
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-20">
-              <FileText className="w-16 h-16 text-slate-600 mb-6" />
-              <h3 className="text-white text-lg font-semibold mb-2">No {reportType} Report Yet</h3>
-              <p className="text-slate-400 text-sm mb-6">Generate an AI-powered report for insights.</p>
-              <button onClick={() => generateReport(reportType, false, selectedReportPeriod)} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-white flex items-center gap-2">
-                <Zap className="w-5 h-5" />Generate Report
-              </button>
-            </div>
-          )}
-        </div>
-
-        {weeklyReports[reportType]?.reports?.length > 0 && !generatingReport && (
-          <div className="border-t border-slate-700 p-4 flex-shrink-0">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-slate-400 text-sm">History:</span>
-                {weeklyReports[reportType].reports.slice(0, 5).map(r => (
-                  <button key={r.id} onClick={() => setCurrentReport(r)} className={`px-3 py-1 rounded-lg text-xs ${currentReport?.id === r.id ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>
-                    {r.periodLabel}
-                  </button>
-                ))}
-              </div>
-              <button onClick={() => generateReport(reportType, true, selectedReportPeriod)} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm text-slate-300 flex items-center gap-2">
-                <RefreshCw className="w-4 h-4" />Regenerate
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+    <WeeklyReportModal
+      showWeeklyReport={showWeeklyReport}
+      setShowWeeklyReport={setShowWeeklyReport}
+      reportType={reportType}
+      setReportType={setReportType}
+      currentReport={currentReport}
+      setCurrentReport={setCurrentReport}
+      reportError={reportError}
+      setReportError={setReportError}
+      generatingReport={generatingReport}
+      generateReport={generateReport}
+      downloadReport={downloadReport}
+      weeklyReports={weeklyReports}
+      selectedReportPeriod={selectedReportPeriod}
+      setSelectedReportPeriod={setSelectedReportPeriod}
+      allWeeksData={allWeeksData}
+      allPeriodsData={allPeriodsData}
+      formatCurrency={formatCurrency}
+    />
   );
   
-  // AI Chat UI - rendered as JSX variable, not a component function
-  const aiChatUI = showAIChat && (
-    <div className="fixed bottom-4 right-4 z-50 w-96 max-w-[calc(100vw-2rem)]">
-      <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden">
-        <div className="bg-gradient-to-r from-violet-600 to-indigo-600 p-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-              <MessageSquare className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h3 className="text-white font-semibold">AI Assistant</h3>
-              <p className="text-white/70 text-xs">Ask about your business data</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <select 
-              value={aiChatModel} 
-              onChange={(e) => setAiChatModel(e.target.value)}
-              className="bg-white/20 text-white text-xs rounded-lg px-2 py-1.5 border border-white/30 focus:outline-none cursor-pointer appearance-none"
-              style={{ maxWidth: '130px' }}
-            >
-              {AI_MODEL_OPTIONS.map(m => (
-                <option key={m.value} value={m.value} className="bg-slate-800 text-white">{m.label}</option>
-              ))}
-            </select>
-            {aiMessages.length > 0 && (
-              <button 
-                onClick={() => { if (confirm('Clear chat history?')) setAiMessages([]); }} 
-                className="p-2 hover:bg-white/20 rounded-lg text-white/70 hover:text-white"
-                title="Clear chat history"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            )}
-            <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-        
-        <div className="h-80 overflow-y-auto p-4 space-y-4">
-          {aiMessages.length === 0 && (
-            <div className="text-center text-slate-400 py-8">
-              <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p className="text-sm">Ask me anything about your business!</p>
-              <div className="mt-4 space-y-2">
-                <button onClick={() => setAiInput("What was my total revenue last month?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "What was my total revenue last month?"</button>
-                <button onClick={() => setAiInput("Which SKU has the best profit per unit?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which SKU has the best profit per unit?"</button>
-                <button onClick={() => setAiInput("Which SKUs are declining in profitability?")} className="block w-full text-left px-3 py-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💡 "Which SKUs are declining in profitability?"</button>
-              </div>
-            </div>
-          )}
-          {aiMessages.map((msg, i) => (
-            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] rounded-2xl px-4 py-2 ${msg.role === 'user' ? 'bg-violet-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
-                <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-              </div>
-            </div>
-          ))}
-          {aiLoading && (
-            <div className="flex justify-start">
-              <div className="bg-slate-700 rounded-2xl px-4 py-3">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-        
-        <div className="p-4 border-t border-slate-700">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={aiInput}
-              onChange={(e) => setAiInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendAIMessage(); } }}
-              placeholder="Ask about your data..."
-              className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-500"
-              autoComplete="off"
-            />
-            <button onClick={sendAIMessage} disabled={!aiInput.trim() || aiLoading} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl text-white">
-              <Send className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-  
-  // AI Chat Button - rendered as JSX variable
-  const aiChatButton = !showAIChat && (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-3">
-      <button onClick={() => generateReport('weekly')} className="w-14 h-14 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group">
-        <FileText className="w-6 h-6 text-white" />
-        <span className="absolute right-full mr-3 px-3 py-1 bg-slate-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">AI Reports</span>
-      </button>
-      <button onClick={() => setShowAIChat(true)} className="w-14 h-14 bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group">
-        <MessageSquare className="w-6 h-6 text-white" />
-        <span className="absolute right-full mr-3 px-3 py-1 bg-slate-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Ask AI Assistant</span>
-      </button>
-    </div>
+  // AI Chat — extracted to AIChatPanel component
+  const aiChatPanelElement = (
+    <AIChatPanel
+      showAIChat={showAIChat}
+      setShowAIChat={setShowAIChat}
+      aiMessages={aiMessages}
+      setAiMessages={setAiMessages}
+      aiInput={aiInput}
+      setAiInput={setAiInput}
+      aiLoading={aiLoading}
+      sendAIMessage={sendAIMessage}
+      generateReport={generateReport}
+      aiChatModel={aiChatModel}
+      setAiChatModel={setAiChatModel}
+      aiModelOptions={AI_MODEL_OPTIONS}
+    />
   );
 
   
@@ -16177,7 +15901,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   // ==================== DASHBOARD VIEW ====================
 
   // ==================== GLOBAL MODALS (rendered once, not per-view) ====================
-  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><KeyboardShortcuts setView={setView} exportAll={exportAll} setShowAdsAIChat={setShowAdsAIChat} setToast={setToast} /><AuditLog isOpen={showAuditLog} onClose={() => setShowAuditLog(false)} auditLog={getAuditLog()} /></>);
+  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatPanelElement}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><KeyboardShortcuts setView={setView} exportAll={exportAll} setShowAdsAIChat={setShowAdsAIChat} setToast={setToast} /><AuditLog isOpen={showAuditLog} onClose={() => setShowAuditLog(false)} auditLog={getAuditLog()} /></>);
 
   if (view === 'dashboard') {
     return wrapView(<DashboardView
