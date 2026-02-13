@@ -193,6 +193,7 @@ export default async function handler(req, res) {
         {
           key: 'spCampaigns',
           label: 'SP Campaigns',
+          adProduct: 'SPONSORED_PRODUCTS',
           reportTypeId: 'spCampaigns',
           groupBy: ['campaign'],
           columns: ['campaignName', 'campaignId', 'campaignStatus', 'campaignBudgetAmount', 'campaignBudgetType',
@@ -202,6 +203,7 @@ export default async function handler(req, res) {
         {
           key: 'spAdvertised',
           label: 'SP Advertised Product',
+          adProduct: 'SPONSORED_PRODUCTS',
           reportTypeId: 'spAdvertisedProduct',
           groupBy: ['advertiser'],
           columns: ['campaignName', 'campaignId', 'adGroupName', 'adGroupId',
@@ -212,6 +214,7 @@ export default async function handler(req, res) {
         {
           key: 'spSearchTerms',
           label: 'SP Search Terms',
+          adProduct: 'SPONSORED_PRODUCTS',
           reportTypeId: 'spSearchTerm',
           groupBy: ['searchTerm'],
           columns: ['campaignName', 'campaignId', 'adGroupName', 'adGroupId',
@@ -222,6 +225,7 @@ export default async function handler(req, res) {
         {
           key: 'spTargeting',
           label: 'SP Targeting',
+          adProduct: 'SPONSORED_PRODUCTS',
           reportTypeId: 'spTargeting',
           groupBy: ['targeting'],
           columns: ['campaignName', 'campaignId', 'adGroupName', 'adGroupId',
@@ -232,6 +236,7 @@ export default async function handler(req, res) {
         {
           key: 'spPlacement',
           label: 'SP Campaign Placement',
+          adProduct: 'SPONSORED_PRODUCTS',
           reportTypeId: 'spCampaigns',
           groupBy: ['campaignPlacement'],
           columns: ['campaignName', 'campaignId', 'placementClassification',
@@ -241,6 +246,7 @@ export default async function handler(req, res) {
         {
           key: 'sbCampaigns',
           label: 'SB Campaigns',
+          adProduct: 'SPONSORED_BRANDS',
           reportTypeId: 'sbCampaigns',
           groupBy: ['campaign'],
           columns: ['campaignName', 'campaignId', 'campaignStatus', 'campaignBudgetAmount',
@@ -250,6 +256,7 @@ export default async function handler(req, res) {
         {
           key: 'sbSearchTerms',
           label: 'SB Search Terms',
+          adProduct: 'SPONSORED_BRANDS',
           reportTypeId: 'sbSearchTerm',
           groupBy: ['searchTerm'],
           columns: ['campaignName', 'campaignId',
@@ -261,6 +268,7 @@ export default async function handler(req, res) {
         {
           key: 'sdCampaigns',
           label: 'SD Campaigns',
+          adProduct: 'SPONSORED_DISPLAY',
           reportTypeId: 'sdCampaigns',
           groupBy: ['campaign'],
           columns: ['campaignName', 'campaignId', 'campaignStatus', 'campaignBudgetAmount',
@@ -274,12 +282,13 @@ export default async function handler(req, res) {
       for (const spec of REPORT_SPECS) {
         try {
           const body = {
-            reportTypeId: spec.reportTypeId,
-            timeUnit: 'DAILY',
-            format: 'GZIP_JSON',
             startDate: startStr,
             endDate: endStr,
             configuration: {
+              adProduct: spec.adProduct,
+              reportTypeId: spec.reportTypeId,
+              timeUnit: 'DAILY',
+              format: 'GZIP_JSON',
               groupBy: spec.groupBy,
               columns: spec.columns,
             },
