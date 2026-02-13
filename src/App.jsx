@@ -4521,6 +4521,10 @@ const processAdsUpload = useCallback(async (fileList) => {
 useEffect(() => {
   if (shopifyCredentials.storeUrl || shopifyCredentials.connected) {
     try {
+      // SEC-003 guard: Don't save stripped credentials
+      if (shopifyCredentials.connected && !shopifyCredentials.clientSecret && !shopifyCredentials.accessToken) {
+        return;
+      }
       lsSet('ecommerce_shopify_creds_v1', JSON.stringify(shopifyCredentials));
     } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
@@ -4530,6 +4534,10 @@ useEffect(() => {
 useEffect(() => {
   if (packiyoCredentials.apiKey || packiyoCredentials.connected) {
     try {
+      // SEC-003 guard: Don't save stripped credentials
+      if (packiyoCredentials.connected && !packiyoCredentials.apiKey) {
+        return;
+      }
       lsSet('ecommerce_packiyo_creds_v1', JSON.stringify(packiyoCredentials));
     } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
@@ -4539,6 +4547,11 @@ useEffect(() => {
 useEffect(() => {
   if (amazonCredentials.refreshToken || amazonCredentials.connected) {
     try {
+      // SEC-003 guard: Never save stripped credentials back to localStorage
+      // If connected but missing secrets, cloud load already corrupted state — don't propagate to localStorage
+      if (amazonCredentials.connected && !amazonCredentials.refreshToken && !amazonCredentials.clientId) {
+        return; // Skip — would overwrite real credentials with stripped data
+      }
       lsSet('ecommerce_amazon_creds_v1', JSON.stringify(amazonCredentials));
     } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
@@ -4548,6 +4561,10 @@ useEffect(() => {
 useEffect(() => {
   if (qboCredentials.accessToken || qboCredentials.connected || qboCredentials.clientId) {
     try {
+      // SEC-003 guard: Don't save stripped credentials
+      if (qboCredentials.connected && !qboCredentials.accessToken && !qboCredentials.clientId) {
+        return;
+      }
       lsSet('ecommerce_qbo_creds_v1', JSON.stringify(qboCredentials));
     } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
