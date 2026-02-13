@@ -2242,7 +2242,250 @@ const SettingsView = ({
           )}
         </SettingSection>
         
-        {/* Auto-Sync Settings */}
+        {/* Amazon Ads API Connection */}
+        <SettingSection title="📊 Amazon Ads API">
+          <p className="text-slate-400 text-sm mb-4">Connect to Amazon Advertising API for automatic daily campaign performance data. Uses separate credentials from SP-API.</p>
+          
+          {amazonCredentials.adsConnected ? (
+            <div className="space-y-4">
+              <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-emerald-500/20 rounded-full flex items-center justify-center">
+                      <Check className="w-5 h-5 text-emerald-400" />
+                    </div>
+                    <div>
+                      <p className="text-emerald-400 font-medium">Amazon Ads API Connected</p>
+                      <p className="text-slate-400 text-sm">Profile: {amazonCredentials.adsProfileId}</p>
+                      {amazonCredentials.adsLastSync && (
+                        <p className="text-slate-500 text-xs">Last sync: {new Date(amazonCredentials.adsLastSync).toLocaleString()}</p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (confirm('Disconnect Amazon Ads API?')) {
+                        setAmazonCredentials(prev => ({ 
+                          ...prev,
+                          adsClientId: '', adsClientSecret: '', adsRefreshToken: '', adsProfileId: '',
+                          adsConnected: false, adsLastSync: null,
+                        }));
+                        setToast({ message: 'Amazon Ads API disconnected', type: 'success' });
+                      }
+                    }}
+                    className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+              
+              {/* Manual Sync Button */}
+              <SettingRow label="Sync Campaign Data" desc="Pull last 30 days of SP/SB/SD daily campaign performance">
+                <button
+                  onClick={async () => {
+                    setToast({ message: 'Syncing Amazon Ads data...', type: 'info' });
+                    try {
+                      let data = null;
+                      let retries = 0;
+                      const syncBody = {
+                        syncType: 'daily',
+                        daysBack: 30,
+                        adsClientId: amazonCredentials.adsClientId,
+                        adsClientSecret: amazonCredentials.adsClientSecret,
+                        adsRefreshToken: amazonCredentials.adsRefreshToken,
+                        adsProfileId: amazonCredentials.adsProfileId,
+                      };
+
+                      while (retries < 3) {
+                        const r = await fetch('/api/amazon/ads-sync', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(syncBody),
+                        });
+                        data = await r.json();
+
+                        if (data.status === 'pending' && data.pendingReports) {
+                          syncBody.pendingReports = data.pendingReports;
+                          retries++;
+                          await new Promise(r => setTimeout(r, 5000));
+                          continue;
+                        }
+                        break;
+                      }
+
+                      if (data?.success && data?.dailyData) {
+                        // Write daily ad spend to allDaysData
+                        setAllDaysData(prev => {
+                          const updated = { ...prev };
+                          Object.entries(data.dailyData).forEach(([date, adDay]) => {
+                            if (!updated[date]) updated[date] = {};
+                            if (!updated[date].amazon) updated[date].amazon = {};
+                            // Write ad metrics (REPLACE — re-sync overwrites)
+                            updated[date].amazon.adSpend = adDay.spend || 0;
+                            updated[date].amazon.adRevenue = adDay.revenue || 0;
+                            updated[date].amazon.adOrders = adDay.orders || 0;
+                            updated[date].amazon.adImpressions = adDay.impressions || 0;
+                            updated[date].amazon.adClicks = adDay.clicks || 0;
+                            updated[date].amazon.acos = adDay.acos || 0;
+                            updated[date].amazon.adRoas = adDay.roas || 0;
+                            // Preserve existing revenue/units if present (from orders API or SKU Economics)
+                            if (!updated[date].amazon.revenue) updated[date].amazon.revenue = 0;
+                          });
+                          try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch(e) {}
+                          return updated;
+                        });
+
+                        setAmazonCredentials(prev => ({ ...prev, adsLastSync: new Date().toISOString() }));
+                        if (queueCloudSave) queueCloudSave();
+                        setToast({ message: `Synced ${data.summary.daysWithData} days · $${data.summary.totalSpend.toFixed(0)} spend · ${data.summary.campaignCount} campaigns`, type: 'success' });
+                      } else if (data.status === 'pending') {
+                        setToast({ message: 'Reports still generating — will complete on next sync', type: 'info' });
+                      } else {
+                        setToast({ message: data.error || 'Ads sync failed', type: 'error' });
+                      }
+                    } catch (err) {
+                      setToast({ message: `Ads sync error: ${err.message}`, type: 'error' });
+                    }
+                  }}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm text-white font-medium flex items-center gap-2"
+                >
+                  <RefreshCw className="w-4 h-4" />Sync Now
+                </button>
+              </SettingRow>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid gap-3">
+                <div>
+                  <label className="block text-sm text-slate-300 mb-1">Ads LWA Client ID</label>
+                  <input
+                    type="text"
+                    placeholder="amzn1.application-oa2-client.xxxxxxxx"
+                    value={amazonCredentials.adsClientId}
+                    onChange={e => setAmazonCredentials(p => ({ ...p, adsClientId: e.target.value.trim() }))}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-300 mb-1">Ads LWA Client Secret</label>
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    value={amazonCredentials.adsClientSecret}
+                    onChange={e => setAmazonCredentials(p => ({ ...p, adsClientSecret: e.target.value.trim() }))}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-300 mb-1">Ads LWA Refresh Token</label>
+                  <input
+                    type="password"
+                    placeholder="Atzr|xxxxxxxx"
+                    value={amazonCredentials.adsRefreshToken}
+                    onChange={e => setAmazonCredentials(p => ({ ...p, adsRefreshToken: e.target.value.trim() }))}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-300 mb-1">Ads Profile ID <span className="text-slate-500">(auto-detected on connect)</span></label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Will be auto-detected..."
+                      value={amazonCredentials.adsProfileId}
+                      onChange={e => setAmazonCredentials(p => ({ ...p, adsProfileId: e.target.value.trim() }))}
+                      className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+                    />
+                    <button
+                      onClick={async () => {
+                        if (!amazonCredentials.adsClientId || !amazonCredentials.adsRefreshToken) {
+                          setToast({ message: 'Enter Client ID and Refresh Token first', type: 'error' });
+                          return;
+                        }
+                        setToast({ message: 'Fetching ad profiles...', type: 'info' });
+                        try {
+                          const r = await fetch('/api/amazon/ads-sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              syncType: 'profiles',
+                              adsClientId: amazonCredentials.adsClientId,
+                              adsClientSecret: amazonCredentials.adsClientSecret,
+                              adsRefreshToken: amazonCredentials.adsRefreshToken,
+                            }),
+                          });
+                          const data = await r.json();
+                          if (data.error) throw new Error(data.error);
+                          if (data.profiles?.length > 0) {
+                            // Auto-select US seller profile
+                            const usProfile = data.profiles.find(p => p.countryCode === 'US' && p.type === 'seller');
+                            const chosen = usProfile || data.profiles[0];
+                            setAmazonCredentials(p => ({ ...p, adsProfileId: chosen.profileId }));
+                            setToast({ message: `Found ${data.profiles.length} profile(s) — selected "${chosen.name}" (${chosen.profileId})`, type: 'success' });
+                          } else {
+                            setToast({ message: 'No advertising profiles found. Make sure your app has advertising API access.', type: 'error' });
+                          }
+                        } catch (err) {
+                          setToast({ message: err.message, type: 'error' });
+                        }
+                      }}
+                      disabled={!amazonCredentials.adsClientId || !amazonCredentials.adsRefreshToken}
+                      className="px-3 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 rounded-lg text-sm text-slate-300 whitespace-nowrap"
+                    >
+                      Fetch Profiles
+                    </button>
+                  </div>
+                </div>
+                
+                <button
+                  disabled={!amazonCredentials.adsClientId || !amazonCredentials.adsClientSecret || !amazonCredentials.adsRefreshToken || !amazonCredentials.adsProfileId}
+                  onClick={async () => {
+                    setToast({ message: 'Testing Amazon Ads connection...', type: 'info' });
+                    try {
+                      const r = await fetch('/api/amazon/ads-sync', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          syncType: 'test',
+                          adsClientId: amazonCredentials.adsClientId,
+                          adsClientSecret: amazonCredentials.adsClientSecret,
+                          adsRefreshToken: amazonCredentials.adsRefreshToken,
+                          adsProfileId: amazonCredentials.adsProfileId,
+                        }),
+                      });
+                      const data = await r.json();
+                      if (data.error) throw new Error(data.error);
+                      
+                      setAmazonCredentials(p => ({ ...p, adsConnected: true, adsLastSync: null }));
+                      setToast({ message: `Connected! Found ${data.profiles?.length || 0} profile(s). You can now sync campaign data.`, type: 'success' });
+                    } catch (err) {
+                      setToast({ message: `Connection failed: ${err.message}`, type: 'error' });
+                    }
+                  }}
+                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:hover:bg-emerald-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
+                >
+                  <Target className="w-5 h-5" />
+                  Test & Connect
+                </button>
+              </div>
+              
+              <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-xl p-4">
+                <h4 className="text-emerald-400 font-medium mb-2 flex items-center gap-2">
+                  <HelpCircle className="w-4 h-4" />
+                  Getting Your Amazon Ads API Credentials
+                </h4>
+                <div className="text-slate-300 text-sm space-y-2">
+                  <p>1. Go to <strong>Amazon Advertising API Console</strong> → Create or select your app</p>
+                  <p>2. Under <strong>Settings → Authorization</strong>, generate a refresh token</p>
+                  <p>3. Copy your LWA Client ID, Client Secret, and Refresh Token</p>
+                  <p>4. Profile ID is auto-detected — click "Fetch Profiles" after entering credentials</p>
+                </div>
+                <p className="text-slate-500 text-xs mt-3">This pulls daily SP/SB/SD campaign data via the Reporting API. Syncs spend, revenue, ACOS, and campaign performance into your daily tracking automatically.</p>
+              </div>
+            </div>
+          )}
+        </SettingSection>
         <SettingSection title="🔄 Auto-Sync Settings">
           <p className="text-slate-400 text-sm mb-4">
             Automatically sync Amazon, Shopify, and Packiyo data to keep inventory velocity accurate
@@ -2332,6 +2575,29 @@ const SettingsView = ({
                       className={`w-10 h-5 rounded-full transition-colors relative ${appSettings.autoSync?.amazon !== false && amazonCredentials.connected ? 'bg-orange-500' : 'bg-slate-600'} ${!amazonCredentials.connected ? 'opacity-50' : ''}`}
                     >
                       <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.amazon !== false ? 'left-5' : 'left-0.5'}`} />
+                    </button>
+                  </div>
+                  
+                  {/* Amazon Ads API */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-2 h-2 rounded-full ${amazonCredentials.adsConnected ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+                      <span className="text-slate-300">Amazon Ads API</span>
+                      {amazonCredentials.adsLastSync && (
+                        <span className="text-slate-500 text-xs">
+                          Last: {new Date(amazonCredentials.adsLastSync).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setAppSettings(prev => ({
+                        ...prev,
+                        autoSync: { ...prev.autoSync, amazonAds: !prev.autoSync?.amazonAds }
+                      }))}
+                      disabled={!amazonCredentials.adsConnected}
+                      className={`w-10 h-5 rounded-full transition-colors relative ${appSettings.autoSync?.amazonAds !== false && amazonCredentials.adsConnected ? 'bg-emerald-500' : 'bg-slate-600'} ${!amazonCredentials.adsConnected ? 'opacity-50' : ''}`}
+                    >
+                      <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.amazonAds !== false ? 'left-5' : 'left-0.5'}`} />
                     </button>
                   </div>
                   

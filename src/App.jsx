@@ -4395,6 +4395,10 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
         ...(cred.customerId && { customerId: cred.customerId }),
         ...(cred.sellerId && { sellerId: cred.sellerId }),
         ...(cred.marketplaceId && { marketplaceId: cred.marketplaceId }),
+        // Ads API metadata (non-secret) — preserve connection state for cloud restore
+        ...(cred.adsConnected !== undefined && { adsConnected: cred.adsConnected }),
+        ...(cred.adsLastSync && { adsLastSync: cred.adsLastSync }),
+        ...(cred.adsProfileId && { adsProfileId: cred.adsProfileId }),
       };
     }
   });
@@ -4545,12 +4549,11 @@ useEffect(() => {
 
 // Persist Amazon credentials to localStorage for offline backup
 useEffect(() => {
-  if (amazonCredentials.refreshToken || amazonCredentials.connected) {
+  if (amazonCredentials.refreshToken || amazonCredentials.connected || amazonCredentials.adsRefreshToken || amazonCredentials.adsConnected) {
     try {
       // SEC-003 guard: Never save stripped credentials back to localStorage
-      // If connected but missing secrets, cloud load already corrupted state — don't propagate to localStorage
       if (amazonCredentials.connected && !amazonCredentials.refreshToken && !amazonCredentials.clientId) {
-        return; // Skip — would overwrite real credentials with stripped data
+        if (!amazonCredentials.adsRefreshToken) return; // Skip — would overwrite real credentials with stripped data
       }
       lsSet('ecommerce_amazon_creds_v1', JSON.stringify(amazonCredentials));
     } catch (e) { if (e.message) devWarn("[init]", e.message); }
@@ -4751,13 +4754,17 @@ const loadFromCloud = useCallback(async (storeId = null) => {
         lastSync: cloud.packiyoCredentials.lastSync || prev.lastSync,
       }));
     }
-    if (cloud.amazonCredentials?.connected) {
+    if (cloud.amazonCredentials?.connected || cloud.amazonCredentials?.adsConnected) {
       setAmazonCredentials(prev => ({
         ...prev,
-        connected: cloud.amazonCredentials.connected,
+        connected: cloud.amazonCredentials.connected || prev.connected,
         lastSync: cloud.amazonCredentials.lastSync || prev.lastSync,
         sellerId: cloud.amazonCredentials.sellerId || prev.sellerId,
         marketplaceId: cloud.amazonCredentials.marketplaceId || prev.marketplaceId,
+        // Restore Ads API metadata (secrets stay in localStorage only)
+        adsConnected: cloud.amazonCredentials.adsConnected || prev.adsConnected,
+        adsLastSync: cloud.amazonCredentials.adsLastSync || prev.adsLastSync,
+        adsProfileId: cloud.amazonCredentials.adsProfileId || prev.adsProfileId,
       }));
     }
     if (cloud.qboCredentials?.connected) {
@@ -4814,9 +4821,18 @@ const loadFromCloud = useCallback(async (storeId = null) => {
       const local = JSON.parse(lsGet('ecommerce_packiyo_creds_v1') || '{}');
       if (!local.apiKey) writeToLocal('ecommerce_packiyo_creds_v1', JSON.stringify({ ...local, connected: cloud.packiyoCredentials.connected, lastSync: cloud.packiyoCredentials.lastSync }));
     }
-    if (cloud.amazonCredentials?.connected) {
+    if (cloud.amazonCredentials?.connected || cloud.amazonCredentials?.adsConnected) {
       const local = JSON.parse(lsGet('ecommerce_amazon_creds_v1') || '{}');
-      if (!local.refreshToken) writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify({ ...local, connected: cloud.amazonCredentials.connected, lastSync: cloud.amazonCredentials.lastSync }));
+      if (!local.refreshToken && !local.adsRefreshToken) {
+        writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify({ 
+          ...local, 
+          connected: cloud.amazonCredentials.connected, 
+          lastSync: cloud.amazonCredentials.lastSync,
+          adsConnected: cloud.amazonCredentials.adsConnected,
+          adsLastSync: cloud.amazonCredentials.adsLastSync,
+          adsProfileId: cloud.amazonCredentials.adsProfileId,
+        }));
+      }
     }
     if (cloud.qboCredentials?.connected) {
       const local = JSON.parse(lsGet('ecommerce_qbo_creds_v1') || '{}');
@@ -11527,6 +11543,93 @@ const savePeriods = async (d) => {
           } catch (err) {
             results.push({ service: 'Amazon Sales', success: false, error: err.message });
             devWarn('Amazon sales auto-sync error:', err.message);
+          }
+        }
+      }
+      
+      // Check Amazon Ads API — pull daily SP/SB/SD campaign performance
+      if (appSettings.autoSync?.amazonAds !== false && amazonCredentials.adsConnected && amazonCredentials.adsRefreshToken) {
+        const adsStale = isServiceStale(amazonCredentials.adsLastSync, threshold);
+        
+        if (adsStale || force) {
+          try {
+            const adsSyncBody = {
+              syncType: 'daily',
+              daysBack: 30,
+              adsClientId: amazonCredentials.adsClientId,
+              adsClientSecret: amazonCredentials.adsClientSecret,
+              adsRefreshToken: amazonCredentials.adsRefreshToken,
+              adsProfileId: amazonCredentials.adsProfileId,
+            };
+            
+            let adsData = null;
+            let adsRetries = 0;
+            const maxAdsRetries = 3;
+            
+            while (adsRetries < maxAdsRetries) {
+              const adsRes = await fetch('/api/amazon/ads-sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(adsSyncBody),
+              });
+              adsData = await adsRes.json();
+              
+              if (adsData.status === 'pending' && adsData.pendingReports) {
+                console.log(`[AutoSync] Amazon Ads reports pending, retry ${adsRetries + 1}/${maxAdsRetries}...`);
+                adsSyncBody.pendingReports = adsData.pendingReports;
+                adsRetries++;
+                await new Promise(r => setTimeout(r, 10000));
+                continue;
+              }
+              break;
+            }
+            
+            if (adsData?.success && adsData?.dailyData) {
+              let adsDaysUpdated = 0;
+              
+              setAllDaysData(prev => {
+                const updated = { ...prev };
+                Object.entries(adsData.dailyData).forEach(([date, adDay]) => {
+                  if (!updated[date]) updated[date] = {};
+                  if (!updated[date].amazon) updated[date].amazon = { sales: 0, units: 0, refunds: 0 };
+                  
+                  // Write ad metrics from API (REPLACE — re-sync is authoritative)
+                  updated[date].amazon.adSpend = adDay.spend || 0;
+                  updated[date].amazon.adRevenue = adDay.revenue || 0;
+                  updated[date].amazon.adOrders = adDay.orders || 0;
+                  updated[date].amazon.adImpressions = adDay.impressions || 0;
+                  updated[date].amazon.adClicks = adDay.clicks || 0;
+                  updated[date].amazon.acos = adDay.acos || 0;
+                  updated[date].amazon.adRoas = adDay.roas || 0;
+                  
+                  // Recalculate netProfit if we have revenue data
+                  const rev = updated[date].amazon.revenue || updated[date].amazon.sales || 0;
+                  if (rev > 0) {
+                    const cogs = updated[date].amazon.cogs || 0;
+                    const fees = updated[date].amazon.fees || (rev * 0.30);
+                    updated[date].amazon.netProfit = rev - cogs - fees - (adDay.spend || 0);
+                  }
+                  
+                  adsDaysUpdated++;
+                });
+                
+                console.log(`[AutoSync] Amazon Ads: ${adsDaysUpdated} days updated, $${adsData.summary?.totalSpend?.toFixed(2)} total spend`);
+                try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('[AutoSync] Failed to persist ads data to localStorage'); }
+                return updated;
+              });
+              
+              queueCloudSave({ ...combinedData });
+              setAmazonCredentials(p => ({ ...p, adsLastSync: new Date().toISOString() }));
+              results.push({ service: 'Amazon Ads', success: true, days: adsData.summary?.daysWithData, spend: adsData.summary?.totalSpend, campaigns: adsData.summary?.campaignCount });
+            } else if (adsData?.status === 'pending') {
+              results.push({ service: 'Amazon Ads', success: false, error: 'Reports still generating - will complete on next sync' });
+            } else {
+              results.push({ service: 'Amazon Ads', success: false, error: adsData?.error || 'Ads sync failed' });
+              devWarn('Amazon Ads auto-sync failed:', adsData?.error);
+            }
+          } catch (err) {
+            results.push({ service: 'Amazon Ads', success: false, error: err.message });
+            devWarn('Amazon Ads auto-sync error:', err.message);
           }
         }
       }
