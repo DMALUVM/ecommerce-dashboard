@@ -137,7 +137,125 @@ const InventoryView = ({
   };
   const rawItems = data.items || [];
   
-  // Log raw data for debugging
+  // LIVE VELOCITY: Compute from current allDaysData + allWeeksData reactively
+  // This ensures velocity updates in real-time when sync brings new sales data
+  // Without this, velocity is baked into the snapshot at creation time and never updates
+  const liveVelocity = useMemo(() => {
+    const amzVel = {};
+    const shopVel = {};
+    
+    // SOURCE 1: Daily data (last 28 days with SKU data)
+    const sortedDates = Object.keys(allDaysData || {}).sort().reverse();
+    
+    const datesWithAmzSku = sortedDates.filter(d => {
+      const s = allDaysData[d]?.amazon?.skuData;
+      return (Array.isArray(s) && s.length > 0) || (s && typeof s === 'object' && Object.keys(s).length > 0);
+    });
+    const datesWithShopSku = sortedDates.filter(d => {
+      const s = allDaysData[d]?.shopify?.skuData;
+      return (Array.isArray(s) && s.length > 0) || (s && typeof s === 'object' && Object.keys(s).length > 0);
+    });
+    
+    // Amazon from daily
+    if (datesWithAmzSku.length > 0) {
+      const last28 = datesWithAmzSku.slice(0, 28);
+      const weeksEquiv = last28.length / 7;
+      last28.forEach(d => {
+        const skuArr = allDaysData[d]?.amazon?.skuData;
+        const skuList = Array.isArray(skuArr) ? skuArr : Object.values(skuArr || {});
+        skuList.forEach(item => {
+          if (!item.sku) return;
+          const u = item.unitsSold || item.units || 0;
+          const vel = u / weeksEquiv;
+          [item.sku, item.sku.toUpperCase(), item.sku.toLowerCase(),
+           item.sku.replace(/shop$/i, '').toUpperCase()].forEach(k => {
+            amzVel[k] = (amzVel[k] || 0) + vel;
+          });
+        });
+      });
+    }
+    
+    // Shopify from daily
+    if (datesWithShopSku.length > 0) {
+      const last28 = datesWithShopSku.slice(0, 28);
+      const weeksEquiv = last28.length / 7;
+      last28.forEach(d => {
+        const skuArr = allDaysData[d]?.shopify?.skuData;
+        const skuList = Array.isArray(skuArr) ? skuArr : Object.values(skuArr || {});
+        skuList.forEach(item => {
+          if (!item.sku) return;
+          const u = item.unitsSold || item.units || 0;
+          const vel = u / weeksEquiv;
+          [item.sku, item.sku.toUpperCase(), item.sku.toLowerCase(),
+           item.sku.replace(/shop$/i, '').toUpperCase(), item.sku.replace(/shop$/i, '') + 'Shop'].forEach(k => {
+            shopVel[k] = (shopVel[k] || 0) + vel;
+          });
+        });
+      });
+    }
+    
+    // SOURCE 2: Weekly data supplements (catches slow movers not in 28-day window)
+    const sortedWeeks = Object.keys(allWeeksData || {}).sort().reverse().slice(0, 4);
+    if (sortedWeeks.length > 0) {
+      const weeklyAmz = {};
+      const weeklyShop = {};
+      sortedWeeks.forEach(w => {
+        const wd = allWeeksData[w];
+        if (wd?.amazon?.skuData) {
+          const arr = Array.isArray(wd.amazon.skuData) ? wd.amazon.skuData : Object.values(wd.amazon.skuData);
+          arr.forEach(item => {
+            if (!item.sku) return;
+            weeklyAmz[item.sku] = (weeklyAmz[item.sku] || 0) + (item.unitsSold || item.units || 0);
+          });
+        }
+        if (wd?.shopify?.skuData) {
+          const arr = Array.isArray(wd.shopify.skuData) ? wd.shopify.skuData : Object.values(wd.shopify.skuData);
+          arr.forEach(item => {
+            if (!item.sku) return;
+            weeklyShop[item.sku] = (weeklyShop[item.sku] || 0) + (item.unitsSold || item.units || 0);
+          });
+        }
+      });
+      // Fill gaps only - don't overwrite daily data
+      Object.keys(weeklyAmz).forEach(sku => {
+        const avg = weeklyAmz[sku] / sortedWeeks.length;
+        [sku, sku.toUpperCase(), sku.toLowerCase(), sku.replace(/shop$/i, '').toUpperCase()].forEach(k => {
+          if (!amzVel[k]) amzVel[k] = avg;
+        });
+      });
+      Object.keys(weeklyShop).forEach(sku => {
+        const avg = weeklyShop[sku] / sortedWeeks.length;
+        [sku, sku.toUpperCase(), sku.toLowerCase(), sku.replace(/shop$/i, '').toUpperCase()].forEach(k => {
+          if (!shopVel[k]) shopVel[k] = avg;
+        });
+      });
+    }
+    
+    return { amzVel, shopVel };
+  }, [allDaysData, allWeeksData]);
+  
+  // Overlay live velocity onto snapshot items
+  const velocityEnhancedItems = rawItems.map(item => {
+    const sku = item.sku;
+    if (!sku) return item;
+    const newAmzVel = liveVelocity.amzVel[sku] || liveVelocity.amzVel[sku?.toUpperCase()] || 
+                      liveVelocity.amzVel[sku?.toLowerCase()] || liveVelocity.amzVel[sku?.replace(/shop$/i, '').toUpperCase()] || 0;
+    const newShopVel = liveVelocity.shopVel[sku] || liveVelocity.shopVel[sku?.toUpperCase()] || 
+                       liveVelocity.shopVel[sku?.toLowerCase()] || liveVelocity.shopVel[sku?.replace(/shop$/i, '').toUpperCase()] ||
+                       liveVelocity.shopVel[sku?.replace(/shop$/i, '') + 'Shop'] || 0;
+    // Only override if we have live data
+    const hasLiveData = newAmzVel > 0 || newShopVel > 0;
+    if (!hasLiveData) return item;
+    
+    const totalVel = newAmzVel + newShopVel;
+    return {
+      ...item,
+      amzWeeklyVel: Math.round(newAmzVel * 10) / 10,
+      shopWeeklyVel: Math.round(newShopVel * 10) / 10,
+      weeklyVel: Math.round(totalVel * 10) / 10,
+      // daysOfSupply recalculated downstream in recalculatedItems
+    };
+  });
   
   // FILTER AND DEDUPLICATE SKUs
   // Priority: SKUs with inventory > 0, prefer "Shop" suffix variants
@@ -145,7 +263,7 @@ const InventoryView = ({
   const deduplicatedItems = (() => {
     const skuMap = new Map();
     
-    rawItems.forEach(item => {
+    velocityEnhancedItems.forEach(item => {
       if (!item.sku) return;
       
       // Normalize SKU - remove "Shop" suffix and lowercase for dedup key
