@@ -115,213 +115,174 @@ const AdsView = ({
     return insights;
   }, [campaigns, campaignSummary, hasCampaignData]);
 
-  // ═══ AMAZON ADS INTELLIGENCE (from API sync data) ═══
+  // ═══ AMAZON ADS INTELLIGENCE (from allDaysData + amazonCampaigns + adsIntelData) ═══
   const amazonAdsInsights = useMemo(() => {
-    const intel = { hasData: false, wastedSpend: [], topWinners: [], topCampaigns: [], skuPerformance: [], placementInsights: null, negativeKeywords: [], summary: null, dateRange: { earliest: null, latest: null, daysAvailable: 0 } };
-    if (!adsIntelData) return intel;
+    const intel = { hasData: false, wastedSpend: [], topWinners: [], topCampaigns: [], skuPerformance: [], placementInsights: null, negativeKeywords: [], summary: null, dateRange: { earliest: null, latest: null, daysAvailable: 0 }, trendData: [] };
     
-    // Read from BOTH formats: nested (amazon.sp_search_terms.records) AND flat (_apiSpSearchTerms)
-    const amz = adsIntelData.amazon || {};
-    const getRecords = (nestedKey, flatKey) => {
-      const nested = amz[nestedKey]?.records;
-      const flat = adsIntelData[flatKey];
-      if (nested?.length) return nested;
-      if (Array.isArray(flat) && flat.length) return flat;
-      return [];
-    };
+    // Date cutoff
+    const cutoffDate = intelDateRange === 'all' ? null : (() => { const d = new Date(); d.setDate(d.getDate() - intelDateRange); return d.toISOString().slice(0, 10); })();
+    const inRange = (r) => { if (!cutoffDate) return true; const d = r['Date'] || r['date'] || ''; return d >= cutoffDate; };
     
-    const spSearchTerms = getRecords('sp_search_terms', '_apiSpSearchTerms');
-    const spCampaignsRaw = getRecords('sp_campaigns', '_apiSpCampaigns');
-    const spCampaigns = spCampaignsRaw.length ? spCampaignsRaw : getRecords('sp_campaigns', '_apiDailyOverview');
-    const spAdvertised = getRecords('sp_advertised_product', '_apiSpAdvertised');
-    const spPlacement = getRecords('sp_placement', '_apiSpPlacement');
-    const spTargeting = getRecords('sp_targeting', '_apiSpTargeting');
-    
-    // If nothing at all, bail
-    if (!spSearchTerms.length && !spCampaigns.length && !spAdvertised.length && !spPlacement.length) return intel;
-    
-    // Date range filter
-    const cutoffDate = intelDateRange === 'all' ? null : (() => {
-      const d = new Date(); d.setDate(d.getDate() - intelDateRange); return d.toISOString().slice(0, 10);
-    })();
-    const inRange = (r) => {
-      if (!cutoffDate) return true;
-      const d = r['Date'] || r['date'] || '';
-      return d >= cutoffDate;
-    };
-    
-    // Detect date range of available data
-    const allDates = new Set();
-    [spSearchTerms, spCampaigns, spAdvertised, spPlacement, spTargeting].forEach(arr => {
-      arr.forEach(r => { const d = r['Date'] || r['date']; if (d) allDates.add(d); });
+    // ─── PRIMARY: Build from allDaysData (always available) ───
+    const daysWithAds = sortedDays.filter(d => {
+      if (cutoffDate && d < cutoffDate) return false;
+      const day = allDaysData[d];
+      return (day?.amazon?.adSpend > 0) || (day?.amazonAdsMetrics?.spend > 0);
     });
-    if (allDates.size > 0) {
-      const sorted = [...allDates].sort();
-      intel.dateRange.earliest = sorted[0];
-      intel.dateRange.latest = sorted[sorted.length - 1];
-      intel.dateRange.daysAvailable = sorted.length;
-    }
     
-    // --- Search Terms Analysis ---
-    const searchTerms = spSearchTerms.filter(inRange);
-    if (searchTerms.length > 0) {
+    if (daysWithAds.length >= 1) {
       intel.hasData = true;
-      // Aggregate by search term (API gives daily rows)
-      const termMap = {};
-      searchTerms.forEach(r => {
-        const term = r['Customer Search Term'] || '';
-        if (!term) return;
-        if (!termMap[term]) termMap[term] = { term, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
-        termMap[term].spend += Number(r['Spend'] || 0);
-        termMap[term].sales += Number(r['7 Day Total Sales'] || 0);
-        termMap[term].clicks += Number(r['Clicks'] || 0);
-        termMap[term].impressions += Number(r['Impressions'] || 0);
-        termMap[term].orders += Number(r['7 Day Total Orders (#)'] || 0);
+      let totalSpend = 0, totalRev = 0;
+      
+      daysWithAds.forEach(d => {
+        const day = allDaysData[d];
+        const spend = day?.amazon?.adSpend || day?.amazonAdsMetrics?.spend || 0;
+        const rev = day?.amazon?.adRevenue || day?.amazonAdsMetrics?.totalRevenue || day?.amazon?.revenue || 0;
+        totalSpend += spend;
+        totalRev += rev;
+        intel.trendData.push({ date: d, spend, rev, acos: rev > 0 ? (spend / rev) * 100 : 0, roas: spend > 0 ? rev / spend : 0 });
       });
-      const terms = Object.values(termMap);
       
-      // Wasted spend: $5+ spend, zero sales
-      intel.wastedSpend = terms
-        .filter(t => t.spend >= 5 && t.sales === 0)
-        .sort((a, b) => b.spend - a.spend)
-        .slice(0, 10);
-      
-      // Top winners: highest ROAS with meaningful spend
-      intel.topWinners = terms
-        .filter(t => t.spend >= 3 && t.sales > 0)
-        .map(t => ({ ...t, roas: t.sales / t.spend, acos: t.spend / t.sales * 100 }))
-        .sort((a, b) => b.roas - a.roas)
-        .slice(0, 10);
-      
-      // Negative keyword candidates: 10+ clicks, zero orders
-      intel.negativeKeywords = terms
-        .filter(t => t.clicks >= 10 && t.orders === 0)
-        .sort((a, b) => b.spend - a.spend)
-        .slice(0, 10);
-      
-      // Summary
-      const totalSearchSpend = terms.reduce((s, t) => s + t.spend, 0);
-      const totalSearchSales = terms.reduce((s, t) => s + t.sales, 0);
-      const wastedTotal = intel.wastedSpend.reduce((s, t) => s + t.spend, 0);
+      intel.dateRange = { earliest: daysWithAds[0], latest: daysWithAds[daysWithAds.length - 1], daysAvailable: daysWithAds.length };
       intel.summary = {
-        totalTerms: terms.length,
-        totalSpend: totalSearchSpend,
-        totalSales: totalSearchSales,
-        overallRoas: totalSearchSpend > 0 ? totalSearchSales / totalSearchSpend : 0,
-        wastedTotal,
-        wastedPct: totalSearchSpend > 0 ? (wastedTotal / totalSearchSpend) * 100 : 0
+        totalTerms: 0,
+        totalSpend: totalSpend,
+        totalSales: totalRev,
+        overallRoas: totalSpend > 0 ? totalRev / totalSpend : 0,
+        wastedTotal: 0,
+        wastedPct: 0,
+        daysCount: daysWithAds.length
       };
     }
     
-    // --- Campaign Analysis ---
-    // campaignSummary is pre-aggregated across all dates (not date-filterable)
-    // dailyOverview rows can supplement if they have campaign names
-    const campaignSummaryData = adsIntelData.campaignSummary;
-    if (Array.isArray(campaignSummaryData) && campaignSummaryData.length > 0) {
+    // ─── CAMPAIGNS: from amazonCampaigns prop (CSV imports) ───
+    if (hasCampaignData) {
       intel.hasData = true;
-      intel.topCampaigns = campaignSummaryData
-        .filter(c => c.spend > 0)
+      intel.topCampaigns = campaigns
+        .filter(c => (c.spend || 0) > 0)
         .map(c => ({
           name: c.name || '',
-          type: c.type || 'SP',
-          status: c.status || '',
           spend: c.spend || 0,
-          sales: c.revenue || 0,
+          sales: c.sales || 0,
           clicks: c.clicks || 0,
           impressions: c.impressions || 0,
           orders: c.orders || 0,
-          roas: c.roas || (c.spend > 0 ? (c.revenue || 0) / c.spend : 0),
-          acos: c.acos || (c.revenue > 0 ? (c.spend / c.revenue) * 100 : 999),
+          roas: c.roas || (c.spend > 0 && c.sales > 0 ? c.sales / c.spend : 0),
+          acos: c.acos || (c.spend > 0 && c.sales > 0 ? (c.spend / c.sales) * 100 : 999),
+          state: c.state || '',
+          type: c.type || 'SP'
         }))
         .sort((a, b) => b.spend - a.spend)
         .slice(0, 12);
-    } else {
-      // Fallback: try daily campaign rows
-      const dailyOverview = spCampaigns.filter(inRange);
-      if (dailyOverview.length > 0) {
+    }
+    
+    // ─── ENRICHMENT: Overlay adsIntelData (API sync / deep analysis uploads) ───
+    if (adsIntelData) {
+      const amz = adsIntelData.amazon || {};
+      const getRecords = (nestedKey, flatKey) => {
+        const nested = amz[nestedKey]?.records;
+        const flat = adsIntelData[flatKey];
+        if (nested?.length) return nested;
+        if (Array.isArray(flat) && flat.length) return flat;
+        return [];
+      };
+      
+      // Search Terms (only from adsIntelData - not in allDaysData)
+      const spSearchTerms = getRecords('sp_search_terms', '_apiSpSearchTerms').filter(inRange);
+      if (spSearchTerms.length > 0) {
         intel.hasData = true;
-        const campMap = {};
-        dailyOverview.forEach(r => {
-          const name = r['Campaign Name'] || r['campaignName'] || '';
-          if (!name) return;
-          if (!campMap[name]) campMap[name] = { name, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
-          campMap[name].spend += Number(r['Spend'] || r['spend'] || 0);
-          campMap[name].sales += Number(r['Sales'] || r['sales'] || r['7 Day Total Sales'] || 0);
-          campMap[name].clicks += Number(r['Clicks'] || r['clicks'] || 0);
-          campMap[name].impressions += Number(r['Impressions'] || r['impressions'] || 0);
-          campMap[name].orders += Number(r['Orders'] || r['orders'] || r['7 Day Total Orders (#)'] || 0);
+        const termMap = {};
+        spSearchTerms.forEach(r => {
+          const term = r['Customer Search Term'] || '';
+          if (!term) return;
+          if (!termMap[term]) termMap[term] = { term, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+          termMap[term].spend += Number(r['Spend'] || 0);
+          termMap[term].sales += Number(r['7 Day Total Sales'] || 0);
+          termMap[term].clicks += Number(r['Clicks'] || 0);
+          termMap[term].impressions += Number(r['Impressions'] || 0);
+          termMap[term].orders += Number(r['7 Day Total Orders (#)'] || 0);
         });
-        intel.topCampaigns = Object.values(campMap)
-          .filter(c => c.spend > 0)
-          .map(c => ({ ...c, roas: c.spend > 0 ? c.sales / c.spend : 0, acos: c.sales > 0 ? (c.spend / c.sales) * 100 : 999 }))
-          .sort((a, b) => b.spend - a.spend)
-          .slice(0, 12);
+        const terms = Object.values(termMap);
+        intel.wastedSpend = terms.filter(t => t.spend >= 5 && t.sales === 0).sort((a, b) => b.spend - a.spend).slice(0, 10);
+        intel.topWinners = terms.filter(t => t.spend >= 3 && t.sales > 0).map(t => ({ ...t, roas: t.sales / t.spend, acos: t.spend / t.sales * 100 })).sort((a, b) => b.roas - a.roas).slice(0, 10);
+        intel.negativeKeywords = terms.filter(t => t.clicks >= 10 && t.orders === 0).sort((a, b) => b.spend - a.spend).slice(0, 10);
+        // Upgrade summary with search term counts
+        const totalSearchSpend = terms.reduce((s, t) => s + t.spend, 0);
+        const totalSearchSales = terms.reduce((s, t) => s + t.sales, 0);
+        const wastedTotal = intel.wastedSpend.reduce((s, t) => s + t.spend, 0);
+        intel.summary = { ...intel.summary, totalTerms: terms.length, wastedTotal, wastedPct: totalSearchSpend > 0 ? (wastedTotal / totalSearchSpend) * 100 : 0 };
+      }
+      
+      // Campaigns from API (override CSV if available)
+      const campaignSummaryData = adsIntelData.campaignSummary;
+      if (Array.isArray(campaignSummaryData) && campaignSummaryData.length > 0) {
+        intel.topCampaigns = campaignSummaryData.filter(c => c.spend > 0).map(c => ({
+          name: c.name || '', type: c.type || 'SP', status: c.status || '', spend: c.spend || 0, sales: c.revenue || 0,
+          clicks: c.clicks || 0, impressions: c.impressions || 0, orders: c.orders || 0,
+          roas: c.roas || (c.spend > 0 ? (c.revenue || 0) / c.spend : 0), acos: c.acos || (c.revenue > 0 ? (c.spend / c.revenue) * 100 : 999),
+        })).sort((a, b) => b.spend - a.spend).slice(0, 12);
+      } else {
+        const spCampaignsRaw = getRecords('sp_campaigns', '_apiSpCampaigns');
+        const spCampaignRows = (spCampaignsRaw.length ? spCampaignsRaw : getRecords('sp_campaigns', '_apiDailyOverview')).filter(inRange);
+        if (spCampaignRows.length > 0) {
+          const campMap = {};
+          spCampaignRows.forEach(r => {
+            const name = r['Campaign Name'] || r['campaignName'] || '';
+            if (!name) return;
+            if (!campMap[name]) campMap[name] = { name, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+            campMap[name].spend += Number(r['Spend'] || r['spend'] || 0);
+            campMap[name].sales += Number(r['Sales'] || r['sales'] || r['7 Day Total Sales'] || 0);
+            campMap[name].clicks += Number(r['Clicks'] || r['clicks'] || 0);
+            campMap[name].impressions += Number(r['Impressions'] || r['impressions'] || 0);
+          });
+          intel.topCampaigns = Object.values(campMap).filter(c => c.spend > 0).map(c => ({ ...c, roas: c.spend > 0 ? c.sales / c.spend : 0, acos: c.sales > 0 ? (c.spend / c.sales) * 100 : 999 })).sort((a, b) => b.spend - a.spend).slice(0, 12);
+        }
+      }
+      
+      // SKU Performance from API
+      const spAdvertised = getRecords('sp_advertised_product', '_apiSpAdvertised').filter(inRange);
+      if (spAdvertised.length > 0) {
+        intel.hasData = true;
+        const skuMap = {};
+        spAdvertised.forEach(r => {
+          const sku = r['Advertised SKU'] || r['SKU'] || '';
+          if (!sku) return;
+          if (!skuMap[sku]) skuMap[sku] = { sku, asin: r['Advertised ASIN'] || '', spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+          skuMap[sku].spend += Number(r['Spend'] || 0);
+          skuMap[sku].sales += Number(r['7 Day Total Sales'] || 0);
+          skuMap[sku].clicks += Number(r['Clicks'] || 0);
+          skuMap[sku].orders += Number(r['7 Day Total Orders (#)'] || r['7 Day Total Units (#)'] || 0);
+        });
+        intel.skuPerformance = Object.values(skuMap).filter(s => s.spend > 0).map(s => ({ ...s, roas: s.spend > 0 ? s.sales / s.spend : 0, acos: s.sales > 0 ? (s.spend / s.sales) * 100 : 999 })).sort((a, b) => b.spend - a.spend).slice(0, 10);
+      } else if (Array.isArray(adsIntelData.skuAdPerformance) && adsIntelData.skuAdPerformance.length > 0) {
+        intel.hasData = true;
+        intel.skuPerformance = adsIntelData.skuAdPerformance.filter(s => s.spend > 0).map(s => ({
+          sku: s.sku || '', asin: s.asin || '', spend: s.spend || 0, sales: s.revenue || s.sales || 0,
+          clicks: s.clicks || 0, orders: s.orders || 0,
+          roas: s.roas || (s.spend > 0 ? (s.revenue || s.sales || 0) / s.spend : 0), acos: s.acos || (s.revenue > 0 ? (s.spend / s.revenue) * 100 : 999),
+        })).sort((a, b) => b.spend - a.spend).slice(0, 10);
+      }
+      
+      // Placement from API
+      const spPlacement = getRecords('sp_placement', '_apiSpPlacement').filter(inRange);
+      if (spPlacement.length > 0) {
+        intel.hasData = true;
+        const placeMap = {};
+        spPlacement.forEach(r => {
+          const place = r['Placement'] || '';
+          if (!place) return;
+          if (!placeMap[place]) placeMap[place] = { placement: place, spend: 0, sales: 0, clicks: 0, impressions: 0 };
+          placeMap[place].spend += Number(r['Spend'] || 0);
+          placeMap[place].sales += Number(r['7 Day Total Sales'] || 0);
+          placeMap[place].clicks += Number(r['Clicks'] || 0);
+          placeMap[place].impressions += Number(r['Impressions'] || 0);
+        });
+        intel.placementInsights = Object.values(placeMap).map(p => ({ ...p, roas: p.spend > 0 ? p.sales / p.spend : 0, cpc: p.clicks > 0 ? p.spend / p.clicks : 0, ctr: p.impressions > 0 ? (p.clicks / p.impressions) * 100 : 0 }));
       }
     }
     
-    // --- SKU Performance ---
-    // Try daily rows first (date-filterable), then fall back to pre-aggregated skuAdPerformance
-    const skuData = spAdvertised.filter(inRange);
-    if (skuData.length > 0) {
-      intel.hasData = true;
-      const skuMap = {};
-      skuData.forEach(r => {
-        const sku = r['Advertised SKU'] || r['SKU'] || '';
-        if (!sku) return;
-        if (!skuMap[sku]) skuMap[sku] = { sku, asin: r['Advertised ASIN'] || '', spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
-        skuMap[sku].spend += Number(r['Spend'] || 0);
-        skuMap[sku].sales += Number(r['7 Day Total Sales'] || 0);
-        skuMap[sku].clicks += Number(r['Clicks'] || 0);
-        skuMap[sku].impressions += Number(r['Impressions'] || 0);
-        skuMap[sku].orders += Number(r['7 Day Total Orders (#)'] || r['7 Day Total Units (#)'] || 0);
-      });
-      intel.skuPerformance = Object.values(skuMap)
-        .filter(s => s.spend > 0)
-        .map(s => ({ ...s, roas: s.spend > 0 ? s.sales / s.spend : 0, acos: s.sales > 0 ? (s.spend / s.sales) * 100 : 999 }))
-        .sort((a, b) => b.spend - a.spend)
-        .slice(0, 10);
-    } else if (Array.isArray(adsIntelData.skuAdPerformance) && adsIntelData.skuAdPerformance.length > 0) {
-      // Fallback: pre-aggregated SKU data from API
-      intel.hasData = true;
-      intel.skuPerformance = adsIntelData.skuAdPerformance
-        .filter(s => s.spend > 0)
-        .map(s => ({
-          sku: s.sku || '',
-          asin: s.asin || '',
-          spend: s.spend || 0,
-          sales: s.revenue || s.sales || 0,
-          clicks: s.clicks || 0,
-          impressions: s.impressions || 0,
-          orders: s.orders || 0,
-          roas: s.roas || (s.spend > 0 ? (s.revenue || s.sales || 0) / s.spend : 0),
-          acos: s.acos || (s.revenue > 0 ? (s.spend / s.revenue) * 100 : 999),
-        }))
-        .sort((a, b) => b.spend - a.spend)
-        .slice(0, 10);
-    }
-    
-    // --- Placement Insights ---
-    const placementData = spPlacement.filter(inRange);
-    if (placementData.length > 0) {
-      intel.hasData = true;
-      const placeMap = {};
-      placementData.forEach(r => {
-        const place = r['Placement'] || '';
-        if (!place) return;
-        if (!placeMap[place]) placeMap[place] = { placement: place, spend: 0, sales: 0, clicks: 0, impressions: 0 };
-        placeMap[place].spend += Number(r['Spend'] || 0);
-        placeMap[place].sales += Number(r['7 Day Total Sales'] || 0);
-        placeMap[place].clicks += Number(r['Clicks'] || 0);
-        placeMap[place].impressions += Number(r['Impressions'] || 0);
-      });
-      const placements = Object.values(placeMap).map(p => ({
-        ...p, roas: p.spend > 0 ? p.sales / p.spend : 0, cpc: p.clicks > 0 ? p.spend / p.clicks : 0, ctr: p.impressions > 0 ? (p.clicks / p.impressions) * 100 : 0
-      }));
-      intel.placementInsights = placements;
-    }
-    
     return intel;
-  }, [adsIntelData, intelDateRange]);
+  }, [adsIntelData, intelDateRange, sortedDays, allDaysData, hasCampaignData, campaigns]);
 
   // Period navigation constants
   const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -613,8 +574,8 @@ const AdsView = ({
               {amazonAdsInsights.dateRange.earliest && (
                 <p className="text-xs text-slate-500 mt-1">
                   {intelDateRange === 'all' ? `All data: ${amazonAdsInsights.dateRange.earliest} → ${amazonAdsInsights.dateRange.latest}` : `Last ${intelDateRange} days`}
-                  {amazonAdsInsights.summary ? ` · ${amazonAdsInsights.summary.totalTerms.toLocaleString()} search terms` : ''}
-                  {` · ${amazonAdsInsights.dateRange.daysAvailable} days available`}
+                  {amazonAdsInsights.summary?.totalTerms > 0 ? ` · ${amazonAdsInsights.summary.totalTerms.toLocaleString()} search terms` : ''}
+                  {` · ${amazonAdsInsights.dateRange.daysAvailable} days with ad spend`}
                 </p>
               )}
               </div>
@@ -652,6 +613,55 @@ const AdsView = ({
                   </div>
                 </div>
               )}
+
+              {/* ACOS Trend Chart — last 30 days from allDaysData */}
+              {amazonAdsInsights.trendData.length > 2 && (() => {
+                const trend = amazonAdsInsights.trendData.slice(-30);
+                const maxSpend = Math.max(...trend.map(d => d.spend), 1);
+                const last7 = trend.slice(-7);
+                const prev7 = trend.slice(-14, -7);
+                const last7Acos = (() => { const s = last7.reduce((a, d) => a + d.spend, 0); const r = last7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
+                const prev7Acos = (() => { const s = prev7.reduce((a, d) => a + d.spend, 0); const r = prev7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
+                const delta = prev7Acos > 0 ? last7Acos - prev7Acos : 0;
+                return (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-white font-semibold text-sm flex items-center gap-2"><BarChart3 className="w-4 h-4 text-cyan-400"/>ACOS Trend — Last {trend.length} Days</h3>
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="text-slate-400">7d ACOS: <span className={`font-bold ${last7Acos <= 25 ? 'text-emerald-400' : last7Acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>{last7Acos.toFixed(1)}%</span></span>
+                        {delta !== 0 && <span className={`flex items-center gap-0.5 ${delta < 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{delta < 0 ? <TrendingDown className="w-3 h-3"/> : <TrendingUp className="w-3 h-3"/>}{Math.abs(delta).toFixed(1)}pp WoW</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-end gap-px h-20">
+                      {trend.map((d, i) => {
+                        const h = maxSpend > 0 ? Math.max((d.spend / maxSpend) * 100, 3) : 3;
+                        const color = d.acos <= 25 ? 'bg-emerald-500' : d.acos <= 40 ? 'bg-amber-500' : 'bg-rose-500';
+                        return (
+                          <div key={i} className="flex-1 flex flex-col items-center justify-end group relative">
+                            <div className={`w-full rounded-t ${color} opacity-80 hover:opacity-100 transition-opacity cursor-default`} style={{ height: `${h}%`, minHeight: '2px' }}/>
+                            <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 pointer-events-none">
+                              <div className="bg-slate-900 border border-slate-600 rounded-lg p-2 text-xs whitespace-nowrap shadow-xl">
+                                <p className="text-slate-400">{new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                <p className="text-white">Spend: {formatCurrency(d.spend)}</p>
+                                <p className={`font-bold ${d.acos <= 25 ? 'text-emerald-400' : d.acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>ACOS: {d.acos.toFixed(1)}%</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-600 mt-1">
+                      <span>{new Date(trend[0].date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                      <div className="flex items-center gap-3">
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"/>≤25%</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500"/>≤40%</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500"/>&gt;40%</span>
+                      </div>
+                      <span>{new Date(trend[trend.length - 1].date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {/* Wasted Spend — Zero-Sale Search Terms */}
