@@ -15481,16 +15481,20 @@ Reference the full data from the prior analysis. Be concise but still specific w
           dataBlock += `\n\n## DATA SOURCES ANALYZED\n${sourcesList.join('\n')}\n\nIMPORTANT: Begin your report with a "📂 Sources Analyzed" section listing these exact data sources so the reader knows what the analysis is based on. If critical data is MISSING (e.g., no search terms, no placement data), call it out explicitly as a gap.`;
         }
       } else {
-        // Lightweight context for follow-ups
+        // Lightweight context for follow-ups — compressed weekly summary
         const sortedDays = Object.keys(allDaysData || {}).sort();
-        const last7 = sortedDays.slice(-7);
-        let recentSpend = 0, recentRev = 0;
-        last7.forEach(d => {
+        const last14 = sortedDays.slice(-14);
+        let rSpend = 0, rRev = 0, rGoog = 0, rMeta = 0, rAmzSpend = 0;
+        last14.forEach(d => {
           const day = allDaysData[d];
-          recentSpend += (day?.amazon?.adSpend || 0) + (day?.shopify?.googleSpend || 0) + (day?.shopify?.metaSpend || 0);
-          recentRev += (day?.amazon?.revenue || 0) + (day?.shopify?.revenue || 0);
+          rAmzSpend += (day?.amazon?.adSpend || 0);
+          rGoog += (day?.shopify?.googleSpend || day?.googleSpend || 0);
+          rMeta += (day?.shopify?.metaSpend || day?.metaSpend || 0);
+          rRev += (day?.amazon?.revenue || 0) + (day?.shopify?.revenue || 0);
         });
-        dataBlock = `[Quick context: Last 7d spend $${recentSpend.toFixed(0)}, revenue $${recentRev.toFixed(0)}, ROAS ${recentSpend > 0 ? (recentRev/recentSpend).toFixed(2) : 'N/A'}x. Full dataset was provided earlier in this conversation.]`;
+        rSpend = rAmzSpend + rGoog + rMeta;
+        const rAcos = rRev > 0 ? ((rAmzSpend / rRev) * 100).toFixed(1) : 'N/A';
+        dataBlock = `[14-day snapshot: Amazon $${rAmzSpend.toFixed(0)} spend (ACOS ${rAcos}%), Google $${rGoog.toFixed(0)}, Meta $${rMeta.toFixed(0)}. Total spend $${rSpend.toFixed(0)}, revenue $${rRev.toFixed(0)}, blended ROAS ${rSpend > 0 ? (rRev/rSpend).toFixed(2) : 'N/A'}x. Full data was provided in the first message of this conversation.]`;
       }
       
       // Build message with data separated from question
@@ -15499,9 +15503,19 @@ Reference the full data from the prior analysis. Be concise but still specific w
         : `${dataBlock}\n\n${userMessage}`;
 
       // ── Send with smart token budget ──
+      // Truncate conversation history to prevent unbounded token growth
+      // Keep first message (establishes context) + last 6 exchanges for continuity
+      const trimmedHistory = adsAiMessages.length <= 8 
+        ? adsAiMessages.map(m => ({ role: m.role, content: m.content }))
+        : [
+            ...adsAiMessages.slice(0, 2).map(m => ({ role: m.role, content: m.content })),
+            { role: 'assistant', content: '[...earlier analysis truncated for token efficiency — key findings retained above...]' },
+            ...adsAiMessages.slice(-6).map(m => ({ role: m.role, content: m.content })),
+          ];
+      
       const aiResponse = await callAI({
         system: systemPrompt,
-        messages: [...adsAiMessages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userContent }],
+        messages: [...trimmedHistory, { role: 'user', content: userContent }],
       }, '', aiChatModel, tokenBudget);
       
       const responseText = aiResponse || 'Sorry, I could not process that.';

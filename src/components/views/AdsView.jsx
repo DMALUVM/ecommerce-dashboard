@@ -409,6 +409,71 @@ const AdsView = ({
     catch { return dateStr || ''; }
   };
 
+  // ═══ CAMPAIGN RANKINGS (top/worst performers) ═══
+  const campaignRankings = useMemo(() => {
+    if (!hasCampaignData) return { top: [], worst: [], byType: {}, totalActive: 0, enabledCount: 0, pausedCount: 0 };
+    const meaningful = campaigns.filter(c => (c.spend || 0) > 5);
+    const top = [...meaningful].filter(c => c.sales > 0).sort((a, b) => (b.roas || 0) - (a.roas || 0)).slice(0, 5);
+    const worst = [...meaningful].filter(c => c.spend > 10).sort((a, b) => (a.roas || 0) - (b.roas || 0)).slice(0, 5);
+    
+    // Group by type
+    const byType = {};
+    campaigns.forEach(c => {
+      const t = c.type || 'Unknown';
+      if (!byType[t]) byType[t] = { type: t, count: 0, spend: 0, sales: 0, clicks: 0, orders: 0 };
+      byType[t].count++;
+      byType[t].spend += c.spend || 0;
+      byType[t].sales += c.sales || 0;
+      byType[t].clicks += c.clicks || 0;
+      byType[t].orders += c.orders || 0;
+    });
+    Object.values(byType).forEach(t => {
+      t.roas = t.spend > 0 ? t.sales / t.spend : 0;
+      t.acos = t.sales > 0 ? (t.spend / t.sales) * 100 : 999;
+      t.cpc = t.clicks > 0 ? t.spend / t.clicks : 0;
+    });
+    
+    return {
+      top, worst, byType,
+      totalActive: campaigns.filter(c => c.state === 'ENABLED').length,
+      enabledCount: campaigns.filter(c => c.state === 'ENABLED').length,
+      pausedCount: campaigns.filter(c => c.state !== 'ENABLED').length,
+    };
+  }, [campaigns, hasCampaignData]);
+
+  // ═══ REVENUE ATTRIBUTION (organic vs paid) ═══
+  const revenueAttribution = useMemo(() => {
+    const cutoff = (() => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10); })();
+    const last30 = sortedDays.filter(d => d >= cutoff);
+    let totalRev = 0, adRev = 0, adSpend = 0;
+    last30.forEach(d => {
+      const day = allDaysData[d];
+      const rev = (day?.amazon?.revenue || 0) + (day?.shopify?.revenue || 0);
+      const aRev = day?.amazon?.adRevenue || 0;
+      const aSpend = (day?.amazon?.adSpend || 0) + (day?.shopify?.googleSpend || day?.googleSpend || 0) + (day?.shopify?.metaSpend || day?.metaSpend || 0);
+      totalRev += rev;
+      adRev += aRev;
+      adSpend += aSpend;
+    });
+    const organicRev = totalRev - adRev;
+    return {
+      totalRev, adRev, organicRev, adSpend,
+      adPct: totalRev > 0 ? (adRev / totalRev) * 100 : 0,
+      organicPct: totalRev > 0 ? (organicRev / totalRev) * 100 : 0,
+      tacos: totalRev > 0 ? (adSpend / totalRev) * 100 : 0,
+    };
+  }, [sortedDays, allDaysData]);
+
+  // Platform report modes for generation
+  const REPORT_MODES = [
+    { key: 'all', label: 'All Platforms', icon: '🌐', desc: 'Amazon + Google + Meta comprehensive audit' },
+    { key: 'amazon', label: 'Amazon Only', icon: '📦', desc: 'Deep dive: campaigns, keywords, placements, ACOS' },
+    { key: 'dtc', label: 'Google + Meta (DTC)', icon: '🛍️', desc: 'DTC channels: Google & Meta performance' },
+    { key: 'google', label: 'Google Only', icon: '🔍', desc: 'Google Ads: search terms, CPC, conversions' },
+    { key: 'meta', label: 'Meta Only', icon: '📱', desc: 'Meta Ads: creative, audiences, CPA, ROAS' },
+  ];
+  const [reportMode, setReportMode] = useState('all');
+
   // Period navigation constants
   const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const availableYears = [...new Set([...sortedWeeks, ...sortedDays].map(d => parseInt(d.slice(0, 4))))].filter(Boolean).sort();
@@ -858,6 +923,99 @@ const AdsView = ({
                   </div>
                 );
               })()}
+
+              {/* ═══ CAMPAIGN & REVENUE DATA CARDS ═══ */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                
+                {/* Top Performing Campaigns */}
+                {campaignRankings.top.length > 0 && (
+                  <div className="bg-gradient-to-br from-emerald-900/10 to-slate-800/30 rounded-xl border border-emerald-500/20 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Trophy className="w-4 h-4 text-emerald-400"/>Top Campaigns by ROAS</h3>
+                    <div className="space-y-1.5">
+                      {campaignRankings.top.map((c, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-emerald-900/10">
+                          <span className="text-emerald-500 font-bold w-5">{i + 1}</span>
+                          <span className="text-white flex-1 truncate" title={c.name}>{c.name}</span>
+                          <span className="text-slate-500 w-8">{c.type || 'SP'}</span>
+                          <span className="text-slate-400 w-16 text-right">{formatCurrency(c.spend)}</span>
+                          <span className="text-emerald-400 font-bold w-12 text-right">{(c.roas || 0).toFixed(1)}x</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-700/50 flex justify-between">
+                      <span>Campaigns with $5+ spend, sorted by ROAS</span>
+                      <span>{campaignRankings.top.length} shown</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Worst Performing Campaigns */}
+                {campaignRankings.worst.length > 0 && (
+                  <div className="bg-gradient-to-br from-red-900/10 to-slate-800/30 rounded-xl border border-red-500/20 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-red-400"/>Worst Campaigns by ROAS</h3>
+                    <div className="space-y-1.5">
+                      {campaignRankings.worst.map((c, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-red-900/10">
+                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${(c.roas || 0) === 0 ? 'bg-red-500' : (c.roas || 0) < 1 ? 'bg-orange-500' : 'bg-amber-500'}`}/>
+                          <span className="text-white flex-1 truncate" title={c.name}>{c.name}</span>
+                          <span className="text-slate-500 w-8">{c.type || 'SP'}</span>
+                          <span className="text-slate-400 w-16 text-right">{formatCurrency(c.spend)}</span>
+                          <span className={`font-bold w-12 text-right ${(c.roas || 0) === 0 ? 'text-red-400' : (c.roas || 0) < 1 ? 'text-orange-400' : 'text-amber-400'}`}>{(c.roas || 0).toFixed(1)}x</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-xs mt-2 pt-2 border-t border-slate-700/50 flex items-center justify-between">
+                      <span className="text-slate-500">Campaigns with $10+ spend, sorted lowest ROAS first</span>
+                      <button onClick={() => { setAdsAiInput(`Analyze my worst performing campaigns: ${campaignRankings.worst.map(c => `${c.name} (${c.type}, $${c.spend.toFixed(0)} spend, ${c.roas.toFixed(1)}x ROAS)`).join(', ')}. For each one: should I pause it, restructure it, or adjust bids? Give specific actions.`); setShowAdsAIChat(true); }}
+                        className="text-red-400 hover:text-red-300 text-xs">Diagnose →</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Campaign Type Breakdown */}
+                {Object.keys(campaignRankings.byType).length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Target className="w-4 h-4 text-violet-400"/>Campaign Type Breakdown</h3>
+                    <div className="space-y-2">
+                      {Object.values(campaignRankings.byType).sort((a, b) => b.spend - a.spend).map((t, i) => (
+                        <div key={i} className="flex items-center gap-3 text-xs">
+                          <span className={`px-2 py-0.5 rounded font-bold text-white ${t.type === 'SP' ? 'bg-violet-600' : t.type === 'SB' || t.type === 'SB2' ? 'bg-cyan-600' : t.type === 'SD' ? 'bg-amber-600' : 'bg-slate-600'}`}>{t.type}</span>
+                          <span className="text-slate-400">{t.count} campaigns</span>
+                          <span className="text-white">{formatCurrency(t.spend)} spend</span>
+                          <span className={`font-bold ml-auto ${t.roas >= 3 ? 'text-emerald-400' : t.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{t.roas.toFixed(1)}x ROAS</span>
+                          <span className={`${t.acos <= 25 ? 'text-emerald-400' : t.acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>{t.acos < 999 ? t.acos.toFixed(0) + '% ACOS' : '∞'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Revenue Attribution: Paid vs Organic */}
+                {revenueAttribution.totalRev > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><DollarSign className="w-4 h-4 text-emerald-400"/>Revenue Attribution <span className="text-xs font-normal text-slate-500">30-day</span></h3>
+                    <div className="flex rounded-lg overflow-hidden h-5 mb-3">
+                      {revenueAttribution.adPct > 0 && <div className="bg-violet-500" style={{ width: `${revenueAttribution.adPct}%` }}/>}
+                      {revenueAttribution.organicPct > 0 && <div className="bg-emerald-500" style={{ width: `${revenueAttribution.organicPct}%` }}/>}
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <div className="flex items-center gap-1.5 mb-1"><span className="w-2.5 h-2.5 rounded bg-violet-500"/>
+                          <span className="text-slate-400">Ad-Attributed</span></div>
+                        <p className="text-white font-bold">{formatCurrency(revenueAttribution.adRev)} <span className="text-violet-400 font-normal">({revenueAttribution.adPct.toFixed(0)}%)</span></p>
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5 mb-1"><span className="w-2.5 h-2.5 rounded bg-emerald-500"/>
+                          <span className="text-slate-400">Organic / Other</span></div>
+                        <p className="text-white font-bold">{formatCurrency(revenueAttribution.organicRev)} <span className="text-emerald-400 font-normal">({revenueAttribution.organicPct.toFixed(0)}%)</span></p>
+                      </div>
+                    </div>
+                    {revenueAttribution.tacos > 20 && (
+                      <p className="text-amber-400 text-xs mt-2 pt-2 border-t border-slate-700/50">⚠️ TACOS at {revenueAttribution.tacos.toFixed(1)}% — ad dependency is {revenueAttribution.tacos > 30 ? 'dangerously high' : 'above target'}. Goal: 15-20%.</p>
+                    )}
+                  </div>
+                )}
+              </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {/* Wasted Spend — Zero-Sale Search Terms */}
@@ -1339,7 +1497,11 @@ const AdsView = ({
               // Tier 1: Daily KPIs
               if (sortedDays.length > 0) sources.push({ platform: 'Dashboard', type: 'Daily KPIs (SP-API + Shopify)', rows: sortedDays.length, unit: 'days', date: sortedDays[sortedDays.length-1], color: 'violet' });
               // SP-API campaigns
-              if (hasCampaignData) sources.push({ platform: 'Amazon', type: 'SP-API Campaigns', rows: campaigns.length, unit: 'campaigns', date: 'Live', color: 'orange' });
+              if (hasCampaignData) {
+                const activeCamps = campaigns.filter(c => (c.spend || 0) > 0);
+                const lastUpdated = amazonCampaigns?.lastUpdated;
+                sources.push({ platform: 'Amazon', type: `Campaign CSV (${activeCamps.length} active)`, rows: campaigns.length, unit: 'campaigns', date: lastUpdated ? lastUpdated.slice(0, 10) : 'unknown', color: 'orange' });
+              }
               // Tier 2 reports
               if (adsIntelData) {
                 ['amazon','google','meta','shopify'].forEach(plat => {
@@ -1394,15 +1556,90 @@ const AdsView = ({
               );
             })()}
 
-            <div className="space-y-3">
-              <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Generate a COMPREHENSIVE cross-platform advertising audit using ALL available data. Cover: Executive Summary, Amazon PPC deep analysis (search terms, placements, targeting, ACOS trends), Google Ads analysis (campaigns, search terms, keywords), Meta Ads analysis (creative performance, audiences, placements), Cross-Channel budget allocation, Immediate Actions for this week, and 30-day Strategic Recommendations. Be BRUTALLY specific — cite exact campaign names, search terms, ASINs, ad names, and dollar amounts."),200);}} className="w-full px-6 py-4 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-semibold shadow-lg shadow-orange-500/20 flex items-center justify-center gap-3">
-                <Zap className="w-5 h-5"/>Generate Full Cross-Platform Audit
+            <div className="space-y-4">
+              {/* Platform Mode Selector */}
+              <div>
+                <p className="text-slate-400 text-xs uppercase mb-2 font-medium">Report Scope</p>
+                <div className="flex flex-wrap gap-2">
+                  {REPORT_MODES.map(m => (
+                    <button key={m.key} onClick={() => setReportMode(m.key)}
+                      className={`px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center gap-2 ${reportMode === m.key ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-lg shadow-orange-500/20' : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700 border border-slate-600/50'}`}>
+                      <span>{m.icon}</span>{m.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-slate-500 text-xs mt-1.5">{REPORT_MODES.find(m => m.key === reportMode)?.desc}</p>
+              </div>
+
+              {/* Generate Button */}
+              <button onClick={() => {
+                const prompts = {
+                  all: `Generate a COMPREHENSIVE AGENCY-LEVEL cross-platform advertising audit. This report should be at the quality level of a $15K/month PPC agency deliverable.
+
+REQUIRED SECTIONS:
+## 📊 EXECUTIVE SUMMARY — Ad health score (1-10), total spend/revenue/ROAS per platform, #1 most urgent problem with $ impact, #1 biggest scaling opportunity
+## 🔴 CUT WASTE — For EACH wasteful keyword/campaign: exact name, spend over period, $0 or low sales, SPECIFIC action (pause, negate with match type, reduce bid to $X.XX)
+## 🟢 PROTECT WINNERS — For EACH top performer: name, ROAS, conversion rate, defend strategy (budget floor, bid floor, exact match isolation, keyword harvesting)
+## 🚀 SCALE OPPORTUNITIES — For EACH opportunity: name, current metrics, scaling math ("$X/day at Y ROAS → $Z/day projects $W additional revenue"), step-by-step launch plan
+## 🔄 PLACEMENT OPTIMIZATION — TOS vs Product Pages vs RoS: ROAS comparison, exact bid modifier percentages to set
+## 💰 CROSS-PLATFORM BUDGET REALLOCATION — Current split with $ amounts → Recommended split with rationale. Amazon vs Google vs Meta efficiency comparison.
+## 📈 TREND DIAGNOSIS — MoM trajectory with % changes, TACOS trend, organic share trend, seasonal prep
+## 🎯 THIS WEEK: Top 5 Priority Actions — [Action] → [$ impact] → [minutes to implement] → [exact console click-path]
+
+CITE SPECIFIC: campaign names, search terms, ASINs, dollar amounts, percentages. NO generic advice.`,
+                  amazon: `Generate a DEEP-DIVE AMAZON PPC AUDIT at agency level.
+
+REQUIRED SECTIONS:
+## 📊 AMAZON AD HEALTH — Score 1-10, total spend, ACOS, TACOS, attributed vs organic revenue split
+## 🔍 SEARCH TERM ANALYSIS — Top 10 profitable terms (term, spend, sales, ACOS, orders), Top 10 wasteful terms (term, spend, $0 sales, clicks wasted), exact negative keyword list with match types (phrase vs exact)
+## 📦 CAMPAIGN-LEVEL PERFORMANCE — Every campaign: name, type (SP/SB/SD), state, spend, sales, ROAS, ACOS, orders, clicks, CPC. Flag any with ROAS <1.5x or ACOS >40% as needs attention.
+## 🎯 TARGETING & MATCH TYPE ANALYSIS — Broad vs Phrase vs Exact efficiency, auto vs manual campaign comparison, keyword harvesting recommendations
+## 📍 PLACEMENT OPTIMIZATION — Top of Search vs Product Pages vs Rest of Search: ROAS, CPC, conversion rate for each. Exact bid modifier % recommendations.
+## 💡 SKU-LEVEL AD PERFORMANCE — Which products are profitable to advertise vs which are burning budget? Per-SKU ACOS and recommendation.
+## 🔄 CAMPAIGN STRUCTURE RECOMMENDATIONS — Are campaigns properly segmented? Single-keyword exact match campaigns for top performers? Negative keyword architecture?
+## 🎯 THIS WEEK: Top 5 Amazon Actions — with exact $ impact and implementation steps in Amazon Ads Console`,
+                  dtc: `Generate a COMPREHENSIVE DTC ADVERTISING AUDIT covering Google Ads AND Meta Ads.
+
+REQUIRED SECTIONS:
+## 📊 DTC AD HEALTH — Combined Google+Meta health score, total DTC spend, DTC ROAS, CPA, comparison to Amazon efficiency
+## 🔍 GOOGLE ADS DEEP DIVE — Campaign performance, search term quality, CPC trends, conversion rate by campaign, keyword opportunities, negative keyword suggestions, Quality Score insights if available
+## 📱 META ADS DEEP DIVE — Campaign performance, creative fatigue indicators, audience insights, placement efficiency (Feed vs Stories vs Reels), CPA trends, frequency analysis
+## 💰 GOOGLE vs META COMPARISON — Side-by-side: CPC, CTR, CPA, ROAS, conversion rate. Where is each $ most efficient?
+## 🔄 BUDGET REALLOCATION — Current Google/Meta split → Recommended split with math. Which platform should get more budget and why?
+## 🎯 LANDING PAGE & FUNNEL — Are conversion rates where they should be? Any platform-specific conversion gaps?
+## 🎯 THIS WEEK: Top 5 DTC Actions`,
+                  google: `Generate a DEEP-DIVE GOOGLE ADS AUDIT.
+
+REQUIRED SECTIONS:
+## 📊 GOOGLE ADS HEALTH — Score 1-10, total spend, clicks, CPC, CTR, conversions, conversion rate, cost per conversion
+## 🔍 SEARCH TERM ANALYSIS — Top performing terms, wasteful terms to negate, match type efficiency, Quality Score issues
+## 📋 CAMPAIGN PERFORMANCE — Every campaign with full KPIs, recommendations per campaign (scale/pause/restructure)
+## 💡 KEYWORD OPPORTUNITIES — Missing keywords, competitor gaps, long-tail opportunities with estimated CPC and volume
+## 🎯 BID STRATEGY — Current strategy assessment, recommended changes with specific $ amounts
+## 🎯 THIS WEEK: Top 5 Google Actions`,
+                  meta: `Generate a DEEP-DIVE META ADS AUDIT.
+
+REQUIRED SECTIONS:
+## 📊 META ADS HEALTH — Score 1-10, total spend, impressions, clicks, CTR, CPC, purchases, CPA, ROAS, purchase value
+## 🎨 CREATIVE PERFORMANCE — Which ads/creatives are performing? Creative fatigue indicators? When to refresh?
+## 👥 AUDIENCE ANALYSIS — Which audiences convert best? Lookalike vs interest vs retargeting efficiency? Frequency caps?
+## 📍 PLACEMENT BREAKDOWN — Feed vs Stories vs Reels vs Audience Network: CPC, CTR, CPA for each. Where to allocate?
+## 📈 FUNNEL ANALYSIS — Click-through rate vs landing page conversion vs purchase rate. Where is the funnel leaking?
+## 💰 SCALING PLAN — Which campaigns/ad sets to scale? At what daily budget? Expected CPA at higher spend?
+## 🎯 THIS WEEK: Top 5 Meta Actions`,
+                };
+                setShowAdsAIChat(true);
+                setTimeout(() => sendAdsAIMessage(prompts[reportMode]), 200);
+              }} className="w-full px-6 py-4 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-semibold shadow-lg shadow-orange-500/20 flex items-center justify-center gap-3">
+                <Zap className="w-5 h-5"/>Generate {REPORT_MODES.find(m => m.key === reportMode)?.label} Audit
               </button>
+
+              {/* Quick Actions */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Analyze ALL Amazon PPC data — search terms, placements, targeting, campaigns. Top 10 profitable keywords, top 10 wasteful keywords with exact $ wasted, placement bid strategy, negative keyword recommendations."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-orange-500"/>Amazon PPC Deep Dive</button>
-                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Analyze ALL Google Ads data — campaigns, search terms, keywords, ad groups. Best campaigns, wasteful search terms as negatives, keyword opportunities, budget reallocation."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-red-500"/>Google Ads Deep Dive</button>
-                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Analyze ALL Meta Ads data — campaigns, creatives, audiences, placements. Best ads, audience insights, creative fatigue, budget optimization."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-blue-500"/>Meta Ads Deep Dive</button>
-                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Compare organic search query performance (Brand Analytics) with paid campaigns. Where am I paying for clicks I could get organically? Where should I increase paid? Specific keyword recommendations."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-emerald-500"/>Organic vs Paid Gap</button>
+                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Give me the top 20 negative keywords I should add TODAY based on my search term data. For each: the exact keyword, match type (phrase or exact), which campaigns to add it to, and how much I'll save per month. Format as a ready-to-implement checklist."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="text-amber-400">🚫</span>Negative Keyword List</button>
+                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("What are my top 10 scaling opportunities right now? For each: the campaign/keyword, current daily spend, current ROAS, recommended new daily spend, projected additional revenue. Show me the math."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="text-emerald-400">📈</span>Scaling Opportunities</button>
+                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Compare organic search query performance with paid campaigns. Where am I paying for clicks I could get organically? Where should I increase paid? Specific keyword recommendations with $ impact."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="text-violet-400">🔄</span>Organic vs Paid Gap</button>
+                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Give me a weekly PPC maintenance checklist based on my data. What should I check every Monday? Include specific bid adjustments, budget checks, and performance thresholds that should trigger action."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="text-cyan-400">📋</span>Weekly Maintenance Plan</button>
               </div>
             </div>
           </div>
@@ -1473,48 +1710,73 @@ const AdsView = ({
                     const report = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n');
                     const dateStr = new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
                     const modelName = getModelLabel(aiChatModel);
+                    const modeLabel = REPORT_MODES.find(m => m.key === reportMode)?.label || 'All Platforms';
                     const htmlBody = markdownToHtml(report);
-                    const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tallowbourn Ads Audit - ${dateStr}</title>
+                    // Build KPI summary from computed insights
+                    const kpiHtml = amazonAdsInsights.summary ? `<div class="kpi-bar">
+                      <div class="kpi"><span class="kpi-label">Ad Spend</span><span class="kpi-value">$${(amazonAdsInsights.summary.totalSpend || 0).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</span></div>
+                      <div class="kpi"><span class="kpi-label">Ad Revenue</span><span class="kpi-value">$${(amazonAdsInsights.summary.totalSales || 0).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</span></div>
+                      <div class="kpi"><span class="kpi-label">ROAS</span><span class="kpi-value">${(amazonAdsInsights.summary.overallRoas || 0).toFixed(2)}x</span></div>
+                      <div class="kpi"><span class="kpi-label">Blended TACOS</span><span class="kpi-value">${(platformInsights.blendedTacos || 0).toFixed(1)}%</span></div>
+                      <div class="kpi"><span class="kpi-label">Days Analyzed</span><span class="kpi-value">${amazonAdsInsights.summary.daysCount || 0}</span></div>
+                    </div>` : '';
+                    const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tallowbourn ${modeLabel} Audit - ${dateStr}</title>
 <style>
   @page { margin: 0.75in; size: letter; }
   * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #1a1a2e; line-height: 1.6; max-width: 100%; padding: 0; margin: 0; font-size: 11pt; }
-  .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: white; padding: 30px 40px; margin: -0.75in -0.75in 30px; }
-  .header h1 { font-size: 22pt; margin: 0 0 8px; font-weight: 700; }
-  .header .meta { font-size: 9pt; opacity: 0.8; }
-  .header .meta span { margin-right: 20px; }
-  h2 { color: #1a1a2e; border-bottom: 2px solid #e94560; padding-bottom: 6px; margin-top: 28px; font-size: 14pt; page-break-after: avoid; }
-  h3 { color: #16213e; margin-top: 20px; font-size: 12pt; page-break-after: avoid; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #1a1a2e; line-height: 1.65; max-width: 100%; padding: 0; margin: 0; font-size: 11pt; }
+  .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); color: white; padding: 32px 40px 20px; margin: -0.75in -0.75in 0; }
+  .header h1 { font-size: 22pt; margin: 0 0 4px; font-weight: 800; letter-spacing: -0.5px; }
+  .header .subtitle { font-size: 13pt; opacity: 0.85; margin-bottom: 12px; font-weight: 300; }
+  .header .meta { font-size: 9pt; opacity: 0.7; display: flex; gap: 20px; }
+  .kpi-bar { display: flex; gap: 0; margin: 0 -0.75in; padding: 16px 40px; background: #0a1628; }
+  .kpi { flex: 1; text-align: center; border-right: 1px solid rgba(255,255,255,0.1); }
+  .kpi:last-child { border-right: none; }
+  .kpi-label { display: block; font-size: 8pt; text-transform: uppercase; letter-spacing: 0.5px; color: rgba(255,255,255,0.5); margin-bottom: 2px; }
+  .kpi-value { display: block; font-size: 14pt; font-weight: 700; color: white; }
+  .content { padding-top: 24px; }
+  h2 { color: #1a1a2e; border-bottom: 3px solid #e94560; padding-bottom: 6px; margin-top: 32px; font-size: 14pt; page-break-after: avoid; }
+  h3 { color: #16213e; margin-top: 22px; font-size: 12pt; page-break-after: avoid; border-left: 3px solid #e94560; padding-left: 10px; }
   h4 { color: #444; margin-top: 16px; font-size: 11pt; }
-  p, li { font-size: 11pt; }
-  ul, ol { padding-left: 20px; }
-  li { margin-bottom: 4px; }
+  p, li { font-size: 11pt; margin-bottom: 6px; }
+  ul, ol { padding-left: 22px; }
+  li { margin-bottom: 5px; }
   strong { color: #e94560; }
-  code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 10pt; }
-  hr { border: none; border-top: 1px solid #ddd; margin: 24px 0; }
-  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 10pt; }
-  th { background: #1a1a2e; color: white; padding: 8px 10px; text-align: left; }
-  td { padding: 6px 10px; border-bottom: 1px solid #eee; }
+  code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 10pt; font-family: 'Consolas', monospace; }
+  hr { border: none; border-top: 1px solid #ddd; margin: 28px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 10pt; }
+  th { background: #1a1a2e; color: white; padding: 8px 10px; text-align: left; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.3px; }
+  td { padding: 7px 10px; border-bottom: 1px solid #eee; }
   tr:nth-child(even) td { background: #f8f9fa; }
-  .footer { margin-top: 40px; padding-top: 16px; border-top: 2px solid #1a1a2e; font-size: 8pt; color: #888; text-align: center; }
-  @media print { .no-print { display: none; } .header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  blockquote { border-left: 3px solid #e94560; margin: 16px 0; padding: 8px 16px; background: #fff5f5; font-style: italic; }
+  .footer { margin-top: 48px; padding-top: 16px; border-top: 2px solid #1a1a2e; font-size: 8pt; color: #888; text-align: center; }
+  .footer p { margin: 2px 0; }
+  .confidential { background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 10px 16px; margin-bottom: 24px; font-size: 9pt; color: #856404; }
+  @media print { .no-print { display: none !important; } .header, .kpi-bar { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style></head><body>
 <div class="header">
-  <h1>📊 Tallowbourn Advertising Audit</h1>
-  <div class="meta"><span>📅 ${dateStr}</span><span>🤖 ${modelName}</span><span>📁 ${(adsAiMessages.filter(m=>m.role==='assistant').length)} report sections</span></div>
+  <h1>Tallowbourn Advertising Audit</h1>
+  <div class="subtitle">${modeLabel} Performance Report</div>
+  <div class="meta"><span>📅 ${dateStr}</span><span>🤖 ${modelName}</span><span>📁 ${(adsAiMessages.filter(m=>m.role==='assistant').length)} analysis sections</span><span>📊 ${intelDateRange === 'all' ? 'All available data' : intelDateRange + '-day window'}</span></div>
 </div>
+${kpiHtml}
+<div class="content">
 <div class="no-print" style="background:#fff3cd;padding:12px 20px;margin-bottom:20px;border-radius:8px;font-size:10pt;color:#856404;">
-  💡 <strong>To save as PDF:</strong> Press Ctrl+P (or ⌘+P on Mac) → Select "Save as PDF" as the destination → Click Save
+  💡 <strong>To save as PDF:</strong> Press Ctrl+P (or ⌘+P on Mac) → Select "Save as PDF" → Click Save
 </div>
+<div class="confidential">📋 <strong>CONFIDENTIAL</strong> — This report contains proprietary advertising data for Tallowbourn. Do not distribute outside your advertising team.</div>
 ${htmlBody}
+</div>
 <div class="footer">
-  <p>Generated by Tallowbourn Advertising Command Center • ${dateStr} • ${modelName}</p>
+  <p><strong>Tallowbourn Advertising Command Center</strong></p>
+  <p>${modeLabel} Audit • ${dateStr} • AI Model: ${modelName} • Report ID: ${Date.now().toString(36).toUpperCase()}</p>
+  <p style="margin-top:6px;font-size:7pt;">This report was generated using AI-powered analysis. All recommendations should be validated against current market conditions before implementation.</p>
 </div>
 </body></html>`;
                     const w = window.open('','_blank','width=900,height=700');
                     w.document.write(printDoc); w.document.close();
                     setTimeout(()=>w.print(), 500);
-                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1.5 bg-orange-900/50 rounded-lg hover:bg-orange-800/50 border border-orange-500/30" title="Export as PDF (opens print dialog)">📑 PDF</button>
+                  }} className="px-3 py-1.5 bg-gradient-to-r from-orange-600/80 to-amber-600/80 hover:from-orange-500 hover:to-amber-500 rounded-lg text-white text-xs font-medium flex items-center gap-1.5 shadow-sm" title="Export as PDF (opens print dialog)">📑 Export PDF</button>
                   
                   {/* Clear */}
                   <button onClick={()=>{if(adsAiMessages.length>4){if(!window.confirm('Clear report? This will remove all AI output from this session.'))return;}setAdsAiMessages([]);}} className="text-slate-400 hover:text-red-400 text-xs flex items-center gap-1 px-2 py-1.5 bg-slate-700/50 rounded-lg hover:bg-slate-700"><RefreshCw className="w-3 h-3"/>Clear</button>
