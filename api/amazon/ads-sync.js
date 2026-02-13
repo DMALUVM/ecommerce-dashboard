@@ -277,9 +277,12 @@ export default async function handler(req, res) {
             reportTypeId: spec.reportTypeId,
             timeUnit: 'DAILY',
             format: 'GZIP_JSON',
-            groupBy: spec.groupBy,
-            columns: spec.columns,
-            reportDate: { startDate: startStr, endDate: endStr },
+            startDate: startStr,
+            endDate: endStr,
+            configuration: {
+              groupBy: spec.groupBy,
+              columns: spec.columns,
+            },
           };
 
           const created = await adsRequest(token, '/reporting/reports', 'POST', body);
