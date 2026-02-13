@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { X, Upload, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, ShoppingCart, Zap, Download, FileText, Globe, Instagram, Archive, Loader2 } from 'lucide-react';
+import { X, Upload, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, ShoppingCart, Zap, Download, FileText, Globe, Instagram, Archive, Loader2, ChevronDown } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
-import { AI_DEFAULT_MODEL } from '../../utils/config';
+import { AI_DEFAULT_MODEL, AI_MODEL_OPTIONS } from '../../utils/config';
 import { sanitizeHtml } from '../../utils/sanitize';
 
 // ============ REPORT TYPES ============
@@ -48,16 +48,39 @@ const pct = (v) => {
 
 // Google exports have metadata rows at top; need to find the real header
 const parseXlsxSmart = async (file) => {
-  const XLSX = await loadXLSX();
-  const data = await file.arrayBuffer();
-  const wb = XLSX.read(data);
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const allRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  let allRows;
+  try {
+    const XLSX = await loadXLSX();
+    const data = await file.arrayBuffer();
+    const wb = XLSX.read(data);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    allRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  } catch (xlsxErr) {
+    // Fallback: parse CSV as text (handles cases where SheetJS fails on CSV ArrayBuffer)
+    if (file.name.toLowerCase().endsWith('.csv') || file.type === 'text/csv') {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) throw new Error('CSV file is empty');
+      allRows = lines.map(line => {
+        const vals = [];
+        let current = '', inQ = false;
+        for (const c of line) {
+          if (c === '"') inQ = !inQ;
+          else if (c === ',' && !inQ) { vals.push(current.trim().replace(/^"|"$/g, '')); current = ''; }
+          else current += c;
+        }
+        vals.push(current.trim().replace(/^"|"$/g, ''));
+        return vals;
+      });
+    } else {
+      throw xlsxErr;
+    }
+  }
   
   // Find the header row — look for known column names
   const knownHeaders = ['campaign', 'search term', 'keyword', 'ad group', 'ad set name', 'ad name', 
-    'campaign name', 'search query', 'day', 'landing page type', 'asset group status', 'reporting starts',
-    'keyword status', 'ad group status', 'campaign state', 'reporting starts', 'amount spent'];
+    'campaign name', 'search query', 'day', 'date', 'landing page type', 'asset group status', 'reporting starts',
+    'keyword status', 'ad group status', 'campaign state', 'reporting starts', 'amount spent', 'impressions', 'clicks', 'cost'];
   
   let headerIdx = 0;
   for (let i = 0; i < Math.min(5, allRows.length); i++) {
@@ -100,6 +123,9 @@ const detectReportType = (headers, rows, fileName) => {
   const hSet = new Set(headers.map(h => h.toLowerCase().trim()));
   const fLower = fileName.toLowerCase();
   
+  // Helper: Meta exports may use "Amount spent (USD)" (xlsx) or "Amount spent" (CSV)
+  const hasMetaSpend = hSet.has('amount spent (usd)') || hSet.has('amount spent');
+  
   // === AMAZON ===
   if (hSet.has('search query') && hSet.has('search query volume')) return 'amazonSearchQuery';
   
@@ -111,20 +137,26 @@ const detectReportType = (headers, rows, fileName) => {
   if (hSet.has('day') && hSet.has('sessions') && hSet.has('online store visitors')) return 'shopifySessions';
   
   // === META ===
-  if (hSet.has('ad set name') && hSet.has('age') && hSet.has('amount spent (usd)')) return 'metaAdSetAge';
-  if (hSet.has('ad set name') && hSet.has('gender') && hSet.has('amount spent (usd)')) return 'metaAdSetGender';
+  if (hSet.has('ad set name') && hSet.has('age') && hasMetaSpend) return 'metaAdSetAge';
+  if (hSet.has('ad set name') && hSet.has('gender') && hasMetaSpend) return 'metaAdSetGender';
   if (hSet.has('ad set name') && hSet.has('placement') && hSet.has('platform')) return 'metaAdSetPlacement';
-  if (hSet.has('ad name') && hSet.has('amount spent (usd)')) return 'metaAds';
-  if (hSet.has('ad set name') && hSet.has('amount spent (usd)') && !hSet.has('ad name')) return 'metaAdSets';
-  if (hSet.has('campaign name') && hSet.has('amount spent (usd)')) return 'metaCampaign';
+  if (hSet.has('ad name') && hasMetaSpend) return 'metaAds';
+  // Meta CSV daily format: Date + Ad name + Amount spent + Purchases value (all)
+  if (hSet.has('date') && hSet.has('ad name') && hSet.has('amount spent')) return 'metaAds';
+  if (hSet.has('ad set name') && hasMetaSpend && !hSet.has('ad name')) return 'metaAdSets';
+  if (hSet.has('campaign name') && hasMetaSpend) return 'metaCampaign';
   // Meta Ads Manager export format (has Reporting starts/ends)
-  if (hSet.has('reporting starts') && (hSet.has('amount spent (usd)') || hSet.has('purchase roas (return on ad spend)'))) return 'metaCampaign';
+  if (hSet.has('reporting starts') && (hasMetaSpend || hSet.has('purchase roas (return on ad spend)'))) {
+    if (hSet.has('ad name')) return 'metaAds';
+    if (hSet.has('ad set name')) return 'metaAdSets';
+    return 'metaCampaign';
+  }
   
   // === GOOGLE ===
   if (hSet.has('asset group status') || hSet.has('asset group')) return 'googleAssetGroups';
   if (hSet.has('keyword status') && hSet.has('max. cpc')) return 'googleKeywords';
-  if (hSet.has('search term') && hSet.has('match type') && (hSet.has('avg. cpc') || hSet.has('cost'))) return 'googleSearchTerms';
-  if (hSet.has('ad group') && hSet.has('campaign') && hSet.has('clicks') && !hSet.has('search term')) return 'googleAdGroup';
+  if (hSet.has('search term') && hSet.has('match type') && (hSet.has('avg. cpc') || hSet.has('cost') || hSet.has('avg. cost'))) return 'googleSearchTerms';
+  if (hSet.has('ad group') && hSet.has('campaign') && (hSet.has('clicks') || hSet.has('cost')) && !hSet.has('search term') && !hSet.has('keyword')) return 'googleAdGroup';
   if (hSet.has('campaign') && hSet.has('campaign state') && hSet.has('cost')) return 'googleCampaign';
   // Google Ads daily export (Day + Campaign + Cost/Impressions/Clicks, no Campaign state)
   if (hSet.has('day') && hSet.has('campaign') && (hSet.has('cost') || hSet.has('impressions')) && hSet.has('clicks')) return 'googleCampaign';
@@ -252,23 +284,29 @@ const aggregateGoogleAdGroups = (rows, dateRange) => {
 };
 
 const aggregateGoogleSearchTerms = (rows, dateRange) => {
-  const terms = rows.filter(r => r['Search term']).map(r => ({
-    term: r['Search term'],
-    matchType: r['Match type'] || '',
-    campaign: r['Campaign'] || '',
-    adGroup: r['Ad group'] || '',
-    keyword: r['Keyword'] || '',
-    clicks: num(r['Clicks']),
-    impressions: num(r['Impr.']),
-    ctr: pct(r['CTR']),
-    avgCPC: num(r['Avg. CPC']),
-    cost: num(r['Cost']),
-    conversions: num(r['Conversions']),
-    convValue: num(r['Conv. value']),
-    roas: num(r['Conv. value / cost']),
-    convRate: pct(r['Conv. rate']),
-    added: r['Added/Excluded'] || '',
-  }));
+  const terms = rows.filter(r => r['Search term']).map(r => {
+    // Google xlsx uses "Interactions"/"Interaction rate"/"Avg. cost"; CSV uses "Clicks"/"CTR"/"Avg. CPC"
+    const clicks = num(r['Clicks'] || r['Interactions']);
+    const impressions = num(r['Impr.'] || r['Impressions']);
+    const cost = num(r['Cost'] || r['Avg. cost']); // Note: "Avg. cost" in search terms report IS total cost per term
+    return {
+      term: r['Search term'],
+      matchType: r['Match type'] || '',
+      campaign: r['Campaign'] || '',
+      adGroup: r['Ad group'] || '',
+      keyword: r['Keyword'] || '',
+      clicks,
+      impressions,
+      ctr: pct(r['CTR'] || r['Interaction rate']),
+      avgCPC: num(r['Avg. CPC']) || (clicks > 0 ? cost / clicks : 0),
+      cost,
+      conversions: num(r['Conversions']),
+      convValue: num(r['Conv. value'] || r['All conv. value']),
+      roas: num(r['Conv. value / cost']),
+      convRate: pct(r['Conv. rate']),
+      added: r['Added/Excluded'] || '',
+    };
+  });
 
   const totalCost = terms.reduce((s, t) => s + t.cost, 0);
   const totalConvValue = terms.reduce((s, t) => s + t.convValue, 0);
@@ -331,21 +369,32 @@ const aggregateGoogleAssetGroups = (rows, dateRange) => {
 
 // === META AGGREGATORS ===
 
+// Helper: Meta exports may use "Amount spent (USD)" (Ads Manager xlsx) or "Amount spent" (CSV/third-party)
+const metaSpend = (r) => num(r['Amount spent (USD)'] || r['Amount Spent (USD)'] || r['Amount spent'] || r['Amount Spent']);
+const metaClicks = (r) => num(r['Link clicks'] || r['Link Clicks'] || r['Clicks (all)']);
+const metaPurchases = (r) => num(r['Purchases'] || r['Purchases (all)']);
+const metaPurchaseValue = (r) => num(r['Purchases conversion value'] || r['Purchases value (all)']);
+const metaCostPerPurchase = (r) => num(r['Cost per purchase (USD)'] || r['Cost per Purchase (all)']);
+const metaROAS = (r) => num(r['Purchase ROAS (return on ad spend)'] || r['Purchase (ROAS) (all)']);
+const metaCPM = (r) => num(r['CPM (cost per 1,000 impressions) (USD)'] || r['CPM']);
+const metaCPC = (r) => num(r['CPC (cost per link click) (USD)'] || r['Cost per link click']);
+const metaCTR = (r) => pct(r['CTR (all)'] || r['CTR']);
+
 const aggregateMetaCampaigns = (rows, dateRange) => {
   return rows.filter(r => r['Campaign name'] || r['Campaign Name']).map(r => ({
     campaign: r['Campaign name'] || r['Campaign Name'] || '',
     delivery: r['Campaign delivery'] || r['Campaign Delivery'] || '',
-    spend: num(r['Amount spent (USD)'] || r['Amount Spent (USD)']),
+    spend: metaSpend(r),
     impressions: num(r['Impressions']),
     reach: num(r['Reach']),
     frequency: num(r['Frequency']),
-    cpm: num(r['CPM (cost per 1,000 impressions) (USD)']),
-    cpc: num(r['CPC (cost per link click) (USD)']),
-    clicks: num(r['Link clicks'] || r['Clicks (all)']),
-    purchases: num(r['Purchases']),
-    purchaseValue: num(r['Purchases conversion value']),
-    costPerPurchase: num(r['Cost per purchase (USD)']),
-    roas: num(r['Purchase ROAS (return on ad spend)']),
+    cpm: metaCPM(r),
+    cpc: metaCPC(r),
+    clicks: metaClicks(r),
+    purchases: metaPurchases(r),
+    purchaseValue: metaPurchaseValue(r),
+    costPerPurchase: metaCostPerPurchase(r),
+    roas: metaROAS(r),
     addToCart: num(r['Adds to cart']),
     checkouts: num(r['Checkouts initiated']),
     dateRange,
@@ -353,20 +402,20 @@ const aggregateMetaCampaigns = (rows, dateRange) => {
 };
 
 const aggregateMetaAdSets = (rows, dateRange) => {
-  return rows.filter(r => r['Ad set name'] && num(r['Amount spent (USD)']) > 0).map(r => ({
+  return rows.filter(r => r['Ad set name'] && metaSpend(r) > 0).map(r => ({
     adSet: r['Ad set name'],
     delivery: r['Ad set delivery'] || '',
-    spend: num(r['Amount spent (USD)']),
+    spend: metaSpend(r),
     impressions: num(r['Impressions']),
     reach: num(r['Reach']),
     frequency: num(r['Frequency']),
-    cpm: num(r['CPM (cost per 1,000 impressions) (USD)']),
-    cpc: num(r['CPC (cost per link click) (USD)']),
-    clicks: num(r['Link clicks']),
-    purchases: num(r['Purchases']),
-    purchaseValue: num(r['Purchases conversion value']),
-    costPerPurchase: num(r['Cost per purchase (USD)']),
-    roas: num(r['Purchase ROAS (return on ad spend)']),
+    cpm: metaCPM(r),
+    cpc: metaCPC(r),
+    clicks: metaClicks(r),
+    purchases: metaPurchases(r),
+    purchaseValue: metaPurchaseValue(r),
+    costPerPurchase: metaCostPerPurchase(r),
+    roas: metaROAS(r),
     addToCart: num(r['Adds to cart']),
     cartValue: num(r['Adds to cart conversion value']),
     checkouts: num(r['Checkouts initiated']),
@@ -375,21 +424,83 @@ const aggregateMetaAdSets = (rows, dateRange) => {
 };
 
 const aggregateMetaAds = (rows, dateRange) => {
-  return rows.filter(r => r['Ad name'] && num(r['Amount spent (USD)']) > 0).map(r => ({
+  // Handle both period-level and daily-granularity Meta exports
+  const hasDate = rows.length > 0 && (rows[0]['Date'] != null || rows[0]['date'] != null);
+  
+  if (hasDate) {
+    // Daily CSV format (Date, Ad name, Amount spent, ...) — aggregate by ad name across dates
+    const adMap = {};
+    const dailyTotals = {}; // Track daily totals for allDaysData feed
+    for (const r of rows) {
+      const adName = r['Ad name'] || r['Ad Name'] || '';
+      if (!adName) continue;
+      const spend = metaSpend(r);
+      const imp = num(r['Impressions']);
+      const clk = metaClicks(r);
+      const purch = metaPurchases(r);
+      const pval = metaPurchaseValue(r);
+      if (spend <= 0 && imp <= 0) continue;
+      if (!adMap[adName]) {
+        adMap[adName] = { adName, adSet: '', delivery: '', spend: 0, impressions: 0, reach: 0, frequency: 0,
+          cpm: 0, cpc: 0, ctr: 0, clicks: 0, purchases: 0, purchaseValue: 0, costPerPurchase: 0, roas: 0,
+          addToCart: 0, checkouts: 0, qualityRanking: '', engagementRanking: '', conversionRanking: '', days: new Set() };
+      }
+      const a = adMap[adName];
+      a.spend += spend;
+      a.impressions += imp;
+      a.clicks += clk;
+      a.purchases += purch;
+      a.purchaseValue += pval;
+      a.reach += num(r['Reach']);
+      a.addToCart += num(r['Adds to cart']);
+      a.checkouts += num(r['Checkouts initiated']);
+      const dateVal = r['Date'] || r['date'] || '';
+      if (dateVal) a.days.add(String(dateVal));
+      
+      // Daily totals for feed
+      const dayKey = String(dateVal);
+      if (dayKey) {
+        if (!dailyTotals[dayKey]) dailyTotals[dayKey] = { cost: 0, impressions: 0, clicks: 0, conversions: 0, convValue: 0 };
+        dailyTotals[dayKey].cost += spend;
+        dailyTotals[dayKey].impressions += imp;
+        dailyTotals[dayKey].clicks += clk;
+        dailyTotals[dayKey].conversions += purch;
+        dailyTotals[dayKey].convValue += pval;
+      }
+    }
+    // Compute derived metrics
+    const result = Object.values(adMap).map(a => ({
+      ...a,
+      cpm: a.impressions > 0 ? (a.spend / a.impressions) * 1000 : 0,
+      cpc: a.clicks > 0 ? a.spend / a.clicks : 0,
+      ctr: a.impressions > 0 ? (a.clicks / a.impressions) * 100 : 0,
+      roas: a.spend > 0 ? a.purchaseValue / a.spend : 0,
+      costPerPurchase: a.purchases > 0 ? a.spend / a.purchases : 0,
+      daysActive: a.days ? a.days.size : 0,
+      dateRange,
+    })).sort((a, b) => b.spend - a.spend);
+    // Attach daily totals for allDaysData feed
+    result._dailyTrend = dailyTotals;
+    return result;
+  }
+  
+  // Period-level format (Ads Manager xlsx — one row per ad)
+  return rows.filter(r => r['Ad name'] && metaSpend(r) > 0).map(r => ({
     adName: r['Ad name'],
     adSet: r['Ad set name'] || '',
     delivery: r['Ad delivery'] || '',
-    spend: num(r['Amount spent (USD)']),
+    spend: metaSpend(r),
     impressions: num(r['Impressions']),
     reach: num(r['Reach']),
     frequency: num(r['Frequency']),
-    cpm: num(r['CPM (cost per 1,000 impressions) (USD)']),
-    cpc: num(r['CPC (cost per link click) (USD)']),
-    clicks: num(r['Link clicks']),
-    purchases: num(r['Purchases']),
-    purchaseValue: num(r['Purchases conversion value']),
-    costPerPurchase: num(r['Cost per purchase (USD)']),
-    roas: num(r['Purchase ROAS (return on ad spend)']),
+    cpm: metaCPM(r),
+    cpc: metaCPC(r),
+    ctr: metaCTR(r),
+    clicks: metaClicks(r),
+    purchases: metaPurchases(r),
+    purchaseValue: metaPurchaseValue(r),
+    costPerPurchase: metaCostPerPurchase(r),
+    roas: metaROAS(r),
     addToCart: num(r['Adds to cart']),
     checkouts: num(r['Checkouts initiated']),
     qualityRanking: r['Quality ranking'] || '',
@@ -400,15 +511,15 @@ const aggregateMetaAds = (rows, dateRange) => {
 };
 
 const aggregateMetaDemographic = (rows, dimensionKey, dateRange) => {
-  return rows.filter(r => r[dimensionKey] && num(r['Amount spent (USD)']) > 0).map(r => ({
+  return rows.filter(r => r[dimensionKey] && metaSpend(r) > 0).map(r => ({
     dimension: r[dimensionKey],
     adSet: r['Ad set name'] || '',
-    spend: num(r['Amount spent (USD)']),
+    spend: metaSpend(r),
     impressions: num(r['Impressions']),
-    clicks: num(r['Link clicks']),
-    cpc: num(r['CPC (cost per link click) (USD)']),
-    purchases: num(r['Purchases']),
-    purchaseValue: num(r['Purchases conversion value']),
+    clicks: metaClicks(r),
+    cpc: metaCPC(r),
+    purchases: metaPurchases(r),
+    purchaseValue: metaPurchaseValue(r),
     roas: num(r['Purchase ROAS (return on ad spend)']),
     costPerPurchase: num(r['Cost per purchase (USD)']),
     addToCart: num(r['Adds to cart']),
@@ -1149,6 +1260,8 @@ const DtcAdsIntelModal = ({
   setToast,
   callAI,
   saveReportToHistory,
+  allDaysData,
+  setAllDaysData,
 }) => {
   const [detectedFiles, setDetectedFiles] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -1157,6 +1270,7 @@ const DtcAdsIntelModal = ({
   const [actionReport, setActionReport] = useState(null);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [reportError, setReportError] = useState(null);
+  const [selectedModel, setSelectedModel] = useState(window.__aiModelOverride || AI_DEFAULT_MODEL);
 
   if (!show) return null;
 
@@ -1302,6 +1416,95 @@ const DtcAdsIntelModal = ({
       }
 
       setDtcIntelData(newIntel);
+      
+      // === FEED DAILY AD SPEND INTO allDaysData ===
+      // Extract daily totals from Google campaigns and Meta ads (daily CSV format)
+      if (setAllDaysData) {
+        const googleDaily = newIntel.googleCampaign?._dailyTrend || {};
+        const metaDaily = newIntel.metaAds?._dailyTrend || {};
+        
+        const allDateKeys = new Set([...Object.keys(googleDaily), ...Object.keys(metaDaily)]);
+        
+        if (allDateKeys.size > 0) {
+          const currentDays = { ...(allDaysData || {}) };
+          let daysUpdated = false;
+          
+          // Normalize date strings to YYYY-MM-DD
+          const normDate = (d) => {
+            if (!d) return null;
+            const s = String(d).trim();
+            // Already ISO
+            if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+            // "Feb 11, 2026" format
+            const months = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
+            const m = s.match(/^(\w{3})\s+(\d+),?\s*(\d{4})$/);
+            if (m) {
+              const mo = months[m[1].toLowerCase()];
+              if (mo !== undefined) {
+                const dt = new Date(parseInt(m[3]), mo, parseInt(m[2]));
+                return dt.toISOString().slice(0, 10);
+              }
+            }
+            // Excel serial number
+            if (/^\d{5}$/.test(s)) {
+              const dt = new Date((parseInt(s) - 25569) * 86400000);
+              return dt.toISOString().slice(0, 10);
+            }
+            // Try Date parse
+            const dt = new Date(s);
+            return isNaN(dt.getTime()) ? null : dt.toISOString().slice(0, 10);
+          };
+          
+          for (const rawDate of allDateKeys) {
+            const dateKey = normDate(rawDate);
+            if (!dateKey) continue;
+            
+            const gd = googleDaily[rawDate] || {};
+            const md = metaDaily[rawDate] || {};
+            
+            if (!currentDays[dateKey]) currentDays[dateKey] = {};
+            if (!currentDays[dateKey].shopify) currentDays[dateKey].shopify = {};
+            
+            // Write Google daily metrics
+            if (gd.cost > 0 || gd.impressions > 0) {
+              currentDays[dateKey].googleSpend = gd.cost || 0;
+              currentDays[dateKey].googleAds = gd.cost || 0;
+              currentDays[dateKey].googleImpressions = gd.impressions || 0;
+              currentDays[dateKey].googleClicks = gd.clicks || 0;
+              currentDays[dateKey].googleConversions = gd.conversions || 0;
+              currentDays[dateKey].googleCpc = gd.clicks > 0 ? gd.cost / gd.clicks : 0;
+              currentDays[dateKey].shopify.googleSpend = gd.cost || 0;
+              daysUpdated = true;
+            }
+            
+            // Write Meta daily metrics
+            if (md.cost > 0 || md.impressions > 0) {
+              currentDays[dateKey].metaSpend = md.cost || 0;
+              currentDays[dateKey].metaAds = md.cost || 0;
+              currentDays[dateKey].metaImpressions = md.impressions || 0;
+              currentDays[dateKey].metaClicks = md.clicks || 0;
+              currentDays[dateKey].metaPurchases = md.conversions || 0;
+              currentDays[dateKey].metaConversions = md.conversions || 0;
+              currentDays[dateKey].metaCpc = md.clicks > 0 ? md.cost / md.clicks : 0;
+              currentDays[dateKey].shopify.metaSpend = md.cost || 0;
+              daysUpdated = true;
+            }
+            
+            // Update shopify.adSpend total
+            const gs = currentDays[dateKey].shopify.googleSpend || currentDays[dateKey].googleSpend || 0;
+            const ms = currentDays[dateKey].shopify.metaSpend || currentDays[dateKey].metaSpend || 0;
+            if (gs + ms > 0) {
+              currentDays[dateKey].shopify.adSpend = gs + ms;
+            }
+          }
+          
+          if (daysUpdated) {
+            setAllDaysData(currentDays);
+            try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(currentDays)); } catch(e) {}
+          }
+        }
+      }
+      
       if (queueCloudSave) queueCloudSave();
       setResults(processResults);
       const successCount = processResults.filter(r => r.status === 'success').length;
@@ -1323,7 +1526,7 @@ const DtcAdsIntelModal = ({
     try {
       const prompts = buildDtcActionReportPrompt(dtcIntelData);
       if (!prompts) throw new Error('No data available');
-      const response = await callAI(prompts.userPrompt, prompts.systemPrompt);
+      const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel);
       setActionReport(response);
       // Save to report history
       if (saveReportToHistory) {
@@ -1337,7 +1540,7 @@ const DtcAdsIntelModal = ({
         saveReportToHistory({
           type: 'dtc',
           content: response,
-          model: window.__aiModelOverride || AI_DEFAULT_MODEL,
+          model: selectedModel,
           metrics: {
             revenue: totalRev,
             adSpend: totalSpend,
@@ -1411,9 +1614,23 @@ const DtcAdsIntelModal = ({
                 ].filter(Boolean).join(' · ')}
               </p>
               {callAI && !actionReport && !generatingReport && (
-                <button onClick={generateActionReport} className="mt-3 w-full px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-lg text-white font-medium flex items-center justify-center gap-2 text-sm shadow-lg shadow-cyan-500/20">
-                  <FileText className="w-4 h-4" />🔬 Generate DTC Action Report from This Data
-                </button>
+                <div className="mt-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-slate-400 whitespace-nowrap">AI Model:</label>
+                    <select
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                      className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500"
+                    >
+                      {AI_MODEL_OPTIONS.map(m => (
+                        <option key={m.value} value={m.value}>{m.label} — {m.cost}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <button onClick={generateActionReport} className="w-full px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-lg text-white font-medium flex items-center justify-center gap-2 text-sm shadow-lg shadow-cyan-500/20">
+                    <FileText className="w-4 h-4" />Generate DTC Action Report
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -1521,10 +1738,24 @@ const DtcAdsIntelModal = ({
                       <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-lg p-3">
                         <p className="text-emerald-400 font-medium flex items-center gap-2"><CheckCircle className="w-4 h-4" />Data imported!</p>
                       </div>
+                      {callAI && !actionReport && !generatingReport && (
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-slate-400 whitespace-nowrap">AI Model:</label>
+                          <select
+                            value={selectedModel}
+                            onChange={(e) => setSelectedModel(e.target.value)}
+                            className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500"
+                          >
+                            {AI_MODEL_OPTIONS.map(m => (
+                              <option key={m.value} value={m.value}>{m.label} — {m.cost}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                       <div className="flex gap-2">
                         {callAI && !actionReport && !generatingReport && (
                           <button onClick={generateActionReport} className="flex-1 px-4 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-xl text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20">
-                            <FileText className="w-4 h-4" />🔬 Generate DTC Action Report
+                            <FileText className="w-4 h-4" />Generate DTC Action Report
                           </button>
                         )}
                         <button onClick={() => { setShow(false); setDetectedFiles([]); setResults(null); }} className="px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-medium flex items-center justify-center gap-2">

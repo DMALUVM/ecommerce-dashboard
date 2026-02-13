@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
-import { Brain, X, Upload, FileSpreadsheet, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, Eye, ShoppingCart, Zap, Download, FileText, Loader2, Archive } from 'lucide-react';
+import { Brain, X, Upload, FileSpreadsheet, CheckCircle, AlertTriangle, TrendingUp, Target, Search, BarChart3, Eye, ShoppingCart, Zap, Download, FileText, Loader2, Archive, ChevronDown } from 'lucide-react';
 import { loadXLSX } from '../../utils/xlsx';
-import { AI_DEFAULT_MODEL } from '../../utils/config';
+import { AI_DEFAULT_MODEL, AI_MODEL_OPTIONS } from '../../utils/config';
 import { sanitizeHtml } from '../../utils/sanitize';
 
 const REPORT_TYPES = [
@@ -1225,6 +1225,7 @@ const AmazonAdsIntelModal = ({
   const [actionReport, setActionReport] = useState(null);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [reportError, setReportError] = useState(null);
+  const [selectedModel, setSelectedModel] = useState(window.__aiModelOverride || AI_DEFAULT_MODEL);
 
   // Move all logic into the render check
   if (!show) return null;
@@ -1445,7 +1446,7 @@ const AmazonAdsIntelModal = ({
       const prompts = buildActionReportPrompt(adsIntelData);
       if (!prompts) throw new Error('No data available for report');
       
-      const response = await callAI(prompts.userPrompt, prompts.systemPrompt);
+      const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel);
       setActionReport(response);
       // Save to report history
       if (saveReportToHistory) {
@@ -1453,7 +1454,7 @@ const AmazonAdsIntelModal = ({
         saveReportToHistory({
           type: 'amazon',
           content: response,
-          model: window.__aiModelOverride || AI_DEFAULT_MODEL,
+          model: selectedModel,
           metrics: {
             revenue: t.totalSales || 0,
             adSpend: t.totalSpend || 0,
@@ -1529,13 +1530,27 @@ const AmazonAdsIntelModal = ({
               </p>
               {/* Generate report from existing data */}
               {callAI && !actionReport && !generatingReport && (
-                <button
-                  onClick={generateActionReport}
-                  className="mt-3 w-full px-4 py-2.5 bg-gradient-to-r from-rose-600 to-orange-600 hover:from-rose-500 hover:to-orange-500 rounded-lg text-white font-medium flex items-center justify-center gap-2 text-sm shadow-lg shadow-rose-500/20"
-                >
-                  <FileText className="w-4 h-4" />
-                  🔬 Generate Action Report from This Data
-                </button>
+                <div className="mt-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-slate-400 whitespace-nowrap">AI Model:</label>
+                    <select
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                      className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500"
+                    >
+                      {AI_MODEL_OPTIONS.map(m => (
+                        <option key={m.value} value={m.value}>{m.label} — {m.cost}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    onClick={generateActionReport}
+                    className="w-full px-4 py-2.5 bg-gradient-to-r from-rose-600 to-orange-600 hover:from-rose-500 hover:to-orange-500 rounded-lg text-white font-medium flex items-center justify-center gap-2 text-sm shadow-lg shadow-rose-500/20"
+                  >
+                    <FileText className="w-4 h-4" />
+                    Generate Action Report
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -1676,7 +1691,23 @@ const AmazonAdsIntelModal = ({
                     <p className="text-slate-400 text-xs mt-1">Your ads data has been imported and is now available in your dashboard.</p>
                   </div>
                   
-                  <div className="flex gap-2">
+                  <div className="space-y-2">
+                    {/* Model selector */}
+                    {callAI && !actionReport && !generatingReport && (
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-slate-400 whitespace-nowrap">AI Model:</label>
+                        <select
+                          value={selectedModel}
+                          onChange={(e) => setSelectedModel(e.target.value)}
+                          className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500"
+                        >
+                          {AI_MODEL_OPTIONS.map(m => (
+                            <option key={m.value} value={m.value}>{m.label} — {m.cost}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    <div className="flex gap-2">
                     {/* Generate Action Report */}
                     {callAI && !actionReport && !generatingReport && (
                       <button
@@ -1684,7 +1715,7 @@ const AmazonAdsIntelModal = ({
                         className="flex-1 px-4 py-3 bg-gradient-to-r from-rose-600 to-orange-600 hover:from-rose-500 hover:to-orange-500 rounded-xl text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-rose-500/20"
                       >
                         <FileText className="w-4 h-4" />
-                        🔬 Generate Action Report
+                        Generate Action Report
                       </button>
                     )}
                     
@@ -1720,6 +1751,7 @@ const AmazonAdsIntelModal = ({
                         Done
                       </button>
                     )}
+                  </div>
                   </div>
                   
                   {/* Report Generation State */}

@@ -249,7 +249,7 @@ const DashboardView = ({
         type: 'warning', 
         text: `Missing Ads data: ${weekDates}`,
         link: 'ads-upload',
-        action: () => { setUploadTab('bulk-ads'); setView('upload'); }
+        action: () => { setUploadTab('advertising'); setView('upload'); }
       });
     }
     
