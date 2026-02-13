@@ -11548,119 +11548,123 @@ const savePeriods = async (d) => {
       }
       
       // Check Amazon Ads API — pull daily SP/SB/SD campaign performance
+      // IMPORTANT: Run non-blocking (fire-and-forget) because the polling/retry loop
+      // can take 2-4 minutes, which would block Shopify/Packiyo/QBO from syncing
       if (appSettings.autoSync?.amazonAds !== false && amazonCredentials.adsConnected && amazonCredentials.adsRefreshToken) {
         const adsStale = isServiceStale(amazonCredentials.adsLastSync, threshold);
         
         if (adsStale || force) {
-          try {
-            const adsSyncBody = {
-              syncType: 'daily',
-              daysBack: 30,
-              adsClientId: amazonCredentials.adsClientId,
-              adsClientSecret: amazonCredentials.adsClientSecret,
-              adsRefreshToken: amazonCredentials.adsRefreshToken,
-              adsProfileId: amazonCredentials.adsProfileId,
-            };
-            
-            let adsData = null;
-            let adsRetries = 0;
-            const maxAdsRetries = 3;
-            
-            while (adsRetries < maxAdsRetries) {
-              const adsRes = await fetch('/api/amazon/ads-sync', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(adsSyncBody),
-              });
-              adsData = await adsRes.json();
+          // Fire and forget — don't await
+          (async () => {
+            try {
+              console.log('[AutoSync] Amazon Ads: starting background sync (non-blocking)...');
+              const adsSyncBody = {
+                syncType: 'daily',
+                daysBack: 30,
+                adsClientId: amazonCredentials.adsClientId,
+                adsClientSecret: amazonCredentials.adsClientSecret,
+                adsRefreshToken: amazonCredentials.adsRefreshToken,
+                adsProfileId: amazonCredentials.adsProfileId,
+              };
               
-              if (adsData.status === 'pending' && adsData.pendingReports) {
-                console.log(`[AutoSync] Amazon Ads reports pending, retry ${adsRetries + 1}/${maxAdsRetries}...`);
-                adsSyncBody.pendingReports = adsData.pendingReports;
-                adsRetries++;
-                await new Promise(r => setTimeout(r, 10000));
-                continue;
-              }
-              break;
-            }
-            
-            if (adsData?.success && adsData?.dailyData) {
-              let adsDaysUpdated = 0;
+              let adsData = null;
+              let adsRetries = 0;
+              const maxAdsRetries = 3;
               
-              setAllDaysData(prev => {
-                const updated = { ...prev };
-                Object.entries(adsData.dailyData).forEach(([date, adDay]) => {
-                  if (!updated[date]) updated[date] = {};
-                  if (!updated[date].amazon) updated[date].amazon = { sales: 0, units: 0, refunds: 0 };
-                  
-                  // Write ad metrics from API (REPLACE — re-sync is authoritative)
-                  updated[date].amazon.adSpend = adDay.spend || 0;
-                  updated[date].amazon.adRevenue = adDay.revenue || 0;
-                  updated[date].amazon.adOrders = adDay.orders || 0;
-                  updated[date].amazon.adImpressions = adDay.impressions || 0;
-                  updated[date].amazon.adClicks = adDay.clicks || 0;
-                  updated[date].amazon.acos = adDay.acos || 0;
-                  updated[date].amazon.adRoas = adDay.roas || 0;
-                  
-                  // Write per-SKU ad spend for this date
-                  const skuDay = adsData.skuDailyData?.[date];
-                  if (skuDay && updated[date].amazon.skuData) {
-                    updated[date].amazon.skuData = updated[date].amazon.skuData.map(sk => {
-                      const match = skuDay[sk.sku] || skuDay[sk.asin] || skuDay[(sk.sku || '').toUpperCase()];
-                      if (match) {
-                        return { ...sk, adSpend: match.spend || 0, adRevenue: match.sales || 0, adOrders: match.orders || 0 };
-                      }
-                      return sk;
-                    });
-                  }
-                  
-                  // Recalculate netProfit if we have revenue data
-                  const rev = updated[date].amazon.revenue || updated[date].amazon.sales || 0;
-                  if (rev > 0) {
-                    const cogs = updated[date].amazon.cogs || 0;
-                    const fees = updated[date].amazon.fees || (rev * 0.30);
-                    updated[date].amazon.netProfit = rev - cogs - fees - (adDay.spend || 0);
-                  }
-                  
-                  adsDaysUpdated++;
+              while (adsRetries < maxAdsRetries) {
+                const adsRes = await fetch('/api/amazon/ads-sync', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(adsSyncBody),
                 });
+                adsData = await adsRes.json();
                 
-                console.log(`[AutoSync] Amazon Ads: ${adsDaysUpdated} days updated, $${adsData.summary?.totalSpend?.toFixed(2)} total spend, ${adsData.summary?.skuCount || 0} SKUs`);
-                try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('[AutoSync] Failed to persist ads data to localStorage'); }
-                return updated;
-              });
+                if (adsData.status === 'pending' && adsData.pendingReports) {
+                  console.log(`[AutoSync] Amazon Ads reports pending, retry ${adsRetries + 1}/${maxAdsRetries}...`);
+                  adsSyncBody.pendingReports = adsData.pendingReports;
+                  adsRetries++;
+                  await new Promise(r => setTimeout(r, 10000));
+                  continue;
+                }
+                break;
+              }
               
-              // Store transformed reports in adsIntelData for AI analysis
-              if (adsData.reports) {
-                setAdsIntelData(prev => {
-                  const updated = { ...(prev || {}), lastUpdated: new Date().toISOString(), source: 'amazon-ads-api' };
-                  if (adsData.reports.dailyOverview) updated._apiDailyOverview = adsData.reports.dailyOverview;
-                  if (adsData.reports.spSearchTerms) updated._apiSpSearchTerms = adsData.reports.spSearchTerms;
-                  if (adsData.reports.spAdvertised) updated._apiSpAdvertised = adsData.reports.spAdvertised;
-                  if (adsData.reports.spPlacement) updated._apiSpPlacement = adsData.reports.spPlacement;
-                  if (adsData.reports.spTargeting) updated._apiSpTargeting = adsData.reports.spTargeting;
-                  if (adsData.reports.sbSearchTerms) updated._apiSbSearchTerms = adsData.reports.sbSearchTerms;
-                  if (adsData.reports.sdCampaign) updated._apiSdCampaign = adsData.reports.sdCampaign;
-                  if (adsData.skuSummary) updated.skuAdPerformance = adsData.skuSummary;
-                  if (adsData.campaigns) updated.campaignSummary = adsData.campaigns;
-                  updated.apiSyncSummary = adsData.summary;
+              if (adsData?.success && adsData?.dailyData) {
+                let adsDaysUpdated = 0;
+                
+                setAllDaysData(prev => {
+                  const updated = { ...prev };
+                  Object.entries(adsData.dailyData).forEach(([date, adDay]) => {
+                    if (!updated[date]) updated[date] = {};
+                    if (!updated[date].amazon) updated[date].amazon = { sales: 0, units: 0, refunds: 0 };
+                    
+                    // Write ad metrics from API (REPLACE — re-sync is authoritative)
+                    updated[date].amazon.adSpend = adDay.spend || 0;
+                    updated[date].amazon.adRevenue = adDay.revenue || 0;
+                    updated[date].amazon.adOrders = adDay.orders || 0;
+                    updated[date].amazon.adImpressions = adDay.impressions || 0;
+                    updated[date].amazon.adClicks = adDay.clicks || 0;
+                    updated[date].amazon.acos = adDay.acos || 0;
+                    updated[date].amazon.adRoas = adDay.roas || 0;
+                    
+                    // Write per-SKU ad spend for this date
+                    const skuDay = adsData.skuDailyData?.[date];
+                    if (skuDay && updated[date].amazon.skuData) {
+                      updated[date].amazon.skuData = updated[date].amazon.skuData.map(sk => {
+                        const match = skuDay[sk.sku] || skuDay[sk.asin] || skuDay[(sk.sku || '').toUpperCase()];
+                        if (match) {
+                          return { ...sk, adSpend: match.spend || 0, adRevenue: match.sales || 0, adOrders: match.orders || 0 };
+                        }
+                        return sk;
+                      });
+                    }
+                    
+                    // Recalculate netProfit if we have revenue data
+                    const rev = updated[date].amazon.revenue || updated[date].amazon.sales || 0;
+                    if (rev > 0) {
+                      const cogs = updated[date].amazon.cogs || 0;
+                      const fees = updated[date].amazon.fees || (rev * 0.30);
+                      updated[date].amazon.netProfit = rev - cogs - fees - (adDay.spend || 0);
+                    }
+                    
+                    adsDaysUpdated++;
+                  });
+                  
+                  console.log(`[AutoSync] Amazon Ads: ${adsDaysUpdated} days updated, $${adsData.summary?.totalSpend?.toFixed(2)} total spend, ${adsData.summary?.skuCount || 0} SKUs`);
+                  try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('[AutoSync] Failed to persist ads data to localStorage'); }
                   return updated;
                 });
+                
+                // Store transformed reports in adsIntelData for AI analysis
+                if (adsData.reports) {
+                  setAdsIntelData(prev => {
+                    const updated = { ...(prev || {}), lastUpdated: new Date().toISOString(), source: 'amazon-ads-api' };
+                    if (adsData.reports.dailyOverview) updated._apiDailyOverview = adsData.reports.dailyOverview;
+                    if (adsData.reports.spSearchTerms) updated._apiSpSearchTerms = adsData.reports.spSearchTerms;
+                    if (adsData.reports.spAdvertised) updated._apiSpAdvertised = adsData.reports.spAdvertised;
+                    if (adsData.reports.spPlacement) updated._apiSpPlacement = adsData.reports.spPlacement;
+                    if (adsData.reports.spTargeting) updated._apiSpTargeting = adsData.reports.spTargeting;
+                    if (adsData.reports.sbSearchTerms) updated._apiSbSearchTerms = adsData.reports.sbSearchTerms;
+                    if (adsData.reports.sdCampaign) updated._apiSdCampaign = adsData.reports.sdCampaign;
+                    if (adsData.skuSummary) updated.skuAdPerformance = adsData.skuSummary;
+                    if (adsData.campaigns) updated.campaignSummary = adsData.campaigns;
+                    updated.apiSyncSummary = adsData.summary;
+                    return updated;
+                  });
+                }
+                
+                queueCloudSave({ ...combinedData });
+                setAmazonCredentials(p => ({ ...p, adsLastSync: new Date().toISOString() }));
+                console.log(`[AutoSync] Amazon Ads COMPLETE: ${adsData.summary?.daysWithData} days, $${adsData.summary?.totalSpend?.toFixed(0)} spend, ${adsData.summary?.campaignCount} campaigns, ${adsData.summary?.skuCount} SKUs`);
+              } else if (adsData?.status === 'pending') {
+                console.log('[AutoSync] Amazon Ads: reports still generating — will complete on next sync');
+              } else {
+                devWarn('Amazon Ads auto-sync failed:', adsData?.error);
               }
-              
-              queueCloudSave({ ...combinedData });
-              setAmazonCredentials(p => ({ ...p, adsLastSync: new Date().toISOString() }));
-              results.push({ service: 'Amazon Ads', success: true, days: adsData.summary?.daysWithData, spend: adsData.summary?.totalSpend, campaigns: adsData.summary?.campaignCount, skus: adsData.summary?.skuCount });
-            } else if (adsData?.status === 'pending') {
-              results.push({ service: 'Amazon Ads', success: false, error: 'Reports still generating - will complete on next sync' });
-            } else {
-              results.push({ service: 'Amazon Ads', success: false, error: adsData?.error || 'Ads sync failed' });
-              devWarn('Amazon Ads auto-sync failed:', adsData?.error);
+            } catch (err) {
+              devWarn('Amazon Ads auto-sync error:', err.message);
             }
-          } catch (err) {
-            results.push({ service: 'Amazon Ads', success: false, error: err.message });
-            devWarn('Amazon Ads auto-sync error:', err.message);
-          }
+          })(); // Fire and forget — don't await this IIFE
         }
       }
       
