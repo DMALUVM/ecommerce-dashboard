@@ -1303,6 +1303,7 @@ export default function Dashboard() {
   const [dailyFiles, setDailyFiles] = useState({ amazon: null, shopify: null }); // Daily upload files
   const [dailyAdSpend, setDailyAdSpend] = useState({ meta: '', google: '' }); // Daily ad spend inputs
   const [calendarMonth, setCalendarMonth] = useState(null); // null = auto (latest data), or { year, month }
+  const [navDropdown, setNavDropdown] = useState(null); // Tracks which nav dropdown is open
   
   // Amazon Campaign Data
   const [amazonCampaigns, setAmazonCampaigns] = useState(() => {
@@ -1311,6 +1312,30 @@ export default function Dashboard() {
   });
   const [amazonCampaignSort, setAmazonCampaignSort] = useState({ field: 'spend', dir: 'desc' });
   const [amazonCampaignFilter, setAmazonCampaignFilter] = useState({ status: 'all', type: 'all', search: '' });
+
+  // Amazon Ads Intelligence Data (from API sync or enriched uploads)
+  const [adsIntelData, setAdsIntelData] = useState(() => {
+    try { return safeLocalStorageGet('ecommerce_ads_intel_v1', null); }
+    catch { return null; }
+  });
+  const [intelDateRange, setIntelDateRange] = useState(30);
+  // Persist adsIntelData
+  useEffect(() => {
+    if (adsIntelData) {
+      try { writeToLocal('ecommerce_ads_intel_v1', JSON.stringify(adsIntelData)); } catch {}
+    }
+  }, [adsIntelData]);
+
+  // Amazon Ads API credentials
+  const [amazonAdsCredentials, setAmazonAdsCredentials] = useState(() => {
+    try { return safeLocalStorageGet('ecommerce_amazon_ads_creds_v1', { adsConnected: false, adsClientId: '', adsClientSecret: '', adsRefreshToken: '', adsProfileId: '', adsLastSync: null }); }
+    catch { return { adsConnected: false }; }
+  });
+  useEffect(() => {
+    if (amazonAdsCredentials) {
+      try { writeToLocal('ecommerce_amazon_ads_creds_v1', JSON.stringify(amazonAdsCredentials)); } catch {}
+    }
+  }, [amazonAdsCredentials]);
 
   // Weekly Intelligence Reports
   const [weeklyReports, setWeeklyReports] = useState(() => {
@@ -3075,6 +3100,7 @@ const combinedData = useMemo(() => ({
   productionPipeline,
   threeplLedger,
   amazonCampaigns,
+  adsIntelData,
   // Self-learning forecast data
   forecastAccuracyHistory,
   forecastCorrections,
@@ -3099,7 +3125,7 @@ const combinedData = useMemo(() => ({
   shopifyCredentials,
   // Packiyo 3PL Integration credentials
   packiyoCredentials,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials]);
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, adsIntelData, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -3475,6 +3501,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.productionPipeline) setProductionPipeline(cloud.productionPipeline);
     if (cloud.threeplLedger) setThreeplLedger(cloud.threeplLedger);
     if (cloud.amazonCampaigns) setAmazonCampaigns(cloud.amazonCampaigns);
+    if (cloud.adsIntelData) setAdsIntelData(cloud.adsIntelData);
     
     // Load self-learning forecast data
     if (cloud.forecastAccuracyHistory) setForecastAccuracyHistory(cloud.forecastAccuracyHistory);
@@ -3513,6 +3540,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.productionPipeline) localStorage.setItem('ecommerce_production_v1', JSON.stringify(cloud.productionPipeline));
     if (cloud.threeplLedger) writeToLocal(THREEPL_LEDGER_KEY, JSON.stringify(cloud.threeplLedger));
     if (cloud.amazonCampaigns) writeToLocal('ecommerce_amazon_campaigns_v1', JSON.stringify(cloud.amazonCampaigns));
+    if (cloud.adsIntelData) writeToLocal('ecommerce_ads_intel_v1', JSON.stringify(cloud.adsIntelData));
     
     // Sync self-learning forecast data to localStorage
     if (cloud.forecastAccuracyHistory) writeToLocal(FORECAST_ACCURACY_KEY, JSON.stringify(cloud.forecastAccuracyHistory));
@@ -10596,62 +10624,92 @@ Analyze the data and respond with ONLY this JSON:
     );
   };
 
-  const NavTabs = () => (
-    <div className="flex flex-wrap gap-2 mb-6 p-1.5 bg-slate-800/50 rounded-xl">
-      {/* Main Navigation */}
-      <button onClick={() => setView('dashboard')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'dashboard' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />Dashboard</button>
-      <button onClick={() => setView('upload')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Upload className="w-4 h-4 inline mr-1" />Upload</button>
-      
-      <div className="w-px bg-slate-600 mx-1" />
-      
-      {/* Data Views */}
-      {appSettings.modulesEnabled?.dailyTracking !== false && (
-        <button onClick={() => { const d = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse(); if (d.length) { setSelectedDay(d[0]); setView('daily'); }}} disabled={!Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'daily' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Sun className="w-4 h-4 inline mr-1" />Days</button>
-      )}
-      {appSettings.modulesEnabled?.weeklyTracking !== false && (
-        <button onClick={() => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}} disabled={!Object.keys(allWeeksData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'weekly' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Calendar className="w-4 h-4 inline mr-1" />Weeks</button>
-      )}
-      {appSettings.modulesEnabled?.periodTracking !== false && (
-        <button onClick={() => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }}} disabled={!Object.keys(allPeriodsData).length} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'period-view' ? 'bg-teal-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><CalendarRange className="w-4 h-4 inline mr-1" />Periods</button>
-      )}
-      {appSettings.modulesEnabled?.inventory !== false && (
-        <button onClick={() => { if (Object.keys(invHistory).length) { const d = Object.keys(invHistory).sort().reverse()[0]; setSelectedInvDate(d); setView('inventory'); } else { setUploadTab('inventory'); setView('upload'); }}} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'inventory' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Boxes className="w-4 h-4 inline mr-1" />Inventory</button>
-      )}
-      
-      <div className="w-px bg-slate-600 mx-1" />
-      
-      {/* Analytics */}
-      {appSettings.modulesEnabled?.trends !== false && (
-        <button onClick={() => setView('trends')} disabled={Object.keys(allWeeksData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'trends' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><TrendingUp className="w-4 h-4 inline mr-1" />Trends</button>
-      )}
-      <button onClick={() => setView('forecast')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'forecast' ? 'bg-purple-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Brain className="w-4 h-4 inline mr-1" />Forecast</button>
-      <button onClick={() => setView('analytics')} disabled={Object.keys(allWeeksData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'analytics' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4 inline mr-1" />Analytics</button>
-      {appSettings.modulesEnabled?.yoy !== false && (
-        <button onClick={() => setView('yoy')} disabled={Object.keys(allWeeksData).length < 2 && Object.keys(allPeriodsData).length < 2} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'yoy' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><GitCompare className="w-4 h-4 inline mr-1" />YoY</button>
-      )}
-      {appSettings.modulesEnabled?.skus !== false && (
-        <button onClick={() => setView('skus')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'skus' ? 'bg-pink-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Trophy className="w-4 h-4 inline mr-1" />SKUs</button>
-      )}
-      {appSettings.modulesEnabled?.profitability !== false && (
-        <button onClick={() => setView('profitability')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'profitability' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><PieChart className="w-4 h-4 inline mr-1" />Profit</button>
-      )}
-      {appSettings.modulesEnabled?.ads !== false && (
-        <button onClick={() => setView('ads')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === 'ads' ? 'bg-purple-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Zap className="w-4 h-4 inline mr-1" />Ads</button>
-      )}
-      {appSettings.modulesEnabled?.threepl !== false && (
-        <button onClick={() => setView('3pl')} disabled={Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1} className={`px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${view === '3pl' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Truck className="w-4 h-4 inline mr-1" />3PL</button>
-      )}
-      <button onClick={() => setView('banking')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'banking' ? 'bg-green-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Landmark className="w-4 h-4 inline mr-1" />Banking{bankingData.lastUpload && new Date().toDateString() !== new Date(bankingData.lastUpload).toDateString() && <span className="ml-1 w-2 h-2 bg-amber-400 rounded-full inline-block animate-pulse" title="Banking data not uploaded today" />}</button>
-      
-      <div className="w-px bg-slate-600 mx-1" />
-      
-      {/* Compliance & Settings */}
-      {appSettings.modulesEnabled?.salesTax !== false && (
-        <button onClick={() => setView('sales-tax')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'sales-tax' ? 'bg-rose-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><DollarSign className="w-4 h-4 inline mr-1" />Sales Tax</button>
-      )}
-      <button onClick={() => setView('settings')} className={`px-3 py-2 rounded-lg text-sm font-medium ${view === 'settings' ? 'bg-slate-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><Settings className="w-4 h-4 inline mr-1" />Settings</button>
-    </div>
-  );
+  const navRef = useRef(null);
+  
+  // Close nav dropdown on outside click
+  useEffect(() => {
+    if (!navDropdown) return;
+    const handleClickOutside = (e) => {
+      if (navRef.current && !navRef.current.contains(e.target)) setNavDropdown(null);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => { document.removeEventListener('mousedown', handleClickOutside); document.removeEventListener('touchstart', handleClickOutside); };
+  }, [navDropdown]);
+  
+  const NavTabs = () => {
+    const dataViews = ['daily', 'weekly', 'period-view'];
+    const analyticsViews = ['trends', 'analytics', 'yoy', 'skus', 'profitability', 'ads'];
+    const operationsViews = ['inventory', '3pl', 'banking', 'sales-tax', 'forecast'];
+    const isDataActive = dataViews.includes(view);
+    const isAnalyticsActive = analyticsViews.includes(view);
+    const isOperationsActive = operationsViews.includes(view);
+    
+    const NavDropdownMenu = ({ label, icon: Icon, items, isActive, dropdownKey }) => {
+      const isOpen = navDropdown === dropdownKey;
+      return (
+        <div className="relative flex-shrink-0">
+          <button onClick={() => setNavDropdown(isOpen ? null : dropdownKey)}
+            className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap ${isActive ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
+            <Icon className="w-4 h-4" />
+            <span className="hidden sm:inline">{label}</span>
+            <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {isOpen && (
+            <div className="absolute top-full left-0 mt-2 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl py-1.5 z-50 min-w-[200px] max-w-[calc(100vw-32px)]">
+              {items.map((item, index) => (
+                <React.Fragment key={item.view}>
+                  {item.divider && index > 0 && <div className="border-t border-slate-700 my-1.5" />}
+                  <button onClick={() => { item.onClick(); setNavDropdown(null); }} disabled={item.disabled}
+                    className={`w-full px-4 py-2.5 text-left text-sm flex items-center gap-2.5 disabled:opacity-40 transition-all ${view === item.view ? 'bg-violet-600/20 text-violet-300' : 'text-slate-300 hover:bg-slate-700/70'}`}>
+                    <item.icon className="w-4 h-4" />
+                    {item.label}
+                    {item.badge && <span className="ml-auto text-xs bg-violet-500/30 text-violet-300 px-2 py-0.5 rounded-full">{item.badge}</span>}
+                  </button>
+                </React.Fragment>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    };
+    
+    const dataItems = [
+      ...(appSettings.modulesEnabled?.dailyTracking !== false ? [{ view: 'daily', label: 'Daily View', icon: Sun, disabled: !Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).length, onClick: () => { const d = Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).sort().reverse(); if (d.length) { setSelectedDay(d[0]); setView('daily'); }}, badge: Object.keys(allDaysData).filter(k => hasDailySalesData(allDaysData[k])).length || null }] : []),
+      ...(appSettings.modulesEnabled?.weeklyTracking !== false ? [{ view: 'weekly', label: 'Weekly View', icon: Calendar, disabled: !Object.keys(allWeeksData).length, onClick: () => { const w = Object.keys(allWeeksData).sort().reverse(); if (w.length) { setSelectedWeek(w[0]); setView('weekly'); }}, badge: Object.keys(allWeeksData).length || null }] : []),
+      ...(appSettings.modulesEnabled?.periodTracking !== false ? [{ view: 'period-view', label: 'Period View', icon: CalendarRange, disabled: !Object.keys(allPeriodsData).length, onClick: () => { const p = Object.keys(allPeriodsData).sort().reverse(); if (p.length) { setSelectedPeriod(p[0]); setView('period-view'); }}, badge: Object.keys(allPeriodsData).length || null }] : []),
+    ];
+    
+    const analyticsItems = [
+      ...(appSettings.modulesEnabled?.trends !== false ? [{ view: 'trends', label: 'Trends & Charts', icon: TrendingUp, disabled: Object.keys(allWeeksData).length < 2, onClick: () => setView('trends') }] : []),
+      { view: 'analytics', label: 'Analytics', icon: BarChart3, disabled: Object.keys(allWeeksData).length < 1, onClick: () => setView('analytics') },
+      ...(appSettings.modulesEnabled?.yoy !== false ? [{ view: 'yoy', label: 'Year over Year', icon: GitCompare, disabled: Object.keys(allWeeksData).length < 2 && Object.keys(allPeriodsData).length < 2, onClick: () => setView('yoy') }] : []),
+      ...(appSettings.modulesEnabled?.profitability !== false ? [{ view: 'profitability', label: 'Profitability & P&L', icon: PieChart, disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1, onClick: () => setView('profitability'), divider: true }] : []),
+      ...(appSettings.modulesEnabled?.skus !== false ? [{ view: 'skus', label: 'SKU Performance', icon: Trophy, disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1, onClick: () => setView('skus') }] : []),
+      ...(appSettings.modulesEnabled?.ads !== false ? [{ view: 'ads', label: 'Ads & Marketing', icon: Zap, onClick: () => setView('ads'), divider: true }] : []),
+    ];
+    
+    const operationsItems = [
+      ...(appSettings.modulesEnabled?.inventory !== false ? [{ view: 'inventory', label: 'Inventory', icon: Boxes, disabled: false, onClick: () => { if (Object.keys(invHistory).length) { const d = Object.keys(invHistory).sort().reverse()[0]; setSelectedInvDate(d); setView('inventory'); } else { setUploadTab('inventory'); setView('upload'); }} }] : []),
+      { view: 'forecast', label: 'Forecasting', icon: Brain, disabled: false, onClick: () => setView('forecast') },
+      ...(appSettings.modulesEnabled?.threepl !== false ? [{ view: '3pl', label: '3PL Costs', icon: Truck, disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1, onClick: () => setView('3pl') }] : []),
+      { view: 'banking', label: 'Banking', icon: Landmark, disabled: false, onClick: () => setView('banking'), divider: true },
+      ...(appSettings.modulesEnabled?.salesTax !== false ? [{ view: 'sales-tax', label: 'Sales Tax', icon: DollarSign, disabled: false, onClick: () => setView('sales-tax') }] : []),
+    ];
+    
+    return (
+      <div ref={navRef} className={`flex items-center gap-1 sm:gap-2 mb-4 sm:mb-6 p-1.5 bg-slate-800/50 rounded-xl relative ${navDropdown ? '' : 'overflow-x-auto scrollbar-hide'}`}>
+        <button onClick={() => setView('dashboard')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'dashboard' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><BarChart3 className="w-4 h-4" /><span className="hidden sm:inline">Dashboard</span></button>
+        <button onClick={() => setView('upload')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Upload className="w-4 h-4" /><span className="hidden sm:inline">Upload</span></button>
+        <div className="w-px bg-slate-600 mx-0.5 sm:mx-1 h-6 flex-shrink-0" />
+        {dataItems.length > 0 && <NavDropdownMenu label="Data" icon={Database} items={dataItems} isActive={isDataActive} dropdownKey="data" />}
+        {analyticsItems.length > 0 && <NavDropdownMenu label="Analytics" icon={TrendingUp} items={analyticsItems} isActive={isAnalyticsActive} dropdownKey="analytics" />}
+        {operationsItems.length > 0 && <NavDropdownMenu label="Operations" icon={Boxes} items={operationsItems} isActive={isOperationsActive} dropdownKey="operations" />}
+        <div className="w-px bg-slate-600 mx-0.5 sm:mx-1 h-6 flex-shrink-0" />
+        <button onClick={() => setView('settings')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-500 text-white shadow-lg shadow-slate-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Settings className="w-4 h-4" /><span className="hidden sm:inline">Settings</span></button>
+      </div>
+    );
+  };
 
   const dataBar = useMemo(() => (
     <div className="flex flex-wrap items-center gap-3 mb-6 p-4 bg-slate-800/50 rounded-xl border border-slate-700">
@@ -29826,6 +29884,130 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
     const campaignSummary = amazonCampaigns.summary || {};
     const hasCampaignData = campaignData.length > 0;
     
+    // ═══ AMAZON ADS INTELLIGENCE ═══
+    const amazonAdsInsights = (() => {
+      const intel = { hasData: false, wastedSpend: [], topWinners: [], topCampaigns: [], skuPerformance: [], placementInsights: null, negativeKeywords: [], summary: null, dateRange: { earliest: null, latest: null, daysAvailable: 0 }, trendData: [] };
+      
+      // Helper: read from both nested and flat adsIntelData formats
+      const getRecords = (nestedKey, flatKey) => {
+        const amz = adsIntelData?.amazon || {};
+        const nested = amz[nestedKey]?.records;
+        if (nested?.length) return nested;
+        if (flatKey && Array.isArray(adsIntelData?.[flatKey]) && adsIntelData[flatKey].length) return adsIntelData[flatKey];
+        return [];
+      };
+      
+      // Date cutoff
+      const cutoffDate = intelDateRange === 'all' ? null : (() => { const d = new Date(); d.setDate(d.getDate() - intelDateRange); return d.toISOString().slice(0, 10); })();
+      const inRange = (r) => { if (!cutoffDate) return true; const d = r['Date'] || r['date'] || ''; return d >= cutoffDate; };
+      
+      // --- API Search Terms (if available from adsIntelData) ---
+      const spSearchTerms = getRecords('sp_search_terms', '_apiSpSearchTerms').filter(inRange);
+      if (spSearchTerms.length > 0) {
+        intel.hasData = true;
+        const termMap = {};
+        spSearchTerms.forEach(r => {
+          const term = r['Customer Search Term'] || '';
+          if (!term) return;
+          if (!termMap[term]) termMap[term] = { term, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+          termMap[term].spend += Number(r['Spend'] || 0);
+          termMap[term].sales += Number(r['7 Day Total Sales'] || 0);
+          termMap[term].clicks += Number(r['Clicks'] || 0);
+          termMap[term].impressions += Number(r['Impressions'] || 0);
+          termMap[term].orders += Number(r['7 Day Total Orders (#)'] || 0);
+        });
+        const terms = Object.values(termMap);
+        intel.wastedSpend = terms.filter(t => t.spend >= 5 && t.sales === 0).sort((a, b) => b.spend - a.spend).slice(0, 10);
+        intel.topWinners = terms.filter(t => t.spend >= 3 && t.sales > 0).map(t => ({ ...t, roas: t.sales / t.spend, acos: t.spend / t.sales * 100 })).sort((a, b) => b.roas - a.roas).slice(0, 10);
+        intel.negativeKeywords = terms.filter(t => t.clicks >= 10 && t.orders === 0).sort((a, b) => b.spend - a.spend).slice(0, 10);
+        const totalSearchSpend = terms.reduce((s, t) => s + t.spend, 0);
+        const totalSearchSales = terms.reduce((s, t) => s + t.sales, 0);
+        const wastedTotal = intel.wastedSpend.reduce((s, t) => s + t.spend, 0);
+        intel.summary = { totalTerms: terms.length, totalSpend: totalSearchSpend, totalSales: totalSearchSales, overallRoas: totalSearchSpend > 0 ? totalSearchSales / totalSearchSpend : 0, wastedTotal, wastedPct: totalSearchSpend > 0 ? (wastedTotal / totalSearchSpend) * 100 : 0 };
+      }
+      
+      // --- API Placement data ---
+      const spPlacement = getRecords('sp_placement', '_apiSpPlacement').filter(inRange);
+      if (spPlacement.length > 0) {
+        intel.hasData = true;
+        const placeMap = {};
+        spPlacement.forEach(r => {
+          const place = r['Placement'] || '';
+          if (!place) return;
+          if (!placeMap[place]) placeMap[place] = { placement: place, spend: 0, sales: 0, clicks: 0, impressions: 0 };
+          placeMap[place].spend += Number(r['Spend'] || 0);
+          placeMap[place].sales += Number(r['7 Day Total Sales'] || 0);
+          placeMap[place].clicks += Number(r['Clicks'] || 0);
+          placeMap[place].impressions += Number(r['Impressions'] || 0);
+        });
+        intel.placementInsights = Object.values(placeMap).map(p => ({ ...p, roas: p.spend > 0 ? p.sales / p.spend : 0, cpc: p.clicks > 0 ? p.spend / p.clicks : 0, ctr: p.impressions > 0 ? (p.clicks / p.impressions) * 100 : 0 }));
+      }
+      
+      // --- API SKU performance ---
+      const spAdvertised = getRecords('sp_advertised_product', '_apiSpAdvertised').filter(inRange);
+      if (spAdvertised.length > 0) {
+        intel.hasData = true;
+        const skuMap = {};
+        spAdvertised.forEach(r => {
+          const sku = r['Advertised SKU'] || r['SKU'] || '';
+          if (!sku) return;
+          if (!skuMap[sku]) skuMap[sku] = { sku, asin: r['Advertised ASIN'] || '', spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+          skuMap[sku].spend += Number(r['Spend'] || 0);
+          skuMap[sku].sales += Number(r['7 Day Total Sales'] || 0);
+          skuMap[sku].clicks += Number(r['Clicks'] || 0);
+          skuMap[sku].orders += Number(r['7 Day Total Orders (#)'] || r['7 Day Total Units (#)'] || 0);
+        });
+        intel.skuPerformance = Object.values(skuMap).filter(s => s.spend > 0).map(s => ({ ...s, roas: s.spend > 0 ? s.sales / s.spend : 0, acos: s.sales > 0 ? (s.spend / s.sales) * 100 : 999 })).sort((a, b) => b.spend - a.spend).slice(0, 10);
+      }
+      
+      // --- Campaign insights from BOTH API and CSV import ---
+      const apiCampaigns = getRecords('sp_campaigns', '_apiDailyOverview').filter(inRange);
+      if (apiCampaigns.length > 0) {
+        intel.hasData = true;
+        const campMap = {};
+        apiCampaigns.forEach(r => {
+          const name = r['Campaign Name'] || r['campaignName'] || '';
+          if (!name) return;
+          if (!campMap[name]) campMap[name] = { name, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+          campMap[name].spend += Number(r['Spend'] || r['spend'] || 0);
+          campMap[name].sales += Number(r['Sales'] || r['sales'] || r['7 Day Total Sales'] || 0);
+          campMap[name].clicks += Number(r['Clicks'] || r['clicks'] || 0);
+          campMap[name].impressions += Number(r['Impressions'] || r['impressions'] || 0);
+        });
+        intel.topCampaigns = Object.values(campMap).filter(c => c.spend > 0).map(c => ({ ...c, roas: c.spend > 0 ? c.sales / c.spend : 0, acos: c.sales > 0 ? (c.spend / c.sales) * 100 : 999 })).sort((a, b) => b.spend - a.spend).slice(0, 10);
+      } else if (hasCampaignData) {
+        // Fall back to CSV-imported campaign data
+        intel.hasData = true;
+        intel.topCampaigns = campaignData.filter(c => c.spend > 0).map(c => ({ name: c.name, spend: c.spend || 0, sales: c.sales || 0, clicks: c.clicks || 0, impressions: c.impressions || 0, roas: c.roas || 0, acos: c.acos || (c.spend > 0 && c.sales > 0 ? (c.spend / c.sales) * 100 : 999), state: c.state })).sort((a, b) => b.spend - a.spend).slice(0, 10);
+      }
+      
+      // --- Daily trend from allDaysData (always available if ads data exists) ---
+      const trendDays = sortedDays.filter(d => {
+        if (cutoffDate && d < cutoffDate) return false;
+        const day = allDaysData[d];
+        return (day?.amazon?.adSpend > 0) || (day?.amazonAdsMetrics?.spend > 0);
+      }).slice(-90);
+      if (trendDays.length >= 3) {
+        intel.hasData = true;
+        // Compute 7-day rolling ACOS
+        trendDays.forEach((d, i) => {
+          const day = allDaysData[d];
+          const spend = day?.amazon?.adSpend || day?.amazonAdsMetrics?.spend || 0;
+          const rev = day?.amazon?.adRevenue || day?.amazonAdsMetrics?.totalRevenue || day?.amazon?.revenue || 0;
+          intel.trendData.push({ date: d, spend, rev, acos: rev > 0 ? (spend / rev) * 100 : 0, roas: spend > 0 ? rev / spend : 0 });
+        });
+        // If no summary from search terms, build one from daily data
+        if (!intel.summary) {
+          const totalSpend = intel.trendData.reduce((s, d) => s + d.spend, 0);
+          const totalRev = intel.trendData.reduce((s, d) => s + d.rev, 0);
+          intel.summary = { totalSpend, totalSales: totalRev, overallRoas: totalSpend > 0 ? totalRev / totalSpend : 0, wastedTotal: 0, wastedPct: 0, totalTerms: 0, daysCount: trendDays.length };
+        }
+        intel.dateRange = { earliest: trendDays[0], latest: trendDays[trendDays.length - 1], daysAvailable: trendDays.length };
+      }
+      
+      return intel;
+    })();
+    
     // Filter and sort campaigns
     const filteredCampaigns = campaignData.filter(c => {
       if (amazonCampaignFilter.status !== 'all' && c.state !== amazonCampaignFilter.status) return false;
@@ -30542,6 +30724,217 @@ Be specific with SKU names and numbers. Use bullet points for clarity.`;
             );
           })()}
           
+          {/* ═══ AMAZON ADS INTELLIGENCE ═══ */}
+          {amazonAdsInsights.hasData && (
+            <div className="mb-6 space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2"><Flame className="w-5 h-5 text-orange-400"/>Amazon Ads Intelligence</h2>
+                <div className="flex items-center gap-2">
+                  {[7, 14, 30, 60, 90, 'all'].map(range => (
+                    <button key={range} onClick={() => setIntelDateRange(range)}
+                      className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${intelDateRange === range ? 'bg-orange-600 text-white shadow-lg shadow-orange-500/20' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
+                      {range === 'all' ? 'All' : `${range}d`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {amazonAdsInsights.dateRange.earliest && (
+                <p className="text-xs text-slate-500">
+                  {intelDateRange === 'all' ? `All data: ${amazonAdsInsights.dateRange.earliest} → ${amazonAdsInsights.dateRange.latest}` : `Last ${intelDateRange} days`}
+                  {amazonAdsInsights.summary?.totalTerms ? ` · ${amazonAdsInsights.summary.totalTerms.toLocaleString()} search terms` : ''}
+                  {` · ${amazonAdsInsights.dateRange.daysAvailable} days of data`}
+                </p>
+              )}
+              
+              {/* Alert: Wasted Spend */}
+              {amazonAdsInsights.summary && amazonAdsInsights.summary.wastedTotal > 10 && (
+                <div className="bg-gradient-to-r from-red-900/30 to-amber-900/20 rounded-xl border border-red-500/40 p-4 flex items-center gap-4">
+                  <div className="p-2 bg-red-500/20 rounded-lg"><AlertTriangle className="w-6 h-6 text-red-400"/></div>
+                  <div className="flex-1">
+                    <p className="text-white font-semibold">{formatCurrency(amazonAdsInsights.summary.wastedTotal)} wasted on zero-sale search terms</p>
+                    <p className="text-slate-400 text-sm">{amazonAdsInsights.wastedSpend.length} terms with $5+ spend and no conversions — {amazonAdsInsights.summary.wastedPct.toFixed(1)}% of total search spend</p>
+                  </div>
+                  <button onClick={() => { setAdsAiInput('Analyze my wasted ad spend on search terms with zero sales. Which should be added as negative keywords?'); setShowAdsAIChat(true); }} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 border border-red-500/30 rounded-lg text-red-300 text-xs font-medium whitespace-nowrap">AI Analysis →</button>
+                </div>
+              )}
+              
+              {/* Summary KPIs */}
+              {amazonAdsInsights.summary && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
+                    <p className="text-slate-500 text-xs uppercase">ROAS</p>
+                    <p className={`text-xl font-bold ${amazonAdsInsights.summary.overallRoas >= 4 ? 'text-emerald-400' : amazonAdsInsights.summary.overallRoas >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{amazonAdsInsights.summary.overallRoas.toFixed(2)}x</p>
+                  </div>
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
+                    <p className="text-slate-500 text-xs uppercase">ACOS</p>
+                    <p className={`text-xl font-bold ${amazonAdsInsights.summary.overallRoas > 0 ? ((1/amazonAdsInsights.summary.overallRoas)*100 <= 25 ? 'text-emerald-400' : (1/amazonAdsInsights.summary.overallRoas)*100 <= 40 ? 'text-amber-400' : 'text-rose-400') : 'text-slate-400'}`}>{amazonAdsInsights.summary.overallRoas > 0 ? ((1/amazonAdsInsights.summary.overallRoas)*100).toFixed(1) + '%' : '—'}</p>
+                  </div>
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
+                    <p className="text-slate-500 text-xs uppercase">Ad Sales</p>
+                    <p className="text-xl font-bold text-emerald-400">{formatCurrency(amazonAdsInsights.summary.totalSales)}</p>
+                  </div>
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
+                    <p className="text-slate-500 text-xs uppercase">Ad Spend</p>
+                    <p className="text-xl font-bold text-white">{formatCurrency(amazonAdsInsights.summary.totalSpend)}</p>
+                  </div>
+                </div>
+              )}
+              
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Wasted Spend */}
+                {amazonAdsInsights.wastedSpend.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><TrendingDown className="w-4 h-4 text-red-400"/>Wasted Spend — Zero-Sale Terms</h3>
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {amazonAdsInsights.wastedSpend.map((t, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className="text-slate-500 w-5">{i + 1}.</span>
+                          <span className="text-white flex-1 truncate" title={t.term}>{t.term}</span>
+                          <span className="text-slate-400">{t.clicks} clicks</span>
+                          <span className="text-red-400 font-semibold w-16 text-right">{formatCurrency(t.spend)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-slate-500 text-xs mt-2 pt-2 border-t border-slate-700/50">Consider adding these as negative keywords</p>
+                  </div>
+                )}
+                
+                {/* Top Winners */}
+                {amazonAdsInsights.topWinners.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Star className="w-4 h-4 text-emerald-400"/>Top Winners — Highest ROAS Terms</h3>
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {amazonAdsInsights.topWinners.map((t, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className="text-slate-500 w-5">{i + 1}.</span>
+                          <span className="text-white flex-1 truncate" title={t.term}>{t.term}</span>
+                          <span className="text-slate-400">{formatCurrency(t.spend)}</span>
+                          <span className={`font-semibold w-14 text-right ${t.roas >= 5 ? 'text-emerald-400' : t.roas >= 3 ? 'text-cyan-400' : 'text-amber-400'}`}>{t.roas.toFixed(1)}x</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-slate-500 text-xs mt-2 pt-2 border-t border-slate-700/50">Scale budget on these winning terms</p>
+                  </div>
+                )}
+                
+                {/* Campaign Performance */}
+                {amazonAdsInsights.topCampaigns.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Target className="w-4 h-4 text-violet-400"/>Campaign Performance</h3>
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {amazonAdsInsights.topCampaigns.map((c, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${c.roas >= 3 ? 'bg-emerald-500' : c.roas >= 1.5 ? 'bg-amber-500' : 'bg-red-500'}`}/>
+                          <span className="text-white flex-1 truncate" title={c.name}>{c.name}</span>
+                          <span className="text-slate-400 w-16 text-right">{formatCurrency(c.spend)}</span>
+                          <span className={`font-semibold w-12 text-right ${c.acos <= 25 ? 'text-emerald-400' : c.acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>{c.acos < 999 ? c.acos.toFixed(0) + '%' : '—'}</span>
+                          <span className={`font-semibold w-12 text-right ${c.roas >= 3 ? 'text-emerald-400' : c.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{c.roas.toFixed(1)}x</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-slate-500 mt-2 pt-2 border-t border-slate-700/50">
+                      <span>Sorted by spend</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"/>ROAS&gt;3x</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500"/>1.5-3x</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500"/>&lt;1.5x</span>
+                    </div>
+                  </div>
+                )}
+                
+                {/* SKU Ad Performance */}
+                {amazonAdsInsights.skuPerformance.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><DollarSign className="w-4 h-4 text-cyan-400"/>SKU Ad Performance</h3>
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {amazonAdsInsights.skuPerformance.map((s, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${s.roas >= 3 ? 'bg-emerald-500' : s.roas >= 1.5 ? 'bg-amber-500' : 'bg-red-500'}`}/>
+                          <span className="text-white flex-1 truncate font-mono" title={s.sku}>{s.sku}</span>
+                          <span className="text-slate-400 w-16 text-right">{formatCurrency(s.spend)}</span>
+                          <span className="text-emerald-400 w-16 text-right">{formatCurrency(s.sales)}</span>
+                          <span className={`font-semibold w-12 text-right ${s.acos <= 25 ? 'text-emerald-400' : s.acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>{s.acos < 999 ? s.acos.toFixed(0) + '%' : '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Placement Performance */}
+              {amazonAdsInsights.placementInsights && amazonAdsInsights.placementInsights.length > 0 && (
+                <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                  <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-amber-400"/>Placement Performance</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {amazonAdsInsights.placementInsights.map((p, i) => {
+                      const isTopSearch = /top/i.test(p.placement);
+                      const isProduct = /product|detail/i.test(p.placement);
+                      return (
+                        <div key={i} className={`rounded-xl p-3 border ${isTopSearch ? 'bg-amber-900/15 border-amber-500/30' : isProduct ? 'bg-cyan-900/15 border-cyan-500/30' : 'bg-slate-800/50 border-slate-700'}`}>
+                          <p className={`text-xs font-semibold uppercase mb-2 ${isTopSearch ? 'text-amber-400' : isProduct ? 'text-cyan-400' : 'text-slate-400'}`}>{p.placement}</p>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div><span className="text-slate-500">Spend</span><p className="text-white font-medium">{formatCurrency(p.spend)}</p></div>
+                            <div><span className="text-slate-500">ROAS</span><p className={`font-bold ${p.roas >= 3 ? 'text-emerald-400' : p.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{p.roas.toFixed(2)}x</p></div>
+                            <div><span className="text-slate-500">CPC</span><p className="text-white">{formatCurrency(p.cpc)}</p></div>
+                            <div><span className="text-slate-500">CTR</span><p className="text-white">{p.ctr.toFixed(2)}%</p></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              
+              {/* Negative Keyword Opportunities */}
+              {amazonAdsInsights.negativeKeywords.length > 0 && (
+                <div className="bg-gradient-to-r from-slate-800/50 to-slate-800/30 rounded-xl border border-amber-500/20 p-4">
+                  <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-400"/>Negative Keyword Opportunities <span className="text-xs font-normal text-slate-500">— 10+ clicks, zero orders</span></h3>
+                  <div className="flex flex-wrap gap-2">
+                    {amazonAdsInsights.negativeKeywords.map((t, i) => (
+                      <span key={i} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-700/50 rounded-lg text-xs border border-slate-600/50">
+                        <span className="text-white">{t.term}</span>
+                        <span className="text-red-400">{formatCurrency(t.spend)}</span>
+                        <span className="text-slate-500">{t.clicks}c</span>
+                      </span>
+                    ))}
+                  </div>
+                  <button onClick={() => { setAdsAiInput('Generate a negative keyword list from my search term data. Show exact keywords and which campaigns to add them to.'); setShowAdsAIChat(true); }} className="mt-3 px-3 py-1.5 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/30 rounded-lg text-amber-300 text-xs font-medium">Generate Negative Keyword List →</button>
+                </div>
+              )}
+              
+              {/* ACOS Trend (from daily data) */}
+              {amazonAdsInsights.trendData.length >= 7 && (() => {
+                const data = amazonAdsInsights.trendData;
+                const recent7 = data.slice(-7);
+                const prev7 = data.slice(-14, -7);
+                const recentAcos = (() => { const s = recent7.reduce((a,d) => a+d.spend,0); const r = recent7.reduce((a,d) => a+d.rev,0); return r > 0 ? (s/r)*100 : 0; })();
+                const prevAcos = prev7.length >= 7 ? (() => { const s = prev7.reduce((a,d) => a+d.spend,0); const r = prev7.reduce((a,d) => a+d.rev,0); return r > 0 ? (s/r)*100 : 0; })() : null;
+                const acosDelta = prevAcos ? recentAcos - prevAcos : null;
+                return (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-white font-semibold text-sm flex items-center gap-2"><TrendingUp className="w-4 h-4 text-blue-400"/>ACOS Trend</h3>
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="text-slate-400">Last 7d ACOS: <span className={recentAcos <= 25 ? 'text-emerald-400' : recentAcos <= 40 ? 'text-amber-400' : 'text-rose-400'}>{recentAcos.toFixed(1)}%</span></span>
+                        {acosDelta !== null && <span className={acosDelta < 0 ? 'text-emerald-400' : acosDelta > 0 ? 'text-rose-400' : 'text-slate-400'}>{acosDelta > 0 ? '+' : ''}{acosDelta.toFixed(1)}% vs prior week</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-end gap-0.5 h-20">
+                      {data.slice(-30).map((d, i) => {
+                        const maxAcos = Math.max(...data.slice(-30).map(x => x.acos), 1);
+                        const h = Math.max((d.acos / maxAcos) * 100, 3);
+                        return <div key={i} className={`flex-1 rounded-t ${d.acos <= 25 ? 'bg-emerald-500/60' : d.acos <= 40 ? 'bg-amber-500/60' : 'bg-rose-500/60'}`} style={{ height: `${h}%` }} title={`${d.date}: ${d.acos.toFixed(1)}% ACOS, ${formatCurrency(d.spend)} spend`}/>;
+                      })}
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-500 mt-1">
+                      <span>{data.slice(-30)[0]?.date}</span>
+                      <span>{data[data.length - 1]?.date}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
           {/* Daily Table */}
           {useDailyData && dailyTableData.length > 0 && (
             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5 mb-6">
