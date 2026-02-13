@@ -18,7 +18,11 @@ import {
   LZCompress, COMPRESSED_KEYS, lsGet, lsSet, trimIntelData
 } from './utils/storage';
 import { AI_MODELS, AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, AI_MODEL_OPTIONS, getModelTier, getModelLabel } from './utils/config';
+import { callAI } from './utils/ai';
 import { sanitizeHtml } from './utils/sanitize';
+import { prepareDataContext } from './utils/aiContextBuilder';
+import { buildChatSystemPrompt } from './utils/aiPromptBuilder';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Extracted UI components
 import NotificationCenter from './components/ui/NotificationCenter';
@@ -477,112 +481,7 @@ const parseQBOTransactions = (content, categoryOverrides = {}) => {
   };
 };
 
-// ============ UNIFIED AI CONFIGURATION (Pro Plan) ============
-// AI_MODELS imported from ./utils/config.js — edit ONLY there when models update
-
-const AI_CONFIG = {
-  model: AI_DEFAULT_MODEL,
-  maxTokens: 12000,  // Reports need 8K-12K tokens for full output
-  maxDuration: 60,  // Pro plan 60-second timeout
-  streaming: true,  // Use streaming to avoid 25s first-byte timeout
-  
-  // Forecast calculation weights (data-driven, not AI-generated)
-  forecastWeights: {
-    daily: 0.60,    // 60% weight on recent daily average
-    weekly: 0.20,   // 20% weight on weekly trend
-    amazon: 0.20,   // 20% weight on Amazon forecast (if available)
-  },
-  
-  // Sanity bounds for AI adjustments
-  bounds: {
-    maxAdjustment: 0.05,  // Max ±5% adjustment per future week
-    maxTotalDeviation: 0.25, // Max ±25% from calculated baseline
-  },
-  
-  // Learning configuration
-  learning: {
-    minSamplesForCorrection: 3,  // Need 3+ samples before applying learned corrections
-    correctionDecay: 0.95,       // Older corrections weighted less
-    maxCorrectionFactor: 1.5,    // Max correction multiplier
-    minCorrectionFactor: 0.5,    // Min correction multiplier
-  },
-};
-
-// Helper to call AI with unified config (streaming)
-// Can be called as:
-//   callAI(prompt, systemPrompt) - for simple prompts
-//   callAI({ messages: [...], system: '...' }) - for chat with history or complex content
-const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, maxTokensOverride = null) => {
-  // Model priority: explicit override > window global (report selector) > AI_CONFIG default
-  const selectedModel = modelOverride || (typeof window !== 'undefined' && window.__aiModelOverride) || AI_CONFIG.model;
-  const tokenLimit = maxTokensOverride || AI_CONFIG.maxTokens;
-  let requestBody;
-  
-  if (typeof promptOrOptions === 'string') {
-    // Simple prompt string
-    requestBody = {
-      system: systemPrompt || 'You are a helpful e-commerce analytics AI. Respond with JSON when requested.',
-      messages: [{ role: 'user', content: promptOrOptions }],
-      model: selectedModel,
-      max_tokens: tokenLimit,
-    };
-  } else {
-    // Options object with messages array (supports complex content like PDFs)
-    requestBody = {
-      system: promptOrOptions.system || 'You are a helpful e-commerce analytics AI.',
-      messages: promptOrOptions.messages || [],
-      model: selectedModel,
-      max_tokens: tokenLimit,
-    };
-  }
-  
-  const response = await fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody),
-  });
-  
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`AI API error: ${response.status} - ${error}`);
-  }
-  
-  // Handle streaming response
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('text/event-stream')) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let fullText = '';
-    let buffer = '';
-    
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      
-      for (const line of lines) {
-        if (line.startsWith(':')) continue; // Skip SSE comments like ": connected"
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === 'delta' && data.text) fullText += data.text;
-            else if (data.type === 'complete' && data.content?.[0]?.text) fullText = data.content[0].text;
-            else if (data.type === 'done' && data.fullText) fullText = data.fullText;
-            else if (data.type === 'error') throw new Error(data.error);
-          } catch (e) { /* Skip parse errors for incomplete JSON */ }
-        }
-      }
-    }
-    return fullText;
-  }
-  
-  // Fallback to JSON response (shouldn't happen with streaming enabled)
-  const data = await response.json();
-  return data.content?.[0]?.text || '';
-};
+// AI_CONFIG and callAI imported from ./utils/ai.js — single source of truth
 
 // Supabase (cloud auth + storage)
 // Create a .env.local file in your Vite project with:
@@ -1496,6 +1395,7 @@ const [showConflictModal, setShowConflictModal] = useState(false);
 const [conflictData, setConflictData] = useState(null); // { cloudData, cloudVersion, localData }
 const conflictCheckRef = useRef(false); // Prevent multiple conflict checks
 const saveInProgressRef = useRef(false); // Prevent concurrent saves
+const pendingSaveDataRef = useRef(null); // Queue next save if one is in progress
 
 // Multi-store support
 const [stores, setStores] = useState([]); // List of { id, name, createdAt }
@@ -4378,7 +4278,11 @@ const writeToLocal = useCallback((key, value) => {
 
 const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   if (!supabase || !session?.user?.id) return;
-  if (saveInProgressRef.current) return; // Prevent concurrent saves
+  if (saveInProgressRef.current) {
+    // Save is busy — queue this data so it's saved when current save finishes
+    pendingSaveDataRef.current = dataObj;
+    return;
+  }
   saveInProgressRef.current = true;
   setCloudStatus('Saving…');
   
@@ -4411,6 +4315,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
       setCloudStatus('Save blocked - would delete data');
       setTimeout(() => setCloudStatus(''), 3000);
       saveInProgressRef.current = false;
+      pendingSaveDataRef.current = null;
       return;
     }
     
@@ -4462,6 +4367,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
       setShowConflictModal(true);
       setCloudStatus('Conflict detected');
       saveInProgressRef.current = false;
+      pendingSaveDataRef.current = null;
       return;
     }
   }
@@ -4526,6 +4432,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
     setCloudStatus('Save failed (retry soon)');
     setTimeout(() => setCloudStatus(''), 3000);
     saveInProgressRef.current = false;
+    pendingSaveDataRef.current = null; // Clear queue on error
     return;
   }
   
@@ -4538,12 +4445,19 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   setCloudStatus('Saved');
   setTimeout(() => setCloudStatus(''), 1500);
   saveInProgressRef.current = false;
+  // Drain queued save if another save was requested while we were busy
+  if (pendingSaveDataRef.current) {
+    const queued = pendingSaveDataRef.current;
+    pendingSaveDataRef.current = null;
+    pushToCloudNow(queued);
+  }
   } catch (networkErr) {
     // Handle CORS or network errors gracefully (e.g. Supabase unreachable)
     console.warn('[CloudSave] Network error (CORS or connectivity):', networkErr.message || networkErr);
     setCloudStatus('Save failed - network error');
     setTimeout(() => setCloudStatus(''), 5000);
     saveInProgressRef.current = false;
+    pendingSaveDataRef.current = null; // Clear queue on network error to avoid retry loops
   }
 }, [session, stores, activeStoreId, loadedCloudVersion]);
 
@@ -14922,1384 +14836,15 @@ Analyze the data and respond with ONLY this JSON:
 
   const hasCogs = Object.keys(savedCogs).length > 0;
   
-  // AI Chat - Prepare data context function
-  const prepareDataContext = () => {
-    const weeksCount = Object.keys(allWeeksData).length;
-    const sortedWeeks = Object.keys(allWeeksData).sort();
-    const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
-    const daysCount = sortedDays.length;
-    const periodsCount = Object.keys(allPeriodsData).length;
-    
-    // Daily data summary - for forecasting, only include days with COMPLETE data
-    // Amazon has a reporting delay, so days with Shopify but no Amazon are incomplete
-    // Exception: Include Shopify-only days from early 2024/2025 before Amazon was active
-    const amazonStartDate = '2024-06-01'; // Approximate date Amazon sales started
-    
-    const dailySummary = sortedDays.slice(-30).map(day => {
-      const data = allDaysData[day];
-      const amazonRevenue = data.amazon?.revenue || 0;
-      const shopifyRevenue = data.shopify?.revenue || 0;
-      const isEarlyData = day < amazonStartDate;
-      
-      // For recent days, only include if Amazon has data (or it's early data before Amazon)
-      const hasCompleteData = amazonRevenue > 0 || isEarlyData || day < '2024-01-01';
-      
-      return {
-        date: day,
-        totalRevenue: data.total?.revenue || 0,
-        totalProfit: getProfit(data.total),
-        totalUnits: data.total?.units || 0,
-        amazonRevenue,
-        amazonProfit: data.amazon?.netProfit || 0,
-        shopifyRevenue,
-        shopifyProfit: data.shopify?.netProfit || 0,
-        hasCompleteData, // Flag for filtering in trend calculations
-      };
-    }).filter(d => d.totalRevenue > 0); // Still need some revenue
-    
-    const weeksSummary = sortedWeeks.map(week => {
-      const data = allWeeksData[week];
-      const amz = data.amazon || {};
-      const shop = data.shopify || {};
-      const total = data.total || {};
-      
-      // Adjust date if it's Monday (start of week) to show Sunday (end of week)
-      const weekDate = new Date(week + 'T00:00:00');
-      const dayOfWeek = weekDate.getDay();
-      const weekEndDate = dayOfWeek === 1 
-        ? new Date(weekDate.getTime() - 24 * 60 * 60 * 1000) 
-        : weekDate;
-      const weekEndStr = weekEndDate.toISOString().split('T')[0];
-      
-      return {
-        weekEnding: weekEndStr,
-        weekKey: week, // Original key
-        totalRevenue: total.revenue || 0,
-        totalProfit: total.netProfit || 0,
-        totalUnits: total.units || 0,
-        margin: total.revenue ? ((total.netProfit || 0) / total.revenue * 100).toFixed(1) : 0,
-        amazonRevenue: amz.revenue || 0,
-        amazonProfit: amz.netProfit || 0,
-        shopifyRevenue: shop.revenue || 0,
-        shopifyProfit: shop.netProfit || 0,
-      };
-    });
-    
-    const periodsSummary = Object.entries(allPeriodsData).map(([label, data]) => {
-      const amz = data.amazon || {};
-      const shop = data.shopify || {};
-      
-      // Get 3PL data from ledger for this period
-      const ledger3PL = get3PLForPeriod(threeplLedger, label);
-      const threeplFromLedger = ledger3PL?.metrics?.totalCost || 0;
-      
-      // Compute category breakdown for this period (like we do for weeks)
-      const categoryBreakdown = {};
-      const processSkusForPeriod = (skuData, channel) => {
-        (skuData || []).forEach(s => {
-          const sku = s.sku || s.msku || '';
-          const productName = (savedProductNames[sku] || s.name || s.title || sku).toLowerCase();
-          const units = s.unitsSold || s.units || 0;
-          const revenue = s.netSales || s.revenue || 0;
-          const profit = channel === 'Amazon' ? (s.netProceeds || revenue) : (revenue - (s.cogs || 0));
-          
-          // Determine category (same logic as computeCategoryBreakdown)
-          let category = 'Other';
-          if (productName.includes('lip balm') || productName.includes('lip-balm')) category = 'Lip Balm';
-          else if (productName.includes('sensitive') && productName.includes('deodorant')) category = 'Sensitive Skin Deodorant';
-          else if (productName.includes('extra strength') && productName.includes('deodorant')) category = 'Extra Strength Deodorant';
-          else if (productName.includes('deodorant') || productName.includes('deo')) category = 'Deodorant';
-          else if (productName.includes('athlete') && productName.includes('soap')) category = "Athlete's Shield Soap";
-          else if (productName.includes('soap') || productName.includes('bar soap')) category = 'Tallow Soap Bars';
-          else if (productName.includes('sun balm') || productName.includes('spf')) category = 'Sun Balm';
-          else if (productName.includes('tallow balm') || productName.includes('moisturizer')) category = 'Tallow Balm';
-          
-          // Fallback: check for lip balm pack patterns (handles "Sweet Orange 3-Pack", "Assorted Pack", etc.)
-          if (category === 'Other') {
-            const combined = (sku + ' ' + productName).toLowerCase();
-            // Check for pack patterns with lip balm flavors/variants
-            const isLipBalmPack = (
-              (combined.includes('pack') || combined.includes('pk')) && (
-                combined.includes('orange') || combined.includes('peppermint') || 
-                combined.includes('vanilla') || combined.includes('lavender') ||
-                combined.includes('unscented') || combined.includes('assorted') ||
-                combined.includes('mint') || combined.includes('honey') ||
-                combined.includes('sweet') || combined.includes('citrus') ||
-                combined.includes('cherry') || combined.includes('berry')
-              )
-            );
-            // Also check for lip balm SKU patterns (like LB-, BALM-, etc.)
-            const hasLipBalmSku = /^(lb|balm|lip)/i.test(sku) || sku.toLowerCase().includes('lip');
-            
-            if (isLipBalmPack || hasLipBalmSku) {
-              category = 'Lip Balm';
-            }
-          }
-          
-          if (!categoryBreakdown[category]) {
-            categoryBreakdown[category] = { units: 0, revenue: 0, profit: 0 };
-          }
-          categoryBreakdown[category].units += units;
-          categoryBreakdown[category].revenue += revenue;
-          categoryBreakdown[category].profit += profit;
-        });
-      };
-      
-      processSkusForPeriod(amz.skuData, 'Amazon');
-      processSkusForPeriod(shop.skuData, 'Shopify');
-      
-      // Also build SKU-level breakdown for detailed queries
-      const skuBreakdown = {};
-      const buildSkuBreakdown = (skuData) => {
-        (skuData || []).forEach(s => {
-          const sku = s.sku || s.msku || '';
-          if (!sku) return;
-          const name = savedProductNames[sku] || s.name || s.title || sku;
-          const revenue = s.netSales || s.revenue || 0;
-          const units = s.unitsSold || s.units || 0;
-          if (!skuBreakdown[sku]) {
-            skuBreakdown[sku] = { name, revenue: 0, units: 0 };
-          }
-          skuBreakdown[sku].revenue += revenue;
-          skuBreakdown[sku].units += units;
-        });
-      };
-      buildSkuBreakdown(amz.skuData);
-      buildSkuBreakdown(shop.skuData);
-      
-      return {
-        period: label,
-        label: data.label || label,
-        type: (() => {
-          const l = label.toLowerCase();
-          if (l.match(/^\d{4}$/)) return 'yearly';
-          if (l.match(/^q\d/i)) return 'quarterly';
-          if (l.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i)) return 'monthly';
-          return 'monthly';
-        })(),
-        totalRevenue: data.total?.revenue || 0,
-        totalProfit: getProfit(data.total),
-        totalUnits: data.total?.units || 0,
-        totalCogs: data.total?.cogs || 0,
-        totalAdSpend: data.total?.adSpend || 0,
-        margin: data.total?.revenue > 0 ? ((getProfit(data.total)) / data.total.revenue * 100) : 0,
-        amazonRevenue: amz.revenue || 0,
-        amazonProfit: amz.netProfit || 0,
-        amazonUnits: amz.units || 0,
-        shopifyRevenue: shop.revenue || 0,
-        shopifyProfit: shop.netProfit || 0,
-        shopifyUnits: shop.units || 0,
-        threeplCosts: threeplFromLedger || shop.threeplCosts || 0,
-        skuCount: ((amz.skuData || []).length + (shop.skuData || []).length),
-        byCategory: categoryBreakdown, // Category breakdown for this period
-        skuBreakdown: skuBreakdown, // SKU-level breakdown for detailed queries
-      };
-    }).sort((a, b) => a.period.localeCompare(b.period));
-    
-    // Calculate year-over-year insights
-    const yoyInsights = [];
-    const quarters2024 = periodsSummary.filter(p => p.period.includes('2024') && p.type === 'quarterly');
-    const months2024 = periodsSummary.filter(p => p.period.includes('2024') && p.type === 'monthly');
-    const months2025 = periodsSummary.filter(p => p.period.includes('2025') && p.type === 'monthly');
-    
-    // Q4 2024 vs Q4 2025 (or most recent comparable quarters)
-    quarters2024.forEach(q2024 => {
-      const qNum = q2024.period.split(' ')[0]; // e.g., "Q3"
-      const q2025 = periodsSummary.find(p => p.period === `${qNum} 2025`);
-      if (q2025) {
-        yoyInsights.push({
-          comparison: `${qNum} YoY`,
-          period1: q2024.period,
-          period2: q2025.period,
-          revChange: q2024.totalRevenue > 0 ? ((q2025.totalRevenue - q2024.totalRevenue) / q2024.totalRevenue * 100) : 0,
-          profitChange: q2024.totalProfit > 0 ? ((q2025.totalProfit - q2024.totalProfit) / q2024.totalProfit * 100) : 0,
-        });
-      }
-    });
-    
-    // Monthly trends for 2025
-    const monthlyTrend2025 = months2025.map(m => ({
-      month: m.label,
-      revenue: m.totalRevenue,
-      profit: m.totalProfit,
-      margin: m.margin,
-    }));
-    
-    const skuWeeklyBreakdown = {};
-    sortedWeeks.forEach(week => {
-      const data = allWeeksData[week];
-      (data.amazon?.skuData || []).forEach(s => {
-        const sku = s.sku || s.msku || 'unknown';
-        if (!skuWeeklyBreakdown[sku]) {
-          skuWeeklyBreakdown[sku] = { sku, name: s.name || s.title || sku, channel: 'Amazon', weeks: {}, totals: { revenue: 0, units: 0, profit: 0, fees: 0 } };
-        }
-        const units = s.unitsSold || s.units || 0;
-        const revenue = s.netSales || s.revenue || 0;
-        const proceeds = s.netProceeds || revenue;
-        // Amazon: netProceeds IS the profit (already has COGS, fees, and ad spend deducted)
-        const profit = proceeds;
-        const fees = revenue - proceeds;
-        skuWeeklyBreakdown[sku].weeks[week] = { units, revenue, profit, fees, profitPerUnit: units > 0 ? profit / units : 0 };
-        skuWeeklyBreakdown[sku].totals.revenue += revenue;
-        skuWeeklyBreakdown[sku].totals.units += units;
-        skuWeeklyBreakdown[sku].totals.profit += profit;
-        skuWeeklyBreakdown[sku].totals.fees += fees;
-      });
-      (data.shopify?.skuData || []).forEach(s => {
-        const sku = 'SHOP_' + (s.sku || 'unknown');
-        if (!skuWeeklyBreakdown[sku]) {
-          skuWeeklyBreakdown[sku] = { sku: s.sku, name: s.name || s.title || s.sku, channel: 'Shopify', weeks: {}, totals: { revenue: 0, units: 0, profit: 0, fees: 0 } };
-        }
-        const units = s.unitsSold || s.units || 0;
-        const revenue = s.netSales || s.revenue || 0;
-        // Shopify: netSales already has discounts deducted, subtract COGS
-        const profit = revenue - (s.cogs || 0);
-        skuWeeklyBreakdown[sku].weeks[week] = { units, revenue, profit, fees: 0, profitPerUnit: units > 0 ? profit / units : 0 };
-        skuWeeklyBreakdown[sku].totals.revenue += revenue;
-        skuWeeklyBreakdown[sku].totals.units += units;
-        skuWeeklyBreakdown[sku].totals.profit += profit;
-      });
-    });
-    
-    const skuAnalysis = Object.values(skuWeeklyBreakdown).filter(s => s.totals.units >= 1).map(s => {
-      const weekDates = Object.keys(s.weeks).sort();
-      const recentWeeks = weekDates.slice(-4);
-      const olderWeeks = weekDates.slice(-8, -4);
-      let recentUnits = 0, recentProfit = 0, olderUnits = 0, olderProfit = 0;
-      recentWeeks.forEach(w => { recentUnits += s.weeks[w].units; recentProfit += s.weeks[w].profit; });
-      olderWeeks.forEach(w => { olderUnits += s.weeks[w].units; olderProfit += s.weeks[w].profit; });
-      const recentPPU = recentUnits > 0 ? recentProfit / recentUnits : 0;
-      const olderPPU = olderUnits > 0 ? olderProfit / olderUnits : 0;
-      const ppuChange = olderWeeks.length > 0 ? recentPPU - olderPPU : 0;
-      const overallPPU = s.totals.units > 0 ? s.totals.profit / s.totals.units : 0;
-      const overallMargin = s.totals.revenue > 0 ? (s.totals.profit / s.totals.revenue * 100) : 0;
-      // Get product name from savedProductNames if available
-      const productName = savedProductNames[s.sku] || s.name || s.sku;
-      return {
-        sku: s.sku, name: s.name, productName, channel: s.channel,
-        totalRevenue: s.totals.revenue, totalUnits: s.totals.units, totalProfit: s.totals.profit, totalFees: s.totals.fees,
-        profitPerUnit: overallPPU, margin: overallMargin,
-        recentProfitPerUnit: recentPPU, priorProfitPerUnit: olderPPU, profitPerUnitChange: ppuChange,
-        trend: ppuChange > 0.5 ? 'improving' : ppuChange < -0.5 ? 'declining' : 'stable',
-      };
-    }).sort((a, b) => b.totalRevenue - a.totalRevenue);
-    
-    const latestInvDate = Object.keys(invHistory).sort().reverse()[0];
-    const latestInv = latestInvDate ? invHistory[latestInvDate] : null;
-    
-    // Build comprehensive inventory data for AI
-    const inventoryItems = latestInv?.items || [];
-    const inventorySummary = latestInv ? {
-      asOfDate: latestInvDate, 
-      totalUnits: latestInv.summary?.totalUnits || 0, 
-      totalValue: latestInv.summary?.totalValue || 0,
-      amazonUnits: latestInv.summary?.amazonUnits || 0,
-      threeplUnits: latestInv.summary?.threeplUnits || 0,
-      awdUnits: latestInv.summary?.awdUnits || 0,
-      awdValue: latestInv.summary?.awdValue || 0,
-      amazonInbound: latestInv.summary?.amazonInbound || 0,
-      healthBreakdown: {
-        critical: latestInv.summary?.critical || 0,
-        low: latestInv.summary?.low || 0,
-        healthy: latestInv.summary?.healthy || 0,
-        overstock: latestInv.summary?.overstock || 0,
-      },
-      // Items needing attention
-      criticalItems: inventoryItems.filter(i => i.health === 'critical').map(i => ({
-        sku: i.sku, name: i.name, totalQty: i.totalQty, daysOfSupply: i.daysOfSupply,
-        weeklyVelocity: i.weeklyVel, stockoutDate: i.stockoutDate, reorderByDate: i.reorderByDate,
-        safetyStock: i.safetyStock, reorderPoint: i.reorderPoint, demandClass: i.demandClass
-      })),
-      lowStockItems: inventoryItems.filter(i => i.health === 'low').map(i => ({
-        sku: i.sku, name: i.name, totalQty: i.totalQty, daysOfSupply: i.daysOfSupply,
-        weeklyVelocity: i.weeklyVel, stockoutDate: i.stockoutDate, reorderByDate: i.reorderByDate,
-        safetyStock: i.safetyStock, reorderPoint: i.reorderPoint, demandClass: i.demandClass
-      })),
-      // Overstock items (opportunity to reduce)
-      overstockItems: inventoryItems.filter(i => i.health === 'overstock' && i.daysOfSupply > 180).map(i => ({
-        sku: i.sku, name: i.name, totalQty: i.totalQty, daysOfSupply: i.daysOfSupply,
-        weeklyVelocity: i.weeklyVel, totalValue: i.totalValue, demandClass: i.demandClass
-      })).sort((a, b) => b.totalValue - a.totalValue).slice(0, 10),
-      // Top movers by velocity
-      topMovers: inventoryItems.filter(i => i.weeklyVel > 0).sort((a, b) => b.weeklyVel - a.weeklyVel).slice(0, 10).map(i => ({
-        sku: i.sku, name: i.name, weeklyVelocity: i.weeklyVel, amazonVelocity: i.amzWeeklyVel, shopifyVelocity: i.shopWeeklyVel,
-        daysOfSupply: i.daysOfSupply, totalQty: i.totalQty,
-        safetyStock: i.safetyStock, seasonalFactor: i.seasonalFactor, cv: i.cv, demandClass: i.demandClass
-      })),
-      // Velocity trends (comparing Amazon vs Shopify)
-      velocityByChannel: {
-        amazonTotal: inventoryItems.reduce((sum, i) => sum + (i.amzWeeklyVel || 0), 0),
-        shopifyTotal: inventoryItems.reduce((sum, i) => sum + (i.shopWeeklyVel || 0), 0),
-      },
-      // Reorder recommendations
-      needsReorderSoon: inventoryItems.filter(i => {
-        const daysUntilOrder = i.daysUntilMustOrder;
-        return daysUntilOrder !== null && daysUntilOrder <= 14 && daysUntilOrder > 0;
-      }).map(i => ({
-        sku: i.sku, name: i.name, daysUntilMustOrder: i.daysUntilMustOrder, 
-        suggestedOrderQty: i.suggestedOrderQty, currentQty: i.totalQty,
-        weeklyVelocity: i.weeklyVel, leadTimeDays: i.leadTimeDays
-      })),
-      // Already past reorder point
-      urgentReorder: inventoryItems.filter(i => {
-        const daysUntilOrder = i.daysUntilMustOrder;
-        return daysUntilOrder !== null && daysUntilOrder <= 0;
-      }).map(i => ({
-        sku: i.sku, name: i.name, daysOverdue: Math.abs(i.daysUntilMustOrder),
-        suggestedOrderQty: i.suggestedOrderQty, stockoutDate: i.stockoutDate,
-        weeklyVelocity: i.weeklyVel, safetyStock: i.safetyStock
-      })),
-      // Industry-standard demand analysis
-      demandAnalysis: {
-        methodology: 'Weighted Moving Average with Safety Stock, Seasonality Index, and CV Classification',
-        serviceLevel: '95% (Z=1.65)',
-        demandClassification: inventoryItems.reduce((acc, i) => {
-          const cls = i.demandClass || 'unknown';
-          acc[cls] = (acc[cls] || 0) + 1;
-          return acc;
-        }, {}),
-        totalSafetyStockUnits: inventoryItems.reduce((sum, i) => sum + (i.safetyStock || 0), 0),
-        highVariabilityProducts: inventoryItems.filter(i => i.cv >= 0.8).sort((a, b) => b.cv - a.cv).slice(0, 5).map(i => ({
-          sku: i.sku, name: i.name, cv: i.cv, demandClass: i.demandClass, safetyStock: i.safetyStock
-        })),
-        seasonalHighlights: inventoryItems.filter(i => i.seasonalFactor && Math.abs(i.seasonalFactor - 1.0) > 0.15).map(i => ({
-          sku: i.sku, seasonalFactor: i.seasonalFactor, direction: i.seasonalFactor > 1 ? 'peak' : 'slow'
-        })).slice(0, 10),
-      },
-    } : null;
-    
-    // Calculate velocity trends (is velocity increasing or decreasing?)
-    // Compare last 2 weeks velocity vs prior 2 weeks
-    const velocityTrends = {};
-    const sortedWeeksForTrend = Object.keys(allWeeksData).sort().reverse();
-    const recent2Weeks = sortedWeeksForTrend.slice(0, 2);
-    const prior2Weeks = sortedWeeksForTrend.slice(2, 4);
-    
-    // Build SKU velocity by period
-    const recentVelocity = {};
-    const priorVelocity = {};
-    
-    recent2Weeks.forEach(w => {
-      const weekData = allWeeksData[w];
-      [...(weekData?.amazon?.skuData || []), ...(weekData?.shopify?.skuData || [])].forEach(s => {
-        const sku = s.sku || s.msku;
-        if (!sku) return;
-        if (!recentVelocity[sku]) recentVelocity[sku] = 0;
-        recentVelocity[sku] += s.unitsSold || s.units || 0;
-      });
-    });
-    
-    prior2Weeks.forEach(w => {
-      const weekData = allWeeksData[w];
-      [...(weekData?.amazon?.skuData || []), ...(weekData?.shopify?.skuData || [])].forEach(s => {
-        const sku = s.sku || s.msku;
-        if (!sku) return;
-        if (!priorVelocity[sku]) priorVelocity[sku] = 0;
-        priorVelocity[sku] += s.unitsSold || s.units || 0;
-      });
-    });
-    
-    // Calculate trends
-    inventoryItems.forEach(item => {
-      if (!item.sku || !item.weeklyVel) return;
-      const skuLower = item.sku.toLowerCase();
-      const recent = (recentVelocity[item.sku] || recentVelocity[skuLower] || 0) / Math.max(recent2Weeks.length, 1);
-      const prior = (priorVelocity[item.sku] || priorVelocity[skuLower] || 0) / Math.max(prior2Weeks.length, 1);
-      
-      let trend = 'stable';
-      let trendPercent = 0;
-      if (prior > 0) {
-        trendPercent = ((recent - prior) / prior) * 100;
-        if (trendPercent > 15) trend = 'accelerating';
-        else if (trendPercent > 5) trend = 'increasing';
-        else if (trendPercent < -15) trend = 'declining';
-        else if (trendPercent < -5) trend = 'slowing';
-      } else if (recent > 0) {
-        trend = 'new';
-        trendPercent = 100;
-      }
-      
-      velocityTrends[item.sku] = {
-        currentWeekly: item.weeklyVel,
-        recentAvgWeekly: recent,
-        priorAvgWeekly: prior,
-        trend,
-        trendPercent: trendPercent.toFixed(1) + '%',
-        amazonShare: item.weeklyVel > 0 ? ((item.amzWeeklyVel || 0) / item.weeklyVel * 100).toFixed(0) + '%' : '0%',
-        shopifyShare: item.weeklyVel > 0 ? ((item.shopWeeklyVel || 0) / item.weeklyVel * 100).toFixed(0) + '%' : '0%',
-      };
-    });
-    
-    // Add velocity trends to inventory summary for AI
-    if (inventorySummary) {
-      inventorySummary.velocityTrends = {
-        accelerating: Object.entries(velocityTrends).filter(([,v]) => v.trend === 'accelerating').map(([sku, v]) => ({ sku, ...v })).slice(0, 5),
-        declining: Object.entries(velocityTrends).filter(([,v]) => v.trend === 'declining').map(([sku, v]) => ({ sku, ...v })).slice(0, 5),
-      };
-    }
-    
-    const taxSummary = {
-      nexusStates: Object.entries(salesTaxConfig.nexusStates || {}).filter(([,v]) => v.hasNexus).map(([code, config]) => ({ state: US_STATES_TAX_INFO[code]?.name || code, frequency: config.frequency })),
-      totalPaidAllTime: Object.values(salesTaxConfig.filingHistory || {}).reduce((sum, periods) => sum + Object.values(periods).reduce((s, p) => s + (p.amount || 0), 0), 0),
-    };
-    
-    // Build product catalog with categories from product names
-    const productCatalog = Object.entries(savedProductNames).map(([sku, name]) => {
-      // Auto-detect category from product name
-      const nameLower = name.toLowerCase();
-      let category = 'Other';
-      if (nameLower.includes('lip balm')) category = 'Lip Balm';
-      else if (nameLower.includes('deodorant') && nameLower.includes('sensitive')) category = 'Sensitive Skin Deodorant';
-      else if (nameLower.includes('deodorant') && nameLower.includes('extra strength')) category = 'Extra Strength Deodorant';
-      else if (nameLower.includes('deodorant')) category = 'Deodorant';
-      else if (nameLower.includes('soap') && nameLower.includes('athlete')) category = "Athlete's Shield Soap";
-      else if (nameLower.includes('soap')) category = 'Tallow Soap Bars';
-      else if (nameLower.includes('sun balm')) category = 'Sun Balm';
-      else if (nameLower.includes('tallow balm')) category = 'Tallow Balm';
-      
-      return { sku, name, category };
-    });
-    
-    // Group SKUs by category for easier AI lookup
-    const skusByCategory = {};
-    productCatalog.forEach(p => {
-      if (!skusByCategory[p.category]) skusByCategory[p.category] = [];
-      skusByCategory[p.category].push(p.sku);
-    });
-    
-    // COMPREHENSIVE SKU-LEVEL AGGREGATION (combines all periods + weeks)
-    const skuMasterData = {};
-    
-    // Add period data (2025 monthly, 2024 quarterly)
-    periodsSummary.filter(p => p.totalRevenue > 0).forEach(period => {
-      Object.entries(period.skuBreakdown || {}).forEach(([sku, data]) => {
-        if (!skuMasterData[sku]) {
-          const catalogEntry = productCatalog.find(p => p.sku === sku);
-          skuMasterData[sku] = {
-            sku,
-            name: catalogEntry?.name || data.name || sku,
-            category: catalogEntry?.category || 'Other',
-            totalRevenue: 0,
-            totalUnits: 0,
-            byPeriod: {},
-            byWeek: {},
-          };
-        }
-        skuMasterData[sku].totalRevenue += data.revenue || 0;
-        skuMasterData[sku].totalUnits += data.units || 0;
-        skuMasterData[sku].byPeriod[period.period] = { revenue: data.revenue, units: data.units };
-      });
-    });
-    
-    // Add weekly data (recent weeks)
-    sortedWeeks.slice(-12).forEach(week => {
-      const weekData = allWeeksData[week];
-      if (!weekData) return;
-      
-      const processWeekSkus = (skuData, channel) => {
-        (skuData || []).forEach(s => {
-          const sku = s.sku || s.msku || '';
-          if (!sku) return;
-          const revenue = s.netSales || s.revenue || 0;
-          const units = s.unitsSold || s.units || 0;
-          
-          if (!skuMasterData[sku]) {
-            const catalogEntry = productCatalog.find(p => p.sku === sku);
-            skuMasterData[sku] = {
-              sku,
-              name: catalogEntry?.name || savedProductNames[sku] || s.name || sku,
-              category: catalogEntry?.category || 'Other',
-              totalRevenue: 0,
-              totalUnits: 0,
-              byPeriod: {},
-              byWeek: {},
-            };
-          }
-          
-          if (!skuMasterData[sku].byWeek[week]) {
-            skuMasterData[sku].byWeek[week] = { revenue: 0, units: 0 };
-          }
-          skuMasterData[sku].byWeek[week].revenue += revenue;
-          skuMasterData[sku].byWeek[week].units += units;
-          // Only add to totals if not already counted in periods
-          if (Object.keys(skuMasterData[sku].byPeriod).length === 0) {
-            skuMasterData[sku].totalRevenue += revenue;
-            skuMasterData[sku].totalUnits += units;
-          }
-        });
-      };
-      
-      processWeekSkus(weekData.amazon?.skuData, 'Amazon');
-      processWeekSkus(weekData.shopify?.skuData, 'Shopify');
-    });
-    
-    // Convert to sorted array
-    const skuMasterList = Object.values(skuMasterData)
-      .filter(s => s.totalRevenue > 0 || Object.keys(s.byWeek).length > 0)
-      .sort((a, b) => b.totalRevenue - a.totalRevenue);
-    
-    // Calculate all time totals properly:
-    // 2026: Use weekly data (actual weeks)
-    // 2025: Use monthly period data (no weekly breakdown available)
-    // 2024: Use quarterly period data
-    const currentYear = new Date().getFullYear().toString();
-    const weeks2026 = weeksSummary.filter(w => w.weekKey && w.weekKey.startsWith(currentYear) && w.totalRevenue > 0);
-    // Note: months2025 and quarters2024 already defined above in YoY section
-    
-    const allTimeRevenue = 
-      weeks2026.reduce((s, w) => s + w.totalRevenue, 0) +
-      months2025.reduce((s, p) => s + p.totalRevenue, 0) +
-      quarters2024.reduce((s, p) => s + p.totalRevenue, 0);
-    const allTimeProfit = 
-      weeks2026.reduce((s, w) => s + w.totalProfit, 0) +
-      months2025.reduce((s, p) => s + p.totalProfit, 0) +
-      quarters2024.reduce((s, p) => s + p.totalProfit, 0);
-    const allTimeUnits = 
-      weeks2026.reduce((s, w) => s + w.totalUnits, 0) +
-      months2025.reduce((s, p) => s + p.totalUnits, 0) +
-      quarters2024.reduce((s, p) => s + p.totalUnits, 0);
-    const recentWeeksData = weeksSummary.filter(w => w.totalRevenue > 0).slice(-4);
-    const priorWeeksData = weeksSummary.filter(w => w.totalRevenue > 0).slice(-8, -4);
-    const recentRevenue = recentWeeksData.reduce((s, w) => s + w.totalRevenue, 0);
-    const priorRevenue = priorWeeksData.reduce((s, w) => s + w.totalRevenue, 0);
-    const recentProfit = recentWeeksData.reduce((s, w) => s + w.totalProfit, 0);
-    const priorProfit = priorWeeksData.reduce((s, w) => s + w.totalProfit, 0);
-    
-    // Calculate daily trends for AI learning - ONLY use days with complete data
-    const completeDailySummary = dailySummary.filter(d => d.hasCompleteData);
-    const recentDailyData = completeDailySummary.slice(-7);
-    const priorDailyData = completeDailySummary.slice(-14, -7);
-    const recentDailyRevenue = recentDailyData.reduce((s, d) => s + d.totalRevenue, 0);
-    const priorDailyRevenue = priorDailyData.reduce((s, d) => s + d.totalRevenue, 0);
-    const dailyTrend = priorDailyRevenue > 0 ? ((recentDailyRevenue - priorDailyRevenue) / priorDailyRevenue * 100) : 0;
-    
-    // Calculate day-of-week patterns for AI learning - only use complete data days
-    const dayOfWeekPatterns = {};
-    const amazonStartDateObj = new Date('2024-06-01');
-    sortedDays.forEach(day => {
-      const data = allDaysData[day];
-      const dayDate = new Date(day + 'T12:00:00');
-      const dayName = dayDate.toLocaleDateString('en-US', { weekday: 'long' });
-      
-      // Only include days with complete data (Amazon revenue > 0, or pre-Amazon era)
-      const hasAmazonData = (data.amazon?.revenue || 0) > 0;
-      const isPreAmazon = dayDate < amazonStartDateObj;
-      if (!hasAmazonData && !isPreAmazon && dayDate >= new Date('2024-01-01')) {
-        return; // Skip incomplete days
-      }
-      
-      if (!dayOfWeekPatterns[dayName]) {
-        dayOfWeekPatterns[dayName] = { count: 0, totalRevenue: 0, totalProfit: 0 };
-      }
-      dayOfWeekPatterns[dayName].count++;
-      dayOfWeekPatterns[dayName].totalRevenue += data.total?.revenue || 0;
-      dayOfWeekPatterns[dayName].totalProfit += getProfit(data.total);
-    });
-    Object.keys(dayOfWeekPatterns).forEach(day => {
-      const p = dayOfWeekPatterns[day];
-      p.avgRevenue = p.count > 0 ? p.totalRevenue / p.count : 0;
-      p.avgProfit = p.count > 0 ? p.totalProfit / p.count : 0;
-    });
-    
-    // PRE-COMPUTED: Filter to only weeks with actual revenue
-    const weeksWithRevenue = sortedWeeks.filter(w => (allWeeksData[w]?.total?.revenue || 0) > 0);
-    
-    // Helper function to compute category breakdown for a set of weeks
-    const computeCategoryBreakdown = (weekKeys) => {
-      const categories = {};
-      
-      // SKU patterns for categorization (fallback if product name doesn't match)
-      const skuPatterns = {
-        'Lip Balm': [/lip/i, /balm.*pack/i, /orange.*pack/i, /peppermint.*pack/i, /unscented.*pack/i, /assorted.*pack/i, /vanilla.*pack/i, /lavender.*pack/i, /mint.*pack/i],
-        'Deodorant': [/deo/i, /deod/i],
-        'Tallow Soap Bars': [/soap/i, /bar/i],
-        'Sun Balm': [/sun/i, /spf/i],
-        'Tallow Balm': [/tallow.*balm/i, /moisturiz/i, /hydrat/i],
-      };
-      
-      weekKeys.forEach(weekKey => {
-        const weekData = allWeeksData[weekKey];
-        if (!weekData) return;
-        
-        // Process all SKUs and group by category
-        const processSkus = (skuData, channel) => {
-          (skuData || []).forEach(s => {
-            const sku = s.sku || s.msku || '';
-            const productName = (savedProductNames[sku] || s.name || s.title || sku).toLowerCase();
-            const units = s.unitsSold || s.units || 0;
-            const revenue = s.netSales || s.revenue || 0;
-            const profit = channel === 'Amazon' ? (s.netProceeds || revenue) : (revenue - (s.cogs || 0));
-            
-            // Determine category from product name first
-            let category = 'Other';
-            
-            // Explicit product name matching
-            if (productName.includes('lip balm') || productName.includes('lip-balm')) category = 'Lip Balm';
-            else if (productName.includes('sensitive') && productName.includes('deodorant')) category = 'Sensitive Skin Deodorant';
-            else if (productName.includes('extra strength') && productName.includes('deodorant')) category = 'Extra Strength Deodorant';
-            else if (productName.includes('deodorant') || productName.includes('deo')) category = 'Deodorant';
-            else if (productName.includes('athlete') && productName.includes('soap')) category = "Athlete's Shield Soap";
-            else if (productName.includes('soap') || productName.includes('bar soap')) category = 'Tallow Soap Bars';
-            else if (productName.includes('sun balm') || productName.includes('spf')) category = 'Sun Balm';
-            else if (productName.includes('tallow balm') || productName.includes('moisturizer')) category = 'Tallow Balm';
-            
-            // If still "Other", try SKU-based pattern matching (common lip balm packs)
-            if (category === 'Other') {
-              const combined = (sku + ' ' + productName).toLowerCase();
-              // Check for pack patterns with lip balm flavors/variants
-              const isLipBalmPack = (
-                (combined.includes('pack') || combined.includes('pk')) && (
-                  combined.includes('orange') || combined.includes('peppermint') || 
-                  combined.includes('vanilla') || combined.includes('lavender') ||
-                  combined.includes('unscented') || combined.includes('assorted') ||
-                  combined.includes('mint') || combined.includes('honey') ||
-                  combined.includes('sweet') || combined.includes('citrus') ||
-                  combined.includes('cherry') || combined.includes('berry')
-                )
-              );
-              // Also check for lip balm SKU patterns (like LB-, BALM-, etc.)
-              const hasLipBalmSku = /^(lb|balm|lip)/i.test(sku) || sku.toLowerCase().includes('lip');
-              
-              if (isLipBalmPack || hasLipBalmSku) {
-                category = 'Lip Balm';
-              }
-            }
-            
-            // Final fallback: check SKU patterns
-            if (category === 'Other') {
-              for (const [cat, patterns] of Object.entries(skuPatterns)) {
-                for (const pattern of patterns) {
-                  if (pattern.test(sku) || pattern.test(productName)) {
-                    category = cat;
-                    break;
-                  }
-                }
-                if (category !== 'Other') break;
-              }
-            }
-            
-            if (!categories[category]) {
-              categories[category] = { units: 0, revenue: 0, profit: 0, skus: [] };
-            }
-            categories[category].units += units;
-            categories[category].revenue += revenue;
-            categories[category].profit += profit;
-            
-            // Only add SKU details for single-week queries (keep data compact)
-            if (weekKeys.length === 1) {
-              categories[category].skus.push({ sku, name: savedProductNames[sku] || s.name || sku, channel, units, revenue, profit });
-            }
-          });
-        };
-        
-        processSkus(weekData.amazon?.skuData, 'Amazon');
-        processSkus(weekData.shopify?.skuData, 'Shopify');
-      });
-      
-      // Calculate margins and sort SKUs
-      Object.values(categories).forEach(cat => {
-        cat.margin = cat.revenue > 0 ? (cat.profit / cat.revenue * 100).toFixed(1) : 0;
-        if (cat.skus) cat.skus.sort((a, b) => b.revenue - a.revenue);
-      });
-      
-      return categories;
-    };
-    
-    // Get total metrics for a set of weeks
-    const getWeeksTotals = (weekKeys) => {
-      return weekKeys.reduce((acc, w) => {
-        const data = allWeeksData[w];
-        if (data) {
-          acc.revenue += data.total?.revenue || 0;
-          acc.profit += getProfit(data.total);
-          acc.units += data.total?.units || 0;
-        }
-        return acc;
-      }, { revenue: 0, profit: 0, units: 0 });
-    };
-    
-    // LAST WEEK (most recent week with actual data)
-    const lastWeekKey = weeksWithRevenue[weeksWithRevenue.length - 1];
-    const lastWeekData = lastWeekKey ? allWeeksData[lastWeekKey] : null;
-    
-    return {
-      storeName: storeName || 'E-Commerce Store',
-      dataRange: { 
-        weeksTracked: weeksCount, 
-        daysTracked: daysCount,
-        periodsTracked: periodsCount, 
-        oldestWeek: sortedWeeks[0], 
-        newestWeek: sortedWeeks[sortedWeeks.length - 1],
-        oldestDay: sortedDays[0],
-        newestDay: sortedDays[sortedDays.length - 1],
-      },
-      dailyData: dailySummary,
-      dailyTrend,
-      dayOfWeekPatterns,
-      weeklyData: weeksSummary,
-      periodData: periodsSummary,
-      yoyInsights,
-      monthlyTrend2025,
-      // PER-WEEK SKU BREAKDOWN - for answering "last week" questions accurately
-      skuByWeek: (() => {
-        const recentWeeks = sortedWeeks.slice(-4);
-        return recentWeeks.map(week => {
-          const data = allWeeksData[week];
-          const skuList = [];
-          
-          // Week dates: Amazon reports week as ending Sunday, key is typically the Sunday
-          // If key is Monday (start of week), adjust to show Sunday (end of prior week)
-          const weekDate = new Date(week + 'T00:00:00');
-          const dayOfWeek = weekDate.getDay(); // 0=Sun, 1=Mon, etc.
-          // If it's Monday (1), subtract 1 day to get Sunday
-          // If it's already Sunday (0), keep it
-          const weekEndDate = dayOfWeek === 1 
-            ? new Date(weekDate.getTime() - 24 * 60 * 60 * 1000) 
-            : weekDate;
-          const weekEndStr = weekEndDate.toISOString().split('T')[0];
-          
-          // Amazon SKUs
-          (data.amazon?.skuData || []).forEach(s => {
-            const sku = s.sku || s.msku;
-            const productName = savedProductNames[sku] || s.name || s.title || sku;
-            const units = s.unitsSold || s.units || 0;
-            const revenue = s.netSales || s.revenue || 0;
-            const profit = s.netProceeds || revenue;
-            skuList.push({
-              sku,
-              productName,
-              channel: 'Amazon',
-              units,
-              revenue,
-              profit,
-              profitPerUnit: units > 0 ? profit / units : 0,
-            });
-          });
-          
-          // Shopify SKUs
-          (data.shopify?.skuData || []).forEach(s => {
-            const sku = s.sku;
-            const productName = savedProductNames[sku] || s.name || s.title || sku;
-            const units = s.unitsSold || s.units || 0;
-            const revenue = s.netSales || s.revenue || 0;
-            const profit = revenue - (s.cogs || 0);
-            skuList.push({
-              sku,
-              productName,
-              channel: 'Shopify',
-              units,
-              revenue,
-              profit,
-              profitPerUnit: units > 0 ? profit / units : 0,
-            });
-          });
-          
-          return {
-            weekEnding: weekEndStr,
-            weekKey: week, // Original key for reference
-            weekLabel: `Week ending ${weekEndDate.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })}`,
-            totalRevenue: data.total?.revenue || 0,
-            totalProfit: getProfit(data.total),
-            totalUnits: data.total?.units || 0,
-            skus: skuList.sort((a, b) => b.revenue - a.revenue),
-          };
-        });
-      })(),
-      // LAST WEEK (most recent week with actual revenue)
-      lastWeekByCategory: lastWeekKey ? {
-        weekEnding: lastWeekKey,
-        weekLabel: `Week of ${new Date(new Date(lastWeekKey + 'T00:00:00').getTime() - 6*24*60*60*1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(lastWeekKey + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
-        totalRevenue: lastWeekData?.total?.revenue || 0,
-        totalProfit: getProfit(lastWeekData?.total),
-        totalUnits: lastWeekData?.total?.units || 0,
-        byCategory: computeCategoryBreakdown([lastWeekKey]),
-      } : null,
-      
-      // LAST 2 WEEKS
-      last2WeeksByCategory: (() => {
-        const weeks = weeksWithRevenue.slice(-2);
-        if (weeks.length === 0) return null;
-        const totals = getWeeksTotals(weeks);
-        const startDate = new Date(new Date(weeks[0] + 'T00:00:00').getTime() - 6*24*60*60*1000);
-        const endDate = new Date(weeks[weeks.length - 1] + 'T00:00:00');
-        return {
-          weeks: weeks,
-          dateRange: `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
-          totalRevenue: totals.revenue,
-          totalProfit: totals.profit,
-          totalUnits: totals.units,
-          byCategory: computeCategoryBreakdown(weeks),
-        };
-      })(),
-      
-      // LAST 4 WEEKS (approx 1 month)
-      last4WeeksByCategory: (() => {
-        const weeks = weeksWithRevenue.slice(-4);
-        if (weeks.length === 0) return null;
-        const totals = getWeeksTotals(weeks);
-        const startDate = new Date(new Date(weeks[0] + 'T00:00:00').getTime() - 6*24*60*60*1000);
-        const endDate = new Date(weeks[weeks.length - 1] + 'T00:00:00');
-        return {
-          weeks: weeks,
-          dateRange: `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
-          totalRevenue: totals.revenue,
-          totalProfit: totals.profit,
-          totalUnits: totals.units,
-          byCategory: computeCategoryBreakdown(weeks),
-        };
-      })(),
-      
-      // ALL TIME by category
-      allTimeByCategory: (() => {
-        const totals = getWeeksTotals(weeksWithRevenue);
-        return {
-          weeks: weeksWithRevenue.length,
-          totalRevenue: totals.revenue,
-          totalProfit: totals.profit,
-          totalUnits: totals.units,
-          byCategory: computeCategoryBreakdown(weeksWithRevenue),
-        };
-      })(),
-      
-      // CURRENT MONTH (MTD) by category - aggregated from DAILY data for precision
-      // Falls back to WEEKLY data if no daily data exists
-      currentMonthByCategory: (() => {
-        const today = new Date();
-        const currentYear = today.getFullYear();
-        const currentMonth = today.getMonth();
-        const monthStart = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-01`;
-        const monthName = today.toLocaleDateString('en-US', { month: 'long' });
-        
-        // Aggregate SKU data - SEPARATE by channel
-        const amazonSkuTotals = {};
-        const shopifySkuTotals = {};
-        let totalRevenue = 0, totalUnits = 0, totalProfit = 0;
-        let amazonRevenue = 0, amazonUnits = 0, shopifyRevenue = 0, shopifyUnits = 0;
-        let dataSource = 'none';
-        let daysOrWeeksIncluded = 0;
-        
-        // Get all days in current month from DAILY data
-        const daysInMonth = sortedDays.filter(d => d >= monthStart && d <= formatDateKey(today));
-        
-        if (daysInMonth.length > 0) {
-          dataSource = 'daily';
-          daysOrWeeksIncluded = daysInMonth.length;
-          
-          daysInMonth.forEach(dayKey => {
-            const dayData = allDaysData[dayKey];
-            if (!dayData) return;
-            
-            // Amazon daily SKU data
-            (dayData.amazon?.skuData || []).forEach(s => {
-              const sku = s.sku || s.msku || '';
-              if (!sku) return;
-              const units = s.unitsSold || s.units || 0;
-              const revenue = s.netSales || s.revenue || 0;
-              const profit = s.netProceeds || revenue;
-              
-              if (!amazonSkuTotals[sku]) {
-                amazonSkuTotals[sku] = { sku, name: savedProductNames[sku] || s.name || sku, units: 0, revenue: 0, profit: 0, channel: 'Amazon' };
-              }
-              amazonSkuTotals[sku].units += units;
-              amazonSkuTotals[sku].revenue += revenue;
-              amazonSkuTotals[sku].profit += profit;
-              amazonRevenue += revenue;
-              amazonUnits += units;
-            });
-            
-            // Shopify daily SKU data
-            (dayData.shopify?.skuData || []).forEach(s => {
-              const sku = s.sku || '';
-              if (!sku) return;
-              const units = s.unitsSold || s.units || 0;
-              const revenue = s.netSales || s.revenue || 0;
-              const profit = revenue - (s.cogs || 0);
-              
-              if (!shopifySkuTotals[sku]) {
-                shopifySkuTotals[sku] = { sku, name: savedProductNames[sku] || s.name || sku, units: 0, revenue: 0, profit: 0, channel: 'Shopify' };
-              }
-              shopifySkuTotals[sku].units += units;
-              shopifySkuTotals[sku].revenue += revenue;
-              shopifySkuTotals[sku].profit += profit;
-              shopifyRevenue += revenue;
-              shopifyUnits += units;
-            });
-            
-            totalRevenue += (dayData.total?.revenue || 0);
-            totalUnits += (dayData.total?.units || 0);
-            totalProfit += (getProfit(dayData.total));
-          });
-        }
-        
-        // If no daily data OR no Amazon data in daily, try WEEKLY data
-        const weeksInMonth = Object.keys(allWeeksData).filter(w => w >= monthStart).sort();
-        if (weeksInMonth.length > 0 && (Object.keys(amazonSkuTotals).length === 0 || amazonUnits === 0)) {
-          // Use weekly data for Amazon (supplement or replace)
-          if (Object.keys(amazonSkuTotals).length === 0) {
-            dataSource = dataSource === 'daily' ? 'daily+weekly' : 'weekly';
-          } else {
-            dataSource = 'daily+weekly-amazon';
-          }
-          daysOrWeeksIncluded = weeksInMonth.length + ' weeks';
-          
-          weeksInMonth.forEach(weekKey => {
-            const weekData = allWeeksData[weekKey];
-            if (!weekData) return;
-            
-            // Amazon weekly SKU data (only if we don't have daily amazon data)
-            if (Object.keys(amazonSkuTotals).length === 0 || amazonUnits === 0) {
-              (weekData.amazon?.skuData || []).forEach(s => {
-                const sku = s.sku || s.msku || '';
-                if (!sku) return;
-                const units = s.unitsSold || s.units || 0;
-                const revenue = s.netSales || s.revenue || 0;
-                const profit = s.netProceeds || revenue;
-                
-                if (!amazonSkuTotals[sku]) {
-                  amazonSkuTotals[sku] = { sku, name: savedProductNames[sku] || s.name || sku, units: 0, revenue: 0, profit: 0, channel: 'Amazon' };
-                }
-                amazonSkuTotals[sku].units += units;
-                amazonSkuTotals[sku].revenue += revenue;
-                amazonSkuTotals[sku].profit += profit;
-                amazonRevenue += revenue;
-                amazonUnits += units;
-              });
-            }
-            
-            // If no daily Shopify data either, use weekly
-            if (Object.keys(shopifySkuTotals).length === 0) {
-              (weekData.shopify?.skuData || []).forEach(s => {
-                const sku = s.sku || '';
-                if (!sku) return;
-                const units = s.unitsSold || s.units || 0;
-                const revenue = s.netSales || s.revenue || 0;
-                const profit = revenue - (s.cogs || 0);
-                
-                if (!shopifySkuTotals[sku]) {
-                  shopifySkuTotals[sku] = { sku, name: savedProductNames[sku] || s.name || sku, units: 0, revenue: 0, profit: 0, channel: 'Shopify' };
-                }
-                shopifySkuTotals[sku].units += units;
-                shopifySkuTotals[sku].revenue += revenue;
-                shopifySkuTotals[sku].profit += profit;
-                shopifyRevenue += revenue;
-                shopifyUnits += units;
-              });
-            }
-            
-            // Update totals from weekly if no daily
-            if (daysInMonth.length === 0) {
-              totalRevenue += (weekData.total?.revenue || 0);
-              totalUnits += (weekData.total?.units || 0);
-              totalProfit += (getProfit(weekData.total));
-            }
-          });
-        }
-        
-        if (Object.keys(amazonSkuTotals).length === 0 && Object.keys(shopifySkuTotals).length === 0) {
-          return null;
-        }
-        
-        // Build category breakdown from SKU data
-        const byCategory = {};
-        const bySku = {};
-        
-        const processSkuForCategory = (skuData) => {
-          Object.values(skuData).forEach(s => {
-            // Determine category
-            const productName = s.name.toLowerCase();
-            const sku = s.sku.toLowerCase();
-            let category = 'Other';
-            
-            if (productName.includes('lip balm') || productName.includes('lip-balm') || 
-                /^(ddpe|lb)/i.test(s.sku) ||
-                ((productName.includes('pack') || productName.includes('pk')) && 
-                 (productName.includes('orange') || productName.includes('peppermint') || 
-                  productName.includes('unscented') || productName.includes('assorted')))) {
-              category = 'Lip Balm';
-            } else if (productName.includes('deodorant') || productName.includes('deo')) {
-              category = 'Deodorant';
-            } else if (productName.includes('soap')) {
-              category = 'Soap';
-            } else if (productName.includes('sun balm') || productName.includes('spf')) {
-              category = 'Sun Balm';
-            } else if (productName.includes('tallow balm') || productName.includes('moisturizer')) {
-              category = 'Tallow Balm';
-            }
-            
-            if (!byCategory[category]) {
-              byCategory[category] = { units: 0, revenue: 0, profit: 0, amazonUnits: 0, shopifyUnits: 0, skus: [] };
-            }
-            byCategory[category].units += s.units;
-            byCategory[category].revenue += s.revenue;
-            byCategory[category].profit += s.profit;
-            if (s.channel === 'Amazon') byCategory[category].amazonUnits += s.units;
-            if (s.channel === 'Shopify') byCategory[category].shopifyUnits += s.units;
-            byCategory[category].skus.push(s);
-            
-            // Also track by SKU
-            if (!bySku[s.sku]) {
-              bySku[s.sku] = { ...s };
-            } else {
-              bySku[s.sku].units += s.units;
-              bySku[s.sku].revenue += s.revenue;
-              bySku[s.sku].profit += s.profit;
-            }
-          });
-        };
-        
-        processSkuForCategory(amazonSkuTotals);
-        processSkuForCategory(shopifySkuTotals);
-        
-        // Sort SKUs by units within each category
-        Object.values(byCategory).forEach(cat => {
-          cat.skus.sort((a, b) => b.units - a.units);
-        });
-        
-        return {
-          month: monthName,
-          year: currentYear,
-          dateRange: `${monthName} 1-${today.getDate()}, ${currentYear}`,
-          dataSource,
-          daysOrWeeksIncluded,
-          totalRevenue,
-          totalUnits,
-          totalProfit,
-          amazonRevenue,
-          amazonUnits,
-          shopifyRevenue,
-          shopifyUnits,
-          byCategory,
-          bySku: Object.values(bySku).sort((a, b) => b.units - a.units).slice(0, 30),
-        };
-      })(),
-      
-      skuAnalysis: skuAnalysis.slice(0, 30),
-      skusByProfitPerUnit: [...skuAnalysis].sort((a, b) => b.profitPerUnit - a.profitPerUnit).slice(0, 10),
-      decliningSkus: skuAnalysis.filter(s => s.trend === 'declining').slice(0, 10),
-      improvingSkus: skuAnalysis.filter(s => s.trend === 'improving').slice(0, 10),
-      productCatalog,
-      skusByCategory,
-      skuMasterData: skuMasterList, // COMPREHENSIVE: all SKU data across periods + weeks
-      inventory: inventorySummary,
-      salesTax: taxSummary,
-      goals,
-      insights: {
-        allTimeRevenue, allTimeProfit, allTimeUnits,
-        avgWeeklyRevenue: weeksCount > 0 ? allTimeRevenue / weeksCount : 0,
-        avgWeeklyProfit: weeksCount > 0 ? allTimeProfit / weeksCount : 0,
-        avgDailyRevenue: daysCount > 0 ? dailySummary.reduce((s, d) => s + d.totalRevenue, 0) / daysCount : 0,
-        avgDailyProfit: daysCount > 0 ? dailySummary.reduce((s, d) => s + d.totalProfit, 0) / daysCount : 0,
-        overallMargin: allTimeRevenue > 0 ? (allTimeProfit / allTimeRevenue * 100) : 0,
-        overallProfitPerUnit: allTimeUnits > 0 ? allTimeProfit / allTimeUnits : 0,
-        recentVsPrior: {
-          recentRevenue, priorRevenue, revenueChange: priorRevenue > 0 ? ((recentRevenue - priorRevenue) / priorRevenue * 100) : 0,
-          recentProfit, priorProfit, profitChange: priorProfit > 0 ? ((recentProfit - priorProfit) / priorProfit * 100) : 0,
-        },
-        topChannel: allTimeRevenue > 0 ? (weeksSummary.reduce((s, w) => s + w.amazonRevenue, 0) > allTimeRevenue / 2 ? 'Amazon' : 'Shopify') : 'Unknown',
-      },
-      // AI Learning Data - helps Claude make better predictions
-      aiLearning: {
-        forecastCorrections: {
-          revenueMultiplier: forecastCorrections.overall?.revenue || 1,
-          unitsMultiplier: forecastCorrections.overall?.units || 1,
-          confidence: forecastCorrections.confidence || 0,
-          samplesUsed: forecastCorrections.samplesUsed || 0,
-        },
-        predictionHistory: {
-          totalPredictions: aiLearningHistory.predictions?.length || 0,
-          verifiedPredictions: aiLearningHistory.predictions?.filter(p => p.actual !== undefined).length || 0,
-          recentAccuracy: (() => {
-            const verified = aiLearningHistory.predictions?.filter(p => p.accuracy?.revenueError !== undefined) || [];
-            if (verified.length === 0) return null;
-            const avgError = verified.slice(-10).reduce((sum, p) => sum + Math.abs(p.accuracy.revenueError || 0), 0) / Math.min(10, verified.length);
-            return 100 - avgError;
-          })(),
-        },
-        recentPredictions: aiLearningHistory.predictions?.slice(-5).map(p => ({
-          type: p.type,
-          period: p.period,
-          predictedAt: p.predictedAt,
-          predicted: p.prediction?.revenue?.expected,
-          actual: p.actual?.revenue,
-          error: p.accuracy?.revenueError,
-        })) || [],
-      },
-      // Seasonal Patterns for AI Forecasting
-      seasonalPatterns: (() => {
-        // Group data by month across years
-        const monthlyByYear = {};
-        sortedWeeks.forEach(w => {
-          const data = allWeeksData[w];
-          const date = new Date(w);
-          const year = date.getFullYear();
-          const month = date.getMonth() + 1;
-          const key = `${year}-${String(month).padStart(2, '0')}`;
-          if (!monthlyByYear[key]) monthlyByYear[key] = { year, month, revenue: 0, profit: 0, units: 0, weeks: 0 };
-          monthlyByYear[key].revenue += data.total?.revenue || 0;
-          monthlyByYear[key].profit += getProfit(data.total);
-          monthlyByYear[key].units += data.total?.units || 0;
-          monthlyByYear[key].weeks++;
-        });
-        
-        // Calculate month-over-month and year-over-year patterns
-        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        const seasonalIndex = {};
-        monthNames.forEach((name, i) => {
-          const monthData = Object.values(monthlyByYear).filter(m => m.month === i + 1);
-          if (monthData.length > 0) {
-            const avgRevenue = monthData.reduce((s, m) => s + m.revenue, 0) / monthData.length;
-            seasonalIndex[name] = {
-              avgRevenue,
-              avgProfit: monthData.reduce((s, m) => s + m.profit, 0) / monthData.length,
-              dataPoints: monthData.length,
-              years: monthData.map(m => m.year),
-            };
-          }
-        });
-        
-        // Calculate overall average for seasonal index
-        const allMonths = Object.values(seasonalIndex);
-        const overallAvg = allMonths.length > 0 ? allMonths.reduce((s, m) => s + m.avgRevenue, 0) / allMonths.length : 0;
-        
-        // Add seasonal index (1.0 = average, >1 = above average month)
-        Object.keys(seasonalIndex).forEach(month => {
-          seasonalIndex[month].index = overallAvg > 0 ? seasonalIndex[month].avgRevenue / overallAvg : 1;
-        });
-        
-        return {
-          byMonth: seasonalIndex,
-          overallMonthlyAvg: overallAvg,
-          strongMonths: Object.entries(seasonalIndex).filter(([_, m]) => m.index > 1.1).map(([name]) => name),
-          weakMonths: Object.entries(seasonalIndex).filter(([_, m]) => m.index < 0.9).map(([name]) => name),
-        };
-      })(),
-      // Multi-Source Data Triangulation for AI
-      dataTriangulation: (() => {
-        // Compare sales data with banking deposits
-        const salesVsBanking = {};
-        if (bankingData.monthlySnapshots) {
-          Object.entries(bankingData.monthlySnapshots).forEach(([month, banking]) => {
-            // Find matching sales data
-            const salesWeeks = sortedWeeks.filter(w => w.startsWith(month));
-            const salesRevenue = salesWeeks.reduce((s, w) => s + (allWeeksData[w]?.total?.revenue || 0), 0);
-            const salesProfit = salesWeeks.reduce((s, w) => s + (getProfit(allWeeksData[w]?.total)), 0);
-            
-            if (salesRevenue > 0 || banking.income > 0) {
-              salesVsBanking[month] = {
-                salesRevenue,
-                salesProfit,
-                bankDeposits: banking.income,
-                bankExpenses: banking.expenses,
-                bankNet: banking.net,
-                // Deposits should be less than revenue (after marketplace fees)
-                depositRatio: salesRevenue > 0 ? (banking.income / salesRevenue) : 0,
-                // True profit = sales profit - additional bank expenses (like ads, 3PL not in sales data)
-                adjustedProfit: salesProfit - (banking.expenses * 0.3), // Estimate 30% of expenses are already in COGS
-              };
-            }
-          });
-        }
-        
-        return {
-          salesVsBanking,
-          hasMultipleSources: bankingData.transactions?.length > 0 && sortedWeeks.length > 0,
-          dataQualityScore: (() => {
-            let score = 0;
-            if (sortedWeeks.length >= 12) score += 25; // Good weekly history
-            if (sortedDays.length >= 30) score += 20; // Good daily history
-            if (bankingData.transactions?.length >= 100) score += 20; // Good banking data
-            if (Object.keys(savedCogs).length >= 10) score += 15; // Good COGS coverage
-            if (forecastCorrections.samplesUsed >= 4) score += 10; // AI learning active
-            if (Object.keys(amazonForecasts).length > 0) score += 10; // Has forecasts
-            return score;
-          })(),
-        };
-      })(),
-      // Banking/Cash Flow Data for AI analysis
-      banking: bankingData.transactions?.length > 0 ? (() => {
-        // Filter to real bank accounts only
-        const strictFilter = (name) => {
-          if (!/\(\d{4}\)\s*-\s*\d+$/.test(name)) return false;
-          if (name.includes('"') || name.length > 60) return false;
-          if (!/^[A-Za-z]/.test(name.trim())) return false;
-          return true;
-        };
-        const accts = Object.entries(bankingData.accounts || {}).filter(([name, _]) => strictFilter(name));
-        const checkingAccts = accts.filter(([_, a]) => a.type !== 'credit_card');
-        const creditAccts = accts.filter(([_, a]) => a.type === 'credit_card');
-        const totalCash = checkingAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
-        const totalDebt = creditAccts.reduce((s, [_, a]) => s + (a.balance || 0), 0);
-        const recentMonths = Object.keys(bankingData.monthlySnapshots || {}).sort().slice(-3);
-        const avgBurn = recentMonths.length > 0 
-          ? recentMonths.reduce((s, m) => s + (bankingData.monthlySnapshots[m]?.expenses || 0), 0) / recentMonths.length
-          : 0;
-        const runway = avgBurn > 0 ? Math.floor(totalCash / avgBurn) : 99;
-        
-        return {
-          transactionCount: bankingData.transactions.length,
-          dateRange: bankingData.dateRange,
-          lastUpload: bankingData.lastUpload,
-          // CFO Summary (note: this is CASH FLOW not profit - doesn't include COGS)
-          cfoMetrics: {
-            cashPosition: totalCash,
-            creditCardDebt: totalDebt,
-            netPosition: totalCash - totalDebt,
-            monthlyBurnRate: avgBurn,
-            cashRunwayMonths: runway,
-          },
-          // Account Balances
-          accounts: accts.map(([name, data]) => ({
-            name: name.split('(')[0].trim(),
-            type: data.type,
-            balance: data.balance || 0,
-            transactions: data.transactions,
-          })),
-          // Monthly Cash Flow (last 12 months) - NOTE: income is deposits, not revenue; net is cash flow, not profit
-          monthlySnapshots: Object.entries(bankingData.monthlySnapshots || {}).slice(-12).map(([month, data]) => ({
-            month,
-            income: data.income,  // Bank deposits (Amazon/Shopify payouts after fees)
-            expenses: data.expenses,
-            net: data.net,
-            transactionCount: data.transactions,
-          })),
-          // Top expense categories
-          topExpenseCategories: Object.entries(bankingData.categories || {})
-            .filter(([_, c]) => c.totalOut > 0)
-            .sort((a, b) => b[1].totalOut - a[1].totalOut)
-            .slice(0, 10)
-            .map(([name, data]) => ({ name, total: data.totalOut, count: data.count })),
-          // Top income sources
-          topIncomeCategories: Object.entries(bankingData.categories || {})
-            .filter(([_, c]) => c.totalIn > 0)
-            .sort((a, b) => b[1].totalIn - a[1].totalIn)
-            .slice(0, 10)
-            .map(([name, data]) => ({ name, total: data.totalIn, count: data.count })),
-        };
-      })() : null,
-      // ========= UNIFIED AI METRICS - COMPREHENSIVE DATA VIEW =========
-      // This provides the AI with a proper understanding of data availability
-      // IMPORTANT: Use these metrics for ALL-TIME totals, not the daily data
-      unifiedMetrics: unifiedBusinessMetrics,
-      
-      // Data availability explanation for AI
-      dataAvailability: {
-        // Amazon: Daily data may only exist for 2026, but 2024-2025 has monthly/quarterly period data
-        amazon: {
-          dailyDataDates: unifiedBusinessMetrics.dataSources?.amazon?.dailyDates?.length || 0,
-          periodDataCount: unifiedBusinessMetrics.dataSources?.amazon?.periodNames?.length || 0,
-          hasDailyGaps: unifiedBusinessMetrics.dataSources?.amazon?.hasDailyGaps || false,
-          gapsCoveredBy: unifiedBusinessMetrics.dataSources?.amazon?.gapsCoveredByPeriods || [],
-          explanation: unifiedBusinessMetrics.dataSources?.amazon?.hasDailyGaps 
-            ? 'Amazon has monthly period data for periods without daily uploads. DO NOT treat missing daily data as $0 sales.'
-            : 'Amazon has daily data available.',
-        },
-        shopify: {
-          dailyDataDates: unifiedBusinessMetrics.dataSources?.shopify?.dailyDates?.length || 0,
-          periodDataCount: unifiedBusinessMetrics.dataSources?.shopify?.periodNames?.length || 0,
-          hasDailyGaps: unifiedBusinessMetrics.dataSources?.shopify?.hasDailyGaps || false,
-          gapsCoveredBy: unifiedBusinessMetrics.dataSources?.shopify?.gapsCoveredByPeriods || [],
-        },
-        // Key instruction for AI
-        instructions: `
-⚠️ CRITICAL DATA AVAILABILITY RULES:
-1. Amazon daily data may not exist for all dates - we have MONTHLY period data instead
-2. NEVER treat missing daily Amazon data as $0 sales - this will severely undercount revenue
-3. For all-time totals, use the unifiedMetrics.allTime values which properly combine period + weekly data
-4. For averages, use unifiedMetrics.averages which only calculate from days WITH data
-5. When calculating trends, EXCLUDE days without data rather than counting them as $0
-6. Period data (monthly/quarterly) is AUTHORITATIVE for historical totals
-
-📊 DATA SOURCES HIERARCHY:
-- For 2024: Use quarterly period data (most accurate)
-- For 2025: Use monthly period data (most accurate)
-- For 2026: Use weekly/daily data (most current)
-`,
-      },
-      // ========= DAILY ADS DATA - AGGREGATED FROM DAILY UPLOADS =========
-      dailyAdsData: (() => {
-        const last30Days = sortedDays.slice(-30);
-        const last7Days = sortedDays.slice(-7);
-        
-        const aggregateAds = (days) => {
-          let metaSpend = 0, googleSpend = 0, metaImpressions = 0, googleImpressions = 0;
-          let metaClicks = 0, googleClicks = 0, metaConversions = 0, googleConversions = 0;
-          let daysWithData = 0;
-          
-          days.forEach(dayKey => {
-            const dayData = allDaysData[dayKey];
-            if (!dayData) return;
-            
-            const meta = dayData.metaSpend || dayData.shopify?.metaSpend || 0;
-            const google = dayData.googleSpend || dayData.shopify?.googleSpend || 0;
-            
-            if (meta > 0 || google > 0) daysWithData++;
-            metaSpend += meta;
-            googleSpend += google;
-            metaImpressions += dayData.metaImpressions || 0;
-            googleImpressions += dayData.googleImpressions || 0;
-            metaClicks += dayData.metaClicks || 0;
-            googleClicks += dayData.googleClicks || 0;
-            metaConversions += dayData.metaConversions || 0;
-            googleConversions += dayData.googleConversions || 0;
-          });
-          
-          const totalSpend = metaSpend + googleSpend;
-          const totalClicks = metaClicks + googleClicks;
-          const totalImpressions = metaImpressions + googleImpressions;
-          
-          return {
-            metaSpend, googleSpend, totalSpend,
-            metaImpressions, googleImpressions, totalImpressions,
-            metaClicks, googleClicks, totalClicks,
-            metaConversions, googleConversions,
-            daysWithData,
-            avgDailySpend: daysWithData > 0 ? totalSpend / daysWithData : 0,
-            ctr: totalImpressions > 0 ? (totalClicks / totalImpressions * 100).toFixed(2) : 0,
-            cpc: totalClicks > 0 ? (totalSpend / totalClicks).toFixed(2) : 0,
-          };
-        };
-        
-        return {
-          last7Days: aggregateAds(last7Days),
-          last30Days: aggregateAds(last30Days),
-          byWeek: (() => {
-            // Group ads by week
-            const weeklyAds = {};
-            sortedDays.forEach(dayKey => {
-              const dayData = allDaysData[dayKey];
-              if (!dayData) return;
-              
-              // Validate date key format
-              if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return;
-              const date = new Date(dayKey + 'T12:00:00');
-              if (isNaN(date.getTime())) return; // Skip invalid dates
-              
-              const dayOfWeek = date.getDay();
-              const weekEnd = new Date(date);
-              weekEnd.setDate(date.getDate() + (dayOfWeek === 0 ? 0 : 7 - dayOfWeek));
-              const weekKey = weekEnd.toISOString().split('T')[0];
-              
-              if (!weeklyAds[weekKey]) weeklyAds[weekKey] = { metaSpend: 0, googleSpend: 0, days: 0 };
-              weeklyAds[weekKey].metaSpend += dayData.metaSpend || dayData.shopify?.metaSpend || 0;
-              weeklyAds[weekKey].googleSpend += dayData.googleSpend || dayData.shopify?.googleSpend || 0;
-              weeklyAds[weekKey].days++;
-            });
-            
-            return Object.entries(weeklyAds)
-              .filter(([_, d]) => d.metaSpend > 0 || d.googleSpend > 0)
-              .slice(-8)
-              .map(([week, data]) => ({
-                week,
-                metaSpend: data.metaSpend,
-                googleSpend: data.googleSpend,
-                totalSpend: data.metaSpend + data.googleSpend,
-                daysWithData: data.days,
-              }));
-          })(),
-        };
-      })(),
-    };
-  };
+  // AI Chat - Prepare data context (extracted to utils/aiContextBuilder.js)
+  const prepareCtx = () => prepareDataContext({
+    allDaysData, allWeeksData, allPeriodsData,
+    savedProductNames, savedCogs, invHistory,
+    forecastCorrections, amazonForecasts, leadTimeSettings,
+    storeName, salesTaxConfig, threeplLedger,
+    goals, bankingData, aiLearningHistory,
+    getProfit, get3PLForPeriod,
+  });
   
   // Send AI Message - defined at component level, not nested
   const sendAIMessage = async (directMessage) => {
@@ -16310,1098 +14855,116 @@ Analyze the data and respond with ONLY this JSON:
     setAiLoading(true);
     
     try {
-      const ctx = prepareDataContext();
+      const ctx = prepareCtx();
       
-      // Build alerts summary for AI
+      // Build alerts summary for AI — each section wrapped so one bad calculation doesn't kill chat
       const alertsSummary = [];
-      if (ctx.inventory?.lowStockItems?.length > 0) {
-        alertsSummary.push(`LOW STOCK ALERT: ${ctx.inventory.lowStockItems.length} products need reorder (${ctx.inventory.lowStockItems.map(i => i.sku).join(', ')})`);
-      }
-      // Add critical reorder deadline alerts
-      const criticalReorders = [...(ctx.inventory?.urgentReorder || []), ...(ctx.inventory?.needsReorderSoon || [])];
-      if (criticalReorders.length > 0) {
-        alertsSummary.push(`🚨 REORDER DEADLINES: ${criticalReorders.map(i => 
-          `${i.sku} (${i.daysUntilMustOrder !== undefined && i.daysUntilMustOrder <= 0 ? 'OVERDUE' : (i.daysUntilMustOrder || '?') + ' days left'}${i.daysOverdue ? ', ' + i.daysOverdue + ' days overdue' : ''})`
-        ).join(', ')}`);
-      }
-      if (ctx.salesTax?.nexusStates?.length > 0) {
-        alertsSummary.push(`Sales tax nexus in ${ctx.salesTax.nexusStates.length} states: ${ctx.salesTax.nexusStates.map(s => s.state).join(', ')}`);
-      }
-      
-      // Channel concentration alert
-      if (ctx.insights.allTimeRevenue > 0) {
-        const amazonShare = ctx.weeklyData.reduce((s, w) => s + w.amazonRevenue, 0) / ctx.insights.allTimeRevenue * 100;
-        if (amazonShare > 90) {
-          alertsSummary.push(`CHANNEL CONCENTRATION: ${amazonShare.toFixed(0)}% of revenue from Amazon - consider diversifying`);
+      try {
+        if (ctx.inventory?.lowStockItems?.length > 0) {
+          alertsSummary.push(`LOW STOCK ALERT: ${ctx.inventory.lowStockItems.length} products need reorder (${ctx.inventory.lowStockItems.map(i => i.sku).join(', ')})`);
         }
-      }
-      
-      // 3PL cost alert
-      const ledgerOrders = Object.values(threeplLedger.orders || {});
-      if (ledgerOrders.length > 100) {
-        let total3PL = 0;
-        ledgerOrders.forEach(o => {
-          const c = o.charges || {};
-          total3PL += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0);
-        });
-        const avgCostPerOrder = total3PL / ledgerOrders.length;
-        if (avgCostPerOrder > 12) {
-          alertsSummary.push(`3PL COSTS ELEVATED: Avg $${avgCostPerOrder.toFixed(2)}/order - review fulfillment efficiency`);
+        const criticalReorders = [...(ctx.inventory?.urgentReorder || []), ...(ctx.inventory?.needsReorderSoon || [])];
+        if (criticalReorders.length > 0) {
+          alertsSummary.push(`🚨 REORDER DEADLINES: ${criticalReorders.map(i => 
+            `${i.sku} (${i.daysUntilMustOrder !== undefined && i.daysUntilMustOrder <= 0 ? 'OVERDUE' : (i.daysUntilMustOrder || '?') + ' days left'}${i.daysOverdue ? ', ' + i.daysOverdue + ' days overdue' : ''})`
+          ).join(', ')}`);
         }
-      }
+        if (ctx.salesTax?.nexusStates?.length > 0) {
+          alertsSummary.push(`Sales tax nexus in ${ctx.salesTax.nexusStates.length} states: ${ctx.salesTax.nexusStates.map(s => s.state).join(', ')}`);
+        }
+        if (ctx.insights?.allTimeRevenue > 0) {
+          const amazonShare = ctx.weeklyData.reduce((s, w) => s + (w.amazonRevenue || 0), 0) / ctx.insights.allTimeRevenue * 100;
+          if (amazonShare > 90) {
+            alertsSummary.push(`CHANNEL CONCENTRATION: ${amazonShare.toFixed(0)}% of revenue from Amazon - consider diversifying`);
+          }
+        }
+        const ledgerOrders = Object.values(threeplLedger?.orders || {});
+        if (ledgerOrders.length > 100) {
+          let total3PL = 0;
+          ledgerOrders.forEach(o => {
+            const c = o.charges || {};
+            total3PL += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0);
+          });
+          const avgCostPerOrder = total3PL / ledgerOrders.length;
+          if (avgCostPerOrder > 12) {
+            alertsSummary.push(`3PL COSTS ELEVATED: Avg $${avgCostPerOrder.toFixed(2)}/order - review fulfillment efficiency`);
+          }
+        }
+      } catch (alertErr) { devWarn('AI chat: alerts section failed, continuing:', alertErr.message); }
       
-      // Include forecast data if available (use enhanced if corrections active)
-      const forecastData = enhancedForecast ? {
-        nextMonth: enhancedForecast.monthly,
-        originalNextMonth: enhancedForecast.originalMonthly,
-        trend: generateForecast?.trend,
-        confidence: generateForecast?.confidence,
-        weekly: enhancedForecast.weekly,
-        corrected: enhancedForecast.corrected,
-        correctionNote: enhancedForecast.correctionNote,
-        learningStatus: enhancedForecast.learningStatus,
-      } : generateForecast ? {
-        nextMonth: generateForecast.monthly,
-        trend: generateForecast.trend,
-        confidence: generateForecast.confidence,
-        weekly: generateForecast.weekly
-      } : null;
+      // Forecast data — safe defaults if assembly fails
+      let forecastData = null;
+      let multiSignalForecast = null;
+      let forecastAccuracy = { records: [], summary: null };
+      try {
+        forecastData = enhancedForecast ? {
+          nextMonth: enhancedForecast.monthly,
+          originalNextMonth: enhancedForecast.originalMonthly,
+          trend: generateForecast?.trend,
+          confidence: generateForecast?.confidence,
+          weekly: enhancedForecast.weekly,
+          corrected: enhancedForecast.corrected,
+          correctionNote: enhancedForecast.correctionNote,
+          learningStatus: enhancedForecast.learningStatus,
+        } : generateForecast ? {
+          nextMonth: generateForecast.monthly,
+          trend: generateForecast.trend,
+          confidence: generateForecast.confidence,
+          weekly: generateForecast.weekly
+        } : null;
+        
+        multiSignalForecast = aiForecasts?.salesForecast ? {
+          nextWeek: aiForecasts.salesForecast.next4Weeks?.[0] || null,
+          next4Weeks: aiForecasts.salesForecast.next4Weeks || [],
+          signals: aiForecasts.calculatedSignals || {},
+          dataPoints: aiForecasts.dataPoints || {},
+          generatedAt: aiForecasts.generatedAt,
+          methodology: 'Weighted: 60% daily trends (last 7 days), 20% weekly averages, 20% Amazon forecasts (if available)',
+        } : null;
+        
+        const records = forecastAccuracyHistory?.records || [];
+        const withActuals = records.filter(r => r.actualRevenue !== undefined);
+        forecastAccuracy = {
+          records: records.slice(-20),
+          summary: withActuals.length === 0 
+            ? (records.length === 0 ? null : { message: 'No actuals recorded yet - waiting for weeks to complete' })
+            : (() => {
+                const avgRevenueError = withActuals.reduce((s, r) => {
+                  const error = r.forecastRevenue > 0 ? Math.abs(r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100 : 0;
+                  return s + error;
+                }, 0) / withActuals.length;
+                const avgBias = withActuals.reduce((s, r) => {
+                  const bias = r.forecastRevenue > 0 ? (r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100 : 0;
+                  return s + bias;
+                }, 0) / withActuals.length;
+                return {
+                  samplesWithActuals: withActuals.length,
+                  avgAccuracy: (100 - avgRevenueError).toFixed(1) + '%',
+                  avgBias: (avgBias > 0 ? '+' : '') + avgBias.toFixed(1) + '% (positive = forecasts too low)',
+                  recentTrend: withActuals.slice(-5).map(r => ({
+                    week: r.weekEnding,
+                    forecast: r.forecastRevenue,
+                    actual: r.actualRevenue,
+                    error: r.forecastRevenue > 0 ? ((r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100).toFixed(1) + '%' : 'N/A'
+                  }))
+                };
+              })(),
+        };
+      } catch (forecastErr) { devWarn('AI chat: forecast section failed, continuing:', forecastErr.message); }
       
-      // Include Multi-Signal AI Forecast (the most accurate forecast - same as dashboard widget)
-      const multiSignalForecast = aiForecasts?.salesForecast ? {
-        nextWeek: aiForecasts.salesForecast.next4Weeks?.[0] || null,
-        next4Weeks: aiForecasts.salesForecast.next4Weeks || [],
-        signals: aiForecasts.calculatedSignals || {},
-        dataPoints: aiForecasts.dataPoints || {},
-        generatedAt: aiForecasts.generatedAt,
-        methodology: 'Weighted: 60% daily trends (last 7 days), 20% weekly averages, 20% Amazon forecasts (if available)',
-      } : null;
-      
-      // Include Forecast Accuracy History (for learning from past predictions)
-      const forecastAccuracy = {
-        records: forecastAccuracyHistory.records?.slice(-20) || [], // Last 20 forecast vs actual comparisons
-        summary: (() => {
-          const records = forecastAccuracyHistory.records || [];
-          if (records.length === 0) return null;
-          const withActuals = records.filter(r => r.actualRevenue !== undefined);
-          if (withActuals.length === 0) return { message: 'No actuals recorded yet - waiting for weeks to complete' };
-          
-          const avgRevenueError = withActuals.reduce((s, r) => {
-            const error = r.forecastRevenue > 0 ? Math.abs(r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100 : 0;
-            return s + error;
-          }, 0) / withActuals.length;
-          
-          const avgBias = withActuals.reduce((s, r) => {
-            const bias = r.forecastRevenue > 0 ? (r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100 : 0;
-            return s + bias;
-          }, 0) / withActuals.length;
-          
-          return {
-            samplesWithActuals: withActuals.length,
-            avgAccuracy: (100 - avgRevenueError).toFixed(1) + '%',
-            avgBias: (avgBias > 0 ? '+' : '') + avgBias.toFixed(1) + '% (positive = forecasts too low)',
-            recentTrend: withActuals.slice(-5).map(r => ({
-              week: r.weekEnding,
-              forecast: r.forecastRevenue,
-              actual: r.actualRevenue,
-              error: r.forecastRevenue > 0 ? ((r.actualRevenue - r.forecastRevenue) / r.forecastRevenue * 100).toFixed(1) + '%' : 'N/A'
-            }))
-          };
-        })(),
-      };
-      
-      // Include week notes
-      const notesData = Object.entries(weekNotes).filter(([k, v]) => v).map(([week, note]) => ({ week, note }));
+      // Week notes
+      const notesData = Object.entries(weekNotes || {}).filter(([k, v]) => v).map(([week, note]) => ({ week, note }));
       
       // Re-derive sortedDays for use in system prompt (prepareDataContext's sortedDays is out of scope)
       const sortedDays = Object.keys(allDaysData).filter(d => hasDailySalesData(allDaysData[d])).sort();
       
-      const systemPrompt = `You are an expert e-commerce analyst and business advisor for "${ctx.storeName}". You have access to ALL uploaded sales data and can answer questions about any aspect of the business.
-
-🚨🚨🚨 CRITICAL DATA AVAILABILITY RULES - READ FIRST 🚨🚨🚨
-
-${ctx.dataAvailability?.instructions || ''}
-
-**DATA AVAILABILITY STATUS:**
-- Amazon: ${ctx.dataAvailability?.amazon?.dailyDataDates || 0} days of daily data, ${ctx.dataAvailability?.amazon?.periodDataCount || 0} period records
-${ctx.dataAvailability?.amazon?.hasDailyGaps ? `  ⚠️ GAPS COVERED BY: ${ctx.dataAvailability.amazon.gapsCoveredBy?.join(', ') || 'monthly data'}` : ''}
-- Shopify: ${ctx.dataAvailability?.shopify?.dailyDataDates || 0} days of daily data
-
-**UNIFIED ALL-TIME TOTALS (USE THESE - includes period data):**
-${ctx.unifiedMetrics ? `
-- Amazon Revenue: $${ctx.unifiedMetrics.allTime?.amazon?.revenue?.toFixed(2) || 0}
-- Shopify Revenue: $${ctx.unifiedMetrics.allTime?.shopify?.revenue?.toFixed(2) || 0}
-- TOTAL Revenue: $${ctx.unifiedMetrics.allTime?.total?.revenue?.toFixed(2) || 0}
-- TOTAL Profit: $${ctx.unifiedMetrics.allTime?.total?.profit?.toFixed(2) || 0}
-
-By Year:
-${Object.entries(ctx.unifiedMetrics.byYear || {}).map(([year, data]) => 
-  `  ${year}: Amazon $${data.amazon?.revenue?.toFixed(0) || 0} | Shopify $${data.shopify?.revenue?.toFixed(0) || 0} | Total $${data.total?.revenue?.toFixed(0) || 0}`
-).join('\n')}
-
-Proper Averages (only from days WITH data):
-- Daily Avg Revenue: $${ctx.unifiedMetrics.averages?.dailyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.dailyRevenue?.daysUsed || 0} days with actual data)
-- Weekly Avg Revenue: $${ctx.unifiedMetrics.averages?.weeklyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.weeklyRevenue?.weeksUsed || 0} weeks)
-- Monthly Avg Revenue: $${ctx.unifiedMetrics.averages?.monthlyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.monthlyRevenue?.monthsUsed || 0} months)
-` : 'Unified metrics not available'}
-
-🚨🚨🚨 TIMEFRAME QUERIES - USE PRE-COMPUTED DATA 🚨🚨🚨
-When user asks about a TIMEFRAME (last week, last month, etc.) you MUST use the PRE-COMPUTED data below.
-DO NOT use skuAnalysis - that's ALL-TIME data and will give WRONG answers for timeframe questions!
-
-| User asks about... | ONLY USE THIS DATA |
-|-------------------|-------------------|
-| "last week" | lastWeekByCategory (below) |
-| "last 2 weeks" | last2WeeksByCategory (below) |
-| "last month" / "last 4 weeks" | last4WeeksByCategory (below) |
-| "this month" / "January" / "MTD" / "Jan 1-25" | currentMonthByCategory AND/OR CUSTOM DATE RANGE DATA (below) |
-| "between X and Y" / specific dates | CUSTOM DATE RANGE DATA (below) |
-| "all time" / "total" | allTimeByCategory (below) |
-
-🎯 FOR DATE-SPECIFIC QUESTIONS LIKE "this month so far" or "between X and Y":
-→ USE the "CUSTOM DATE RANGE DATA" section below - it has PRE-COMPUTED current month aggregates
-→ The data shows EXACT Amazon vs Shopify breakdown by SKU
-
-For category questions (e.g., "how much [product] this month?"):
-→ Look up: currentMonthByCategory.byCategory["Category Name"]
-→ OR use CUSTOM DATE RANGE DATA for per-SKU breakdown
-
-⚠️ IMPORTANT: currentMonthByCategory has SEPARATE Amazon vs Shopify counts!
-→ If user asks "Amazon [product] units", use amazonUnits from the category
-→ If user asks "total [product] units", add Amazon + Shopify
-
-⛔ NEVER use skuAnalysis for timeframe questions - it contains ALL-TIME totals
-⛔ NEVER sum from skuByWeek array - those are historical weeks
-⛔ NEVER use weekly skuData for current month - it may be MISSING Amazon SKU breakdown
-✅ ALWAYS use DAILY data aggregates (currentMonthByCategory or CUSTOM DATE RANGE DATA) for current month
-✅ ALWAYS use unifiedMetrics for all-time totals (includes period data)
-✅ For date range questions → USE CUSTOM DATE RANGE DATA section
-
-IMPORTANT PROFIT CALCULATION NOTES:
-- Amazon "Net Proceeds" IS the profit - it already has COGS, fees, and ad spend deducted
-- Shopify profit = Revenue - COGS - 3PL Fulfillment Costs - Ad Spend (Meta + Google)
-- Do NOT double-count COGS or ad spend when calculating Amazon profit
-- When reporting "total profit" always add Amazon Net Proceeds + Shopify calculated profit
-
-STORE: ${ctx.storeName}
-DATA RANGE: ${ctx.dataRange.weeksTracked} weeks tracked (${ctx.dataRange.oldestWeek || 'N/A'} to ${ctx.dataRange.newestWeek || 'N/A'})
-
-=== KEY METRICS (All Time) ===
-- Total Revenue: $${ctx.insights.allTimeRevenue.toFixed(2)}
-- Total Profit: $${ctx.insights.allTimeProfit.toFixed(2)}
-- Total Units Sold: ${ctx.insights.allTimeUnits}
-- Overall Margin: ${ctx.insights.overallMargin.toFixed(1)}%
-- Avg Profit/Unit: $${ctx.insights.overallProfitPerUnit.toFixed(2)}
-- Avg Weekly Revenue: $${ctx.insights.avgWeeklyRevenue.toFixed(2)}
-- Avg Weekly Profit: $${ctx.insights.avgWeeklyProfit.toFixed(2)}
-- Avg Daily Revenue: $${ctx.insights.avgDailyRevenue?.toFixed(2) || 0}
-- Avg Daily Profit: $${ctx.insights.avgDailyProfit?.toFixed(2) || 0}
-
-=== DAILY DATA (Last 14 days for granular analysis) ===
-${ctx.dailyData?.length > 0 ? `
-Days tracked: ${ctx.dataRange.daysTracked}
-Recent daily trend (last 7 days vs prior 7 days): ${ctx.dailyTrend?.toFixed(1) || 0}%
-${JSON.stringify(ctx.dailyData)}
-` : 'No daily data uploaded yet'}
-
-=== DAY-OF-WEEK PATTERNS (AI Learning) ===
-${ctx.dayOfWeekPatterns && Object.keys(ctx.dayOfWeekPatterns).length > 0 ? `
-Best performing days and average revenue/profit by day of week:
-${JSON.stringify(ctx.dayOfWeekPatterns)}
-Use this to identify optimal days for promotions, ad spend, and inventory planning.
-` : 'Not enough daily data for day-of-week analysis'}
-
-=== RECENT TREND (Last 4 weeks vs Prior 4 weeks) ===
-- Recent Revenue: $${ctx.insights.recentVsPrior.recentRevenue.toFixed(2)}
-- Prior Revenue: $${ctx.insights.recentVsPrior.priorRevenue.toFixed(2)}
-- Revenue Change: ${ctx.insights.recentVsPrior.revenueChange.toFixed(1)}%
-- Recent Profit: $${ctx.insights.recentVsPrior.recentProfit.toFixed(2)}
-- Prior Profit: $${ctx.insights.recentVsPrior.priorProfit.toFixed(2)}
-- Profit Change: ${ctx.insights.recentVsPrior.profitChange.toFixed(1)}%
-
-=== FORECAST (Next 4 Weeks Projection) ===
-${forecastData ? `
-- Projected Monthly Revenue: $${forecastData.nextMonth.revenue.toFixed(2)}
-- Projected Monthly Profit: $${forecastData.nextMonth.profit.toFixed(2)}
-- Projected Monthly Units: ${forecastData.nextMonth.units}
-- Trend Direction: ${forecastData.trend.revenue} (${forecastData.trend.revenueChange.toFixed(1)}% per week)
-- Forecast Confidence: ${forecastData.confidence}%
-- Weekly Projections: ${JSON.stringify(forecastData.weekly)}
-` : 'Not enough data for forecast (need 4+ weeks)'}
-
-=== 🧠 MULTI-SIGNAL AI FORECAST (PRIMARY - Use this for predictions) ===
-${multiSignalForecast ? `
-This is the most accurate forecast - it's the same one shown on the dashboard widget.
-
-**NEXT WEEK PREDICTION:**
-- Revenue: $${multiSignalForecast.nextWeek?.predictedRevenue?.toFixed(2) || 0}
-- Profit: $${multiSignalForecast.nextWeek?.predictedProfit?.toFixed(2) || 0}
-- Units: ${multiSignalForecast.nextWeek?.predictedUnits || 0}
-- Confidence: ${multiSignalForecast.nextWeek?.confidence || 'N/A'}
-
-**4-WEEK OUTLOOK:**
-${JSON.stringify(multiSignalForecast.next4Weeks)}
-
-**SIGNALS USED:**
-- Daily Average (7 days): $${multiSignalForecast.signals.dailyAvg7?.toFixed(2) || 0}/day
-- Momentum (7d vs prior 7d): ${multiSignalForecast.signals.momentum?.toFixed(1) || 0}%
-- Profit Margin: ${((multiSignalForecast.signals.avgProfitMargin || 0) * 100).toFixed(1)}%
-
-**DATA SOURCES:**
-- Daily data points: ${multiSignalForecast.dataPoints.dailyDays || multiSignalForecast.dataPoints.daysAnalyzed || 0} days
-- Weekly data points: ${multiSignalForecast.dataPoints.weeklyWeeks || multiSignalForecast.dataPoints.weeksAnalyzed || 0} weeks  
-- Amazon forecasts: ${multiSignalForecast.dataPoints.amazonForecastWeeks || 0} weeks
-
-**METHODOLOGY:** ${multiSignalForecast.methodology}
-
-Last updated: ${multiSignalForecast.generatedAt || 'Not yet generated'}
-` : 'Multi-Signal forecast not yet generated. User should click "Refresh Forecast" on dashboard.'}
-
-=== 📊 FORECAST ACCURACY LEARNING (Compare predictions to actuals) ===
-${forecastAccuracy.summary ? `
-**ACCURACY SUMMARY (from past forecasts vs actuals):**
-- Samples with actual data: ${forecastAccuracy.summary.samplesWithActuals || 0}
-- Average Accuracy: ${forecastAccuracy.summary.avgAccuracy || 'N/A'}
-- Bias: ${forecastAccuracy.summary.avgBias || 'N/A'}
-
-**RECENT FORECAST vs ACTUAL COMPARISONS:**
-${forecastAccuracy.summary.recentTrend ? JSON.stringify(forecastAccuracy.summary.recentTrend, null, 2) : 'No recent comparisons yet'}
-
-⚠️ LEARNING INSTRUCTIONS:
-- If bias is consistently positive (actuals > forecast), predictions are too conservative - adjust up
-- If bias is consistently negative (actuals < forecast), predictions are too optimistic - adjust down
-- Use the accuracy % to determine confidence level in your predictions
-- Factor in the specific error patterns when making new predictions
-` : 'No forecast accuracy data yet. As weeks complete and actuals are uploaded, I will learn from prediction errors.'}
-
-**FULL ACCURACY HISTORY (last 20 records):**
-${forecastAccuracy.records.length > 0 ? JSON.stringify(forecastAccuracy.records.slice(-10)) : 'No records yet'}
-
-=== GOALS ===
-- Weekly Revenue Target: $${ctx.goals.weeklyRevenue || 0}
-- Weekly Profit Target: $${ctx.goals.weeklyProfit || 0}
-- Monthly Revenue Target: $${ctx.goals.monthlyRevenue || 0}
-- Monthly Profit Target: $${ctx.goals.monthlyProfit || 0}
-${ctx.goals.weeklyRevenue > 0 && ctx.weeklyData.length > 0 ? `- Last Week vs Goal: ${ctx.weeklyData[ctx.weeklyData.length-1]?.totalRevenue >= ctx.goals.weeklyRevenue ? 'MET' : 'MISSED'}` : ''}
-
-=== ALERTS ===
-${alertsSummary.length > 0 ? alertsSummary.join('\n') : 'No active alerts'}
-
-=== PRODUCT CATALOG (SKU ↔ Product Name mapping) ===
-Use this to translate between product names and SKUs:
-${JSON.stringify(ctx.productCatalog)}
-
-=== QUICK LOOKUP: Product Names → SKUs ===
-${ctx.productCatalog?.slice(0, 15).map(p => `"${p.name.substring(0, 40)}..." → ${p.sku} [${p.category}]`).join('\n') || 'No catalog'}
-
-=== SKUs BY CATEGORY (for category queries) ===
-${Object.entries(ctx.skusByCategory || {}).map(([cat, skus]) => `${cat}: ${skus.join(', ')}`).join('\n') || 'No categories'}
-
-=== 📦 SKU MASTER DATA (PRIMARY DATA SOURCE - USE THIS) ===
-IMPORTANT: This is the authoritative SKU-level data. Use SKUs as the primary identifier for all analysis.
-
-**TOP 20 SKUs BY REVENUE (all-time across periods + weeks):**
-${ctx.skuMasterData?.slice(0, 20).map(s => 
-  `${s.sku}: "${s.name}" [${s.category}] - $${s.totalRevenue.toFixed(0)} rev, ${s.totalUnits} units`
-).join('\n') || 'No SKU data'}
-
-**SKU BREAKDOWN BY 2025 MONTH:**
-${(() => {
-  const byMonth = {};
-  ctx.skuMasterData?.forEach(s => {
-    Object.entries(s.byPeriod || {}).forEach(([period, data]) => {
-      if (!byMonth[period]) byMonth[period] = [];
-      if (data.revenue > 0) byMonth[period].push({ sku: s.sku, name: s.name, category: s.category, revenue: data.revenue, units: data.units });
-    });
-  });
-  return Object.entries(byMonth)
-    .filter(([p]) => p.includes('2025') || p.includes('-2025'))
-    .sort(([a], [b]) => a.localeCompare(b))
-    .slice(0, 6)
-    .map(([period, skus]) => {
-      const top3 = skus.sort((a, b) => b.revenue - a.revenue).slice(0, 3);
-      return `${period}: ${top3.map(s => `${s.sku}=$${s.revenue.toFixed(0)}`).join(', ')}`;
-    }).join('\n') || 'No period data';
-})()}
-
-**CATEGORY TOTALS FROM SKU DATA:**
-${(() => {
-  const cats = {};
-  ctx.skuMasterData?.forEach(s => {
-    if (!cats[s.category]) cats[s.category] = { revenue: 0, units: 0, skuCount: 0 };
-    cats[s.category].revenue += s.totalRevenue;
-    cats[s.category].units += s.totalUnits;
-    cats[s.category].skuCount++;
-  });
-  return Object.entries(cats)
-    .sort(([,a], [,b]) => b.revenue - a.revenue)
-    .map(([cat, d]) => `${cat}: $${d.revenue.toFixed(0)} revenue, ${d.units} units (${d.skuCount} SKUs)`)
-    .join('\n') || 'No category data';
-})()}
-
-🔑 SKU-CENTRIC ANALYSIS RULES:
-- ALWAYS use SKU codes as primary identifiers
-- Look up product names from productCatalog when needed for display
-- For category questions, find SKUs in that category and sum their data
-- For period questions, use skuMasterData[x].byPeriod[period]
-- For week questions, use skuMasterData[x].byWeek[week]
-
-=== 🎯🎯🎯 PRE-COMPUTED TIMEFRAME DATA - USE THIS FOR TIMEFRAME QUESTIONS 🎯🎯🎯 ===
-
-**LAST WEEK (${ctx.lastWeekByCategory?.weekLabel || 'No data'}):** ← USE THIS FOR "last week" questions
-${ctx.lastWeekByCategory ? `
-Week: ${ctx.lastWeekByCategory.weekEnding}
-Total Revenue: $${ctx.lastWeekByCategory.totalRevenue.toFixed(2)}
-Total Profit: $${ctx.lastWeekByCategory.totalProfit.toFixed(2)}
-Total Units: ${ctx.lastWeekByCategory.totalUnits}
-BY CATEGORY: ${JSON.stringify(ctx.lastWeekByCategory.byCategory)}
-` : 'No data'}
-
-**LAST 2 WEEKS (${ctx.last2WeeksByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "last 2 weeks" questions
-${ctx.last2WeeksByCategory ? `
-Weeks included: ${ctx.last2WeeksByCategory.weeks?.join(', ')}
-Total Revenue: $${ctx.last2WeeksByCategory.totalRevenue.toFixed(2)}
-Total Profit: $${ctx.last2WeeksByCategory.totalProfit.toFixed(2)}
-Total Units: ${ctx.last2WeeksByCategory.totalUnits}
-BY CATEGORY: ${JSON.stringify(ctx.last2WeeksByCategory.byCategory)}
-` : 'No data'}
-
-**LAST 4 WEEKS / LAST MONTH (${ctx.last4WeeksByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "last month" questions
-${ctx.last4WeeksByCategory ? `
-Weeks included: ${ctx.last4WeeksByCategory.weeks?.join(', ')}
-Total Revenue: $${ctx.last4WeeksByCategory.totalRevenue.toFixed(2)}
-Total Profit: $${ctx.last4WeeksByCategory.totalProfit.toFixed(2)}
-Total Units: ${ctx.last4WeeksByCategory.totalUnits}
-BY CATEGORY: ${JSON.stringify(ctx.last4WeeksByCategory.byCategory)}
-` : 'No data'}
-
-**🆕 CURRENT MONTH MTD (${ctx.currentMonthByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "this month", "January", "MTD" questions
-${ctx.currentMonthByCategory ? `
-Data Source: ${ctx.currentMonthByCategory.dataSource} (${ctx.currentMonthByCategory.daysOrWeeksIncluded})
-AMAZON: $${ctx.currentMonthByCategory.amazonRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.amazonUnits || 0} units
-SHOPIFY: $${ctx.currentMonthByCategory.shopifyRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.shopifyUnits || 0} units
-TOTAL: $${ctx.currentMonthByCategory.totalRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.totalUnits || 0} units
-BY CATEGORY (units): ${JSON.stringify(Object.fromEntries(Object.entries(ctx.currentMonthByCategory.byCategory || {}).map(([cat, data]) => [cat, { total: data.units, amazon: data.amazonUnits, shopify: data.shopifyUnits }])))}
-TOP SKUs BY UNITS: ${JSON.stringify((ctx.currentMonthByCategory.bySku || []).slice(0, 15).map(s => ({ sku: s.sku, name: s.name, channel: s.channel, units: s.units })))}
-` : 'No daily or weekly data for current month - User should upload Amazon/Shopify reports via Upload tab'}
-
-**⚠️ DATA AVAILABILITY CHECK:**
-Daily data days: ${Object.keys(allDaysData || {}).length}
-Days with Amazon skuData: ${Object.keys(allDaysData || {}).filter(d => (allDaysData[d]?.amazon?.skuData || []).length > 0).length}
-Days with Shopify skuData: ${Object.keys(allDaysData || {}).filter(d => (allDaysData[d]?.shopify?.skuData || []).length > 0).length}
-Latest daily data: ${sortedDays[sortedDays.length - 1] || 'none'}
-Current month daily days: ${(() => { const now = new Date(); const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`; return sortedDays.filter(d => d.startsWith(prefix)).length; })()}
-
-**📅 CUSTOM DATE RANGE DATA (For recent date range questions):**
-${(() => {
-  // Pre-compute current month aggregates dynamically
-  const now = new Date();
-  const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const currentMonthDays = sortedDays.filter(d => d.startsWith(currentMonthPrefix));
-  if (currentMonthDays.length === 0) return 'No daily data available for current month';
-  
-  const skuTotals = {};
-  let amzTotal = 0, shopTotal = 0;
-  
-  currentMonthDays.forEach(dayKey => {
-    const dayData = allDaysData[dayKey];
-    if (!dayData) return;
-    
-    (dayData.amazon?.skuData || []).forEach(s => {
-      const sku = s.sku || s.msku || '';
-      const units = s.unitsSold || s.units || 0;
-      if (!skuTotals[sku]) skuTotals[sku] = { amazon: 0, shopify: 0, name: savedProductNames[sku] || s.name || sku };
-      skuTotals[sku].amazon += units;
-      amzTotal += units;
-    });
-    
-    (dayData.shopify?.skuData || []).forEach(s => {
-      const sku = s.sku || '';
-      const units = s.unitsSold || s.units || 0;
-      if (!skuTotals[sku]) skuTotals[sku] = { amazon: 0, shopify: 0, name: savedProductNames[sku] || s.name || sku };
-      skuTotals[sku].shopify += units;
-      shopTotal += units;
-    });
-  });
-  
-  // Get top SKUs by total units (dynamic, not hardcoded to any specific product)
-  const topSkus = Object.entries(skuTotals)
-    .sort((a, b) => (b[1].amazon + b[1].shopify) - (a[1].amazon + a[1].shopify))
-    .slice(0, 15);
-  
-  const monthName = now.toLocaleString('en-US', { month: 'long' });
-  const lastDay = currentMonthDays[currentMonthDays.length - 1]?.split('-')[2] || '';
-  
-  return `
-${monthName.toUpperCase()} 1-${lastDay}, ${now.getFullYear()} (${currentMonthDays.length} days of daily data):
-- Total Amazon units: ${amzTotal}
-- Total Shopify units: ${shopTotal}
-
-TOP SKUs BY UNITS (this month):
-${topSkus.map(([sku, d]) => `  ${sku} (${d.name?.substring(0, 40) || sku}): Amazon ${d.amazon}, Shopify ${d.shopify}, TOTAL ${d.amazon + d.shopify}`).join('\n')}
-`;
-})()}
-
-**ALL TIME (${ctx.allTimeByCategory?.weeks || 0} weeks):** ← USE THIS FOR "all time/total" questions
-${ctx.allTimeByCategory ? `
-Total Revenue: $${ctx.allTimeByCategory.totalRevenue.toFixed(2)}
-Total Profit: $${ctx.allTimeByCategory.totalProfit.toFixed(2)}
-Total Units: ${ctx.allTimeByCategory.totalUnits}
-BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
-` : 'No data'}
-
-⚠️ REMINDER: For "how much X sold last week" → use lastWeekByCategory.byCategory["X"]
-⚠️ FOR CURRENT MONTH / DATE RANGE QUESTIONS → use CUSTOM DATE RANGE DATA above (has pre-computed current month totals)
-⚠️ DO NOT use skuAnalysis or weekly skuData for current month - they may be missing Amazon data!
-
-🗓️ FOR HISTORICAL QUESTIONS (2025 monthly, 2024 quarterly):
-- "How did we do in January 2025?" → Use PERIOD DATA section above
-- "What was Q3 2024 revenue?" → Use PERIOD DATA section above
-- "Compare 2024 vs 2025" → Use YoY INSIGHTS + PERIOD DATA
-- The period data contains monthly 2025 totals and quarterly 2024 totals
-
-🏷️ FOR CATEGORY QUESTIONS (e.g., "how much [category] sold?"):
-- User says category name → Find SKUs: skusByCategory["Category Name"] = [SKU1, SKU2, ...]
-- Sum data from skuMasterData for each of those SKUs
-- Show breakdown by SKU in response: "SKU1 (Product Name): $X, SKU2 (Product Name): $Y..."
-
-📦 FOR SPECIFIC PRODUCT QUESTIONS (e.g., "how did [product] do?" or "[SKU] sales"):
-- If SKU given → Look up directly in skuMasterData
-- If product name given → Search productCatalog for match → Get SKU → Look up in skuMasterData
-- Show: "SKU (Full Product Name): $X total, Y units"
-
-🗓️ FOR PERIOD QUESTIONS (e.g., "[product] in January 2025"):
-- Resolve product/category to SKUs first
-- Then look up each SKU's byPeriod["january-2025"] data
-- Sum and display with SKU breakdown
-
-🔑 REMEMBER: Internally always use SKUs - they're unique identifiers. Product names are for user-friendly display.
-
-=== WEEKLY DATA (most recent 12 weeks) ===
-${JSON.stringify(ctx.weeklyData.slice().reverse().slice(0, 12))}
-
-=== PERIOD DATA (Quarterly/Monthly/Yearly Historical) ===
-${ctx.periodData.length > 0 ? `Total periods tracked: ${ctx.periodData.filter(p => p.totalRevenue > 0).length} (with data)
-
-📅 2025 MONTHLY TOTALS:
-${ctx.periodData.filter(p => (p.period.includes('2025') || p.period.includes('-2025')) && p.type === 'monthly' && p.totalRevenue > 0).map(p => 
-  `${p.period}: $${p.totalRevenue.toFixed(0)} rev, ${p.totalUnits} units, ${p.margin.toFixed(1)}% margin`
-).join('\n') || 'No 2025 monthly periods'}
-
-📅 2024 QUARTERLY TOTALS:
-${ctx.periodData.filter(p => (p.period.includes('2024') || p.period.includes('-2024')) && p.type === 'quarterly' && p.totalRevenue > 0).map(p => 
-  `${p.period}: $${p.totalRevenue.toFixed(0)} rev, ${p.totalUnits} units`
-).join('\n') || 'No 2024 quarterly periods'}
-
-NOTE: For SKU-level breakdown by period, use the SKU MASTER DATA section above.
-` : 'No historical period data uploaded yet'}
-
-=== YEAR-OVER-YEAR INSIGHTS ===
-${ctx.yoyInsights?.length > 0 ? JSON.stringify(ctx.yoyInsights) : 'No comparable year-over-year data available yet'}
-
-=== 2025 MONTHLY TREND ===
-${ctx.monthlyTrend2025?.length > 0 ? JSON.stringify(ctx.monthlyTrend2025) : 'No 2025 monthly data'}
-
-=== SEASONALITY INSIGHTS ===
-${ctx.periodData.length > 0 ? (() => {
-  const months = ctx.periodData.filter(p => p.type === 'monthly');
-  if (months.length < 3) return 'Not enough monthly data for seasonality analysis';
-  const sorted = [...months].sort((a, b) => b.totalRevenue - a.totalRevenue);
-  const best = sorted[0];
-  const worst = sorted[sorted.length - 1];
-  const avgRev = months.reduce((s, m) => s + m.totalRevenue, 0) / months.length;
-  return 'Best Month: ' + best.label + ' ($' + best.totalRevenue.toFixed(0) + ')\n' +
-         'Worst Month: ' + worst.label + ' ($' + worst.totalRevenue.toFixed(0) + ')\n' +
-         'Avg Monthly Revenue: $' + avgRev.toFixed(0) + '\n' +
-         'Peak vs Avg: ' + ((best.totalRevenue / avgRev - 1) * 100).toFixed(0) + '% above average';
-})() : 'No seasonality data'}
-
-=== SEASONAL PATTERNS (AI Learning) ===
-${ctx.seasonalPatterns ? `
-Monthly Performance Patterns (for forecasting):
-${JSON.stringify(ctx.seasonalPatterns.byMonth)}
-Overall Monthly Average: $${ctx.seasonalPatterns.overallMonthlyAvg?.toFixed(0) || 0}
-Strong Months (>10% above avg): ${ctx.seasonalPatterns.strongMonths?.join(', ') || 'None identified yet'}
-Weak Months (<10% below avg): ${ctx.seasonalPatterns.weakMonths?.join(', ') || 'None identified yet'}
-
-Use seasonal indices when forecasting:
-- Index > 1.0 = Above average month (expect higher sales)
-- Index < 1.0 = Below average month (expect lower sales)
-- Apply: Expected Revenue = Base Forecast × Seasonal Index
-` : 'Not enough historical data for seasonal pattern analysis'}
-
-=== DATA QUALITY & TRIANGULATION ===
-${ctx.dataTriangulation ? `
-Data Quality Score: ${ctx.dataTriangulation.dataQualityScore}/100
-- 25 pts: 12+ weeks sales history
-- 20 pts: 30+ days daily data
-- 20 pts: 100+ banking transactions
-- 15 pts: 10+ SKUs with COGS
-- 10 pts: AI learning active (4+ samples)
-- 10 pts: Amazon forecasts uploaded
-
-Multiple Data Sources: ${ctx.dataTriangulation.hasMultipleSources ? 'YES - Can cross-validate sales vs banking' : 'NO - Limited to single source'}
-
-${ctx.dataTriangulation.hasMultipleSources && Object.keys(ctx.dataTriangulation.salesVsBanking || {}).length > 0 ? `
-Sales vs Banking Comparison (cross-validation):
-${Object.entries(ctx.dataTriangulation.salesVsBanking).slice(-6).map(([month, data]) => 
-  `- ${month}: Sales $${data.salesRevenue?.toFixed(0) || 0} → Bank Deposits $${data.bankDeposits?.toFixed(0) || 0} (${(data.depositRatio * 100).toFixed(0)}% deposit ratio)`
-).join('\n')}
-
-Note: Deposit ratio < 100% is normal (marketplace fees taken before payout)
-Typical healthy range: 70-85% for Amazon, 95-98% for Shopify
-` : ''}
-` : 'Data triangulation not available'}
-
-=== WEEK NOTES (user annotations) ===
-${notesData.length > 0 ? JSON.stringify(notesData) : 'No notes added'}
-
-=== ⛔⛔⛔ ALL-TIME SKU DATA BELOW - DO NOT USE FOR TIMEFRAME QUESTIONS ⛔⛔⛔ ===
-The data below is ALL-TIME totals. For "last week", "last month" etc. use the PRE-COMPUTED TIMEFRAME DATA sections above!
-
-=== TOP SKUS BY REVENUE (ALL-TIME totals - NOT for timeframe questions) ===
-${JSON.stringify(ctx.skuAnalysis.slice(0, 15))}
-
-=== SKUS WITH DECLINING PROFITABILITY (ALL-TIME) ===
-${JSON.stringify(ctx.decliningSkus)}
-
-=== SKUS WITH IMPROVING PROFITABILITY (ALL-TIME) ===
-${JSON.stringify(ctx.improvingSkus)}
-
-=== INVENTORY STATUS ===
-${ctx.inventory ? `As of ${ctx.inventory.asOfDate}: ${ctx.inventory.totalUnits?.toLocaleString() || 0} total units, $${ctx.inventory.totalValue?.toLocaleString() || 0} value
-Amazon FBA: ${ctx.inventory.amazonUnits?.toLocaleString() || 0} units | AWD: ${ctx.inventory.awdUnits?.toLocaleString() || 0} units ($${ctx.inventory.awdValue?.toLocaleString() || 0}) | 3PL: ${ctx.inventory.threeplUnits?.toLocaleString() || 0} units | Inbound to FBA: ${ctx.inventory.amazonInbound?.toLocaleString() || 0} units
-
-HEALTH BREAKDOWN:
-- Critical (will stock out soon): ${ctx.inventory.healthBreakdown?.critical || 0} SKUs
-- Low Stock: ${ctx.inventory.healthBreakdown?.low || 0} SKUs  
-- Healthy: ${ctx.inventory.healthBreakdown?.healthy || 0} SKUs
-- Overstock: ${ctx.inventory.healthBreakdown?.overstock || 0} SKUs
-` : 'No inventory data'}
-
-=== 🚨 URGENT REORDER (Past reorder date!) ===
-${ctx.inventory?.urgentReorder?.length > 0 ? ctx.inventory.urgentReorder.map(i => 
-  `- ${i.sku}: ${i.daysOverdue} days overdue! Stockout: ${i.stockoutDate}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk, Suggested Order: ${i.suggestedOrderQty} units`
-).join('\n') : 'None - all items are on schedule'}
-
-=== ⚠️ NEEDS REORDER SOON (within 14 days) ===
-${ctx.inventory?.needsReorderSoon?.length > 0 ? ctx.inventory.needsReorderSoon.map(i =>
-  `- ${i.sku}: Order in ${i.daysUntilMustOrder} days, Current: ${i.currentQty}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk, Lead Time: ${i.leadTimeDays}d, Suggested: ${i.suggestedOrderQty} units`
-).join('\n') : 'None - no immediate reorders needed'}
-
-=== 🔴 CRITICAL STOCK (will run out soon) ===
-${ctx.inventory?.criticalItems?.length > 0 ? ctx.inventory.criticalItems.map(i =>
-  `- ${i.sku} (${i.name?.slice(0,40)}...): ${i.totalQty} units, ${i.daysOfSupply} days supply, Stockout: ${i.stockoutDate}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk`
-).join('\n') : 'None'}
-
-=== 🟡 LOW STOCK ===
-${ctx.inventory?.lowStockItems?.length > 0 ? ctx.inventory.lowStockItems.slice(0, 10).map(i =>
-  `- ${i.sku}: ${i.totalQty} units, ${i.daysOfSupply} days supply, Reorder by: ${i.reorderByDate}`
-).join('\n') : 'None'}
-
-=== 📈 TOP MOVERS (Highest Velocity) ===
-${ctx.inventory?.topMovers?.length > 0 ? ctx.inventory.topMovers.map(i =>
-  `- ${i.sku}: ${i.weeklyVelocity?.toFixed(1)} units/wk (AMZ: ${i.amazonVelocity?.toFixed(1)}, Shop: ${i.shopifyVelocity?.toFixed(1)}), ${i.daysOfSupply} days supply, Stock: ${i.totalQty}`
-).join('\n') : 'No velocity data'}
-
-=== 📦 OVERSTOCK (excess inventory tying up capital) ===
-${ctx.inventory?.overstockItems?.length > 0 ? ctx.inventory.overstockItems.slice(0, 5).map(i =>
-  `- ${i.sku}: ${i.daysOfSupply} days supply (${(i.daysOfSupply/30).toFixed(1)} months!), ${i.totalQty} units, $${i.totalValue?.toFixed(0)} tied up, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk`
-).join('\n') : 'None identified'}
-
-=== VELOCITY BY CHANNEL ===
-${ctx.inventory?.velocityByChannel ? `
-- Amazon: ${ctx.inventory.velocityByChannel.amazonTotal?.toFixed(0)} units/week
-- Shopify: ${ctx.inventory.velocityByChannel.shopifyTotal?.toFixed(0)} units/week
-- Total: ${(ctx.inventory.velocityByChannel.amazonTotal + ctx.inventory.velocityByChannel.shopifyTotal)?.toFixed(0)} units/week
-` : 'No velocity data'}
-
-=== 📊 VELOCITY TRENDS (Last 2 weeks vs Prior 2 weeks) ===
-${ctx.inventory?.velocityTrends?.accelerating?.length > 0 ? `
-🚀 ACCELERATING (velocity increasing >15%):
-${ctx.inventory.velocityTrends.accelerating.map(v => 
-  `- ${v.sku}: ${v.trendPercent} increase (was ${v.priorAvgWeekly?.toFixed(1)}/wk → now ${v.recentAvgWeekly?.toFixed(1)}/wk)`
-).join('\n')}
-` : ''}
-${ctx.inventory?.velocityTrends?.declining?.length > 0 ? `
-📉 DECLINING (velocity decreasing >15%):
-${ctx.inventory.velocityTrends.declining.map(v => 
-  `- ${v.sku}: ${v.trendPercent} decrease (was ${v.priorAvgWeekly?.toFixed(1)}/wk → now ${v.recentAvgWeekly?.toFixed(1)}/wk)`
-).join('\n')}
-` : ''}
-${!ctx.inventory?.velocityTrends?.accelerating?.length && !ctx.inventory?.velocityTrends?.declining?.length ? 'All SKUs have stable velocity (±15%)' : ''}
-
-=== INVENTORY FORECASTING ===
-When user asks about inventory, you can analyze: Stockout Risk, Reorder Recommendations, Capital Efficiency, Velocity Trends, and Channel Mix.
-${(() => {
-  // Calculate velocity and days of supply from weekly data
-  const sortedWeeks = Object.keys(allWeeksData).sort().slice(-8);
-  if (sortedWeeks.length < 2) return 'Not enough weekly data for inventory forecasting';
-  
-  const weeklyUnits = sortedWeeks.map(w => allWeeksData[w]?.total?.units || 0);
-  const avgWeeklyVelocity = weeklyUnits.reduce((s, u) => s + u, 0) / weeklyUnits.length;
-  
-  // Get SKU-level velocity
-  const skuVelocity = {};
-  sortedWeeks.forEach(w => {
-    const shopify = allWeeksData[w]?.shopify?.skuData || [];
-    const amazon = allWeeksData[w]?.amazon?.skuData || [];
-    [...shopify, ...amazon].forEach(s => {
-      const sku = s.sku || s.msku;
-      if (!skuVelocity[sku]) skuVelocity[sku] = [];
-      skuVelocity[sku].push(s.unitsSold || s.units || 0);
-    });
-  });
-  
-  const topVelocity = Object.entries(skuVelocity)
-    .map(([sku, weeks]) => ({ sku, avgPerWeek: weeks.reduce((s,u) => s+u, 0) / weeks.length }))
-    .sort((a, b) => b.avgPerWeek - a.avgPerWeek)
-    .slice(0, 10);
-  
-  return 'Avg Weekly Unit Velocity: ' + avgWeeklyVelocity.toFixed(0) + ' units/week\n' +
-    'Top SKUs by Velocity: ' + JSON.stringify(topVelocity.slice(0, 5)) + '\n' +
-    'Use this to calculate: Days of Supply = Current Inventory / (Weekly Velocity / 7)';
-})()}
-
-=== SALES TAX ===
-${ctx.salesTax?.nexusStates?.length > 0 ? `Nexus states: ${JSON.stringify(ctx.salesTax.nexusStates)}` : 'No nexus states configured'}
-Total sales tax paid all-time: $${ctx.salesTax?.totalPaidAllTime?.toFixed(2) || 0}
-
-=== UPCOMING BILLS & INVOICES ===
-${(() => {
-  const unpaid = invoices.filter(i => !i.paid);
-  if (unpaid.length === 0) return 'No upcoming bills';
-  const total = unpaid.reduce((s, i) => s + i.amount, 0);
-  return `Upcoming bills (${unpaid.length} total, $${total.toFixed(2)}):
-${JSON.stringify(unpaid.map(i => ({ vendor: i.vendor, amount: i.amount, dueDate: i.dueDate, category: i.category, daysUntilDue: Math.ceil((new Date(i.dueDate) - new Date()) / (1000 * 60 * 60 * 24)) })))}`;
-})()}
-
-=== AMAZON FORECASTS (from Amazon's projections) ===
-${upcomingAmazonForecasts.length > 0 ? `
-Upcoming Amazon projections:
-${JSON.stringify(upcomingAmazonForecasts.map(f => ({ weekEnding: f.weekEnding, projectedRevenue: f.totals?.sales || f.totalSales || 0, projectedUnits: f.totals?.units || f.totalUnits || 0, projectedProfit: f.totals?.proceeds || f.totalProceeds || 0, skuCount: f.skuCount || 0 })))}
-` : 'No upcoming Amazon forecasts uploaded'}
-
-${getAmazonForecastComparison.length > 0 ? `
-Forecast vs Actual Accuracy (Amazon) - ${getAmazonForecastComparison.length} weeks tracked:
-${JSON.stringify(getAmazonForecastComparison.slice(0, 8).map(c => ({ 
-  week: c.weekEnding, 
-  forecastRev: c.forecast.revenue, 
-  actualRev: c.actual.revenue, 
-  variance: c.variance.revenuePercent.toFixed(1) + '%',
-  accuracy: c.accuracy.toFixed(1) + '%',
-  status: c.status 
-})))}
-` : ''}
-
-${forecastAccuracyMetrics ? `
-FORECAST ACCURACY INSIGHTS:
-- Overall Accuracy: ${forecastAccuracyMetrics.avgAccuracy.toFixed(1)}% (based on ${forecastAccuracyMetrics.totalWeeks} weeks)
-- Beat forecast ${forecastAccuracyMetrics.beatCount} times, Missed ${forecastAccuracyMetrics.missedCount} times
-- Average Revenue Variance: ${forecastAccuracyMetrics.avgRevenueVariance > 0 ? '+' : ''}${forecastAccuracyMetrics.avgRevenueVariance.toFixed(1)}%
-- Forecast Bias: ${forecastAccuracyMetrics.biasDescription}
-- Recent 4-week Accuracy: ${forecastAccuracyMetrics.recentAccuracy.toFixed(1)}%
-- Accuracy Trend: ${forecastAccuracyMetrics.accuracyTrend > 0 ? 'Improving' : forecastAccuracyMetrics.accuracyTrend < 0 ? 'Declining' : 'Stable'} (${forecastAccuracyMetrics.accuracyTrend > 0 ? '+' : ''}${forecastAccuracyMetrics.accuracyTrend.toFixed(1)}%)
-${forecastAccuracyMetrics.bestWeek ? `- Best Predicted Week: ${forecastAccuracyMetrics.bestWeek.weekEnding} (${forecastAccuracyMetrics.bestWeek.accuracy.toFixed(1)}% accurate)` : ''}
-${forecastAccuracyMetrics.worstWeek ? `- Worst Predicted Week: ${forecastAccuracyMetrics.worstWeek.weekEnding} (${forecastAccuracyMetrics.worstWeek.accuracy.toFixed(1)}% accurate)` : ''}
-` : ''}
-
-${mlTrainingData ? `
-ML CORRECTION MODEL (based on ${mlTrainingData.summary.totalSamples} samples):
-- Amazon Bias: ${mlTrainingData.summary.bias > 0 ? 'Under-forecasts' : 'Over-forecasts'} by ${Math.abs(mlTrainingData.summary.bias).toFixed(1)}% on average
-- Correction Factor: ${mlTrainingData.summary.correctionFactor.toFixed(3)}x (multiply Amazon forecast by this)
-- Prediction Variance: ±${mlTrainingData.summary.stdDev.toFixed(1)}%
-- When user asks about expected revenue, apply correction: Amazon Forecast × ${mlTrainingData.summary.correctionFactor.toFixed(3)} = Adjusted Forecast
-` : ''}
-
-${forecastCorrections.samplesUsed >= 2 ? `
-SELF-LEARNING FORECAST SYSTEM:
-- Learning Status: ${forecastCorrections.confidence >= 30 ? 'ACTIVE' : 'TRAINING'} (${forecastCorrections.confidence.toFixed(0)}% confidence)
-- Samples Used: ${forecastCorrections.samplesUsed} weeks of forecast-vs-actual comparisons
-- Revenue Correction Factor: ${forecastCorrections.overall.revenue.toFixed(3)}x
-- Units Correction Factor: ${forecastCorrections.overall.units.toFixed(3)}x  
-- Profit Correction Factor: ${forecastCorrections.overall.profit.toFixed(3)}x
-- SKUs with Custom Corrections: ${Object.keys(forecastCorrections.bySku).length}
-- Last Updated: ${forecastCorrections.lastUpdated || 'Never'}
-- Note: When confidence >= 30%, forecasts are auto-adjusted using learned corrections
-` : `
-SELF-LEARNING FORECAST SYSTEM:
-- Status: COLLECTING DATA (need more samples)
-- Current Samples: ${forecastCorrections.samplesUsed}
-- Required: At least 2 weeks of forecast-vs-actual comparisons
-- To enable: Upload Amazon forecasts BEFORE week ends, then upload actual sales AFTER week ends
-`}
-
-${pendingForecasts.length > 0 ? `
-PENDING FORECASTS (awaiting actual data):
-${pendingForecasts.map(pf => `- Week ${pf.weekEnding}: ${(pf.forecast.totals?.sales || pf.forecast.totalSales || 0).toFixed(0)} forecasted (${pf.isPast ? 'PAST - needs actuals uploaded' : pf.daysUntil + ' days until week ends'})`).join('\n')}
-` : ''}
-
-=== PRODUCTION PIPELINE (incoming inventory) ===
-${productionPipeline.length > 0 ? `
-${productionPipeline.length} production orders in pipeline (${formatNumber(productionPipeline.reduce((s, p) => s + (p.quantity || 0), 0))} total units):
-${JSON.stringify(productionPipeline.map(p => ({ 
-  sku: p.sku, 
-  product: p.productName, 
-  quantity: p.quantity, 
-  expectedDate: p.expectedDate, 
-  status: p.status,
-  daysUntil: p.expectedDate ? Math.ceil((new Date(p.expectedDate) - new Date()) / (1000 * 60 * 60 * 24)) : null
-})))}
-` : 'No production orders in pipeline'}
-
-=== 3PL FULFILLMENT COSTS ===
-${(() => {
-  const ledgerOrders = Object.values(threeplLedger.orders || {});
-  if (ledgerOrders.length === 0) return 'No 3PL data uploaded yet';
-  
-  // Calculate totals from ledger
-  const allWeeks = [...new Set(ledgerOrders.map(o => o.weekKey))].sort();
-  const totalOrders = ledgerOrders.length;
-  let totalCost = 0;
-  let totalUnits = 0;
-  
-  ledgerOrders.forEach(o => {
-    const c = o.charges || {};
-    totalCost += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0) + (c.reBoxing || 0) + (c.fbaForwarding || 0);
-    totalUnits += (c.firstPickQty || 0) + (c.additionalPickQty || 0);
-  });
-  
-  // Get summary charges (storage, shipping, etc.)
-  Object.values(threeplLedger.summaryCharges || {}).forEach(c => {
-    totalCost += c.amount || 0;
-  });
-  
-  // Recent weeks data
-  const recentWeeks = allWeeks.slice(-8);
-  const weeklyTotals = recentWeeks.map(w => {
-    const weekOrders = ledgerOrders.filter(o => o.weekKey === w);
-    let weekCost = 0;
-    weekOrders.forEach(o => {
-      const c = o.charges || {};
-      weekCost += (c.firstPick || 0) + (c.additionalPick || 0) + (c.box || 0);
-    });
-    return { week: w, orders: weekOrders.length, cost: weekCost };
-  });
-  
-  // Calculate trend
-  const avgCostPerOrder = totalOrders > 0 ? totalCost / totalOrders : 0;
-  
-  return '3PL Summary (from bulk uploads):\n' +
-    '- Total Orders Tracked: ' + totalOrders + '\n' +
-    '- Total 3PL Cost: $' + totalCost.toFixed(2) + '\n' +
-    '- Avg Cost Per Order: $' + avgCostPerOrder.toFixed(2) + '\n' +
-    '- Total Units Shipped: ' + totalUnits + '\n' +
-    '- Weeks with Data: ' + allWeeks.length + ' (' + (allWeeks[0] || 'N/A') + ' to ' + (allWeeks[allWeeks.length-1] || 'N/A') + ')\n\n' +
-    'Recent Weekly 3PL Costs:\n' + JSON.stringify(weeklyTotals) + '\n\n' +
-    'LOOK FOR:\n' +
-    '- Rising avg cost per order (margin erosion)\n' +
-    '- Storage cost spikes\n' +
-    '- Shipping cost increases\n' +
-    '- Changes in units per order affecting fulfillment efficiency';
-})()}
-
-=== FORECAST DIVERGENCE ANALYSIS ===
-${(() => {
-  // Compare our projection vs Amazon's forecast
-  const upcomingAmazon = Object.entries(amazonForecasts)
-    .filter(([weekKey]) => new Date(weekKey) > new Date())
-    .sort((a, b) => a[0].localeCompare(b[0]));
-  
-  if (upcomingAmazon.length === 0) return 'No upcoming Amazon forecasts to compare';
-  
-  const sortedWeeks = Object.keys(allWeeksData).sort();
-  if (sortedWeeks.length === 0) return 'No historical data for our projection';
-  
-  const weeklyRevenues = sortedWeeks.map(w => allWeeksData[w]?.total?.revenue || 0);
-  const ourAvg = weeklyRevenues.reduce((s, v) => s + v, 0) / weeklyRevenues.length;
-  
-  let analysis = 'FORECAST COMPARISON:\n';
-  upcomingAmazon.slice(0, 4).forEach(([weekKey, forecast]) => {
-    const amazonProjected = forecast.totals?.sales || 0;
-    const divergence = ourAvg > 0 ? ((amazonProjected - ourAvg) / ourAvg * 100) : 0;
-    const direction = divergence > 10 ? '📈 ABOVE' : divergence < -10 ? '📉 BELOW' : '≈ ALIGNED';
-    analysis += `Week ${weekKey}: Amazon=$${amazonProjected.toFixed(0)} vs Our Avg=$${ourAvg.toFixed(0)} → ${direction} (${divergence > 0 ? '+' : ''}${divergence.toFixed(0)}%)\n`;
-  });
-  
-  // Add recommendation
-  const firstAmazon = upcomingAmazon[0]?.[1]?.totals?.sales || 0;
-  const divergence = ourAvg > 0 ? ((firstAmazon - ourAvg) / ourAvg * 100) : 0;
-  if (divergence > 20) {
-    analysis += '\n⚠️ SIGNIFICANT DIVERGENCE: Amazon forecasts much higher than historical average. Could indicate upcoming demand surge OR Amazon being optimistic.';
-  } else if (divergence < -20) {
-    analysis += '\n⚠️ SIGNIFICANT DIVERGENCE: Amazon forecasts lower than historical average. Could indicate demand slowdown OR seasonality adjustment.';
-  } else {
-    analysis += '\nForecasts are reasonably aligned.';
-  }
-  
-  return analysis;
-})()}
-
-=== FORECAST UPLOAD STATUS ===
-${(() => {
-  const uploads = forecastMeta?.lastUploads || {};
-  const status = [];
-  ['7day', '30day', '60day'].forEach(type => {
-    const last = uploads[type];
-    if (last) {
-      const days = Math.floor((new Date() - new Date(last)) / (1000 * 60 * 60 * 24));
-      const threshold = type === '7day' ? 7 : type === '30day' ? 30 : 60;
-      const isStale = days >= threshold;
-      status.push(`${type}: ${days} days ago ${isStale ? '(NEEDS REFRESH)' : ''}`);
-    } else {
-      status.push(`${type}: Never uploaded`);
-    }
-  });
-  return status.join('\n');
-})()}
-
-=== AMAZON PPC CAMPAIGNS ===
-${amazonCampaigns.campaigns?.length > 0 ? `
-Last Updated: ${amazonCampaigns.lastUpdated ? new Date(amazonCampaigns.lastUpdated).toLocaleDateString() : 'N/A'}
-Total Campaigns: ${amazonCampaigns.summary?.totalCampaigns || 0} (${amazonCampaigns.summary?.enabledCount || 0} enabled, ${amazonCampaigns.summary?.pausedCount || 0} paused)
-
-CAMPAIGN PERFORMANCE SUMMARY:
-- Total Spend: $${(amazonCampaigns.summary?.totalSpend || 0).toFixed(2)}
-- Total Sales: $${(amazonCampaigns.summary?.totalSales || 0).toFixed(2)}
-- Total Orders: ${amazonCampaigns.summary?.totalOrders || 0}
-- ROAS: ${(amazonCampaigns.summary?.roas || 0).toFixed(2)}x
-- ACOS: ${(amazonCampaigns.summary?.acos || 0).toFixed(1)}%
-- Avg CPC: $${(amazonCampaigns.summary?.avgCpc || 0).toFixed(2)}
-- Conversion Rate: ${(amazonCampaigns.summary?.convRate || 0).toFixed(2)}%
-
-BY CAMPAIGN TYPE:
-- Sponsored Products (SP): ${Array.isArray(amazonCampaigns.summary?.byType?.SP) ? amazonCampaigns.summary.byType.SP.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SP) ? amazonCampaigns.summary.byType.SP.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
-- Sponsored Brands (SB): ${Array.isArray(amazonCampaigns.summary?.byType?.SB) ? amazonCampaigns.summary.byType.SB.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SB) ? amazonCampaigns.summary.byType.SB.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
-- Sponsored Display (SD): ${Array.isArray(amazonCampaigns.summary?.byType?.SD) ? amazonCampaigns.summary.byType.SD.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SD) ? amazonCampaigns.summary.byType.SD.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
-
-TOP 10 CAMPAIGNS BY SPEND:
-${amazonCampaigns.campaigns?.slice().sort((a,b) => (b.spend || 0) - (a.spend || 0)).slice(0,10).map(c => 
-  `- ${(c.name || 'Unknown').substring(0,50)}${(c.name || '').length > 50 ? '...' : ''}: $${(c.spend || 0).toFixed(0)} spend, $${(c.sales || 0).toFixed(0)} sales, ${(c.roas || 0).toFixed(2)}x ROAS, ${(c.acos || 0).toFixed(0)}% ACOS`
-).join('\n')}
-
-TOP 5 CAMPAIGNS BY ROAS (>$100 spend):
-${amazonCampaigns.campaigns?.filter(c => c.spend > 100 && c.state === 'ENABLED').sort((a,b) => b.roas - a.roas).slice(0,5).map(c => 
-  `- ${c.name.substring(0,40)}...: ${c.roas.toFixed(2)}x ROAS, $${c.spend.toFixed(0)} spend`
-).join('\n') || 'No qualifying campaigns'}
-
-CAMPAIGNS NEEDING ATTENTION (Low ROAS, >$100 spend):
-${amazonCampaigns.campaigns?.filter(c => c.spend > 100 && c.roas < 2 && c.state === 'ENABLED').sort((a,b) => a.roas - b.roas).slice(0,5).map(c => 
-  `- ${c.name.substring(0,40)}...: ${c.roas.toFixed(2)}x ROAS, ${c.acos.toFixed(0)}% ACOS - consider pausing or optimizing`
-).join('\n') || 'All campaigns performing adequately'}
-
-${amazonCampaigns.history?.length > 1 ? `
-WEEK-OVER-WEEK TREND (${amazonCampaigns.history.length} weeks tracked):
-${(() => {
-  const current = amazonCampaigns.history[0]?.summary;
-  const prior = amazonCampaigns.history[1]?.summary;
-  if (!current || !prior) return 'Insufficient history';
-  const spendChange = prior.totalSpend > 0 ? ((current.totalSpend - prior.totalSpend) / prior.totalSpend * 100) : 0;
-  const salesChange = prior.totalSales > 0 ? ((current.totalSales - prior.totalSales) / prior.totalSales * 100) : 0;
-  const roasChange = current.roas - prior.roas;
-  return `Spend: $${current.totalSpend.toFixed(0)} (${spendChange >= 0 ? '+' : ''}${spendChange.toFixed(1)}% WoW)
-Sales: $${current.totalSales.toFixed(0)} (${salesChange >= 0 ? '+' : ''}${salesChange.toFixed(1)}% WoW)
-ROAS: ${current.roas.toFixed(2)}x (${roasChange >= 0 ? '+' : ''}${roasChange.toFixed(2)} WoW)`;
-})()}
-` : ''}
-
-${amazonCampaigns.analytics?.dayOfWeekInsights?.length > 0 ? `
-📅 DAY-OF-WEEK PERFORMANCE (Amazon Ads):
-${amazonCampaigns.analytics.dayOfWeekInsights.map(d => 
-  `- ${d.day}: ROAS ${d.avgRoas?.toFixed(2)}x, ACOS ${d.avgAcos?.toFixed(1)}%, Avg Spend $${d.avgSpend?.toFixed(0)}, Avg Orders ${d.avgConversions?.toFixed(1)} (${d.sampleSize} samples)`
-).join('\n')}
-
-🏆 Best Day: ${amazonCampaigns.analytics.bestPerformingDay?.day} (${amazonCampaigns.analytics.bestPerformingDay?.avgRoas?.toFixed(2)}x ROAS)
-📉 Worst Day: ${amazonCampaigns.analytics.worstPerformingDay?.day} (${amazonCampaigns.analytics.worstPerformingDay?.avgRoas?.toFixed(2)}x ROAS)
-
-💡 OPTIMIZATION INSIGHT: Consider increasing ad spend on ${amazonCampaigns.analytics.bestPerformingDay?.day}s and reducing on ${amazonCampaigns.analytics.worstPerformingDay?.day}s to improve overall ROAS.
-` : ''}
-
-${amazonCampaigns.analytics?.monthlyTrends?.length > 0 ? `
-📈 MONTHLY AD TRENDS:
-${amazonCampaigns.analytics.monthlyTrends.slice(-6).map(m => 
-  `- ${m.month}: $${m.spend?.toFixed(0)} spend → $${m.revenue?.toFixed(0)} ad rev, ${m.roas?.toFixed(2)}x ROAS, ${m.acos?.toFixed(1)}% ACOS`
-).join('\n')}
-` : ''}
-` : 'No Amazon campaign data uploaded yet. User can upload Amazon Ads campaign report CSV.'}
-
-=== DTC ADVERTISING (Meta + Google) ===
-${ctx.dailyAdsData ? `
-**LAST 7 DAYS:**
-- Meta Spend: $${ctx.dailyAdsData.last7Days.metaSpend?.toFixed(2) || 0}
-- Google Spend: $${ctx.dailyAdsData.last7Days.googleSpend?.toFixed(2) || 0}
-- Total DTC Ads: $${ctx.dailyAdsData.last7Days.totalSpend?.toFixed(2) || 0}
-- Avg Daily Spend: $${ctx.dailyAdsData.last7Days.avgDailySpend?.toFixed(2) || 0}
-- Days with Data: ${ctx.dailyAdsData.last7Days.daysWithData || 0}
-
-**LAST 30 DAYS:**
-- Meta Spend: $${ctx.dailyAdsData.last30Days.metaSpend?.toFixed(2) || 0}
-- Google Spend: $${ctx.dailyAdsData.last30Days.googleSpend?.toFixed(2) || 0}
-- Total DTC Ads: $${ctx.dailyAdsData.last30Days.totalSpend?.toFixed(2) || 0}
-- Avg Daily Spend: $${ctx.dailyAdsData.last30Days.avgDailySpend?.toFixed(2) || 0}
-- Days with Data: ${ctx.dailyAdsData.last30Days.daysWithData || 0}
-${ctx.dailyAdsData.last30Days.ctr > 0 ? `- CTR: ${ctx.dailyAdsData.last30Days.ctr}%
-- Avg CPC: $${ctx.dailyAdsData.last30Days.cpc}` : ''}
-
-**WEEKLY BREAKDOWN:**
-${ctx.dailyAdsData.byWeek?.length > 0 ? ctx.dailyAdsData.byWeek.map(w => 
-  `- ${w.week}: Meta $${w.metaSpend?.toFixed(0)}, Google $${w.googleSpend?.toFixed(0)}, Total $${w.totalSpend?.toFixed(0)}`
-).join('\n') : 'No weekly ad data available'}
-
-💡 NOTE: DTC ads data comes from daily uploads. If a week shows missing ads in alerts, it means no ads CSV was uploaded for those days.
-` : 'No DTC (Meta/Google) ads data uploaded yet. User can upload Meta/Google ads reports via Upload tab → Bulk Ads Upload.'}
-
-=== AI LEARNING STATUS ===
-${ctx.aiLearning ? `
-Forecast Correction Factors (learned from comparing predictions to actuals):
-- Revenue Multiplier: ${ctx.aiLearning.forecastCorrections.revenueMultiplier.toFixed(3)}x
-- Units Multiplier: ${ctx.aiLearning.forecastCorrections.unitsMultiplier.toFixed(3)}x
-- Learning Confidence: ${ctx.aiLearning.forecastCorrections.confidence.toFixed(0)}%
-- Samples Used: ${ctx.aiLearning.forecastCorrections.samplesUsed}
-
-Prediction History:
-- Total Predictions Made: ${ctx.aiLearning.predictionHistory.totalPredictions}
-- Verified with Actuals: ${ctx.aiLearning.predictionHistory.verifiedPredictions}
-- Recent Accuracy: ${ctx.aiLearning.predictionHistory.recentAccuracy ? ctx.aiLearning.predictionHistory.recentAccuracy.toFixed(1) + '%' : 'Still learning'}
-
-${ctx.aiLearning.recentPredictions.length > 0 ? `Recent Predictions vs Actuals:
-${ctx.aiLearning.recentPredictions.map(p => 
-  `- ${p.type} (${p.period}): Predicted $${p.predicted?.toFixed(0) || 'N/A'}, Actual $${p.actual?.toFixed(0) || 'pending'}, Error: ${p.error ? p.error.toFixed(1) + '%' : 'awaiting actual'}`
-).join('\n')}` : 'No predictions tracked yet'}
-
-USE THIS LEARNING: When forecasting, apply the correction factors if confidence > 30%. This helps adjust for systematic biases in predictions.
-` : 'AI Learning not yet initialized'}
-
-=== WHAT YOU CAN HELP WITH ===
-- Analyze sales trends and patterns (weekly, monthly, quarterly, yearly)
-- Year-over-year comparisons (2024 vs 2025, Q1 vs Q1, etc.)
-- Quarterly and monthly trend analysis
-- Compare performance across weeks, months, quarters, years, products
-- Identify best/worst performing SKUs and their trends over time
-- Track progress toward goals
-- Explain profit margins and calculations
-- Forecast future revenue based on historical trends
-- Compare Amazon's projections vs actual performance
-
-📦 INVENTORY & REORDER PLANNING:
-- Identify which SKUs will stock out and when
-- Recommend when to place reorders based on lead times
-- Calculate suggested order quantities
-- Identify overstock items tying up capital
-- Analyze velocity trends (which products are speeding up vs slowing down)
-- Channel mix analysis for inventory planning (Amazon vs Shopify velocity)
-
-📊 ADVERTISING OPTIMIZATION:
-- Analyze Amazon PPC performance (ROAS, ACOS, TACOS)
-- Day-of-week performance analysis (best/worst days to advertise)
-- Campaign-level recommendations (pause, increase spend, optimize)
-- Monthly and weekly ad spend trends
-- Identify high-potential campaigns to scale
-
-💰 FINANCIAL ANALYSIS:
-- Answer questions about specific products by name or SKU
-- Sales tax obligations by state
-- Upcoming bills and cash flow planning
-- Production pipeline tracking and timing
-- Seasonality analysis (which months/quarters perform best)
-- Cost structure analysis (COGS, fees, ads as % of revenue over time)
-- 3PL cost analysis (avg cost per order, storage trends, shipping cost changes)
-- Identify rising fulfillment costs that may be eroding margins
-- Compare 3PL efficiency across time periods
-- Amazon PPC campaign analysis (ROAS, ACOS by campaign, top/bottom performers)
-- Campaign optimization recommendations (which campaigns to pause, scale, or optimize)
-- Week-over-week campaign performance changes
-- Campaign type comparison (SP vs SB vs SD effectiveness)
-- **BANKING/CASH FLOW ANALYSIS** - analyze real bank transactions to find waste, forecast EOY profit
-
-=== BANKING & CASH FLOW DATA ===
-${ctx.banking ? `
-Banking data available from ${ctx.banking.dateRange?.start} to ${ctx.banking.dateRange?.end}
-Total transactions: ${ctx.banking.transactionCount}
-Last upload: ${ctx.banking.lastUpload ? new Date(ctx.banking.lastUpload).toLocaleString() : 'Unknown'}
-
-${bankingData?.profitAndLoss?.details ? `
-QUICKBOOKS PROFIT & LOSS (${bankingData.profitAndLoss.period?.start || 'unknown'} to ${bankingData.profitAndLoss.period?.end || 'unknown'}):
-- Total Income: $${(bankingData.profitAndLoss.details['Total Income'] || 0).toLocaleString()}
-- Total COGS: $${(bankingData.profitAndLoss.details['Total Cost of Goods Sold'] || 0).toLocaleString()}
-- Gross Profit: $${((bankingData.profitAndLoss.details['Total Income'] || 0) - (bankingData.profitAndLoss.details['Total Cost of Goods Sold'] || 0)).toLocaleString()}
-- Total Expenses: $${(bankingData.profitAndLoss.details['Total Expenses'] || 0).toLocaleString()}
-- Net Operating Income: $${((bankingData.profitAndLoss.details['Total Income'] || 0) - (bankingData.profitAndLoss.details['Total Cost of Goods Sold'] || 0) - (bankingData.profitAndLoss.details['Total Expenses'] || 0)).toLocaleString()}
-Key Expense Lines:
-${Object.entries(bankingData.profitAndLoss.details || {})
-  .filter(([k, v]) => typeof v === 'number' && v > 100 && !k.startsWith('Total') && !k.includes('Sales'))
-  .sort((a, b) => b[1] - a[1])
-  .slice(0, 10)
-  .map(([k, v]) => `  - ${k}: $${v.toLocaleString()}`)
-  .join('\n')}
-` : ''}
-
-MONTHLY CASH FLOW (last 12 months):
-${ctx.banking.monthlySnapshots.map(m => 
-  `- ${m.month}: Income $${m.income?.toFixed(0) || 0}, Expenses $${m.expenses?.toFixed(0) || 0}, Net $${m.net?.toFixed(0) || 0}`
-).join('\n')}
-
-TOP EXPENSE CATEGORIES:
-${ctx.banking.topExpenseCategories.map((c, i) => 
-  `${i + 1}. ${c.name}: $${c.total?.toFixed(0) || 0} (${c.count} transactions)`
-).join('\n')}
-
-TOP INCOME SOURCES:
-${ctx.banking.topIncomeCategories.map((c, i) => 
-  `${i + 1}. ${c.name}: $${c.total?.toFixed(0) || 0} (${c.count} transactions)`
-).join('\n')}
-
-ACCOUNTS:
-${ctx.banking.accounts.map(a => 
-  `- ${a.name}: ${a.transactions} txns, In: $${a.totalIn?.toFixed(0) || 0}, Out: $${a.totalOut?.toFixed(0) || 0}`
-).join('\n')}
-
-You can help with:
-- Identifying where money is being wasted (unusual expense patterns, rising costs)
-- Projecting end-of-year profit based on monthly trends
-- Calculating true business profitability (income - all expenses)
-- Comparing expense categories over time to find cost creep
-- Analyzing cash flow patterns and forecasting cash needs
-- Identifying the biggest expense drivers
-` : 'No banking data uploaded yet. User can upload QBO Transaction Detail by Account CSV.'}
-
-Format all currency as $X,XXX.XX. Be concise but thorough. Reference specific numbers when discussing trends. When comparing periods, always show the actual numbers and % change. If the user asks about data you don't have, let them know what they need to upload.
-
-=== 🧠 AI LEARNING INSTRUCTIONS ===
-You have access to the MULTI-SIGNAL AI FORECAST which is the most accurate forecast available. Use it as your PRIMARY source for predictions.
-
-**PRODUCT IDENTIFICATION (CRITICAL):**
-- Users may ask using EITHER product name OR SKU code
-- ALWAYS resolve to SKU internally for data lookup
-- When user says a category name → find SKUs in skusByCategory → aggregate skuMasterData for those SKUs
-- When user says a specific SKU → look up directly in skuMasterData
-- When user says a product description → search productCatalog for matching name → get SKU → look up in skuMasterData
-- In responses, show BOTH SKU code and product name: "SKU (Product Name): $X revenue"
-
-**FOR SKU-LEVEL ANALYSIS:**
-1. Use skuMasterData as the authoritative source for all SKU data
-2. Each SKU has: totalRevenue, totalUnits, byPeriod (monthly), byWeek (recent weeks)
-3. For category totals, sum data from all SKUs in that category
-4. For period-specific questions, use skuMasterData[sku].byPeriod["january-2025"]
-
-**FOR PREDICTIONS:**
-1. Always use the Multi-Signal AI Forecast data (if available) for weekly predictions
-2. Check the FORECAST ACCURACY LEARNING section to understand how past predictions performed
-3. Apply any correction bias you observe (e.g., if forecasts are consistently 5% low, adjust up 5%)
-4. Consider momentum - if daily trends show acceleration/deceleration, factor this in
-
-**FOR ANALYSIS:**
-1. Cross-reference sales data with banking data when available to validate accuracy
-2. Use seasonal patterns to contextualize current performance
-3. Reference the day-of-week patterns for tactical recommendations
-
-**FOR CONSISTENCY:**
-1. Your predictions should align with the Multi-Signal AI Forecast shown on the dashboard
-2. If asked "what will next week's revenue be?", use the Multi-Signal next week prediction
-3. Be transparent about confidence levels and data quality
-4. Always show SKU codes alongside product names in responses for clarity
-
-The goal is for you to learn from the forecast vs actual comparisons over time and become increasingly accurate.`;
+      const systemPrompt = buildChatSystemPrompt(ctx, {
+        allDaysData, allWeeksData, sortedDays, savedProductNames,
+        amazonCampaigns, amazonForecasts, forecastMeta,
+        threeplLedger, goals, bankingData,
+        productionPipeline, forecastAccuracy,
+        forecastCorrections, alertsSummary, notesData,
+      });
 
       const aiResponse = await callAI({
         system: systemPrompt,
@@ -18603,6 +16166,10 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
 
   // VIEWS
   
+  // Wrap view content in ErrorBoundary — a crash in one tab won't take down the app.
+  // key={view} resets the boundary when navigating between views.
+  const wrapView = (content) => <ErrorBoundary name={view} key={view}>{content}</ErrorBoundary>;
+  
   // Redirect removed views
   if (view === 'analytics') { setView('trends'); return null; }
   if (view === 'pnl') { setProfitSubTab('pnl'); setView('profitability'); return null; }
@@ -18613,7 +16180,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatUI}{aiChatButton}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><KeyboardShortcuts setView={setView} exportAll={exportAll} setShowAdsAIChat={setShowAdsAIChat} setToast={setToast} /><AuditLog isOpen={showAuditLog} onClose={() => setShowAuditLog(false)} auditLog={getAuditLog()} /></>);
 
   if (view === 'dashboard') {
-    return <DashboardView
+    return wrapView(<DashboardView
       activeStoreId={activeStoreId}
       adSpend={adSpend}
       aggregateDailyToWeekly={aggregateDailyToWeekly}
@@ -18697,11 +16264,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       runAutoSync={runAutoSync}
       autoSyncStatus={autoSyncStatus}
       dataLoading={dataLoading}
-    />;
+    />);
   }
   // ==================== UPLOAD VIEW (Combined) ====================
   if (view === 'upload' || view === 'period-upload' || view === 'inv-upload') {
-    return <UploadView
+    return wrapView(<UploadView
       adsIntelData={adsIntelData}
       aggregateDailyToWeekly={aggregateDailyToWeekly}
       allDaysData={allDaysData}
@@ -18804,7 +16371,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       uploadTab={uploadTab}
       view={view}
       weekEnding={weekEnding}
-    />;
+    />);
   }
 
   if (view === 'bulk') {
@@ -19104,7 +16671,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
         </div>
       );
     }
-    return <InventoryView
+    return wrapView(<InventoryView
       aiLoading={aiLoading}
       allDaysData={allDaysData}
       allPeriodsData={allPeriodsData}
@@ -19184,7 +16751,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setView={setView}
       view={view}
       callAI={callAI}
-    />;
+    />);
   }
 
   // ==================== TRENDS VIEW ====================
@@ -19282,7 +16849,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
 
   // ==================== 3PL ANALYTICS VIEW ====================
   if (view === '3pl') {
-    return <ThreePLView
+    return wrapView(<ThreePLView
       allDaysData={allDaysData}
       allPeriodsData={allPeriodsData}
       allWeeksData={allWeeksData}
@@ -19313,7 +16880,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       threeplLedger={threeplLedger}
       threeplTimeView={threeplTimeView}
       view={view}
-    />;
+    />);
   }
 
   // ==================== SKU RANKINGS VIEW ====================
@@ -19433,7 +17000,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
 
   // ==================== FORECAST VIEW (Unified Forecasting System) ====================
   if (view === 'forecast') {
-    return <ForecastView
+    return wrapView(<ForecastView
       aiForecastLoading={aiForecastLoading}
       aiForecastModule={aiForecastModule}
       aiForecasts={aiForecasts}
@@ -19472,11 +17039,11 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setUploadTab={setUploadTab}
       setView={setView}
       view={view}
-    />;
+    />);
   }
 
   if (view === 'ads') {
-    return <AdsView
+    return wrapView(<AdsView
       adSpend={adSpend}
       adsAiInput={adsAiInput}
       adsAiLoading={adsAiLoading}
@@ -19544,12 +17111,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       totalOrders={totalOrders}
       updated={updated}
       save={save}
-    />;
+    />);
   }
 
   // ==================== SALES TAX VIEW ====================
   if (view === 'sales-tax') {
-    return <SalesTaxView
+    return wrapView(<SalesTaxView
       allDaysData={allDaysData}
       allPeriodsData={allPeriodsData}
       allWeeksData={allWeeksData}
@@ -19603,12 +17170,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       transactions={transactions}
       setView={setView}
       view={view}
-    />;
+    />);
   }
 
   // ==================== BANKING VIEW ====================
   if (view === 'banking') {
-    return <BankingView
+    return wrapView(<BankingView
       allDaysData={allDaysData}
       allPeriodsData={allPeriodsData}
       allWeeksData={allWeeksData}
@@ -19678,12 +17245,12 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setView={setView}
       view={view}
       queueCloudSave={queueCloudSave}
-    />;
+    />);
   }
 
   // ==================== SETTINGS VIEW ====================
   if (view === 'settings') {
-    return <SettingsView
+    return wrapView(<SettingsView
       actionItems={actionItems}
       activeStoreId={activeStoreId}
       allDaysData={allDaysData}
@@ -19797,7 +17364,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       t={t}
       transactions={transactions}
       uploads={uploads}
-    />;
+    />);
   }
 
   // Global modals that should render on any view

@@ -1,12 +1,12 @@
-// AI utility functions
-// Handles API calls to Claude AI
+// AI utility functions — single source of truth
+// Handles API calls to Claude AI via /api/chat streaming endpoint
 import { AI_DEFAULT_MODEL } from './config';
 
 // ============ UNIFIED AI CONFIGURATION (Pro Plan) ============
 // Model string imported from config.js — edit ONLY there when models update
 const AI_CONFIG = {
   model: AI_DEFAULT_MODEL,
-  maxTokens: 4000,  // Pro plan allows comprehensive responses
+  maxTokens: 12000,  // Reports need 8K-12K tokens for full output
   maxDuration: 60,  // Pro plan 60-second timeout
   streaming: true,  // Use streaming to avoid 25s first-byte timeout
   
@@ -36,7 +36,10 @@ const AI_CONFIG = {
 // Can be called as:
 //   callAI(prompt, systemPrompt) - for simple prompts
 //   callAI({ messages: [...], system: '...' }) - for chat with history or complex content
-const callAI = async (promptOrOptions, systemPrompt = '') => {
+const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, maxTokensOverride = null) => {
+  // Model priority: explicit override > window global (report selector) > AI_CONFIG default
+  const selectedModel = modelOverride || (typeof window !== 'undefined' && window.__aiModelOverride) || AI_CONFIG.model;
+  const tokenLimit = maxTokensOverride || AI_CONFIG.maxTokens;
   let requestBody;
   
   if (typeof promptOrOptions === 'string') {
@@ -44,16 +47,16 @@ const callAI = async (promptOrOptions, systemPrompt = '') => {
     requestBody = {
       system: systemPrompt || 'You are a helpful e-commerce analytics AI. Respond with JSON when requested.',
       messages: [{ role: 'user', content: promptOrOptions }],
-      model: AI_CONFIG.model,
-      max_tokens: AI_CONFIG.maxTokens,
+      model: selectedModel,
+      max_tokens: tokenLimit,
     };
   } else {
     // Options object with messages array (supports complex content like PDFs)
     requestBody = {
       system: promptOrOptions.system || 'You are a helpful e-commerce analytics AI.',
       messages: promptOrOptions.messages || [],
-      model: AI_CONFIG.model,
-      max_tokens: AI_CONFIG.maxTokens,
+      model: selectedModel,
+      max_tokens: tokenLimit,
     };
   }
   
@@ -104,6 +107,5 @@ const callAI = async (promptOrOptions, systemPrompt = '') => {
   const data = await response.json();
   return data.content?.[0]?.text || '';
 };
-
 
 export { AI_CONFIG, callAI };
