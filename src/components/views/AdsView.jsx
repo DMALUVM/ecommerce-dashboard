@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertTriangle, BarChart3, Brain, Calendar, Check, ChevronLeft, ChevronRight, Clock,
-  Database, DollarSign, FileSpreadsheet, Flame, Globe, Loader2, RefreshCw, Search,
+  AlertTriangle, BarChart3, Brain, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight,
+  Clock, Database, DollarSign, FileSpreadsheet, Flame, Globe, Loader2, RefreshCw, Search,
   Send, ShieldAlert, Sparkles, Target, TrendingDown, TrendingUp, Trophy, Upload, X, Zap
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
@@ -10,43 +10,60 @@ import { hasDailySalesData } from '../../utils/date';
 import { AI_MODEL_OPTIONS, getModelLabel } from '../../utils/config';
 import NavTabs from '../ui/NavTabs';
 
-// Simple markdown → HTML converter for export (no external deps)
+// ── Markdown → HTML for PDF export ──
 const markdownToHtml = (md) => {
   if (!md) return '';
   let html = md
-    // Escape HTML entities
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    // Headers
     .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
     .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    // Bold and italic
     .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    // Code
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    // Horizontal rules
     .replace(/^---$/gm, '<hr/>')
-    // Unordered lists
     .replace(/^[\-\*] (.+)$/gm, '<li>$1</li>')
-    // Numbered lists
     .replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-  
-  // Wrap consecutive <li> in <ul>
   html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-  
-  // Paragraphs (lines not already wrapped in HTML tags)
   html = html.split('\n').map(line => {
     const trimmed = line.trim();
     if (!trimmed) return '';
     if (/^<[a-z]/.test(trimmed)) return trimmed;
     return `<p>${trimmed}</p>`;
   }).join('\n');
-  
   return html;
 };
+
+// ── Safe date formatter ──
+const fmtDate = (dateStr) => {
+  try { const d = new Date(dateStr + 'T12:00:00'); return isNaN(d.getTime()) ? dateStr : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+  catch { return dateStr || ''; }
+};
+
+// ── Color helpers ──
+const tacosColor = (t) => t <= 15 ? 'text-emerald-400' : t <= 25 ? 'text-amber-400' : 'text-rose-400';
+const roasColor = (r) => r >= 4 ? 'text-emerald-400' : r >= 2 ? 'text-amber-400' : 'text-rose-400';
+const acosColor = (a) => a <= 25 ? 'text-emerald-400' : a <= 40 ? 'text-amber-400' : 'text-rose-400';
+
+// ── Mini sparkline component ──
+const Sparkline = ({ data, color = 'bg-cyan-500', h = 32 }) => {
+  if (!data || data.length < 2) return null;
+  const max = Math.max(...data, 0.01);
+  return (
+    <div className="flex items-end gap-px" style={{ height: `${h}px` }}>
+      {data.slice(-14).map((v, i) => (
+        <div key={i} className={`flex-1 ${color} rounded-t opacity-60 hover:opacity-100 transition-opacity`}
+          style={{ height: `${Math.max((v / max) * 100, 4)}%`, minHeight: '1px' }} />
+      ))}
+    </div>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════
+// AdsView — Advertising Command Center
+// ══════════════════════════════════════════════════════════════
 
 const AdsView = ({
   adSpend, adsAiInput, adsAiLoading, adsAiMessages, adsIntelData,
@@ -65,75 +82,65 @@ const AdsView = ({
   setShowAdsIntelUpload, setToast, setUploadTab, showAdsAIChat, setView,
   view, save
 }) => {
+  // ── Core data ──
   const sortedWeeks = Object.keys(allWeeksData).sort();
   const sortedDays = Object.keys(allDaysData || {}).sort();
   const hasDailyData = sortedDays.length > 0;
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
+  // ── Local state ──
   const [uploadStatus, setUploadStatus] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [showDataSources, setShowDataSources] = useState(false);
   const [intelDateRange, setIntelDateRange] = useState(30);
+  const [showTables, setShowTables] = useState(false);
+  const [reportMode, setReportMode] = useState('all');
   const fileInputRef = useRef(null);
 
   const campaigns = amazonCampaigns?.campaigns || [];
   const hasCampaignData = campaigns.length > 0;
-  const campaignSummary = amazonCampaigns?.summary || {};
-  const historicalDaily = amazonCampaigns?.historicalDaily || {};
-  const hasHistoricalData = Object.keys(historicalDaily).length > 0;
 
-  // Count Tier 2 reports
-  const tier2Summary = useMemo(() => {
-    if (!adsIntelData) return { count: 0, platforms: [] };
-    let count = 0; const platforms = new Set();
-    for (const [platform, reports] of Object.entries(adsIntelData)) {
-      if (platform === 'lastUpdated' || platform === 'reportCount') continue;
-      if (typeof reports !== 'object') continue;
-      for (const [, val] of Object.entries(reports)) {
-        if (val?.records) { count++; platforms.add(platform); }
+  // Count deep analysis reports
+  const deepReportCount = useMemo(() => {
+    if (!adsIntelData) return 0;
+    let count = 0;
+    for (const [key, val] of Object.entries(adsIntelData)) {
+      if (key === 'lastUpdated' || key === 'reportCount' || typeof val !== 'object') continue;
+      for (const [, data] of Object.entries(val)) {
+        if (data?.records) count++;
       }
     }
-    return { count, platforms: [...platforms] };
+    return count;
   }, [adsIntelData]);
 
-  // Quick Insights
-  const quickInsights = useMemo(() => {
-    const insights = [];
-    if (hasCampaignData) {
-      const enabled = campaigns.filter(c => c.state === 'ENABLED');
-      const wasteful = enabled.filter(c => c.spend > 100 && c.roas < 1.5);
-      const scaling = enabled.filter(c => c.roas > 4 && c.spend < 500);
-      const avgROAS = campaignSummary.roas || 0;
-      if (wasteful.length > 0) {
-        const w$ = wasteful.reduce((s, c) => s + c.spend, 0);
-        insights.push({ type: 'warning', icon: '⚠️', text: `${wasteful.length} campaigns ROAS<1.5x wasting ${formatCurrency(w$)}`, action: 'Review underperformers' });
-      }
-      if (scaling.length > 0) insights.push({ type: 'opportunity', icon: '🚀', text: `${scaling.length} high-ROAS (>4x) campaigns could scale`, action: 'Increase budgets' });
-      if (avgROAS >= 4) insights.push({ type: 'success', icon: '✅', text: `Excellent ROAS ${avgROAS.toFixed(2)}x`, action: null });
-      else if (avgROAS >= 2) insights.push({ type: 'info', icon: '📊', text: `ROAS ${avgROAS.toFixed(2)}x — room to optimize`, action: null });
-    }
-    return insights;
-  }, [campaigns, campaignSummary, hasCampaignData]);
 
-  // ═══ AMAZON ADS INTELLIGENCE (from allDaysData + amazonCampaigns + adsIntelData) ═══
+  // ══════════════════════════════════════════════════════════════
+  // INTELLIGENCE COMPUTATIONS
+  // ══════════════════════════════════════════════════════════════
+
+  // ── Amazon Ads Intelligence (allDaysData + campaigns + adsIntelData) ──
   const amazonAdsInsights = useMemo(() => {
-    const intel = { hasData: false, wastedSpend: [], topWinners: [], topCampaigns: [], skuPerformance: [], placementInsights: null, negativeKeywords: [], summary: null, dateRange: { earliest: null, latest: null, daysAvailable: 0 }, trendData: [], zeroSaleCampaigns: [], zeroSaleDays: [], acosSpikeDays: [], staleCampaignWarning: false };
-    
-    // Date cutoff
+    const intel = {
+      hasData: false, wastedSpend: [], topWinners: [], topCampaigns: [],
+      skuPerformance: [], placementInsights: null, negativeKeywords: [],
+      summary: null, trendData: [], zeroSaleCampaigns: [], zeroSaleDays: [],
+      acosSpikeDays: [], staleCampaignWarning: false,
+      dateRange: { earliest: null, latest: null, daysAvailable: 0 },
+    };
+
     const cutoffDate = intelDateRange === 'all' ? null : (() => { const d = new Date(); d.setDate(d.getDate() - intelDateRange); return d.toISOString().slice(0, 10); })();
-    const inRange = (r) => { if (!cutoffDate) return true; const d = r['Date'] || r['date'] || ''; return d >= cutoffDate; };
-    
-    // ─── PRIMARY: Build from allDaysData (always available) ───
+    const inRange = (r) => { if (!cutoffDate) return true; return (r['Date'] || r['date'] || '') >= cutoffDate; };
+
+    // PRIMARY: Build from allDaysData (always available)
     const daysWithAds = sortedDays.filter(d => {
       if (cutoffDate && d < cutoffDate) return false;
       const day = allDaysData[d];
       return (day?.amazon?.adSpend > 0) || (day?.amazonAdsMetrics?.spend > 0);
     });
-    
+
     if (daysWithAds.length >= 1) {
       intel.hasData = true;
       let totalSpend = 0, totalRev = 0;
-      
       daysWithAds.forEach(d => {
         const day = allDaysData[d];
         const spend = day?.amazon?.adSpend || day?.amazonAdsMetrics?.spend || 0;
@@ -144,80 +151,45 @@ const AdsView = ({
         const tacos = totalDayRev > 0 ? (spend / totalDayRev) * 100 : (spend > 0 ? 100 : 0);
         intel.trendData.push({ date: d, spend, rev: totalDayRev, adRev, tacos, acos: adRev > 0 ? (spend / adRev) * 100 : 0, roas: spend > 0 ? totalDayRev / spend : 0 });
       });
-      
       intel.dateRange = { earliest: daysWithAds[0], latest: daysWithAds[daysWithAds.length - 1], daysAvailable: daysWithAds.length };
-      intel.summary = {
-        totalTerms: 0,
-        totalSpend: totalSpend,
-        totalSales: totalRev,
-        overallRoas: totalSpend > 0 ? totalRev / totalSpend : 0,
-        wastedTotal: 0,
-        wastedPct: 0,
-        daysCount: daysWithAds.length
-      };
+      intel.summary = { totalTerms: 0, totalSpend, totalSales: totalRev, overallRoas: totalSpend > 0 ? totalRev / totalSpend : 0, wastedTotal: 0, wastedPct: 0, daysCount: daysWithAds.length };
     }
-    
-    // ─── CAMPAIGNS: from amazonCampaigns prop (CSV imports) ───
+
+    // CAMPAIGNS: from amazonCampaigns (CSV) or API
     if (hasCampaignData) {
       intel.hasData = true;
       const activeCamps = campaigns.filter(c => (c.spend || 0) > 0);
       intel.topCampaigns = activeCamps
-        .map(c => ({
-          name: c.name || '',
-          spend: c.spend || 0,
-          sales: c.sales || 0,
-          clicks: c.clicks || 0,
-          impressions: c.impressions || 0,
-          orders: c.orders || 0,
-          roas: c.roas || (c.spend > 0 && c.sales > 0 ? c.sales / c.spend : 0),
-          acos: c.acos || (c.spend > 0 && c.sales > 0 ? (c.spend / c.sales) * 100 : 999),
-          state: c.state || '',
-          type: c.type || 'SP'
-        }))
-        .sort((a, b) => b.spend - a.spend)
-        .slice(0, 12);
-      
-      // Zero-sale campaigns: spend > $1 but $0 sales
-      intel.zeroSaleCampaigns = activeCamps
-        .filter(c => (c.spend || 0) > 1 && (c.sales || 0) === 0)
-        .map(c => ({ name: c.name || '', spend: c.spend || 0, clicks: c.clicks || 0, type: c.type || 'SP', state: c.state || '' }))
+        .map(c => ({ name: c.name || '', spend: c.spend || 0, sales: c.sales || 0, clicks: c.clicks || 0, impressions: c.impressions || 0, orders: c.orders || 0, roas: c.roas || (c.spend > 0 && c.sales > 0 ? c.sales / c.spend : 0), acos: c.acos || (c.spend > 0 && c.sales > 0 ? (c.spend / c.sales) * 100 : 999), state: c.state || '', type: c.type || 'SP' }))
+        .sort((a, b) => b.spend - a.spend).slice(0, 15);
+      intel.zeroSaleCampaigns = activeCamps.filter(c => c.spend > 1 && (c.sales || 0) === 0)
+        .map(c => ({ name: c.name || '', spend: c.spend || 0, clicks: c.clicks || 0, type: c.type || 'SP' }))
         .sort((a, b) => b.spend - a.spend);
-      
-      // Stale campaign warning: all campaigns paused/archived with $0 spend but daily data shows active spend
-      // Suppress if API-synced data exists in adsIntelData (user has Amazon Ads API connected)
-      const allCampsZeroSpend = campaigns.every(c => (c.spend || 0) === 0);
-      const hasRecentAdSpend = daysWithAds.length > 0;
+
+      // Stale warning: suppress when API data exists
+      const allZero = campaigns.every(c => (c.spend || 0) === 0);
       const hasApiData = adsIntelData && (adsIntelData._apiSpCampaigns?.length > 0 || adsIntelData.amazon?.sp_campaigns?.records?.length > 0 || adsIntelData._apiSpSearchTerms?.length > 0 || adsIntelData.amazon?.sp_search_terms?.records?.length > 0);
-      intel.staleCampaignWarning = allCampsZeroSpend && hasRecentAdSpend && !hasApiData;
+      intel.staleCampaignWarning = allZero && daysWithAds.length > 0 && !hasApiData;
     }
-    
-    // ─── ACTIONABLE: Zero-sale days & ACOS spikes (last 14d from allDaysData) ───
-    const last14Cutoff = (() => { const d = new Date(); d.setDate(d.getDate() - 14); return d.toISOString().slice(0, 10); })();
-    const last14Days = sortedDays.filter(d => d >= last14Cutoff);
-    
-    last14Days.forEach(d => {
-      const day = allDaysData[d];
-      if (!day) return;
+
+    // ACTIONABLE: Zero-sale days & spikes (last 14d)
+    const cut14 = (() => { const d = new Date(); d.setDate(d.getDate() - 14); return d.toISOString().slice(0, 10); })();
+    sortedDays.filter(d => d >= cut14).forEach(d => {
+      const day = allDaysData[d]; if (!day) return;
       const spend = day?.amazon?.adSpend || 0;
       const rev = day?.amazon?.adRevenue || day?.amazon?.revenue || 0;
-      if (spend > 5 && rev === 0) {
-        intel.zeroSaleDays.push({ date: d, spend, platform: 'Amazon' });
-      }
-      const gSpend = day?.shopify?.googleSpend || day?.googleSpend || 0;
-      const mSpend = day?.shopify?.metaSpend || day?.metaSpend || 0;
-      const sRev = day?.shopify?.revenue || 0;
-      if (gSpend > 5 && sRev === 0) intel.zeroSaleDays.push({ date: d, spend: gSpend, platform: 'Google' });
-      if (mSpend > 5 && sRev === 0) intel.zeroSaleDays.push({ date: d, spend: mSpend, platform: 'Meta' });
-      
-      // ACOS spike: any day where ACOS > 50% with meaningful spend
+      if (spend > 5 && rev === 0) intel.zeroSaleDays.push({ date: d, spend, platform: 'Amazon' });
+      const gS = day?.shopify?.googleSpend || day?.googleSpend || 0;
+      const mS = day?.shopify?.metaSpend || day?.metaSpend || 0;
+      const sR = day?.shopify?.revenue || 0;
+      if (gS > 5 && sR === 0) intel.zeroSaleDays.push({ date: d, spend: gS, platform: 'Google' });
+      if (mS > 5 && sR === 0) intel.zeroSaleDays.push({ date: d, spend: mS, platform: 'Meta' });
       const acos = rev > 0 ? (spend / rev) * 100 : (spend > 10 ? 999 : 0);
-      if (spend > 20 && acos > 50) {
-        intel.acosSpikeDays.push({ date: d, spend, rev, acos: acos > 999 ? 999 : acos });
-      }
+      if (spend > 20 && acos > 50) intel.acosSpikeDays.push({ date: d, spend, rev, acos: Math.min(acos, 999) });
     });
     intel.zeroSaleDays.sort((a, b) => b.spend - a.spend);
-    
-    // ─── ENRICHMENT: Overlay adsIntelData (API sync / deep analysis uploads) ───
+
+    // ENRICHMENT: adsIntelData (API sync / uploaded reports)
     if (adsIntelData) {
       const amz = adsIntelData.amazon || {};
       const getRecords = (nestedKey, flatKey) => {
@@ -227,268 +199,183 @@ const AdsView = ({
         if (Array.isArray(flat) && flat.length) return flat;
         return [];
       };
-      
-      // Search Terms (only from adsIntelData - not in allDaysData)
-      const spSearchTerms = getRecords('sp_search_terms', '_apiSpSearchTerms').filter(inRange);
-      if (spSearchTerms.length > 0) {
+
+      // Search Terms
+      const spST = getRecords('sp_search_terms', '_apiSpSearchTerms').filter(inRange);
+      if (spST.length > 0) {
         intel.hasData = true;
-        const termMap = {};
-        spSearchTerms.forEach(r => {
-          const term = r['Customer Search Term'] || '';
-          if (!term) return;
-          if (!termMap[term]) termMap[term] = { term, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
-          termMap[term].spend += Number(r['Spend'] || 0);
-          termMap[term].sales += Number(r['7 Day Total Sales'] || 0);
-          termMap[term].clicks += Number(r['Clicks'] || 0);
-          termMap[term].impressions += Number(r['Impressions'] || 0);
-          termMap[term].orders += Number(r['7 Day Total Orders (#)'] || 0);
+        const tm = {};
+        spST.forEach(r => {
+          const t = r['Customer Search Term'] || ''; if (!t) return;
+          if (!tm[t]) tm[t] = { term: t, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+          tm[t].spend += Number(r['Spend'] || 0);
+          tm[t].sales += Number(r['7 Day Total Sales'] || 0);
+          tm[t].clicks += Number(r['Clicks'] || 0);
+          tm[t].impressions += Number(r['Impressions'] || 0);
+          tm[t].orders += Number(r['7 Day Total Orders (#)'] || 0);
         });
-        const terms = Object.values(termMap);
+        const terms = Object.values(tm);
         intel.wastedSpend = terms.filter(t => t.spend >= 5 && t.sales === 0).sort((a, b) => b.spend - a.spend).slice(0, 10);
         intel.topWinners = terms.filter(t => t.spend >= 3 && t.sales > 0).map(t => ({ ...t, roas: t.sales / t.spend, acos: t.spend / t.sales * 100 })).sort((a, b) => b.roas - a.roas).slice(0, 10);
         intel.negativeKeywords = terms.filter(t => t.clicks >= 10 && t.orders === 0).sort((a, b) => b.spend - a.spend).slice(0, 10);
-        // Upgrade summary with search term counts
-        const totalSearchSpend = terms.reduce((s, t) => s + t.spend, 0);
-        const totalSearchSales = terms.reduce((s, t) => s + t.sales, 0);
-        const wastedTotal = intel.wastedSpend.reduce((s, t) => s + t.spend, 0);
-        intel.summary = { ...intel.summary, totalTerms: terms.length, wastedTotal, wastedPct: totalSearchSpend > 0 ? (wastedTotal / totalSearchSpend) * 100 : 0 };
+        const wTotal = intel.wastedSpend.reduce((s, t) => s + t.spend, 0);
+        intel.summary = { ...intel.summary, totalTerms: terms.length, wastedTotal: wTotal, wastedPct: terms.reduce((s, t) => s + t.spend, 0) > 0 ? (wTotal / terms.reduce((s, t) => s + t.spend, 0)) * 100 : 0 };
       }
-      
-      // Campaigns from API (override CSV if available)
-      const campaignSummaryData = adsIntelData.campaignSummary;
-      if (Array.isArray(campaignSummaryData) && campaignSummaryData.length > 0) {
-        intel.topCampaigns = campaignSummaryData.filter(c => c.spend > 0).map(c => ({
-          name: c.name || '', type: c.type || 'SP', status: c.status || '', spend: c.spend || 0, sales: c.revenue || 0,
-          clicks: c.clicks || 0, impressions: c.impressions || 0, orders: c.orders || 0,
-          roas: c.roas || (c.spend > 0 ? (c.revenue || 0) / c.spend : 0), acos: c.acos || (c.revenue > 0 ? (c.spend / c.revenue) * 100 : 999),
-        })).sort((a, b) => b.spend - a.spend).slice(0, 12);
+
+      // Campaigns from API (override CSV)
+      const csd = adsIntelData.campaignSummary;
+      if (Array.isArray(csd) && csd.length > 0) {
+        intel.topCampaigns = csd.filter(c => c.spend > 0).map(c => ({ name: c.name || '', type: c.type || 'SP', spend: c.spend || 0, sales: c.revenue || 0, clicks: c.clicks || 0, impressions: c.impressions || 0, orders: c.orders || 0, roas: c.roas || (c.spend > 0 ? (c.revenue || 0) / c.spend : 0), acos: c.acos || (c.revenue > 0 ? (c.spend / c.revenue) * 100 : 999) })).sort((a, b) => b.spend - a.spend).slice(0, 15);
       } else {
-        const spCampaignsRaw = getRecords('sp_campaigns', '_apiSpCampaigns');
-        const spCampaignRows = (spCampaignsRaw.length ? spCampaignsRaw : getRecords('sp_campaigns', '_apiDailyOverview')).filter(inRange);
-        if (spCampaignRows.length > 0) {
-          const campMap = {};
-          spCampaignRows.forEach(r => {
-            const name = r['Campaign Name'] || r['campaignName'] || '';
-            if (!name) return;
-            if (!campMap[name]) campMap[name] = { name, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
-            campMap[name].spend += Number(r['Spend'] || r['spend'] || 0);
-            campMap[name].sales += Number(r['Sales'] || r['sales'] || r['7 Day Total Sales'] || 0);
-            campMap[name].clicks += Number(r['Clicks'] || r['clicks'] || 0);
-            campMap[name].impressions += Number(r['Impressions'] || r['impressions'] || 0);
+        const raw = getRecords('sp_campaigns', '_apiSpCampaigns');
+        const rows = (raw.length ? raw : getRecords('sp_campaigns', '_apiDailyOverview')).filter(inRange);
+        if (rows.length > 0) {
+          const cm = {};
+          rows.forEach(r => {
+            const n = r['Campaign Name'] || r['campaignName'] || ''; if (!n) return;
+            if (!cm[n]) cm[n] = { name: n, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+            cm[n].spend += Number(r['Spend'] || r['spend'] || 0);
+            cm[n].sales += Number(r['Sales'] || r['sales'] || r['7 Day Total Sales'] || 0);
+            cm[n].clicks += Number(r['Clicks'] || r['clicks'] || 0);
+            cm[n].impressions += Number(r['Impressions'] || r['impressions'] || 0);
           });
-          intel.topCampaigns = Object.values(campMap).filter(c => c.spend > 0).map(c => ({ ...c, roas: c.spend > 0 ? c.sales / c.spend : 0, acos: c.sales > 0 ? (c.spend / c.sales) * 100 : 999 })).sort((a, b) => b.spend - a.spend).slice(0, 12);
+          intel.topCampaigns = Object.values(cm).filter(c => c.spend > 0).map(c => ({ ...c, roas: c.spend > 0 ? c.sales / c.spend : 0, acos: c.sales > 0 ? (c.spend / c.sales) * 100 : 999 })).sort((a, b) => b.spend - a.spend).slice(0, 15);
         }
       }
-      
-      // SKU Performance from API
-      const spAdvertised = getRecords('sp_advertised_product', '_apiSpAdvertised').filter(inRange);
-      if (spAdvertised.length > 0) {
+
+      // SKU Performance
+      const skuRows = getRecords('sp_advertised_product', '_apiSpAdvertised').filter(inRange);
+      if (skuRows.length > 0) {
         intel.hasData = true;
-        const skuMap = {};
-        spAdvertised.forEach(r => {
-          const sku = r['Advertised SKU'] || r['SKU'] || '';
-          if (!sku) return;
-          if (!skuMap[sku]) skuMap[sku] = { sku, asin: r['Advertised ASIN'] || '', spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
-          skuMap[sku].spend += Number(r['Spend'] || 0);
-          skuMap[sku].sales += Number(r['7 Day Total Sales'] || 0);
-          skuMap[sku].clicks += Number(r['Clicks'] || 0);
-          skuMap[sku].orders += Number(r['7 Day Total Orders (#)'] || r['7 Day Total Units (#)'] || 0);
+        const sm = {};
+        skuRows.forEach(r => {
+          const sku = r['Advertised SKU'] || r['SKU'] || ''; if (!sku) return;
+          if (!sm[sku]) sm[sku] = { sku, asin: r['Advertised ASIN'] || '', spend: 0, sales: 0, clicks: 0, orders: 0 };
+          sm[sku].spend += Number(r['Spend'] || 0);
+          sm[sku].sales += Number(r['7 Day Total Sales'] || 0);
+          sm[sku].clicks += Number(r['Clicks'] || 0);
+          sm[sku].orders += Number(r['7 Day Total Orders (#)'] || r['7 Day Total Units (#)'] || 0);
         });
-        intel.skuPerformance = Object.values(skuMap).filter(s => s.spend > 0).map(s => ({ ...s, roas: s.spend > 0 ? s.sales / s.spend : 0, acos: s.sales > 0 ? (s.spend / s.sales) * 100 : 999 })).sort((a, b) => b.spend - a.spend).slice(0, 10);
+        intel.skuPerformance = Object.values(sm).filter(s => s.spend > 0).map(s => ({ ...s, roas: s.spend > 0 ? s.sales / s.spend : 0, acos: s.sales > 0 ? (s.spend / s.sales) * 100 : 999 })).sort((a, b) => b.spend - a.spend).slice(0, 10);
       } else if (Array.isArray(adsIntelData.skuAdPerformance) && adsIntelData.skuAdPerformance.length > 0) {
         intel.hasData = true;
-        intel.skuPerformance = adsIntelData.skuAdPerformance.filter(s => s.spend > 0).map(s => ({
-          sku: s.sku || '', asin: s.asin || '', spend: s.spend || 0, sales: s.revenue || s.sales || 0,
-          clicks: s.clicks || 0, orders: s.orders || 0,
-          roas: s.roas || (s.spend > 0 ? (s.revenue || s.sales || 0) / s.spend : 0), acos: s.acos || (s.revenue > 0 ? (s.spend / s.revenue) * 100 : 999),
-        })).sort((a, b) => b.spend - a.spend).slice(0, 10);
+        intel.skuPerformance = adsIntelData.skuAdPerformance.filter(s => s.spend > 0).map(s => ({ sku: s.sku || '', asin: s.asin || '', spend: s.spend || 0, sales: s.revenue || s.sales || 0, clicks: s.clicks || 0, orders: s.orders || 0, roas: s.roas || (s.spend > 0 ? (s.revenue || s.sales || 0) / s.spend : 0), acos: s.acos || (s.revenue > 0 ? (s.spend / s.revenue) * 100 : 999) })).sort((a, b) => b.spend - a.spend).slice(0, 10);
       }
-      
-      // Placement from API
-      const spPlacement = getRecords('sp_placement', '_apiSpPlacement').filter(inRange);
-      if (spPlacement.length > 0) {
+
+      // Placement
+      const plRows = getRecords('sp_placement', '_apiSpPlacement').filter(inRange);
+      if (plRows.length > 0) {
         intel.hasData = true;
-        const placeMap = {};
-        spPlacement.forEach(r => {
-          const place = r['Placement'] || '';
-          if (!place) return;
-          if (!placeMap[place]) placeMap[place] = { placement: place, spend: 0, sales: 0, clicks: 0, impressions: 0 };
-          placeMap[place].spend += Number(r['Spend'] || 0);
-          placeMap[place].sales += Number(r['7 Day Total Sales'] || 0);
-          placeMap[place].clicks += Number(r['Clicks'] || 0);
-          placeMap[place].impressions += Number(r['Impressions'] || 0);
+        const pm = {};
+        plRows.forEach(r => {
+          const p = r['Placement'] || ''; if (!p) return;
+          if (!pm[p]) pm[p] = { placement: p, spend: 0, sales: 0, clicks: 0, impressions: 0 };
+          pm[p].spend += Number(r['Spend'] || 0);
+          pm[p].sales += Number(r['7 Day Total Sales'] || 0);
+          pm[p].clicks += Number(r['Clicks'] || 0);
+          pm[p].impressions += Number(r['Impressions'] || 0);
         });
-        intel.placementInsights = Object.values(placeMap).map(p => ({ ...p, roas: p.spend > 0 ? p.sales / p.spend : 0, cpc: p.clicks > 0 ? p.spend / p.clicks : 0, ctr: p.impressions > 0 ? (p.clicks / p.impressions) * 100 : 0 }));
+        intel.placementInsights = Object.values(pm).map(p => ({ ...p, roas: p.spend > 0 ? p.sales / p.spend : 0, cpc: p.clicks > 0 ? p.spend / p.clicks : 0, ctr: p.impressions > 0 ? (p.clicks / p.impressions) * 100 : 0 }));
       }
     }
-    
+
     return intel;
   }, [adsIntelData, intelDateRange, sortedDays, allDaysData, hasCampaignData, campaigns]);
 
-  // ═══ MULTI-PLATFORM INTELLIGENCE (Google, Meta, Cross-Platform) ═══
+  // ── Multi-Platform Intelligence ──
   const platformInsights = useMemo(() => {
     const cutoffDate = intelDateRange === 'all' ? null : (() => { const d = new Date(); d.setDate(d.getDate() - intelDateRange); return d.toISOString().slice(0, 10); })();
     const filteredDays = sortedDays.filter(d => !cutoffDate || d >= cutoffDate);
-    
     const google = { trend: [], totalSpend: 0, totalClicks: 0, totalImpressions: 0, totalConversions: 0, daysActive: 0 };
     const meta = { trend: [], totalSpend: 0, totalClicks: 0, totalImpressions: 0, totalPurchases: 0, totalPurchaseValue: 0, daysActive: 0 };
     const dow = [0,1,2,3,4,5,6].map(() => ({ amzSpend: 0, amzRev: 0, gSpend: 0, mSpend: 0, totalSpend: 0, totalRev: 0, count: 0 }));
     let totalSpendAll = 0, totalRevAll = 0;
-    
+
     filteredDays.forEach(d => {
-      const day = allDaysData[d];
-      if (!day) return;
+      const day = allDaysData[d]; if (!day) return;
       const gAds = day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
       const mAds = day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
       const aAds = day?.amazon?.adSpend || 0;
       const aRev = day?.amazon?.revenue || 0;
       const sRev = day?.shopify?.revenue || 0;
       const am = day?.shopify?.adsMetrics || {};
-      
-      if (gAds > 0) {
-        google.daysActive++;
-        google.totalSpend += gAds;
-        google.totalClicks += am.googleClicks || 0;
-        google.totalImpressions += am.googleImpressions || 0;
-        google.totalConversions += am.googleConversions || 0;
-        google.trend.push({ date: d, spend: gAds, clicks: am.googleClicks || 0, impressions: am.googleImpressions || 0, conversions: am.googleConversions || 0 });
-      }
-      if (mAds > 0) {
-        meta.daysActive++;
-        meta.totalSpend += mAds;
-        meta.totalClicks += am.metaClicks || 0;
-        meta.totalImpressions += am.metaImpressions || 0;
-        meta.totalPurchases += am.metaPurchases || 0;
-        meta.totalPurchaseValue += am.metaPurchaseValue || 0;
-        meta.trend.push({ date: d, spend: mAds, clicks: am.metaClicks || 0, impressions: am.metaImpressions || 0, purchases: am.metaPurchases || 0, value: am.metaPurchaseValue || 0 });
-      }
-      
-      // Day of week analysis
+      if (gAds > 0) { google.daysActive++; google.totalSpend += gAds; google.totalClicks += am.googleClicks || 0; google.totalImpressions += am.googleImpressions || 0; google.totalConversions += am.googleConversions || 0; google.trend.push({ date: d, spend: gAds }); }
+      if (mAds > 0) { meta.daysActive++; meta.totalSpend += mAds; meta.totalClicks += am.metaClicks || 0; meta.totalImpressions += am.metaImpressions || 0; meta.totalPurchases += am.metaPurchases || 0; meta.totalPurchaseValue += am.metaPurchaseValue || 0; meta.trend.push({ date: d, spend: mAds }); }
       const dayOfWeek = new Date(d + 'T12:00:00').getDay();
-      if (!isNaN(dayOfWeek)) {
-        dow[dayOfWeek].amzSpend += aAds;
-        dow[dayOfWeek].amzRev += aRev;
-        dow[dayOfWeek].gSpend += gAds;
-        dow[dayOfWeek].mSpend += mAds;
-        dow[dayOfWeek].totalSpend += aAds + gAds + mAds;
-        dow[dayOfWeek].totalRev += aRev + sRev;
-        dow[dayOfWeek].count++;
-      }
+      if (!isNaN(dayOfWeek)) { dow[dayOfWeek].amzSpend += aAds; dow[dayOfWeek].amzRev += aRev; dow[dayOfWeek].gSpend += gAds; dow[dayOfWeek].mSpend += mAds; dow[dayOfWeek].totalSpend += aAds + gAds + mAds; dow[dayOfWeek].totalRev += aRev + sRev; dow[dayOfWeek].count++; }
       totalSpendAll += aAds + gAds + mAds;
       totalRevAll += aRev + sRev;
     });
-    
-    // Compute averages for DOW
+
     const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    const dowData = dow.map((d, i) => ({
-      day: dayNames[i],
-      avgSpend: d.count > 0 ? d.totalSpend / d.count : 0,
-      avgRev: d.count > 0 ? d.totalRev / d.count : 0,
-      roas: d.totalSpend > 0 ? d.totalRev / d.totalSpend : 0,
-      acos: d.totalRev > 0 ? (d.amzSpend / d.amzRev) * 100 : 0,
-      count: d.count
-    }));
-    
-    // Google CPC/CTR/ConvRate
+    const dowData = dow.map((d, i) => ({ day: dayNames[i], avgSpend: d.count > 0 ? d.totalSpend / d.count : 0, avgRev: d.count > 0 ? d.totalRev / d.count : 0, roas: d.totalSpend > 0 ? d.totalRev / d.totalSpend : 0, count: d.count }));
     google.cpc = google.totalClicks > 0 ? google.totalSpend / google.totalClicks : 0;
     google.ctr = google.totalImpressions > 0 ? (google.totalClicks / google.totalImpressions) * 100 : 0;
     google.convRate = google.totalClicks > 0 ? (google.totalConversions / google.totalClicks) * 100 : 0;
-    
-    // Meta CPA/CTR/ROAS
     meta.cpc = meta.totalClicks > 0 ? meta.totalSpend / meta.totalClicks : 0;
     meta.ctr = meta.totalImpressions > 0 ? (meta.totalClicks / meta.totalImpressions) * 100 : 0;
     meta.cpa = meta.totalPurchases > 0 ? meta.totalSpend / meta.totalPurchases : 0;
     meta.roas = meta.totalSpend > 0 ? meta.totalPurchaseValue / meta.totalSpend : 0;
-    
-    // Blended metrics
     const blendedRoas = totalSpendAll > 0 ? totalRevAll / totalSpendAll : 0;
     const blendedTacos = totalRevAll > 0 ? (totalSpendAll / totalRevAll) * 100 : 0;
-    
+
     return { google, meta, dowData, blendedRoas, blendedTacos, totalSpendAll, totalRevAll };
   }, [sortedDays, allDaysData, intelDateRange]);
 
-  // Safe date formatter
-  const fmtDate = (dateStr) => {
-    try { const d = new Date(dateStr + 'T12:00:00'); return isNaN(d.getTime()) ? dateStr : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
-    catch { return dateStr || ''; }
-  };
-
-  // ═══ CAMPAIGN RANKINGS (top/worst performers) ═══
-  const campaignRankings = useMemo(() => {
-    if (!hasCampaignData) return { top: [], worst: [], byType: {}, totalActive: 0, enabledCount: 0, pausedCount: 0 };
-    const meaningful = campaigns.filter(c => (c.spend || 0) > 5);
-    const top = [...meaningful].filter(c => c.sales > 0).sort((a, b) => (b.roas || 0) - (a.roas || 0)).slice(0, 5);
-    const worst = [...meaningful].filter(c => c.spend > 10).sort((a, b) => (a.roas || 0) - (b.roas || 0)).slice(0, 5);
-    
-    // Group by type
-    const byType = {};
-    campaigns.forEach(c => {
-      const t = c.type || 'Unknown';
-      if (!byType[t]) byType[t] = { type: t, count: 0, spend: 0, sales: 0, clicks: 0, orders: 0 };
-      byType[t].count++;
-      byType[t].spend += c.spend || 0;
-      byType[t].sales += c.sales || 0;
-      byType[t].clicks += c.clicks || 0;
-      byType[t].orders += c.orders || 0;
-    });
-    Object.values(byType).forEach(t => {
-      t.roas = t.spend > 0 ? t.sales / t.spend : 0;
-      t.acos = t.sales > 0 ? (t.spend / t.sales) * 100 : 999;
-      t.cpc = t.clicks > 0 ? t.spend / t.clicks : 0;
-    });
-    
-    return {
-      top, worst, byType,
-      totalActive: campaigns.filter(c => c.state === 'ENABLED').length,
-      enabledCount: campaigns.filter(c => c.state === 'ENABLED').length,
-      pausedCount: campaigns.filter(c => c.state !== 'ENABLED').length,
-    };
-  }, [campaigns, hasCampaignData]);
-
-  // ═══ REVENUE ATTRIBUTION (organic vs paid) ═══
+  // ── Revenue Attribution ──
   const revenueAttribution = useMemo(() => {
     const cutoff = (() => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10); })();
-    const last30 = sortedDays.filter(d => d >= cutoff);
     let totalRev = 0, adRev = 0, adSpend = 0;
-    last30.forEach(d => {
+    sortedDays.filter(d => d >= cutoff).forEach(d => {
       const day = allDaysData[d];
-      const rev = (day?.amazon?.revenue || 0) + (day?.shopify?.revenue || 0);
-      const aRev = day?.amazon?.adRevenue || 0;
-      const aSpend = (day?.amazon?.adSpend || 0) + (day?.shopify?.googleSpend || day?.googleSpend || 0) + (day?.shopify?.metaSpend || day?.metaSpend || 0);
-      totalRev += rev;
-      adRev += aRev;
-      adSpend += aSpend;
+      totalRev += (day?.amazon?.revenue || 0) + (day?.shopify?.revenue || 0);
+      adRev += day?.amazon?.adRevenue || 0;
+      adSpend += (day?.amazon?.adSpend || 0) + (day?.shopify?.googleSpend || day?.googleSpend || 0) + (day?.shopify?.metaSpend || day?.metaSpend || 0);
     });
     const organicRev = totalRev - adRev;
-    return {
-      totalRev, adRev, organicRev, adSpend,
-      adPct: totalRev > 0 ? (adRev / totalRev) * 100 : 0,
-      organicPct: totalRev > 0 ? (organicRev / totalRev) * 100 : 0,
-      tacos: totalRev > 0 ? (adSpend / totalRev) * 100 : 0,
-    };
+    return { totalRev, adRev, organicRev, adSpend, adPct: totalRev > 0 ? (adRev / totalRev) * 100 : 0, organicPct: totalRev > 0 ? (organicRev / totalRev) * 100 : 0, tacos: totalRev > 0 ? (adSpend / totalRev) * 100 : 0 };
   }, [sortedDays, allDaysData]);
 
-  // Platform report modes for generation
-  const REPORT_MODES = [
-    { key: 'all', label: 'All Platforms', icon: '🌐', desc: 'Amazon + Google + Meta comprehensive audit' },
-    { key: 'amazon', label: 'Amazon Only', icon: '📦', desc: 'Deep dive: campaigns, keywords, placements, ACOS' },
-    { key: 'dtc', label: 'Google + Meta (DTC)', icon: '🛍️', desc: 'DTC channels: Google & Meta performance' },
-    { key: 'google', label: 'Google Only', icon: '🔍', desc: 'Google Ads: search terms, CPC, conversions' },
-    { key: 'meta', label: 'Meta Only', icon: '📱', desc: 'Meta Ads: creative, audiences, CPA, ROAS' },
-  ];
-  const [reportMode, setReportMode] = useState('all');
+  // ── WoW Comparison ──
+  const wowComparison = useMemo(() => {
+    const now = new Date();
+    const thisWeekStart = new Date(now); thisWeekStart.setDate(thisWeekStart.getDate() - 6);
+    const lastWeekStart = new Date(thisWeekStart); lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+    const lastWeekEnd = new Date(thisWeekStart); lastWeekEnd.setDate(lastWeekEnd.getDate() - 1);
+    const fmt = d => d.toISOString().slice(0, 10);
 
-  // Period navigation constants
+    const agg = (days) => {
+      let spend = 0, rev = 0, clicks = 0, impressions = 0;
+      days.forEach(d => {
+        const day = allDaysData[d]; if (!day) return;
+        spend += (day?.amazon?.adSpend || 0) + (day?.shopify?.googleSpend || day?.googleSpend || 0) + (day?.shopify?.metaSpend || day?.metaSpend || 0);
+        rev += (day?.amazon?.revenue || 0) + (day?.shopify?.revenue || 0);
+        const am = day?.shopify?.adsMetrics || {};
+        clicks += (am.googleClicks || 0) + (am.metaClicks || 0) + (day?.amazonAdsMetrics?.clicks || 0);
+        impressions += (am.googleImpressions || 0) + (am.metaImpressions || 0) + (day?.amazonAdsMetrics?.impressions || 0);
+      });
+      return { spend, rev, clicks, impressions, tacos: rev > 0 ? (spend / rev) * 100 : 0, roas: spend > 0 ? rev / spend : 0 };
+    };
+
+    const thisW = sortedDays.filter(d => d >= fmt(thisWeekStart));
+    const lastW = sortedDays.filter(d => d >= fmt(lastWeekStart) && d <= fmt(lastWeekEnd));
+    return { this: agg(thisW), last: agg(lastW), thisDays: thisW.length, lastDays: lastW.length };
+  }, [sortedDays, allDaysData]);
+
+  // ══════════════════════════════════════════════════════════════
+  // PERIOD NAVIGATION & AGGREGATION
+  // ══════════════════════════════════════════════════════════════
+
   const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const availableYears = [...new Set([...sortedWeeks, ...sortedDays].map(d => parseInt(d.slice(0, 4))))].filter(Boolean).sort();
   if (availableYears.length === 0) availableYears.push(today.getFullYear());
   const weeksInYear = sortedWeeks.filter(w => w.startsWith(String(adsYear)));
   const daysInMonth = sortedDays.filter(d => { const dt = new Date(d+'T00:00:00'); return dt.getMonth() === adsMonth && dt.getFullYear() === adsYear; });
+  const monthsWithData = [...new Set([...sortedWeeks,...sortedDays].filter(d=>d.startsWith(String(adsYear))).map(d=>new Date(d+'T00:00:00').getMonth()))].sort((a,b)=>a-b);
 
   if (adsTimeTab === 'daily' && !adsSelectedDay && sortedDays.length > 0)
     setTimeout(() => setAdsSelectedDay(sortedDays[sortedDays.length - 1]), 0);
 
-  // ── Aggregation helpers ──
   const aggregateDailyData = (days) => days.reduce((acc, d) => {
     const day = allDaysData[d]; if (!day) return acc;
     const gAds = day.shopify?.googleSpend || day.googleSpend || day.googleAds || 0;
@@ -506,8 +393,7 @@ const AdsView = ({
       googleAds:acc.googleAds+gAds, metaAds:acc.metaAds+mAds, amazonAds:acc.amazonAds+aAds,
       totalAds:acc.totalAds+gAds+mAds+aAds,
       googleImpressions:acc.googleImpressions+gI, metaImpressions:acc.metaImpressions+mI,
-      amazonImpressions:acc.amazonImpressions+aI,
-      totalImpressions:acc.totalImpressions+gI+mI+aI,
+      amazonImpressions:acc.amazonImpressions+aI, totalImpressions:acc.totalImpressions+gI+mI+aI,
       googleClicks:acc.googleClicks+gC, metaClicks:acc.metaClicks+mC, amazonClicks:acc.amazonClicks+aC,
       totalClicks:acc.totalClicks+gC+mC+aC,
       googleConversions:acc.googleConversions+gCv, metaPurchases:acc.metaPurchases+mP,
@@ -552,8 +438,8 @@ const AdsView = ({
 
   const periodWeeks = getWeeksForPeriod();
   const periodDays = getDaysForPeriod();
-  const weeklyTotals = aggregateWeeklyData(periodWeeks);
   const dailyTotals = aggregateDailyData(periodDays);
+  const weeklyTotals = aggregateWeeklyData(periodWeeks);
   const useDailyData = adsTimeTab === 'daily' || adsTimeTab === 'weekly';
   const hasDailyMG = dailyTotals.metaAds>0||dailyTotals.googleAds>0;
   const hasWeeklyMG = weeklyTotals.metaAds>0||weeklyTotals.googleAds>0;
@@ -573,14 +459,13 @@ const AdsView = ({
   const amzTacos = totals.amzRev>0?(totals.amzAds/totals.amzRev)*100:0;
   const cpc = dailyTotals.totalClicks>0?dailyTotals.totalAds/dailyTotals.totalClicks:0;
   const ctr = dailyTotals.totalImpressions>0?(dailyTotals.totalClicks/dailyTotals.totalImpressions)*100:0;
-  const tacosColor = (t) => t<=15?'text-emerald-400':t<=25?'text-amber-400':'text-rose-400';
 
   const getPeriodLabel = () => {
     if (adsTimeTab==='daily' && periodDays.length===1) return new Date(periodDays[0]+'T00:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric',year:'numeric'});
-    if (adsTimeTab==='weekly') return `Last 7 Days (${periodDays.length} days with data)`;
+    if (adsTimeTab==='weekly') return `Last 7 Days`;
     if (adsTimeTab==='monthly') return `${monthNames[adsMonth]} ${adsYear}`;
     if (adsTimeTab==='quarterly') return `Q${adsQuarter} ${adsYear}`;
-    if (adsTimeTab==='yearly') return `${adsYear} Full Year`;
+    if (adsTimeTab==='yearly') return `${adsYear}`;
     return '';
   };
   const goToPrev = () => {
@@ -597,9 +482,15 @@ const AdsView = ({
     else if(adsTimeTab==='quarterly'){if(adsQuarter===4){setAdsQuarter(1);setAdsYear(adsYear+1);}else setAdsQuarter(adsQuarter+1);}
     else if(adsTimeTab==='yearly')setAdsYear(adsYear+1);
   };
-  const monthsWithData = [...new Set([...sortedWeeks,...sortedDays,...Object.keys(historicalDaily)].filter(d=>d.startsWith(String(adsYear))).map(d=>new Date(d+'T00:00:00').getMonth()))].sort((a,b)=>a-b);
 
   // Table data
+  const dailyTableData = (useDailyData?periodDays:daysInMonth).map(d => {
+    const day=allDaysData[d]; const gAds=day?.shopify?.googleSpend||day?.googleSpend||day?.googleAds||0;
+    const mAds=day?.shopify?.metaSpend||day?.metaSpend||day?.metaAds||0;
+    const aAds=day?.amazon?.adSpend||0;
+    const sR=day?.shopify?.revenue||0, aR=day?.amazon?.revenue||0;
+    return {date:d,googleAds:gAds,metaAds:mAds,amazonAds:aAds,totalAds:gAds+mAds+aAds,shopifyRev:sR,amazonRev:aR,totalRev:sR+aR};
+  });
   const weeklyTableData = periodWeeks.map(w => {
     const week=allWeeksData[w]; const amzAds=week?.amazon?.adSpend||0;
     let mAds=week?.shopify?.metaAds||week?.shopify?.metaSpend||0, gAds=week?.shopify?.googleAds||week?.shopify?.googleSpend||0;
@@ -607,25 +498,11 @@ const AdsView = ({
     const totalAds=amzAds+mAds+gAds, totalRev=week?.total?.revenue||0;
     return {week:w,amzAds,metaAds:mAds,googleAds:gAds,totalAds,totalRev,tacos:totalRev>0?(totalAds/totalRev)*100:0};
   });
-  const dailyTableData = (useDailyData?periodDays:daysInMonth).map(d => {
-    const day=allDaysData[d]; const gAds=day?.shopify?.googleSpend||day?.googleSpend||day?.googleAds||0;
-    const mAds=day?.shopify?.metaSpend||day?.metaSpend||day?.metaAds||0;
-    const aAds=day?.amazon?.adSpend||0; const am=day?.shopify?.adsMetrics||{};
-    const sR=day?.shopify?.revenue||0, aR=day?.amazon?.revenue||0;
-    return {date:d,googleAds:gAds,metaAds:mAds,amazonAds:aAds,totalAds:gAds+mAds+aAds,
-      googleImpressions:am.googleImpressions||0,metaImpressions:am.metaImpressions||0,
-      impressions:(am.googleImpressions||0)+(am.metaImpressions||0),
-      googleClicks:am.googleClicks||0,metaClicks:am.metaClicks||0,
-      clicks:(am.googleClicks||0)+(am.metaClicks||0),
-      googleConversions:am.googleConversions||0,metaPurchases:am.metaPurchases||0,
-      conversions:(am.googleConversions||0)+(am.metaPurchases||0),
-      metaPurchaseValue:am.metaPurchaseValue||0,shopifyRev:sR,amazonRev:aR,totalRev:sR+aR};
-  });
 
   // Upload handler
   const handleFileDrop = useCallback(async (fileList) => {
     if (!fileList||fileList.length===0) return;
-    if (!processAdsUpload) { setToast({message:'Upload handler not available — update App.jsx',type:'error'}); return; }
+    if (!processAdsUpload) { setToast({message:'Upload handler not available',type:'error'}); return; }
     setUploadStatus({processing:true,results:null,error:null});
     try {
       const result = await processAdsUpload(Array.from(fileList));
@@ -635,737 +512,682 @@ const AdsView = ({
       else if(summary.unrecognized>0) setToast({message:`${summary.unrecognized} file(s) not recognized`,type:'warning'});
     } catch(err) { setUploadStatus({processing:false,results:null,error:err.message}); setToast({message:`Upload error: ${err.message}`,type:'error'}); }
   }, [processAdsUpload, setToast]);
-
   const handleDragOver=(e)=>{e.preventDefault();e.stopPropagation();setIsDragging(true);};
   const handleDragLeave=(e)=>{e.preventDefault();e.stopPropagation();setIsDragging(false);};
   const handleDrop=(e)=>{e.preventDefault();e.stopPropagation();setIsDragging(false);handleFileDrop(e.dataTransfer.files);};
 
-  // ═══════════════════════════════════════════════════════════════════
-  // RENDER — continued in next section via str_replace append
-  // ═══════════════════════════════════════════════════════════════════
+  // Report modes
+  const REPORT_MODES = [
+    { key: 'all', label: 'All Platforms', icon: '🌐', desc: 'Amazon + Google + Meta cross-platform audit' },
+    { key: 'amazon', label: 'Amazon', icon: '📦', desc: 'Campaigns, keywords, placements, ACOS deep dive' },
+    { key: 'dtc', label: 'DTC', icon: '🛍️', desc: 'Google + Meta DTC channel analysis' },
+    { key: 'google', label: 'Google', icon: '🔍', desc: 'Search terms, CPC, conversions, Quality Score' },
+    { key: 'meta', label: 'Meta', icon: '📱', desc: 'Creative, audiences, CPA, ROAS analysis' },
+  ];
+
+  // WoW delta helper
+  const delta = (curr, prev) => prev > 0 ? ((curr - prev) / prev) * 100 : 0;
+  const DeltaBadge = ({ curr, prev, invert = false }) => {
+    const d = delta(curr, prev);
+    if (Math.abs(d) < 0.5 || prev === 0) return null;
+    const good = invert ? d < 0 : d > 0;
+    return <span className={`text-[10px] font-medium flex items-center gap-0.5 ${good ? 'text-emerald-400' : 'text-rose-400'}`}>{good ? <TrendingUp className="w-2.5 h-2.5"/> : <TrendingDown className="w-2.5 h-2.5"/>}{Math.abs(d).toFixed(0)}%</span>;
+  };
+
+  // ══════════════════════════════════════════════════════════════
+  // RENDER
+  // ══════════════════════════════════════════════════════════════
   return (
     <div className="min-h-screen bg-slate-950 p-4 lg:p-6">
       <div className="max-w-7xl mx-auto">{globalModals}
         <NavTabs view={view} setView={setView} navDropdown={navDropdown} setNavDropdown={setNavDropdown} appSettings={appSettings} allDaysData={allDaysData} allWeeksData={allWeeksData} allPeriodsData={allPeriodsData} hasDailySalesData={hasDailySalesData} setSelectedDay={setSelectedDay} setSelectedWeek={setSelectedWeek} setSelectedPeriod={setSelectedPeriod} invHistory={invHistory} setSelectedInvDate={setSelectedInvDate} setUploadTab={setUploadTab} bankingData={bankingData} />
         {dataBar}
 
-        {/* HEADER */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between flex-wrap gap-4">
+        {/* ── HEADER ── */}
+        <div className="mb-5">
+          <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
-              <h1 className="text-2xl lg:text-3xl font-bold text-white mb-1">📊 Advertising Command Center</h1>
-              <p className="text-slate-400">{sortedDays.length>0?`${sortedDays.length} days data`:'No daily data'}{hasCampaignData?` • ${campaigns.length} campaigns`:''}{tier2Summary.count>0?` • ${tier2Summary.count} deep reports loaded`:''}</p>
+              <h1 className="text-2xl lg:text-3xl font-bold text-white">Advertising Command Center</h1>
+              <p className="text-slate-500 text-sm mt-0.5">{sortedDays.length > 0 ? `${sortedDays.length} days tracked` : 'No data yet'}{hasCampaignData ? ` · ${campaigns.length} campaigns` : ''}{deepReportCount > 0 ? ` · ${deepReportCount} deep reports` : ''}</p>
             </div>
-            <button onClick={()=>setShowAdsAIChat(true)} className="px-4 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white flex items-center gap-2 font-medium shadow-lg shadow-orange-500/20">
+            <button onClick={()=>setShowAdsAIChat(true)} className="px-4 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white flex items-center gap-2 font-medium shadow-lg shadow-orange-500/20 transition-all">
               <Zap className="w-4 h-4"/>Ask AI
             </button>
           </div>
         </div>
 
-        {/* QUICK INSIGHTS */}
-        {quickInsights.length>0 && adsViewMode==='overview' && (
-          <div className="bg-gradient-to-r from-slate-800/80 to-slate-800/40 rounded-2xl border border-slate-700 p-4 mb-6">
-            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">⚡ Quick Insights</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {quickInsights.map((ins,i)=>(
-                <div key={i} className={`flex items-start gap-3 p-3 rounded-xl ${ins.type==='warning'?'bg-amber-900/20 border border-amber-500/30':ins.type==='opportunity'?'bg-emerald-900/20 border border-emerald-500/30':'bg-blue-900/20 border border-blue-500/30'}`}>
-                  <span className="text-xl">{ins.icon}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-white text-sm">{ins.text}</p>
-                    {ins.action&&<button onClick={()=>{setAdsAiInput(ins.action);setShowAdsAIChat(true);}} className="text-xs text-orange-400 hover:text-orange-300 mt-1">→ {ins.action}</button>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* TAB BAR */}
-        <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
-          <button onClick={()=>setAdsViewMode('overview')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 ${adsViewMode==='overview'?'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg':'text-slate-300 hover:bg-slate-700'}`}><BarChart3 className="w-4 h-4"/>Overview</button>
-          <button onClick={()=>setAdsViewMode('upload')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 ${adsViewMode==='upload'?'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-lg':'text-slate-300 hover:bg-slate-700'}`}><Upload className="w-4 h-4"/>Upload{tier2Summary.count>0&&<span className="px-1.5 py-0.5 bg-white/20 rounded text-xs">{tier2Summary.count}</span>}</button>
-          <button onClick={()=>setAdsViewMode('analysis')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 ${adsViewMode==='analysis'?'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg':'text-slate-300 hover:bg-slate-700'}`}><Search className="w-4 h-4"/>Deep Analysis</button>
-          <button onClick={()=>setAdsViewMode('reports')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 ${adsViewMode==='reports'?'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-lg':'text-slate-300 hover:bg-slate-700'}`}><Brain className="w-4 h-4"/>AI Reports</button>
+        {/* ── TAB BAR ── */}
+        <div className="flex gap-1.5 mb-5 p-1 bg-slate-800/40 rounded-xl overflow-x-auto">
+          {[
+            { key: 'overview', label: 'Dashboard', icon: BarChart3, gradient: 'from-cyan-600 to-blue-600' },
+            { key: 'reports', label: 'AI Reports', icon: Brain, gradient: 'from-orange-600 to-amber-600' },
+            { key: 'upload', label: 'Data', icon: Database, gradient: 'from-violet-600 to-purple-600' },
+          ].map(tab => (
+            <button key={tab.key} onClick={()=>setAdsViewMode(tab.key)}
+              className={`flex-1 min-w-fit px-4 py-2.5 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 ${adsViewMode===tab.key ? `bg-gradient-to-r ${tab.gradient} text-white shadow-lg` : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}>
+              <tab.icon className="w-4 h-4"/>{tab.label}
+              {tab.key === 'upload' && deepReportCount > 0 && <span className="px-1.5 py-0.5 bg-white/20 rounded text-[10px]">{deepReportCount}</span>}
+            </button>
+          ))}
         </div>
 
-        {/* ═══ OVERVIEW TAB ═══ */}
+        {/* ════════════════════════════════════════════════════════ */}
+        {/* DASHBOARD TAB                                          */}
+        {/* ════════════════════════════════════════════════════════ */}
         {adsViewMode==='overview' && (<>
-          <div className="flex gap-2 mb-4 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
-            <button onClick={()=>setAdsTimeTab('daily')} disabled={!hasDailyData} className={`flex-1 min-w-fit px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${adsTimeTab==='daily'?'bg-cyan-600 text-white':'text-slate-300 hover:bg-slate-700 disabled:opacity-40'}`}>Daily</button>
-            {['weekly','monthly','quarterly','yearly'].map(t=>(<button key={t} onClick={()=>setAdsTimeTab(t)} className={`flex-1 min-w-fit px-4 py-2.5 rounded-lg font-medium text-sm transition-all capitalize ${adsTimeTab===t?(t==='weekly'?'bg-violet-600':t==='monthly'?'bg-blue-600':t==='quarterly'?'bg-teal-600':'bg-amber-600')+' text-white':'text-slate-300 hover:bg-slate-700'}`}>{t}</button>))}
-          </div>
 
-          <div className="flex flex-wrap items-center gap-3 mb-6">
-            <div className="flex items-center gap-2"><span className="text-slate-400 text-sm">Year:</span>
-              <select value={adsYear} onChange={e=>setAdsYear(parseInt(e.target.value))} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">{availableYears.map(y=><option key={y} value={y}>{y}</option>)}</select></div>
-            {adsTimeTab==='monthly'&&<div className="flex items-center gap-2"><span className="text-slate-400 text-sm">Month:</span><select value={adsMonth} onChange={e=>setAdsMonth(parseInt(e.target.value))} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">{monthNames.map((m,i)=><option key={i} value={i} disabled={!monthsWithData.includes(i)}>{m}</option>)}</select></div>}
-            {adsTimeTab==='daily'&&sortedDays.length>0&&<div className="flex items-center gap-2"><span className="text-slate-400 text-sm">Day:</span><select value={adsSelectedDay||''} onChange={e=>setAdsSelectedDay(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">{sortedDays.slice().reverse().slice(0,90).map(d=><option key={d} value={d}>{new Date(d+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'})}</option>)}</select></div>}
-            {adsTimeTab==='weekly'&&weeksInYear.length>0&&<div className="flex items-center gap-2"><span className="text-slate-400 text-sm">Week:</span><select value={adsSelectedWeek||''} onChange={e=>setAdsSelectedWeek(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">{weeksInYear.slice().reverse().map(w=><option key={w} value={w}>{new Date(w+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</option>)}</select></div>}
-            {adsTimeTab==='quarterly'&&<div className="flex items-center gap-2"><span className="text-slate-400 text-sm">Quarter:</span><select value={adsQuarter} onChange={e=>setAdsQuarter(parseInt(e.target.value))} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm">{[1,2,3,4].map(q=><option key={q} value={q}>Q{q}</option>)}</select></div>}
-            <div className="flex items-center gap-1 ml-auto">
-              <button onClick={goToPrev} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"><ChevronLeft className="w-4 h-4"/></button>
-              <button onClick={goToNext} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"><ChevronRight className="w-4 h-4"/></button>
+          {/* ── HERO KPIs with WoW ── */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 mb-5">
+            <div className="bg-gradient-to-br from-slate-800/80 to-slate-800/40 rounded-xl border border-slate-700/60 p-3.5">
+              <div className="flex items-center justify-between"><p className="text-slate-500 text-[10px] uppercase tracking-wider">Ad Spend</p><DeltaBadge curr={wowComparison.this.spend} prev={wowComparison.last.spend} invert/></div>
+              <p className="text-xl font-bold text-white mt-0.5">{formatCurrency(useDailyData?dailyTotals.totalAds:totals.totalAds)}</p>
+            </div>
+            <div className="bg-gradient-to-br from-slate-800/80 to-slate-800/40 rounded-xl border border-slate-700/60 p-3.5">
+              <div className="flex items-center justify-between"><p className="text-slate-500 text-[10px] uppercase tracking-wider">Revenue</p><DeltaBadge curr={wowComparison.this.rev} prev={wowComparison.last.rev}/></div>
+              <p className="text-xl font-bold text-emerald-400 mt-0.5">{formatCurrency(useDailyData?dailyTotals.totalRev:totals.totalRev)}</p>
+            </div>
+            <div className="bg-gradient-to-br from-slate-800/80 to-slate-800/40 rounded-xl border border-slate-700/60 p-3.5">
+              <div className="flex items-center justify-between"><p className="text-slate-500 text-[10px] uppercase tracking-wider">TACOS</p><DeltaBadge curr={wowComparison.this.tacos} prev={wowComparison.last.tacos} invert/></div>
+              <p className={`text-xl font-bold mt-0.5 ${tacosColor(totalTacos)}`}>{totalTacos > 0 ? totalTacos.toFixed(1) + '%' : '—'}</p>
+            </div>
+            <div className="bg-gradient-to-br from-slate-800/80 to-slate-800/40 rounded-xl border border-slate-700/60 p-3.5">
+              <div className="flex items-center justify-between"><p className="text-slate-500 text-[10px] uppercase tracking-wider">ROAS</p><DeltaBadge curr={wowComparison.this.roas} prev={wowComparison.last.roas}/></div>
+              <p className={`text-xl font-bold mt-0.5 ${roasColor(totals.totalRev > 0 && totals.totalAds > 0 ? totals.totalRev / totals.totalAds : 0)}`}>{totals.totalAds > 0 ? (totals.totalRev / totals.totalAds).toFixed(2) + 'x' : '—'}</p>
+            </div>
+            <div className="bg-gradient-to-br from-slate-800/80 to-slate-800/40 rounded-xl border border-slate-700/60 p-3.5">
+              <p className="text-slate-500 text-[10px] uppercase tracking-wider">Avg CPC</p>
+              <p className={`text-xl font-bold mt-0.5 ${cpc < 1.5 ? 'text-emerald-400' : cpc < 2.5 ? 'text-amber-400' : 'text-rose-400'}`}>{cpc > 0 ? formatCurrency(cpc) : '—'}</p>
+            </div>
+            <div className="bg-gradient-to-br from-slate-800/80 to-slate-800/40 rounded-xl border border-slate-700/60 p-3.5">
+              <p className="text-slate-500 text-[10px] uppercase tracking-wider">Conversions</p>
+              <p className="text-xl font-bold text-white mt-0.5">{formatNumber(dailyTotals.googleConversions+dailyTotals.metaPurchases+dailyTotals.amazonConversions)}</p>
             </div>
           </div>
 
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-xl font-bold text-white">{getPeriodLabel()}</h2>
-            <span className="text-slate-400 text-sm">{useDailyData?`${periodDays.length} day${periodDays.length!==1?'s':''}`:`${periodWeeks.length} week${periodWeeks.length!==1?'s':''}`}</span>
-          </div>
-
-          {/* KPI CARDS */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
-            <div className="bg-gradient-to-br from-purple-900/30 to-slate-800/50 rounded-xl border border-purple-500/30 p-4"><p className="text-slate-400 text-xs uppercase">Total Spend</p><p className="text-2xl font-bold text-white">{formatCurrency(useDailyData?dailyTotals.totalAds:totals.totalAds)}</p></div>
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4"><p className="text-slate-400 text-xs uppercase">Impressions</p><p className="text-2xl font-bold text-white">{formatNumber(dailyTotals.totalImpressions)}</p></div>
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4"><p className="text-slate-400 text-xs uppercase">Clicks</p><p className="text-2xl font-bold text-white">{formatNumber(dailyTotals.totalClicks)}</p><p className="text-slate-500 text-xs mt-1">CTR: {ctr.toFixed(2)}%</p></div>
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4"><p className="text-slate-400 text-xs uppercase">Conversions</p><p className="text-2xl font-bold text-white">{formatNumber(dailyTotals.googleConversions+dailyTotals.metaPurchases+dailyTotals.amazonConversions)}</p></div>
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4"><p className="text-slate-400 text-xs uppercase">Avg CPC</p><p className={`text-2xl font-bold ${cpc<1.5?'text-emerald-400':cpc<2.5?'text-amber-400':'text-rose-400'}`}>{formatCurrency(cpc)}</p></div>
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4"><p className="text-slate-400 text-xs uppercase">Revenue</p><p className="text-2xl font-bold text-emerald-400">{formatCurrency(useDailyData?dailyTotals.totalRev:totals.totalRev)}</p><p className="text-slate-500 text-xs mt-1">TACOS: <span className={tacosColor(totalTacos)}>{totalTacos>0?totalTacos.toFixed(1)+'%':'—'}</span></p></div>
-          </div>
-
-          {/* PLATFORM CARDS */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div className="bg-gradient-to-br from-orange-900/20 to-slate-800/50 rounded-xl border border-orange-500/30 p-4">
-              <div className="flex items-center justify-between mb-3"><h4 className="text-orange-400 font-semibold flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-orange-500"/>Amazon</h4><span className="text-white font-bold">{formatCurrency(totals.amzAds||dailyTotals.amazonAds)}</span></div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div><p className="text-slate-500">Revenue</p><p className="text-emerald-400 font-medium">{formatCurrency(totals.amzRev||dailyTotals.amazonRev)}</p></div>
-                <div><p className="text-slate-500">TACOS</p><p className={`font-medium ${tacosColor(amzTacos)}`}>{amzTacos>0?amzTacos.toFixed(1)+'%':'—'}</p></div>
+          {/* ── PLATFORM CARDS ── */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+            {/* Amazon */}
+            <div className="bg-gradient-to-br from-orange-900/15 to-slate-800/40 rounded-xl border border-orange-500/20 p-4">
+              <div className="flex items-center justify-between mb-2"><h4 className="text-orange-400 font-semibold text-sm flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-orange-500"/>Amazon</h4><span className="text-white font-bold text-lg">{formatCurrency(totals.amzAds||dailyTotals.amazonAds)}</span></div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <div><span className="text-slate-500">Revenue</span><p className="text-emerald-400 font-medium">{formatCurrency(totals.amzRev||dailyTotals.amazonRev)}</p></div>
+                <div><span className="text-slate-500">TACOS</span><p className={`font-medium ${tacosColor(amzTacos)}`}>{amzTacos > 0 ? amzTacos.toFixed(1) + '%' : '—'}</p></div>
               </div>
+              <Sparkline data={amazonAdsInsights.trendData.slice(-14).map(d => d.spend)} color="bg-orange-500" h={24} />
             </div>
-            <div className="bg-gradient-to-br from-red-900/20 to-slate-800/50 rounded-xl border border-red-500/30 p-4">
-              <div className="flex items-center justify-between mb-3"><h4 className="text-red-400 font-semibold flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-red-500"/>Google</h4><span className="text-white font-bold">{formatCurrency(totals.googleAds||dailyTotals.googleAds)}</span></div>
-              {(dailyTotals.googleAds>0||dailyTotals.googleImpressions>0)?<div className="grid grid-cols-3 gap-2 text-xs">
-                <div><p className="text-slate-500">Impr.</p><p className="text-white font-medium">{formatNumber(dailyTotals.googleImpressions)}</p></div>
-                <div><p className="text-slate-500">Clicks</p><p className="text-white font-medium">{formatNumber(dailyTotals.googleClicks)}</p></div>
-                <div><p className="text-slate-500">Conv.</p><p className="text-emerald-400 font-medium">{dailyTotals.googleConversions}</p></div>
-              </div>:<p className="text-slate-500 text-xs">No data • <button onClick={()=>setAdsViewMode('upload')} className="text-red-400 hover:underline">Upload</button></p>}
+            {/* Google */}
+            <div className="bg-gradient-to-br from-red-900/15 to-slate-800/40 rounded-xl border border-red-500/20 p-4">
+              <div className="flex items-center justify-between mb-2"><h4 className="text-red-400 font-semibold text-sm flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-red-500"/>Google</h4><span className="text-white font-bold text-lg">{formatCurrency(totals.googleAds||dailyTotals.googleAds)}</span></div>
+              {(dailyTotals.googleAds > 0 || dailyTotals.googleImpressions > 0) ? <>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div><span className="text-slate-500">Clicks</span><p className="text-white font-medium">{formatNumber(dailyTotals.googleClicks)}</p></div>
+                  <div><span className="text-slate-500">Conv</span><p className="text-emerald-400 font-medium">{dailyTotals.googleConversions}</p></div>
+                  <div><span className="text-slate-500">CPC</span><p className={`font-medium ${platformInsights.google.cpc <= 1 ? 'text-emerald-400' : platformInsights.google.cpc <= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.google.cpc > 0 ? formatCurrency(platformInsights.google.cpc) : '—'}</p></div>
+                </div>
+                <Sparkline data={platformInsights.google.trend.slice(-14).map(d => d.spend)} color="bg-red-500" h={24} />
+              </> : <p className="text-slate-600 text-xs mt-1">No data — <button onClick={()=>setAdsViewMode('upload')} className="text-red-400 hover:underline">upload</button></p>}
             </div>
-            <div className="bg-gradient-to-br from-blue-900/20 to-slate-800/50 rounded-xl border border-blue-500/30 p-4">
-              <div className="flex items-center justify-between mb-3"><h4 className="text-blue-400 font-semibold flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-blue-500"/>Meta</h4><span className="text-white font-bold">{formatCurrency(totals.metaAds||dailyTotals.metaAds)}</span></div>
-              {(dailyTotals.metaAds>0||dailyTotals.metaImpressions>0)?<div className="grid grid-cols-3 gap-2 text-xs">
-                <div><p className="text-slate-500">Impr.</p><p className="text-white font-medium">{formatNumber(dailyTotals.metaImpressions)}</p></div>
-                <div><p className="text-slate-500">Clicks</p><p className="text-white font-medium">{formatNumber(dailyTotals.metaClicks)}</p></div>
-                <div><p className="text-slate-500">Purchases</p><p className="text-emerald-400 font-medium">{formatNumber(Math.round(dailyTotals.metaPurchases))}</p></div>
-              </div>:<p className="text-slate-500 text-xs">No data • <button onClick={()=>setAdsViewMode('upload')} className="text-blue-400 hover:underline">Upload</button></p>}
+            {/* Meta */}
+            <div className="bg-gradient-to-br from-blue-900/15 to-slate-800/40 rounded-xl border border-blue-500/20 p-4">
+              <div className="flex items-center justify-between mb-2"><h4 className="text-blue-400 font-semibold text-sm flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-blue-500"/>Meta</h4><span className="text-white font-bold text-lg">{formatCurrency(totals.metaAds||dailyTotals.metaAds)}</span></div>
+              {(dailyTotals.metaAds > 0 || dailyTotals.metaImpressions > 0) ? <>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div><span className="text-slate-500">Clicks</span><p className="text-white font-medium">{formatNumber(dailyTotals.metaClicks)}</p></div>
+                  <div><span className="text-slate-500">Purchases</span><p className="text-emerald-400 font-medium">{formatNumber(Math.round(dailyTotals.metaPurchases))}</p></div>
+                  <div><span className="text-slate-500">CPA</span><p className={`font-medium ${platformInsights.meta.cpa > 0 && platformInsights.meta.cpa <= 15 ? 'text-emerald-400' : platformInsights.meta.cpa <= 30 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.meta.cpa > 0 ? formatCurrency(platformInsights.meta.cpa) : '—'}</p></div>
+                </div>
+                <Sparkline data={platformInsights.meta.trend.slice(-14).map(d => d.spend)} color="bg-blue-500" h={24} />
+              </> : <p className="text-slate-600 text-xs mt-1">No data — <button onClick={()=>setAdsViewMode('upload')} className="text-blue-400 hover:underline">upload</button></p>}
             </div>
           </div>
 
-          {/* ═══ AMAZON ADS INTELLIGENCE ═══ */}
+          {/* ── ALERTS ── */}
+          {(amazonAdsInsights.staleCampaignWarning || amazonAdsInsights.zeroSaleCampaigns.length > 0 || amazonAdsInsights.zeroSaleDays.length > 0 || amazonAdsInsights.acosSpikeDays.length > 0) && (
+            <div className="space-y-2 mb-5">
+              {amazonAdsInsights.staleCampaignWarning && (
+                <div className="flex items-center gap-3 bg-amber-900/20 border border-amber-500/30 rounded-xl p-3.5">
+                  <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0"/>
+                  <div className="flex-1 min-w-0"><p className="text-amber-200 text-sm font-medium">Campaign CSV is stale</p><p className="text-amber-400/70 text-xs">All {campaigns.length} campaigns show $0 spend, but daily data shows active ad spend of {formatCurrency(amazonAdsInsights.summary?.totalSpend || 0)}. Upload a fresh report.</p></div>
+                  <button onClick={()=>setAdsViewMode('upload')} className="px-3 py-1.5 bg-amber-600/30 border border-amber-500/40 rounded-lg text-amber-200 text-xs font-medium hover:bg-amber-600/50 whitespace-nowrap">Upload →</button>
+                </div>
+              )}
+              {amazonAdsInsights.zeroSaleCampaigns.length > 0 && (
+                <div className="flex items-center gap-3 bg-rose-900/15 border border-rose-500/20 rounded-xl p-3.5">
+                  <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0"/>
+                  <div className="flex-1 min-w-0"><p className="text-rose-200 text-sm font-medium">{amazonAdsInsights.zeroSaleCampaigns.length} campaign{amazonAdsInsights.zeroSaleCampaigns.length > 1 ? 's' : ''} with zero sales</p><p className="text-rose-400/70 text-xs">{formatCurrency(amazonAdsInsights.zeroSaleCampaigns.reduce((s, c) => s + c.spend, 0))} spent with $0 attributed revenue</p></div>
+                  <button onClick={()=>{setAdsAiInput(`Diagnose these zero-sale campaigns: ${amazonAdsInsights.zeroSaleCampaigns.map(c => `${c.name} (${formatCurrency(c.spend)} spent)`).join(', ')}. What's wrong and what should I do?`);setShowAdsAIChat(true);}} className="px-3 py-1.5 bg-rose-600/30 border border-rose-500/40 rounded-lg text-rose-200 text-xs font-medium hover:bg-rose-600/50 whitespace-nowrap">Diagnose →</button>
+                </div>
+              )}
+              {amazonAdsInsights.zeroSaleDays.length > 0 && (
+                <div className="flex items-center gap-3 bg-orange-900/15 border border-orange-500/20 rounded-xl p-3.5">
+                  <Flame className="w-5 h-5 text-orange-400 shrink-0"/>
+                  <div className="flex-1 min-w-0"><p className="text-orange-200 text-sm font-medium">{amazonAdsInsights.zeroSaleDays.length} zero-revenue ad day{amazonAdsInsights.zeroSaleDays.length > 1 ? 's' : ''} (last 14d)</p><p className="text-orange-400/70 text-xs">{formatCurrency(amazonAdsInsights.zeroSaleDays.reduce((s, d) => s + d.spend, 0))} potentially wasted across {[...new Set(amazonAdsInsights.zeroSaleDays.map(d => d.platform))].join(', ')}</p></div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── TACOS TREND ── */}
+          {amazonAdsInsights.trendData.length > 2 && (() => {
+            const trend = amazonAdsInsights.trendData.slice(-30);
+            const tacosValues = trend.map(d => d.tacos).filter(t => t > 0 && t < 200);
+            const minT = tacosValues.length > 0 ? Math.min(...tacosValues) : 0;
+            const maxT = tacosValues.length > 0 ? Math.max(...tacosValues) : 50;
+            const range = maxT - minT;
+            const padMin = range > 2 ? minT - range * 0.15 : minT - 2;
+            const padMax = range > 2 ? maxT + range * 0.1 : maxT + 2;
+            const scaleRange = padMax - padMin;
+            const last7 = trend.slice(-7), prev7 = trend.slice(-14, -7);
+            const last7T = (() => { const s = last7.reduce((a, d) => a + d.spend, 0); const r = last7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
+            const prev7T = (() => { const s = prev7.reduce((a, d) => a + d.spend, 0); const r = prev7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
+            const d7 = prev7T > 0 ? last7T - prev7T : 0;
+            return (
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4 mb-5">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-white font-semibold text-sm flex items-center gap-2"><BarChart3 className="w-4 h-4 text-cyan-400"/>TACOS Trend — {trend.length}d</h3>
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="text-slate-400">7d: <span className={`font-bold ${last7T <= 10 ? 'text-emerald-400' : last7T <= 20 ? 'text-amber-400' : 'text-rose-400'}`}>{last7T.toFixed(1)}%</span></span>
+                    {d7 !== 0 && <span className={`flex items-center gap-0.5 ${d7 < 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{d7 < 0 ? <TrendingDown className="w-3 h-3"/> : <TrendingUp className="w-3 h-3"/>}{Math.abs(d7).toFixed(1)}pp</span>}
+                  </div>
+                </div>
+                <div className="flex gap-1">
+                  <div className="flex flex-col justify-between text-[10px] text-slate-600 pr-1" style={{ minWidth: '30px' }}>
+                    <span>{Math.ceil(padMax)}%</span>
+                    <span>{Math.round((padMax + padMin) / 2)}%</span>
+                    <span>{Math.floor(Math.max(padMin, 0))}%</span>
+                  </div>
+                  <div className="flex items-end gap-px flex-1" style={{ height: '80px' }}>
+                    {trend.map((d, i) => {
+                      const t = d.tacos;
+                      const h = scaleRange > 0 ? Math.min(Math.max(((t - padMin) / scaleRange) * 100, 6), 100) : 50;
+                      const color = t <= 10 ? 'bg-emerald-500' : t <= 20 ? 'bg-amber-500' : 'bg-rose-500';
+                      return (
+                        <div key={i} className="flex-1 flex flex-col items-center justify-end group relative">
+                          <div className={`w-full rounded-t ${color} opacity-70 hover:opacity-100 transition-opacity cursor-default`} style={{ height: `${h}%` }}/>
+                          <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 pointer-events-none">
+                            <div className="bg-slate-900 border border-slate-600 rounded-lg p-2 text-xs whitespace-nowrap shadow-xl">
+                              <p className="text-slate-400">{fmtDate(d.date)}</p>
+                              <p className="text-white">Spend: {formatCurrency(d.spend)}</p>
+                              <p className="text-emerald-400">Rev: {formatCurrency(d.rev)}</p>
+                              <p className={`font-bold ${t <= 10 ? 'text-emerald-400' : t <= 20 ? 'text-amber-400' : 'text-rose-400'}`}>TACOS: {t.toFixed(1)}%</p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="flex justify-between text-[10px] text-slate-600 mt-1" style={{ paddingLeft: '34px' }}>
+                  <span>{fmtDate(trend[0].date)}</span>
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>≤10%</span>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-500"/>≤20%</span>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-rose-500"/>&gt;20%</span>
+                  </div>
+                  <span>{fmtDate(trend[trend.length - 1].date)}</span>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* ── INTELLIGENCE SECTION ── */}
           {amazonAdsInsights.hasData && (
-            <div className="mb-6 space-y-4">
-              <div className="flex items-center justify-between">
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <h2 className="text-lg font-bold text-white flex items-center gap-2"><Flame className="w-5 h-5 text-orange-400"/>Amazon Ads Intelligence</h2>
-                <div className="flex items-center gap-2">
+            <div className="mb-5">
+              <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
+                <h2 className="text-base font-bold text-white flex items-center gap-2"><Flame className="w-4 h-4 text-orange-400"/>Intelligence</h2>
+                <div className="flex items-center gap-1.5">
                   {[7, 14, 30, 60, 90, 'all'].map(range => (
                     <button key={range} onClick={() => setIntelDateRange(range)}
-                      className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${intelDateRange === range ? 'bg-orange-600 text-white shadow-lg shadow-orange-500/20' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
-                      {range === 'all' ? 'All' : `${range}d`}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${intelDateRange === range ? 'bg-orange-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/50'}`}>
+                      {range === 'all' ? 'All' : range + 'd'}
                     </button>
                   ))}
                 </div>
               </div>
-              {amazonAdsInsights.dateRange.earliest && (
-                <p className="text-xs text-slate-500 mt-1">
-                  {intelDateRange === 'all' ? `All data: ${amazonAdsInsights.dateRange.earliest} → ${amazonAdsInsights.dateRange.latest}` : `Last ${intelDateRange} days`}
-                  {amazonAdsInsights.summary?.totalTerms > 0 ? ` · ${amazonAdsInsights.summary.totalTerms.toLocaleString()} search terms` : ''}
-                  {` · ${amazonAdsInsights.dateRange.daysAvailable} days with ad spend`}
-                </p>
-              )}
-              </div>
-              
-              {/* Alert Banner: Wasted Spend */}
-              {amazonAdsInsights.summary && amazonAdsInsights.summary.wastedTotal > 10 && (
-                <div className="bg-gradient-to-r from-red-900/30 to-amber-900/20 rounded-xl border border-red-500/40 p-4 flex items-center gap-4">
-                  <div className="p-2 bg-red-500/20 rounded-lg"><ShieldAlert className="w-6 h-6 text-red-400"/></div>
-                  <div className="flex-1">
-                    <p className="text-white font-semibold">{formatCurrency(amazonAdsInsights.summary.wastedTotal)} wasted on zero-sale search terms</p>
-                    <p className="text-slate-400 text-sm">{amazonAdsInsights.wastedSpend.length} terms with ${'>'}5 spend and no conversions — {amazonAdsInsights.summary.wastedPct.toFixed(1)}% of total search spend</p>
-                  </div>
-                  <button onClick={() => { setAdsAiInput('Analyze my wasted ad spend on search terms with zero sales. Which should be added as negative keywords?'); setShowAdsAIChat(true); }} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 border border-red-500/30 rounded-lg text-red-300 text-xs font-medium whitespace-nowrap">AI Analysis →</button>
-                </div>
-              )}
-              
-              {/* Summary KPIs */}
-              {amazonAdsInsights.summary && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
-                    <p className="text-slate-500 text-xs uppercase">ROAS</p>
-                    <p className={`text-xl font-bold ${amazonAdsInsights.summary.overallRoas >= 4 ? 'text-emerald-400' : amazonAdsInsights.summary.overallRoas >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{amazonAdsInsights.summary.overallRoas.toFixed(2)}x</p>
-                  </div>
-                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
-                    <p className="text-slate-500 text-xs uppercase">TACOS</p>
-                    <p className={`text-xl font-bold ${amazonAdsInsights.summary.totalSales > 0 ? ((amazonAdsInsights.summary.totalSpend / amazonAdsInsights.summary.totalSales)*100 <= 10 ? 'text-emerald-400' : (amazonAdsInsights.summary.totalSpend / amazonAdsInsights.summary.totalSales)*100 <= 20 ? 'text-amber-400' : 'text-rose-400') : 'text-slate-400'}`}>{amazonAdsInsights.summary.totalSales > 0 ? ((amazonAdsInsights.summary.totalSpend / amazonAdsInsights.summary.totalSales)*100).toFixed(1) + '%' : '—'}</p>
-                  </div>
-                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
-                    <p className="text-slate-500 text-xs uppercase">Total Revenue</p>
-                    <p className="text-xl font-bold text-emerald-400">{formatCurrency(amazonAdsInsights.summary.totalSales)}</p>
-                  </div>
-                  <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
-                    <p className="text-slate-500 text-xs uppercase">Ad Spend</p>
-                    <p className="text-xl font-bold text-white">{formatCurrency(amazonAdsInsights.summary.totalSpend)}</p>
-                  </div>
-                </div>
-              )}
 
-              {/* ═══ ACTIONABLE ALERTS ═══ */}
-              
-              {/* Stale Campaign Data Warning */}
-              {amazonAdsInsights.staleCampaignWarning && (
-                <div className="bg-gradient-to-r from-amber-900/30 to-orange-900/20 rounded-xl border border-amber-500/40 p-4 flex items-center gap-4">
-                  <div className="p-2 bg-amber-500/20 rounded-lg"><AlertTriangle className="w-6 h-6 text-amber-400"/></div>
-                  <div className="flex-1">
-                    <p className="text-white font-semibold">Campaign CSV Is Stale</p>
-                    <p className="text-slate-400 text-sm">All {campaigns.length} campaigns show $0 spend, but your daily data shows active ad spend of {formatCurrency(amazonAdsInsights.summary?.totalSpend || 0)} over {amazonAdsInsights.summary?.daysCount || 0} days. Upload a fresh Campaign Report from Amazon Ads Console for accurate campaign-level insights.</p>
-                  </div>
-                  <button onClick={() => setAdsViewMode('upload')} className="px-3 py-2 bg-amber-600/40 hover:bg-amber-600/60 border border-amber-500/30 rounded-lg text-amber-300 text-xs font-medium whitespace-nowrap">Upload Fresh Data →</button>
-                </div>
-              )}
-              
-              {/* Zero-Sale Campaigns */}
-              {amazonAdsInsights.zeroSaleCampaigns.length > 0 && (
-                <div className="bg-gradient-to-r from-red-900/20 to-slate-800/30 rounded-xl border border-red-500/30 p-4">
-                  <h3 className="text-white font-semibold text-sm mb-2 flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-red-400"/>Campaigns With Zero Sales</h3>
-                  <p className="text-slate-400 text-xs mb-3">{amazonAdsInsights.zeroSaleCampaigns.length} campaign{amazonAdsInsights.zeroSaleCampaigns.length !== 1 ? 's' : ''} spent money but generated $0 in sales — total wasted: {formatCurrency(amazonAdsInsights.zeroSaleCampaigns.reduce((s, c) => s + c.spend, 0))}</p>
-                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                    {amazonAdsInsights.zeroSaleCampaigns.map((c, i) => (
-                      <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg bg-red-900/10 border border-red-500/10">
-                        <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"/>
-                        <span className="text-white flex-1 truncate" title={c.name}>{c.name}</span>
-                        <span className="text-slate-500">{c.type}</span>
-                        <span className="text-slate-400">{c.clicks} clicks</span>
-                        <span className="text-red-400 font-semibold">{formatCurrency(c.spend)} → $0</span>
-                      </div>
-                    ))}
-                  </div>
-                  <button onClick={() => { setAdsAiInput(`These campaigns spent money with zero sales: ${amazonAdsInsights.zeroSaleCampaigns.map(c => `${c.name} ($${c.spend.toFixed(2)}, ${c.clicks} clicks)`).join(', ')}. Should I pause them? What's wrong with each one? Give me specific action for each.`); setShowAdsAIChat(true); }}
-                    className="mt-3 px-3 py-1.5 bg-red-600/30 hover:bg-red-600/50 border border-red-500/30 rounded-lg text-red-300 text-xs font-medium">Diagnose With AI →</button>
-                </div>
-              )}
-
-              {/* Zero-Sale Days (Last 14 Days) */}
-              {amazonAdsInsights.zeroSaleDays.length > 0 && (
-                <div className="bg-gradient-to-r from-orange-900/15 to-slate-800/30 rounded-xl border border-orange-500/20 p-4">
-                  <h3 className="text-white font-semibold text-sm mb-2 flex items-center gap-2"><TrendingDown className="w-4 h-4 text-orange-400"/>Zero-Revenue Ad Days <span className="text-xs font-normal text-slate-500">— Last 14 Days</span></h3>
-                  <p className="text-slate-400 text-xs mb-3">{amazonAdsInsights.zeroSaleDays.length} instance{amazonAdsInsights.zeroSaleDays.length !== 1 ? 's' : ''} of ad spend with $0 attributed revenue — {formatCurrency(amazonAdsInsights.zeroSaleDays.reduce((s, d) => s + d.spend, 0))} potentially wasted</p>
-                  <div className="flex flex-wrap gap-2">
-                    {amazonAdsInsights.zeroSaleDays.map((d, i) => (
-                      <div key={i} className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg text-xs border border-orange-500/10">
-                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${d.platform === 'Amazon' ? 'bg-orange-500' : d.platform === 'Google' ? 'bg-red-500' : 'bg-blue-500'}`}/>
-                        <span className="text-slate-300">{fmtDate(d.date)}</span>
-                        <span className="text-slate-500">{d.platform}</span>
-                        <span className="text-orange-400 font-semibold">{formatCurrency(d.spend)} → $0</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* ACOS Spike Days (Last 14 Days) */}
-              {amazonAdsInsights.acosSpikeDays.length > 0 && (
-                <div className="bg-slate-800/30 rounded-xl border border-rose-500/20 p-4">
-                  <h3 className="text-white font-semibold text-sm mb-2 flex items-center gap-2"><Flame className="w-4 h-4 text-rose-400"/>ACOS Spike Days <span className="text-xs font-normal text-slate-500">— Last 14 Days, Amazon ACOS &gt; 50%</span></h3>
-                  <div className="flex flex-wrap gap-2">
-                    {amazonAdsInsights.acosSpikeDays.map((d, i) => (
-                      <div key={i} className="inline-flex items-center gap-2 px-3 py-1.5 bg-rose-900/15 rounded-lg text-xs border border-rose-500/15">
-                        <span className="text-slate-300">{fmtDate(d.date)}</span>
-                        <span className="text-white">{formatCurrency(d.spend)} spend</span>
-                        <span className="text-slate-500">→</span>
-                        <span className="text-rose-400 font-bold">{d.acos >= 999 ? '∞' : d.acos.toFixed(0) + '%'} ACOS</span>
-                        {d.rev > 0 && <span className="text-slate-500">(${d.rev.toFixed(0)} rev)</span>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* TACOS Trend Chart — last 30 days from allDaysData */}
-              {amazonAdsInsights.trendData.length > 2 && (() => {
-                const trend = amazonAdsInsights.trendData.slice(-30);
-                // Use TACOS for bar height (meaningful variation vs flat spend bars)
-                const tacosValues = trend.map(d => d.tacos).filter(t => t > 0 && t < 200);
-                const maxTacos = tacosValues.length > 0 ? Math.max(...tacosValues) : 50;
-                const last7 = trend.slice(-7);
-                const prev7 = trend.slice(-14, -7);
-                const last7Tacos = (() => { const s = last7.reduce((a, d) => a + d.spend, 0); const r = last7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
-                const prev7Tacos = (() => { const s = prev7.reduce((a, d) => a + d.spend, 0); const r = prev7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
-                const delta = prev7Tacos > 0 ? last7Tacos - prev7Tacos : 0;
-                return (
-                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-white font-semibold text-sm flex items-center gap-2"><BarChart3 className="w-4 h-4 text-cyan-400"/>TACOS Trend — Last {trend.length} Days</h3>
-                      <div className="flex items-center gap-3 text-xs">
-                        <span className="text-slate-400">7d TACOS: <span className={`font-bold ${last7Tacos <= 10 ? 'text-emerald-400' : last7Tacos <= 20 ? 'text-amber-400' : 'text-rose-400'}`}>{last7Tacos.toFixed(1)}%</span></span>
-                        {delta !== 0 && <span className={`flex items-center gap-0.5 ${delta < 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{delta < 0 ? <TrendingDown className="w-3 h-3"/> : <TrendingUp className="w-3 h-3"/>}{Math.abs(delta).toFixed(1)}pp WoW</span>}
-                      </div>
-                    </div>
-                    <div className="flex items-end gap-px h-24">
-                      {trend.map((d, i) => {
-                        const t = d.tacos;
-                        const h = maxTacos > 0 ? Math.min(Math.max((t / maxTacos) * 100, 4), 100) : 4;
-                        const color = t <= 10 ? 'bg-emerald-500' : t <= 20 ? 'bg-amber-500' : 'bg-rose-500';
-                        return (
-                          <div key={i} className="flex-1 flex flex-col items-center justify-end group relative">
-                            <div className={`w-full rounded-t ${color} opacity-80 hover:opacity-100 transition-opacity cursor-default`} style={{ height: `${h}%` }}/>
-                            <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 pointer-events-none">
-                              <div className="bg-slate-900 border border-slate-600 rounded-lg p-2 text-xs whitespace-nowrap shadow-xl">
-                                <p className="text-slate-400">{fmtDate(d.date)}</p>
-                                <p className="text-white">Spend: {formatCurrency(d.spend)}</p>
-                                <p className="text-emerald-400">Revenue: {formatCurrency(d.rev)}</p>
-                                <p className={`font-bold ${t <= 10 ? 'text-emerald-400' : t <= 20 ? 'text-amber-400' : 'text-rose-400'}`}>TACOS: {t.toFixed(1)}%</p>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="flex justify-between text-xs text-slate-600 mt-1">
-                      <span>{fmtDate(trend[0].date)}</span>
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"/>≤10%</span>
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500"/>≤20%</span>
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500"/>&gt;20%</span>
-                      </div>
-                      <span>{fmtDate(trend[trend.length - 1].date)}</span>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* ═══ CAMPAIGN & REVENUE DATA CARDS ═══ */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                
-                {/* Top Performing Campaigns */}
-                {campaignRankings.top.length > 0 && (
-                  <div className="bg-gradient-to-br from-emerald-900/10 to-slate-800/30 rounded-xl border border-emerald-500/20 p-4">
-                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Trophy className="w-4 h-4 text-emerald-400"/>Top Campaigns by ROAS</h3>
-                    <div className="space-y-1.5">
-                      {campaignRankings.top.map((c, i) => (
-                        <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-emerald-900/10">
-                          <span className="text-emerald-500 font-bold w-5">{i + 1}</span>
-                          <span className="text-white flex-1 truncate" title={c.name}>{c.name}</span>
-                          <span className="text-slate-500 w-8">{c.type || 'SP'}</span>
-                          <span className="text-slate-400 w-16 text-right">{formatCurrency(c.spend)}</span>
-                          <span className="text-emerald-400 font-bold w-12 text-right">{(c.roas || 0).toFixed(1)}x</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-700/50 flex justify-between">
-                      <span>Campaigns with $5+ spend, sorted by ROAS</span>
-                      <span>{campaignRankings.top.length} shown</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Worst Performing Campaigns */}
-                {campaignRankings.worst.length > 0 && (
-                  <div className="bg-gradient-to-br from-red-900/10 to-slate-800/30 rounded-xl border border-red-500/20 p-4">
-                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-red-400"/>Worst Campaigns by ROAS</h3>
-                    <div className="space-y-1.5">
-                      {campaignRankings.worst.map((c, i) => (
-                        <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-red-900/10">
-                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${(c.roas || 0) === 0 ? 'bg-red-500' : (c.roas || 0) < 1 ? 'bg-orange-500' : 'bg-amber-500'}`}/>
-                          <span className="text-white flex-1 truncate" title={c.name}>{c.name}</span>
-                          <span className="text-slate-500 w-8">{c.type || 'SP'}</span>
-                          <span className="text-slate-400 w-16 text-right">{formatCurrency(c.spend)}</span>
-                          <span className={`font-bold w-12 text-right ${(c.roas || 0) === 0 ? 'text-red-400' : (c.roas || 0) < 1 ? 'text-orange-400' : 'text-amber-400'}`}>{(c.roas || 0).toFixed(1)}x</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="text-xs mt-2 pt-2 border-t border-slate-700/50 flex items-center justify-between">
-                      <span className="text-slate-500">Campaigns with $10+ spend, sorted lowest ROAS first</span>
-                      <button onClick={() => { setAdsAiInput(`Analyze my worst performing campaigns: ${campaignRankings.worst.map(c => `${c.name} (${c.type}, $${c.spend.toFixed(0)} spend, ${c.roas.toFixed(1)}x ROAS)`).join(', ')}. For each one: should I pause it, restructure it, or adjust bids? Give specific actions.`); setShowAdsAIChat(true); }}
-                        className="text-red-400 hover:text-red-300 text-xs">Diagnose →</button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Campaign Type Breakdown */}
-                {Object.keys(campaignRankings.byType).length > 0 && (
-                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
-                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Target className="w-4 h-4 text-violet-400"/>Campaign Type Breakdown</h3>
-                    <div className="space-y-2">
-                      {Object.values(campaignRankings.byType).sort((a, b) => b.spend - a.spend).map((t, i) => (
-                        <div key={i} className="flex items-center gap-3 text-xs">
-                          <span className={`px-2 py-0.5 rounded font-bold text-white ${t.type === 'SP' ? 'bg-violet-600' : t.type === 'SB' || t.type === 'SB2' ? 'bg-cyan-600' : t.type === 'SD' ? 'bg-amber-600' : 'bg-slate-600'}`}>{t.type}</span>
-                          <span className="text-slate-400">{t.count} campaigns</span>
-                          <span className="text-white">{formatCurrency(t.spend)} spend</span>
-                          <span className={`font-bold ml-auto ${t.roas >= 3 ? 'text-emerald-400' : t.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{t.roas.toFixed(1)}x ROAS</span>
-                          <span className={`${t.acos <= 25 ? 'text-emerald-400' : t.acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>{t.acos < 999 ? t.acos.toFixed(0) + '% ACOS' : '∞'}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Revenue Attribution: Paid vs Organic */}
-                {revenueAttribution.totalRev > 0 && (
-                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
-                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><DollarSign className="w-4 h-4 text-emerald-400"/>Revenue Attribution <span className="text-xs font-normal text-slate-500">30-day</span></h3>
-                    <div className="flex rounded-lg overflow-hidden h-5 mb-3">
-                      {revenueAttribution.adPct > 0 && <div className="bg-violet-500" style={{ width: `${revenueAttribution.adPct}%` }}/>}
-                      {revenueAttribution.organicPct > 0 && <div className="bg-emerald-500" style={{ width: `${revenueAttribution.organicPct}%` }}/>}
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div>
-                        <div className="flex items-center gap-1.5 mb-1"><span className="w-2.5 h-2.5 rounded bg-violet-500"/>
-                          <span className="text-slate-400">Ad-Attributed</span></div>
-                        <p className="text-white font-bold">{formatCurrency(revenueAttribution.adRev)} <span className="text-violet-400 font-normal">({revenueAttribution.adPct.toFixed(0)}%)</span></p>
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-1.5 mb-1"><span className="w-2.5 h-2.5 rounded bg-emerald-500"/>
-                          <span className="text-slate-400">Organic / Other</span></div>
-                        <p className="text-white font-bold">{formatCurrency(revenueAttribution.organicRev)} <span className="text-emerald-400 font-normal">({revenueAttribution.organicPct.toFixed(0)}%)</span></p>
-                      </div>
-                    </div>
-                    {revenueAttribution.tacos > 20 && (
-                      <p className="text-amber-400 text-xs mt-2 pt-2 border-t border-slate-700/50">⚠️ TACOS at {revenueAttribution.tacos.toFixed(1)}% — ad dependency is {revenueAttribution.tacos > 30 ? 'dangerously high' : 'above target'}. Goal: 15-20%.</p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {/* Wasted Spend — Zero-Sale Search Terms */}
-                {amazonAdsInsights.wastedSpend.length > 0 && (
-                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
-                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><TrendingDown className="w-4 h-4 text-red-400"/>Wasted Spend — Zero-Sale Terms</h3>
-                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                      {amazonAdsInsights.wastedSpend.map((t, i) => (
-                        <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-slate-700/30">
-                          <span className="text-slate-500 w-5">{i + 1}.</span>
-                          <span className="text-white flex-1 truncate" title={t.term}>{t.term}</span>
-                          <span className="text-slate-400">{t.clicks} clicks</span>
-                          <span className="text-red-400 font-semibold w-16 text-right">{formatCurrency(t.spend)}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-slate-500 text-xs mt-2 pt-2 border-t border-slate-700/50">💡 Consider adding these as negative keywords</p>
-                  </div>
-                )}
-
-                {/* Top Winners — High ROAS Terms */}
-                {amazonAdsInsights.topWinners.length > 0 && (
-                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
-                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Sparkles className="w-4 h-4 text-emerald-400"/>Top Winners — Highest ROAS Terms</h3>
-                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                      {amazonAdsInsights.topWinners.map((t, i) => (
-                        <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-slate-700/30">
-                          <span className="text-slate-500 w-5">{i + 1}.</span>
-                          <span className="text-white flex-1 truncate" title={t.term}>{t.term}</span>
-                          <span className="text-slate-400">{formatCurrency(t.spend)}</span>
-                          <span className={`font-semibold w-14 text-right ${t.roas >= 5 ? 'text-emerald-400' : t.roas >= 3 ? 'text-cyan-400' : 'text-amber-400'}`}>{t.roas.toFixed(1)}x</span>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-slate-500 text-xs mt-2 pt-2 border-t border-slate-700/50">🚀 Scale budget on these winning terms</p>
-                  </div>
-                )}
-
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 {/* Campaign Performance */}
                 {amazonAdsInsights.topCampaigns.length > 0 && (
-                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
-                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Target className="w-4 h-4 text-violet-400"/>Campaign Performance</h3>
-                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                      {amazonAdsInsights.topCampaigns.map((c, i) => (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Trophy className="w-4 h-4 text-amber-400"/>Campaigns by Spend</h3>
+                    <div className="space-y-1">
+                      {amazonAdsInsights.topCampaigns.slice(0, 8).map((c, i) => (
                         <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-slate-700/30">
-                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${c.roas >= 3 ? 'bg-emerald-500' : c.roas >= 1.5 ? 'bg-amber-500' : 'bg-red-500'}`}/>
-                          <span className="text-white flex-1 truncate" title={c.name}>{c.name}</span>
-                          <span className="text-slate-400 w-16 text-right">{formatCurrency(c.spend)}</span>
-                          <span className={`font-semibold w-12 text-right ${c.acos <= 25 ? 'text-emerald-400' : c.acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>{c.acos < 999 ? c.acos.toFixed(0) + '%' : '—'}</span>
-                          <span className={`font-semibold w-12 text-right ${c.roas >= 3 ? 'text-emerald-400' : c.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{c.roas.toFixed(1)}x</span>
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.roas >= 3 ? 'bg-emerald-500' : c.roas >= 1.5 ? 'bg-amber-500' : 'bg-rose-500'}`}/>
+                          <span className="text-white flex-1 truncate">{c.name}</span>
+                          <span className="text-slate-500 w-8 text-right">{c.type}</span>
+                          <span className="text-slate-300 w-16 text-right">{formatCurrency(c.spend)}</span>
+                          <span className={`font-semibold w-12 text-right ${roasColor(c.roas)}`}>{c.roas > 0 ? c.roas.toFixed(1) + 'x' : '—'}</span>
                         </div>
                       ))}
                     </div>
-                    <div className="flex items-center gap-4 text-xs text-slate-500 mt-2 pt-2 border-t border-slate-700/50">
-                      <span>Sorted by spend</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"/>ROAS{'>'}3x</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500"/>1.5-3x</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500"/>{'<'}1.5x</span>
+                    <p className="text-slate-600 text-[10px] mt-2">Showing top {Math.min(8, amazonAdsInsights.topCampaigns.length)} by spend · ROAS color-coded</p>
+                  </div>
+                )}
+
+                {/* Revenue Attribution */}
+                {revenueAttribution.totalRev > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><DollarSign className="w-4 h-4 text-emerald-400"/>Revenue Attribution (30d)</h3>
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="flex-1 h-5 rounded-full overflow-hidden bg-slate-700/50 flex">
+                        <div className="bg-violet-500 h-full transition-all" style={{ width: `${revenueAttribution.adPct}%` }}/>
+                        <div className="bg-emerald-500 h-full transition-all" style={{ width: `${revenueAttribution.organicPct}%` }}/>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 text-xs">
+                      <div><span className="flex items-center gap-1.5 text-slate-500"><span className="w-2 h-2 rounded-full bg-violet-500"/>Ad-Attributed</span><p className="text-violet-400 font-bold mt-0.5">{formatCurrency(revenueAttribution.adRev)} <span className="font-normal text-slate-500">({revenueAttribution.adPct.toFixed(0)}%)</span></p></div>
+                      <div><span className="flex items-center gap-1.5 text-slate-500"><span className="w-2 h-2 rounded-full bg-emerald-500"/>Organic</span><p className="text-emerald-400 font-bold mt-0.5">{formatCurrency(revenueAttribution.organicRev)} <span className="font-normal text-slate-500">({revenueAttribution.organicPct.toFixed(0)}%)</span></p></div>
+                    </div>
+                    {revenueAttribution.tacos > 20 && <p className="text-amber-400 text-[10px] mt-2 flex items-center gap-1"><AlertTriangle className="w-3 h-3"/>TACOS {revenueAttribution.tacos.toFixed(1)}% — consider reducing ad dependency</p>}
+                  </div>
+                )}
+
+                {/* Wasted Spend */}
+                {amazonAdsInsights.wastedSpend.length > 0 && (
+                  <div className="bg-gradient-to-br from-rose-900/10 to-slate-800/30 rounded-xl border border-rose-500/20 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-rose-400"/>Wasted Spend <span className="text-rose-400/70 font-normal text-[10px]">{formatCurrency(amazonAdsInsights.summary?.wastedTotal || 0)}</span></h3>
+                    <div className="space-y-1">
+                      {amazonAdsInsights.wastedSpend.slice(0, 6).map((t, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-rose-900/10">
+                          <span className="text-white flex-1 truncate">{t.term}</span>
+                          <span className="text-rose-400 font-medium">{formatCurrency(t.spend)}</span>
+                          <span className="text-slate-600">{t.clicks}c</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={()=>{setAdsAiInput('Generate negative keywords from my search term data with match types and savings estimates.');setShowAdsAIChat(true);}} className="mt-2 text-[10px] text-rose-400 hover:text-rose-300">Get negative keyword list →</button>
+                  </div>
+                )}
+
+                {/* Top Winners */}
+                {amazonAdsInsights.topWinners.length > 0 && (
+                  <div className="bg-gradient-to-br from-emerald-900/10 to-slate-800/30 rounded-xl border border-emerald-500/20 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Sparkles className="w-4 h-4 text-emerald-400"/>Top Search Terms</h3>
+                    <div className="space-y-1">
+                      {amazonAdsInsights.topWinners.slice(0, 6).map((t, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-emerald-900/10">
+                          <span className="text-white flex-1 truncate">{t.term}</span>
+                          <span className="text-emerald-400 font-medium">{t.roas.toFixed(1)}x</span>
+                          <span className="text-slate-500">{formatCurrency(t.spend)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={()=>{setAdsAiInput('Which of my top search terms should I scale? Show me the math for each.');setShowAdsAIChat(true);}} className="mt-2 text-[10px] text-emerald-400 hover:text-emerald-300">Get scaling plan →</button>
+                  </div>
+                )}
+
+                {/* SKU Performance */}
+                {amazonAdsInsights.skuPerformance.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Target className="w-4 h-4 text-violet-400"/>SKU Ad Performance</h3>
+                    <div className="space-y-1">
+                      {amazonAdsInsights.skuPerformance.slice(0, 6).map((s, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.roas >= 3 ? 'bg-emerald-500' : s.roas >= 1.5 ? 'bg-amber-500' : 'bg-rose-500'}`}/>
+                          <span className="text-white flex-1 truncate font-mono text-[10px]">{s.sku}</span>
+                          <span className="text-slate-300 w-14 text-right">{formatCurrency(s.spend)}</span>
+                          <span className={`font-semibold w-14 text-right ${acosColor(s.acos)}`}>{s.acos < 999 ? s.acos.toFixed(0) + '%' : '—'}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
 
-                {/* SKU Ad Performance */}
-                {amazonAdsInsights.skuPerformance.length > 0 && (
-                  <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
-                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><DollarSign className="w-4 h-4 text-cyan-400"/>SKU Ad Performance</h3>
-                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                      {amazonAdsInsights.skuPerformance.map((s, i) => (
-                        <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-slate-700/30">
-                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${s.roas >= 3 ? 'bg-emerald-500' : s.roas >= 1.5 ? 'bg-amber-500' : 'bg-red-500'}`}/>
-                          <span className="text-white flex-1 truncate font-mono" title={s.sku}>{s.sku}</span>
-                          <span className="text-slate-400 w-16 text-right">{formatCurrency(s.spend)}</span>
-                          <span className="text-emerald-400 w-16 text-right">{formatCurrency(s.sales)}</span>
-                          <span className={`font-semibold w-12 text-right ${s.acos <= 25 ? 'text-emerald-400' : s.acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>{s.acos < 999 ? s.acos.toFixed(0) + '%' : '—'}</span>
+                {/* Placement Performance */}
+                {amazonAdsInsights.placementInsights && amazonAdsInsights.placementInsights.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-amber-400"/>Placements</h3>
+                    <div className="space-y-2">
+                      {amazonAdsInsights.placementInsights.map((p, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs py-1.5 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className="text-white font-medium flex-1 truncate">{p.placement}</span>
+                          <div className="flex items-center gap-3">
+                            <span className="text-slate-400">{formatCurrency(p.spend)}</span>
+                            <span className={`font-semibold ${roasColor(p.roas)}`}>{p.roas.toFixed(1)}x</span>
+                            <span className="text-slate-500">{formatCurrency(p.cpc)} CPC</span>
+                          </div>
                         </div>
                       ))}
                     </div>
-                    <div className="flex items-center gap-3 text-xs text-slate-500 mt-2 pt-2 border-t border-slate-700/50">
-                      <span>Cols: SKU · Spend · Sales · ACOS</span>
+                  </div>
+                )}
+
+                {/* Negative Keywords */}
+                {amazonAdsInsights.negativeKeywords.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-amber-500/15 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-400"/>Negative Keyword Candidates</h3>
+                    <div className="flex flex-wrap gap-1.5">
+                      {amazonAdsInsights.negativeKeywords.map((t, i) => (
+                        <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-700/40 rounded-lg text-[10px] border border-slate-600/30">
+                          <span className="text-white">{t.term}</span>
+                          <span className="text-rose-400">{formatCurrency(t.spend)}</span>
+                        </span>
+                      ))}
                     </div>
                   </div>
                 )}
               </div>
+            </div>
+          )}
 
-              {/* Placement Performance */}
-              {amazonAdsInsights.placementInsights && amazonAdsInsights.placementInsights.length > 0 && (
-                <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
-                  <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-amber-400"/>Placement Performance</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    {amazonAdsInsights.placementInsights.map((p, i) => {
-                      const isTopSearch = /top/i.test(p.placement);
-                      const isProduct = /product|detail/i.test(p.placement);
+          {/* ── CROSS-PLATFORM ── */}
+          {platformInsights.totalSpendAll > 0 && (
+            <div className="mb-5">
+              <h2 className="text-base font-bold text-white flex items-center gap-2 mb-3"><Globe className="w-4 h-4 text-cyan-400"/>Cross-Platform</h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3">
+                <div className="bg-gradient-to-br from-cyan-900/15 to-slate-800/40 rounded-xl border border-cyan-500/20 p-3">
+                  <p className="text-slate-500 text-[10px] uppercase">Blended TACOS</p>
+                  <p className={`text-lg font-bold ${tacosColor(platformInsights.blendedTacos)}`}>{platformInsights.blendedTacos.toFixed(1)}%</p>
+                </div>
+                <div className="bg-slate-800/40 rounded-xl border border-slate-700/60 p-3">
+                  <p className="text-slate-500 text-[10px] uppercase">Total Spend</p>
+                  <p className="text-lg font-bold text-white">{formatCurrency(platformInsights.totalSpendAll)}</p>
+                </div>
+                <div className="bg-slate-800/40 rounded-xl border border-slate-700/60 p-3">
+                  <p className="text-slate-500 text-[10px] uppercase">Total Revenue</p>
+                  <p className="text-lg font-bold text-emerald-400">{formatCurrency(platformInsights.totalRevAll)}</p>
+                </div>
+                <div className="bg-slate-800/40 rounded-xl border border-slate-700/60 p-3">
+                  <p className="text-slate-500 text-[10px] uppercase">Blended ROAS</p>
+                  <p className={`text-lg font-bold ${roasColor(platformInsights.blendedRoas)}`}>{platformInsights.blendedRoas.toFixed(2)}x</p>
+                </div>
+              </div>
+
+              {/* Budget Split + DOW */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {/* Budget Allocation */}
+                <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4">
+                  <h3 className="text-white font-semibold text-sm mb-3">Budget Allocation</h3>
+                  {(() => {
+                    const total = (amazonAdsInsights.summary?.totalSpend || 0) + platformInsights.google.totalSpend + platformInsights.meta.totalSpend;
+                    if (total === 0) return <p className="text-slate-600 text-xs">No spend data</p>;
+                    const amzPct = ((amazonAdsInsights.summary?.totalSpend || 0) / total) * 100;
+                    const gPct = (platformInsights.google.totalSpend / total) * 100;
+                    const mPct = (platformInsights.meta.totalSpend / total) * 100;
+                    return <>
+                      <div className="flex h-4 rounded-full overflow-hidden mb-2">
+                        {amzPct > 0 && <div className="bg-orange-500 h-full" style={{ width: `${amzPct}%` }}/>}
+                        {gPct > 0 && <div className="bg-red-500 h-full" style={{ width: `${gPct}%` }}/>}
+                        {mPct > 0 && <div className="bg-blue-500 h-full" style={{ width: `${mPct}%` }}/>}
+                      </div>
+                      <div className="flex gap-4 text-xs">
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500"/>Amazon {amzPct.toFixed(0)}%</span>
+                        {gPct > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500"/>Google {gPct.toFixed(0)}%</span>}
+                        {mPct > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500"/>Meta {mPct.toFixed(0)}%</span>}
+                      </div>
+                    </>;
+                  })()}
+                </div>
+                {/* Day of Week */}
+                <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4">
+                  <h3 className="text-white font-semibold text-sm mb-3">Day of Week Performance</h3>
+                  <div className="flex items-end gap-1" style={{ height: '56px' }}>
+                    {platformInsights.dowData.map((d, i) => {
+                      const maxRev = Math.max(...platformInsights.dowData.map(x => x.avgRev), 0.01);
+                      const h = (d.avgRev / maxRev) * 100;
                       return (
-                        <div key={i} className={`rounded-xl p-3 border ${isTopSearch ? 'bg-amber-900/15 border-amber-500/30' : isProduct ? 'bg-cyan-900/15 border-cyan-500/30' : 'bg-slate-800/50 border-slate-700'}`}>
-                          <p className={`text-xs font-semibold uppercase mb-2 ${isTopSearch ? 'text-amber-400' : isProduct ? 'text-cyan-400' : 'text-slate-400'}`}>{p.placement}</p>
-                          <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div><span className="text-slate-500">Spend</span><p className="text-white font-medium">{formatCurrency(p.spend)}</p></div>
-                            <div><span className="text-slate-500">ROAS</span><p className={`font-bold ${p.roas >= 3 ? 'text-emerald-400' : p.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{p.roas.toFixed(2)}x</p></div>
-                            <div><span className="text-slate-500">CPC</span><p className="text-white">{formatCurrency(p.cpc)}</p></div>
-                            <div><span className="text-slate-500">CTR</span><p className="text-white">{p.ctr.toFixed(2)}%</p></div>
+                        <div key={i} className="flex-1 flex flex-col items-center group relative">
+                          <div className="w-full bg-cyan-500 opacity-50 hover:opacity-90 rounded-t transition-opacity" style={{ height: `${Math.max(h, 4)}%` }}/>
+                          <span className="text-[9px] text-slate-600 mt-1">{d.day}</span>
+                          <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 pointer-events-none">
+                            <div className="bg-slate-900 border border-slate-600 rounded p-1.5 text-[10px] whitespace-nowrap shadow-xl">
+                              <p className="text-white">${d.avgRev.toFixed(0)} avg rev</p>
+                              <p className="text-slate-400">${d.avgSpend.toFixed(0)} avg spend</p>
+                              <p className={roasColor(d.roas)}>{d.roas.toFixed(1)}x ROAS</p>
+                            </div>
                           </div>
                         </div>
                       );
                     })}
                   </div>
                 </div>
-              )}
-
-              {/* Negative Keyword Opportunities */}
-              {amazonAdsInsights.negativeKeywords.length > 0 && (
-                <div className="bg-gradient-to-r from-slate-800/50 to-slate-800/30 rounded-xl border border-amber-500/20 p-4">
-                  <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-400"/>Negative Keyword Opportunities <span className="text-xs font-normal text-slate-500">— 10+ clicks, zero orders</span></h3>
-                  <div className="flex flex-wrap gap-2">
-                    {amazonAdsInsights.negativeKeywords.map((t, i) => (
-                      <span key={i} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-700/50 rounded-lg text-xs border border-slate-600/50">
-                        <span className="text-white">{t.term}</span>
-                        <span className="text-red-400">{formatCurrency(t.spend)}</span>
-                        <span className="text-slate-500">{t.clicks}c</span>
-                      </span>
-                    ))}
-                  </div>
-                  <button onClick={() => { setAdsAiInput('Generate a list of negative keywords I should add based on my search term data. Show me the exact keywords and which campaigns they should be added to.'); setShowAdsAIChat(true); }} className="mt-3 px-3 py-1.5 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/30 rounded-lg text-amber-300 text-xs font-medium">Generate Negative Keyword List →</button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ═══ CROSS-PLATFORM INTELLIGENCE ═══ */}
-          {(platformInsights.totalSpendAll > 0) && (
-            <div className="mb-6 space-y-4">
-              {/* Cross-Platform Header */}
-              <div className="flex items-center gap-3">
-                <h2 className="text-lg font-bold text-white flex items-center gap-2"><Globe className="w-5 h-5 text-cyan-400"/>Cross-Platform Performance</h2>
-              </div>
-
-              {/* Blended KPIs */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="bg-gradient-to-br from-cyan-900/20 to-slate-800/50 rounded-xl border border-cyan-500/30 p-3">
-                  <p className="text-slate-500 text-xs uppercase">Blended TACOS</p>
-                  <p className={`text-xl font-bold ${platformInsights.blendedTacos <= 15 ? 'text-emerald-400' : platformInsights.blendedTacos <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.blendedTacos.toFixed(1)}%</p>
-                </div>
-                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
-                  <p className="text-slate-500 text-xs uppercase">Total Ad Spend</p>
-                  <p className="text-xl font-bold text-white">{formatCurrency(platformInsights.totalSpendAll)}</p>
-                </div>
-                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
-                  <p className="text-slate-500 text-xs uppercase">Total Revenue</p>
-                  <p className="text-xl font-bold text-emerald-400">{formatCurrency(platformInsights.totalRevAll)}</p>
-                </div>
-                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
-                  <p className="text-slate-500 text-xs uppercase">Blended ROAS</p>
-                  <p className={`text-xl font-bold ${platformInsights.blendedRoas >= 5 ? 'text-emerald-400' : platformInsights.blendedRoas >= 3 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.blendedRoas.toFixed(2)}x</p>
-                </div>
-              </div>
-
-              {/* Platform Budget Split */}
-              {(platformInsights.google.totalSpend > 0 || platformInsights.meta.totalSpend > 0) && amazonAdsInsights.summary && (
-                <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
-                  <h3 className="text-white font-semibold text-sm mb-3">Budget Allocation</h3>
-                  <div className="flex rounded-lg overflow-hidden h-6 mb-3">
-                    {[
-                      { label: 'Amazon', value: amazonAdsInsights.summary.totalSpend, color: 'bg-orange-500' },
-                      { label: 'Google', value: platformInsights.google.totalSpend, color: 'bg-red-500' },
-                      { label: 'Meta', value: platformInsights.meta.totalSpend, color: 'bg-blue-500' },
-                    ].filter(p => p.value > 0).map((p, i) => {
-                      const pct = platformInsights.totalSpendAll > 0 ? (p.value / platformInsights.totalSpendAll) * 100 : 0;
-                      return <div key={i} className={`${p.color} opacity-80 hover:opacity-100 transition-opacity relative group`} style={{ width: `${Math.max(pct, 3)}%` }}>
-                        <div className="absolute inset-0 flex items-center justify-center text-white text-xs font-bold">{pct >= 10 ? `${pct.toFixed(0)}%` : ''}</div>
-                      </div>;
-                    })}
-                  </div>
-                  <div className="flex items-center gap-4 text-xs">
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-orange-500"/>Amazon {formatCurrency(amazonAdsInsights.summary.totalSpend)}</span>
-                    {platformInsights.google.totalSpend > 0 && <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-500"/>Google {formatCurrency(platformInsights.google.totalSpend)}</span>}
-                    {platformInsights.meta.totalSpend > 0 && <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-blue-500"/>Meta {formatCurrency(platformInsights.meta.totalSpend)}</span>}
-                  </div>
-                </div>
-              )}
-
-              {/* Day-of-Week Performance */}
-              {platformInsights.dowData.some(d => d.count > 0) && (
-                <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
-                  <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Calendar className="w-4 h-4 text-violet-400"/>Day-of-Week Performance</h3>
-                  <div className="grid grid-cols-7 gap-2">
-                    {platformInsights.dowData.map((d, i) => {
-                      const maxAvg = Math.max(...platformInsights.dowData.map(x => x.avgRev));
-                      const intensity = maxAvg > 0 ? d.avgRev / maxAvg : 0;
-                      const bg = intensity > 0.8 ? 'bg-emerald-600/40 border-emerald-500/40' : intensity > 0.5 ? 'bg-emerald-600/20 border-emerald-500/20' : intensity > 0.2 ? 'bg-slate-700/50 border-slate-600' : 'bg-slate-800/50 border-slate-700';
-                      return (
-                        <div key={i} className={`rounded-lg p-2.5 border text-center ${bg}`}>
-                          <p className="text-slate-400 text-xs font-medium mb-1">{d.day}</p>
-                          <p className="text-white text-sm font-bold">{formatCurrency(d.avgRev)}</p>
-                          <p className="text-slate-500 text-xs">avg rev</p>
-                          <p className={`text-xs font-medium mt-1 ${d.roas >= 5 ? 'text-emerald-400' : d.roas >= 3 ? 'text-amber-400' : 'text-slate-400'}`}>{d.roas > 0 ? d.roas.toFixed(1) + 'x' : '—'}</p>
-                          <p className="text-slate-600 text-xs">{d.count} days</p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <p className="text-slate-500 text-xs mt-2">Brighter = higher average daily revenue. Consider increasing bids on high-performing days.</p>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {/* Google Performance */}
-                {platformInsights.google.totalSpend > 0 && (
-                  <div className="bg-gradient-to-br from-red-900/10 to-slate-800/30 rounded-xl border border-red-500/20 p-4">
-                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-red-500"/>Google Ads Intelligence</h3>
-                    <div className="grid grid-cols-3 gap-3 mb-3">
-                      <div><p className="text-slate-500 text-xs">Spend</p><p className="text-white font-bold">{formatCurrency(platformInsights.google.totalSpend)}</p></div>
-                      <div><p className="text-slate-500 text-xs">Clicks</p><p className="text-white font-bold">{formatNumber(platformInsights.google.totalClicks)}</p></div>
-                      <div><p className="text-slate-500 text-xs">Conv.</p><p className="text-emerald-400 font-bold">{formatNumber(platformInsights.google.totalConversions)}</p></div>
-                      <div><p className="text-slate-500 text-xs">CPC</p><p className={`font-bold ${platformInsights.google.cpc <= 1 ? 'text-emerald-400' : platformInsights.google.cpc <= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{formatCurrency(platformInsights.google.cpc)}</p></div>
-                      <div><p className="text-slate-500 text-xs">CTR</p><p className={`font-bold ${platformInsights.google.ctr >= 3 ? 'text-emerald-400' : platformInsights.google.ctr >= 1 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.google.ctr.toFixed(2)}%</p></div>
-                      <div><p className="text-slate-500 text-xs">Conv Rate</p><p className={`font-bold ${platformInsights.google.convRate >= 5 ? 'text-emerald-400' : platformInsights.google.convRate >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.google.convRate.toFixed(1)}%</p></div>
-                    </div>
-                    {platformInsights.google.trend.length > 3 && (
-                      <div className="flex items-end gap-px h-12 mt-2">
-                        {platformInsights.google.trend.slice(-30).map((d, i) => {
-                          const max = Math.max(...platformInsights.google.trend.slice(-30).map(x => x.spend), 1);
-                          return <div key={i} className="flex-1 bg-red-500 opacity-60 hover:opacity-100 rounded-t" style={{ height: `${Math.max((d.spend / max) * 100, 3)}%`, minHeight: '2px' }}/>;
-                        })}
-                      </div>
-                    )}
-                    <p className="text-slate-500 text-xs mt-2">{platformInsights.google.daysActive} active days · Upload Google Ads reports for search term analysis</p>
-                  </div>
-                )}
-
-                {/* Meta Performance */}
-                {platformInsights.meta.totalSpend > 0 && (
-                  <div className="bg-gradient-to-br from-blue-900/10 to-slate-800/30 rounded-xl border border-blue-500/20 p-4">
-                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-blue-500"/>Meta Ads Intelligence</h3>
-                    <div className="grid grid-cols-3 gap-3 mb-3">
-                      <div><p className="text-slate-500 text-xs">Spend</p><p className="text-white font-bold">{formatCurrency(platformInsights.meta.totalSpend)}</p></div>
-                      <div><p className="text-slate-500 text-xs">Clicks</p><p className="text-white font-bold">{formatNumber(platformInsights.meta.totalClicks)}</p></div>
-                      <div><p className="text-slate-500 text-xs">Purchases</p><p className="text-emerald-400 font-bold">{formatNumber(Math.round(platformInsights.meta.totalPurchases))}</p></div>
-                      <div><p className="text-slate-500 text-xs">CPC</p><p className={`font-bold ${platformInsights.meta.cpc <= 0.8 ? 'text-emerald-400' : platformInsights.meta.cpc <= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{formatCurrency(platformInsights.meta.cpc)}</p></div>
-                      <div><p className="text-slate-500 text-xs">CTR</p><p className={`font-bold ${platformInsights.meta.ctr >= 2 ? 'text-emerald-400' : platformInsights.meta.ctr >= 1 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.meta.ctr.toFixed(2)}%</p></div>
-                      <div><p className="text-slate-500 text-xs">CPA</p><p className={`font-bold ${platformInsights.meta.cpa > 0 && platformInsights.meta.cpa <= 15 ? 'text-emerald-400' : platformInsights.meta.cpa <= 30 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.meta.cpa > 0 ? formatCurrency(platformInsights.meta.cpa) : '—'}</p></div>
-                    </div>
-                    {platformInsights.meta.roas > 0 && (
-                      <div className="flex items-center gap-2 p-2 bg-blue-900/20 rounded-lg mb-2">
-                        <span className="text-slate-400 text-xs">Meta ROAS:</span>
-                        <span className={`font-bold text-sm ${platformInsights.meta.roas >= 3 ? 'text-emerald-400' : platformInsights.meta.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.meta.roas.toFixed(2)}x</span>
-                        <span className="text-slate-500 text-xs ml-auto">Purchase Value: {formatCurrency(platformInsights.meta.totalPurchaseValue)}</span>
-                      </div>
-                    )}
-                    {platformInsights.meta.trend.length > 3 && (
-                      <div className="flex items-end gap-px h-12 mt-2">
-                        {platformInsights.meta.trend.slice(-30).map((d, i) => {
-                          const max = Math.max(...platformInsights.meta.trend.slice(-30).map(x => x.spend), 1);
-                          return <div key={i} className="flex-1 bg-blue-500 opacity-60 hover:opacity-100 rounded-t" style={{ height: `${Math.max((d.spend / max) * 100, 3)}%`, minHeight: '2px' }}/>;
-                        })}
-                      </div>
-                    )}
-                    <p className="text-slate-500 text-xs mt-2">{platformInsights.meta.daysActive} active days · Upload Meta campaign reports for deeper analysis</p>
-                  </div>
-                )}
-              </div>
-
-              {/* AI Optimization CTA */}
-              <div className="bg-gradient-to-r from-violet-900/20 to-orange-900/20 rounded-xl border border-violet-500/20 p-4 flex items-center gap-4">
-                <div className="p-2 bg-violet-500/20 rounded-lg"><Sparkles className="w-6 h-6 text-violet-400"/></div>
-                <div className="flex-1">
-                  <p className="text-white font-semibold">Get AI-Powered Optimization Recommendations</p>
-                  <p className="text-slate-400 text-sm">Analyze performance across all platforms, identify budget reallocation opportunities, and get actionable next steps.</p>
-                </div>
-                <button onClick={() => { setAdsAiInput(`Analyze my advertising performance across all platforms. Amazon: ${formatCurrency(amazonAdsInsights.summary?.totalSpend || 0)} spend with ${amazonAdsInsights.summary?.overallRoas?.toFixed(1) || 0}x ROAS. Google: ${formatCurrency(platformInsights.google.totalSpend)} spend. Meta: ${formatCurrency(platformInsights.meta.totalSpend)} spend. Blended TACOS: ${platformInsights.blendedTacos.toFixed(1)}%. What should I optimize first? Where should I reallocate budget? Give me specific, actionable recommendations.`); setShowAdsAIChat(true); }}
-                  className="px-4 py-2.5 bg-gradient-to-r from-violet-600 to-orange-600 hover:from-violet-500 hover:to-orange-500 rounded-xl text-white text-sm font-medium whitespace-nowrap shadow-lg">Optimize Now →</button>
               </div>
             </div>
           )}
 
-          {/* DETAIL TABLES */}
-          {useDailyData && dailyTableData.length>1 && (
-            <div className="bg-slate-800/30 rounded-2xl border border-slate-700 overflow-hidden mb-6"><div className="overflow-x-auto"><table className="w-full text-sm">
-              <thead><tr className="border-b border-slate-700 text-slate-400 text-xs uppercase"><th className="py-3 px-4 text-left">Date</th><th className="py-3 px-2 text-right">Amazon</th><th className="py-3 px-2 text-right">Google</th><th className="py-3 px-2 text-right">Meta</th><th className="py-3 px-2 text-right">Total</th><th className="py-3 px-2 text-right">Revenue</th><th className="py-3 px-2 text-right">TACOS</th></tr></thead>
-              <tbody>{dailyTableData.map((d,i)=>{const tc=d.totalRev>0?(d.totalAds/d.totalRev)*100:0;return(<tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30"><td className="py-2 px-4 text-slate-300">{fmtDate(d.date)}</td><td className="py-2 px-2 text-right text-orange-400">{d.amazonAds>0?formatCurrency(d.amazonAds):'—'}</td><td className="py-2 px-2 text-right text-red-400">{d.googleAds>0?formatCurrency(d.googleAds):'—'}</td><td className="py-2 px-2 text-right text-blue-400">{d.metaAds>0?formatCurrency(d.metaAds):'—'}</td><td className="py-2 px-2 text-right text-white font-medium">{formatCurrency(d.totalAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(d.totalRev)}</td><td className={`py-2 px-2 text-right font-semibold ${tacosColor(tc)}`}>{tc>0?tc.toFixed(1)+'%':'—'}</td></tr>);})}</tbody>
-              <tfoot><tr className="border-t-2 border-slate-600 font-semibold"><td className="py-2 px-4 text-white">Total</td><td className="py-2 px-2 text-right text-orange-400">{formatCurrency(dailyTotals.amazonAds)}</td><td className="py-2 px-2 text-right text-red-400">{formatCurrency(dailyTotals.googleAds)}</td><td className="py-2 px-2 text-right text-blue-400">{formatCurrency(dailyTotals.metaAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(dailyTotals.totalAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(dailyTotals.totalRev)}</td><td className={`py-2 px-2 text-right ${tacosColor(totalTacos)}`}>{totalTacos>0?totalTacos.toFixed(1)+'%':'—'}</td></tr></tfoot>
-            </table></div></div>
+          {/* ── PERIOD DETAIL (collapsible) ── */}
+          <div className="mb-5">
+            <button onClick={() => setShowTables(!showTables)} className="flex items-center gap-2 text-white text-sm font-semibold mb-3 hover:text-slate-300 transition-colors">
+              <ChevronDown className={`w-4 h-4 transition-transform ${showTables ? '' : '-rotate-90'}`}/>Period Detail
+            </button>
+            {showTables && (<>
+              <div className="flex gap-2 mb-3 p-1 bg-slate-800/40 rounded-xl overflow-x-auto">
+                {['daily','weekly','monthly','quarterly','yearly'].map(t=>(
+                  <button key={t} onClick={()=>setAdsTimeTab(t)} disabled={t==='daily'&&!hasDailyData}
+                    className={`flex-1 min-w-fit px-3 py-2 rounded-lg font-medium text-xs transition-all capitalize ${adsTimeTab===t?'bg-cyan-600 text-white':'text-slate-400 hover:bg-slate-700 disabled:opacity-30'}`}>{t}</button>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <select value={adsYear} onChange={e=>setAdsYear(parseInt(e.target.value))} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs">{availableYears.map(y=><option key={y} value={y}>{y}</option>)}</select>
+                {adsTimeTab==='monthly'&&<select value={adsMonth} onChange={e=>setAdsMonth(parseInt(e.target.value))} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs">{monthNames.map((m,i)=><option key={i} value={i} disabled={!monthsWithData.includes(i)}>{m}</option>)}</select>}
+                {adsTimeTab==='daily'&&sortedDays.length>0&&<select value={adsSelectedDay||''} onChange={e=>setAdsSelectedDay(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs">{sortedDays.slice().reverse().slice(0,90).map(d=><option key={d} value={d}>{new Date(d+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}</option>)}</select>}
+                {adsTimeTab==='weekly'&&weeksInYear.length>0&&<select value={adsSelectedWeek||''} onChange={e=>setAdsSelectedWeek(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs">{weeksInYear.slice().reverse().map(w=><option key={w} value={w}>{new Date(w+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}</option>)}</select>}
+                {adsTimeTab==='quarterly'&&<select value={adsQuarter} onChange={e=>setAdsQuarter(parseInt(e.target.value))} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs">{[1,2,3,4].map(q=><option key={q} value={q}>Q{q}</option>)}</select>}
+                <div className="flex gap-1 ml-auto">
+                  <button onClick={goToPrev} className="p-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"><ChevronLeft className="w-3.5 h-3.5"/></button>
+                  <button onClick={goToNext} className="p-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-white"><ChevronRight className="w-3.5 h-3.5"/></button>
+                </div>
+              </div>
+
+              <p className="text-slate-300 text-sm font-medium mb-2">{getPeriodLabel()} <span className="text-slate-600 font-normal">· {useDailyData?periodDays.length:periodWeeks.length} {useDailyData?'day':'week'}{(useDailyData?periodDays.length:periodWeeks.length)!==1?'s':''}</span></p>
+
+              {useDailyData && dailyTableData.length > 0 && (
+                <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-xs">
+                  <thead><tr className="border-b border-slate-700 text-slate-500 text-[10px] uppercase"><th className="py-2.5 px-3 text-left">Date</th><th className="py-2.5 px-2 text-right">Amazon</th><th className="py-2.5 px-2 text-right">Google</th><th className="py-2.5 px-2 text-right">Meta</th><th className="py-2.5 px-2 text-right">Total</th><th className="py-2.5 px-2 text-right">Revenue</th><th className="py-2.5 px-2 text-right">TACOS</th></tr></thead>
+                  <tbody>{dailyTableData.map((d,i)=>{const tc=d.totalRev>0?(d.totalAds/d.totalRev)*100:0;return(<tr key={i} className="border-b border-slate-800/40 hover:bg-slate-800/20"><td className="py-2 px-3 text-slate-400">{fmtDate(d.date)}</td><td className="py-2 px-2 text-right text-orange-400">{d.amazonAds>0?formatCurrency(d.amazonAds):'—'}</td><td className="py-2 px-2 text-right text-red-400">{d.googleAds>0?formatCurrency(d.googleAds):'—'}</td><td className="py-2 px-2 text-right text-blue-400">{d.metaAds>0?formatCurrency(d.metaAds):'—'}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(d.totalAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(d.totalRev)}</td><td className={`py-2 px-2 text-right font-medium ${tacosColor(tc)}`}>{tc>0?tc.toFixed(1)+'%':'—'}</td></tr>);})}</tbody>
+                  <tfoot><tr className="border-t border-slate-600 font-medium"><td className="py-2 px-3 text-white">Total</td><td className="py-2 px-2 text-right text-orange-400">{formatCurrency(dailyTotals.amazonAds)}</td><td className="py-2 px-2 text-right text-red-400">{formatCurrency(dailyTotals.googleAds)}</td><td className="py-2 px-2 text-right text-blue-400">{formatCurrency(dailyTotals.metaAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(dailyTotals.totalAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(dailyTotals.totalRev)}</td><td className={`py-2 px-2 text-right ${tacosColor(totalTacos)}`}>{totalTacos>0?totalTacos.toFixed(1)+'%':'—'}</td></tr></tfoot>
+                </table></div></div>
+              )}
+
+              {!useDailyData && weeklyTableData.length > 0 && (
+                <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-xs">
+                  <thead><tr className="border-b border-slate-700 text-slate-500 text-[10px] uppercase"><th className="py-2.5 px-3 text-left">Week</th><th className="py-2.5 px-2 text-right">Amazon</th><th className="py-2.5 px-2 text-right">Google</th><th className="py-2.5 px-2 text-right">Meta</th><th className="py-2.5 px-2 text-right">Total</th><th className="py-2.5 px-2 text-right">Revenue</th><th className="py-2.5 px-2 text-right">TACOS</th></tr></thead>
+                  <tbody>{weeklyTableData.map((w,i)=>(<tr key={i} className="border-b border-slate-800/40 hover:bg-slate-800/20"><td className="py-2 px-3 text-slate-400">{fmtDate(w.week)}</td><td className="py-2 px-2 text-right text-orange-400">{formatCurrency(w.amzAds)}</td><td className="py-2 px-2 text-right text-red-400">{formatCurrency(w.googleAds)}</td><td className="py-2 px-2 text-right text-blue-400">{formatCurrency(w.metaAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(w.totalAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(w.totalRev)}</td><td className={`py-2 px-2 text-right font-medium ${tacosColor(w.tacos)}`}>{w.tacos>0?w.tacos.toFixed(1)+'%':'—'}</td></tr>))}</tbody>
+                  <tfoot><tr className="border-t border-slate-600 font-medium"><td className="py-2 px-3 text-white">Total</td><td className="py-2 px-2 text-right text-orange-400">{formatCurrency(totals.amzAds)}</td><td className="py-2 px-2 text-right text-red-400">{formatCurrency(totals.googleAds)}</td><td className="py-2 px-2 text-right text-blue-400">{formatCurrency(totals.metaAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(totals.totalAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(totals.totalRev)}</td><td className={`py-2 px-2 text-right ${tacosColor(totalTacos)}`}>{totalTacos>0?totalTacos.toFixed(1)+'%':'—'}</td></tr></tfoot>
+                </table></div></div>
+              )}
+
+              {((useDailyData&&dailyTableData.length===0)||(!useDailyData&&weeklyTableData.length===0))&&(
+                <div className="text-center py-8 bg-slate-800/20 rounded-xl border border-slate-700/40">
+                  <p className="text-slate-500 text-sm">No data for {getPeriodLabel()}</p>
+                </div>
+              )}
+            </>)}
+          </div>
+        </>)}
+
+        {/* ════════════════════════════════════════════════════════ */}
+        {/* AI REPORTS TAB                                         */}
+        {/* ════════════════════════════════════════════════════════ */}
+        {adsViewMode==='reports' && (<>
+          <div className="bg-gradient-to-r from-orange-900/15 to-amber-900/10 rounded-xl border border-orange-500/25 p-5 mb-5">
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+              <div>
+                <h3 className="text-white text-lg font-semibold flex items-center gap-2"><Brain className="w-5 h-5 text-orange-400"/>AI Ads Audit</h3>
+                <p className="text-slate-500 text-xs mt-0.5">Cross-platform audit from all loaded data sources</p>
+              </div>
+              <select value={aiChatModel} onChange={e => setAiChatModel(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs">
+                {AI_MODEL_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+            </div>
+
+            {/* Data Sources */}
+            {(() => {
+              const sources = [];
+              if (sortedDays.length > 0) sources.push({ platform: 'Dashboard', type: `Daily KPIs (${sortedDays.length}d)`, color: 'bg-violet-500' });
+              if (hasCampaignData) { const ac = campaigns.filter(c => (c.spend||0)>0).length; sources.push({ platform: 'Amazon', type: `Campaigns (${ac} active)`, color: 'bg-orange-500' }); }
+              if (adsIntelData) { ['amazon','google','meta','shopify'].forEach(p => { if (!adsIntelData[p] || typeof adsIntelData[p] !== 'object') return; Object.entries(adsIntelData[p]).forEach(([rt, data]) => { if (!data?.records) return; sources.push({ platform: p.charAt(0).toUpperCase()+p.slice(1), type: `${data.meta?.label||rt} (${data.records.length})`, color: p==='amazon'?'bg-orange-500':p==='google'?'bg-red-500':p==='meta'?'bg-blue-500':'bg-emerald-500' }); }); }); }
+              return (
+                <button onClick={()=>setShowDataSources(p=>!p)} className="flex items-center gap-2 text-xs text-slate-400 hover:text-slate-200 mb-4">
+                  <Database className="w-3.5 h-3.5"/>{sources.length} data source{sources.length!==1?'s':''}<ChevronDown className={`w-3 h-3 transition-transform ${showDataSources?'rotate-180':''}`}/>
+                </button>
+              );
+            })()}
+            {showDataSources && (
+              <div className="bg-slate-900/50 rounded-lg border border-slate-700/50 p-3 mb-4 space-y-1">
+                {(() => {
+                  const sources = [];
+                  if (sortedDays.length > 0) sources.push({ p: 'Dashboard', t: `Daily KPIs (${sortedDays.length}d)`, c: 'bg-violet-500' });
+                  if (hasCampaignData) sources.push({ p: 'Amazon', t: `Campaigns (${campaigns.filter(c=>(c.spend||0)>0).length} active)`, c: 'bg-orange-500' });
+                  if (adsIntelData) { ['amazon','google','meta','shopify'].forEach(pl => { if (!adsIntelData[pl] || typeof adsIntelData[pl] !== 'object') return; Object.entries(adsIntelData[pl]).forEach(([rt, data]) => { if (!data?.records) return; sources.push({ p: pl.charAt(0).toUpperCase()+pl.slice(1), t: `${data.meta?.label||rt} (${data.records.length} rows)`, c: pl==='amazon'?'bg-orange-500':pl==='google'?'bg-red-500':pl==='meta'?'bg-blue-500':'bg-emerald-500' }); }); }); }
+                  return sources.map((s,i) => <div key={i} className="flex items-center gap-2 text-xs"><span className={`w-1.5 h-1.5 rounded-full ${s.c}`}/><span className="text-slate-500 w-16">{s.p}</span><span className="text-slate-300">{s.t}</span></div>);
+                })()}
+              </div>
+            )}
+
+            {/* Report Scope */}
+            <div className="mb-4">
+              <div className="flex flex-wrap gap-1.5">
+                {REPORT_MODES.map(m => (
+                  <button key={m.key} onClick={() => setReportMode(m.key)}
+                    className={`px-3 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${reportMode === m.key ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-md' : 'bg-slate-700/40 text-slate-400 hover:text-white hover:bg-slate-700 border border-slate-600/30'}`}>
+                    <span>{m.icon}</span>{m.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-slate-600 text-[10px] mt-1.5">{REPORT_MODES.find(m => m.key === reportMode)?.desc}</p>
+            </div>
+
+            {/* Generate */}
+            <button onClick={() => {
+              const prompts = {
+                all: `Generate a COMPREHENSIVE CROSS-PLATFORM ADVERTISING AUDIT.\n\nREQUIRED SECTIONS:\n## 📊 EXECUTIVE SUMMARY — Health score 1-10, total spend/revenue/ROAS per platform, #1 urgent issue, #1 opportunity\n## 🚫 CUT WASTE — Exact campaign/keyword names, spend amounts, $0 sales, specific actions\n## 🏆 PROTECT WINNERS — Top performers, defend/scale strategy\n## 📈 SCALE OPPORTUNITIES — Current metrics, scaling math, launch plan\n## 📍 PLACEMENT OPTIMIZATION — TOS vs Product Pages vs RoS with bid modifier %\n## 💰 CROSS-PLATFORM BUDGET REALLOCATION — Current → Recommended split with math\n## 📊 TREND DIAGNOSIS — MoM trajectory, TACOS trend direction\n## 🎯 THIS WEEK: Top 5 Priority Actions — action → $ impact → minutes → click-path`,
+                amazon: `Generate a DEEP-DIVE AMAZON ADS AUDIT.\n\nREQUIRED SECTIONS:\n## 📊 AMAZON AD HEALTH — Score 1-10, spend, ACOS, TACOS, organic split\n## 🔍 SEARCH TERM ANALYSIS — Top 10 profitable, top 10 wasteful, negative keyword list with match types\n## 📋 CAMPAIGN PERFORMANCE — Every campaign with full KPIs, flag ROAS<1.5x or ACOS>40%\n## 🎯 TARGETING ANALYSIS — Broad vs Phrase vs Exact efficiency, auto vs manual, harvesting recommendations\n## 📍 PLACEMENT OPTIMIZATION — TOS vs Product Pages vs RoS: ROAS, CPC, bid modifier %\n## 💡 SKU-LEVEL PERFORMANCE — Which products profitable to advertise vs burning budget?\n## 🔄 CAMPAIGN STRUCTURE — Segmentation recommendations, single-keyword exact match for top performers\n## 🎯 THIS WEEK: Top 5 Amazon Actions`,
+                dtc: `Generate a DTC ADVERTISING AUDIT (Google + Meta).\n\nREQUIRED SECTIONS:\n## 📊 DTC AD HEALTH — Combined score, total DTC spend, ROAS, CPA, vs Amazon efficiency\n## 🔍 GOOGLE DEEP DIVE — Campaigns, search terms, CPC, conversion rate, keyword opportunities\n## 📱 META DEEP DIVE — Creative fatigue, audiences, placements, CPA, frequency\n## 💰 GOOGLE vs META — Side-by-side CPC/CTR/CPA/ROAS comparison\n## 🔄 BUDGET REALLOCATION — Current → Recommended Google/Meta split with math\n## 🎯 THIS WEEK: Top 5 DTC Actions`,
+                google: `Generate a DEEP-DIVE GOOGLE ADS AUDIT.\n\nREQUIRED SECTIONS:\n## 📊 GOOGLE ADS HEALTH — Score 1-10, spend, clicks, CPC, CTR, conversions, cost/conversion\n## 🔍 SEARCH TERM ANALYSIS — Top performers, wasteful terms, match type efficiency\n## 📋 CAMPAIGN PERFORMANCE — Every campaign with recommendations (scale/pause/restructure)\n## 💡 KEYWORD OPPORTUNITIES — Missing keywords, competitor gaps, long-tail with CPC estimates\n## 🎯 BID STRATEGY — Current assessment, recommended changes with $ amounts\n## 🎯 THIS WEEK: Top 5 Google Actions`,
+                meta: `Generate a DEEP-DIVE META ADS AUDIT.\n\nREQUIRED SECTIONS:\n## 📊 META ADS HEALTH — Score 1-10, spend, impressions, CTR, CPC, purchases, CPA, ROAS\n## 🎨 CREATIVE PERFORMANCE — Which ads performing, fatigue indicators, refresh timing\n## 👥 AUDIENCE ANALYSIS — Best converting audiences, lookalike vs interest vs retargeting\n## 📍 PLACEMENT BREAKDOWN — Feed vs Stories vs Reels: CPC, CTR, CPA\n## 📈 SCALING PLAN — Which to scale, daily budget, expected CPA at higher spend\n## 🎯 THIS WEEK: Top 5 Meta Actions`,
+              };
+              setShowAdsAIChat(true);
+              setTimeout(() => sendAdsAIMessage(prompts[reportMode]), 200);
+            }} className="w-full px-5 py-3.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-semibold shadow-lg shadow-orange-500/20 flex items-center justify-center gap-2 transition-all">
+              <Zap className="w-4 h-4"/>Generate {REPORT_MODES.find(m => m.key === reportMode)?.label} Audit
+            </button>
+
+            {/* Quick Actions */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-4">
+              {[
+                { label: 'Negative Keywords', emoji: '🚫', prompt: "Top 20 negative keywords to add TODAY with match types, campaigns, and monthly savings." },
+                { label: 'Scale Opps', emoji: '📈', prompt: "Top 10 scaling opportunities: campaign/keyword, current spend, ROAS, recommended spend, projected revenue." },
+                { label: 'Organic vs Paid', emoji: '🔄', prompt: "Where am I paying for organic clicks? Where to increase paid? Specific keywords with $ impact." },
+                { label: 'Weekly Plan', emoji: '📋', prompt: "Weekly PPC maintenance checklist: what to check every Monday, bid adjustments, thresholds." },
+              ].map((a,i) => (
+                <button key={i} onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage(a.prompt),200);}}
+                  className="px-3 py-2.5 bg-slate-700/40 hover:bg-slate-700 rounded-lg text-white text-xs flex items-center gap-1.5 border border-slate-600/30 transition-colors">
+                  <span>{a.emoji}</span>{a.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Report History */}
+          {adsAiReportHistory && adsAiReportHistory.length > 0 && (
+            <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4 mb-5">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-slate-400 font-medium text-xs flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/>History ({adsAiReportHistory.length})</h3>
+                <button onClick={()=>{if(window.confirm('Clear report history?'))setAdsAiReportHistory([]);}} className="text-[10px] text-slate-600 hover:text-rose-400">Clear</button>
+              </div>
+              <div className="space-y-1">
+                {adsAiReportHistory.slice(-5).reverse().map((r,i)=>(
+                  <div key={i} className="flex items-center justify-between bg-slate-900/40 rounded-lg px-3 py-1.5 text-[10px]">
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-500">{r.date}</span>
+                      <span className={`px-1 py-0.5 rounded ${r.model==='Opus'?'bg-violet-900/50 text-violet-300':'bg-slate-700 text-slate-400'}`}>{r.model}</span>
+                      {r.healthScore && <span className={`font-bold ${parseInt(r.healthScore)>=7?'text-emerald-400':parseInt(r.healthScore)>=4?'text-amber-400':'text-rose-400'}`}>{r.healthScore}/10</span>}
+                    </div>
+                    <select value={r.actionsTaken||'pending'} onChange={e=>{setAdsAiReportHistory(prev=>prev.map((rr,ri)=>ri===prev.length-1-i?{...rr,actionsTaken:e.target.value}:rr));}} className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-[9px] text-slate-400">
+                      <option value="pending">⏳ Pending</option><option value="in-progress">🔄 In Progress</option><option value="completed">✅ Done</option><option value="skipped">⏭ Skip</option>
+                    </select>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
 
-          {!useDailyData && weeklyTableData.length>0 && (
-            <div className="bg-slate-800/30 rounded-2xl border border-slate-700 overflow-hidden mb-6"><div className="overflow-x-auto"><table className="w-full text-sm">
-              <thead><tr className="border-b border-slate-700 text-slate-400 text-xs uppercase"><th className="py-3 px-4 text-left">Week</th><th className="py-3 px-2 text-right">Amazon</th><th className="py-3 px-2 text-right">Google</th><th className="py-3 px-2 text-right">Meta</th><th className="py-3 px-2 text-right">Total</th><th className="py-3 px-2 text-right">Revenue</th><th className="py-3 px-2 text-right">TACOS</th></tr></thead>
-              <tbody>{weeklyTableData.map((w,i)=>(<tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30"><td className="py-2 px-4 text-slate-300">{new Date(w.week+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}</td><td className="py-2 px-2 text-right text-orange-400">{formatCurrency(w.amzAds)}</td><td className="py-2 px-2 text-right text-red-400">{formatCurrency(w.googleAds)}</td><td className="py-2 px-2 text-right text-blue-400">{formatCurrency(w.metaAds)}</td><td className="py-2 px-2 text-right text-white font-medium">{formatCurrency(w.totalAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(w.totalRev)}</td><td className={`py-2 px-2 text-right font-semibold ${tacosColor(w.tacos)}`}>{w.tacos>0?w.tacos.toFixed(1)+'%':'—'}</td></tr>))}</tbody>
-              <tfoot><tr className="border-t-2 border-slate-600 font-semibold"><td className="py-2 px-4 text-white">Total</td><td className="py-2 px-2 text-right text-orange-400">{formatCurrency(totals.amzAds)}</td><td className="py-2 px-2 text-right text-red-400">{formatCurrency(totals.googleAds)}</td><td className="py-2 px-2 text-right text-blue-400">{formatCurrency(totals.metaAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(totals.totalAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(totals.totalRev)}</td><td className={`py-2 px-2 text-right ${tacosColor(totalTacos)}`}>{totalTacos>0?totalTacos.toFixed(1)+'%':'—'}</td></tr></tfoot>
-            </table></div></div>
-          )}
-
-          {((useDailyData&&dailyTableData.length===0)||(!useDailyData&&weeklyTableData.length===0))&&(
-            <div className="text-center py-12 bg-slate-800/30 rounded-2xl border border-slate-700">
-              <DollarSign className="w-12 h-12 text-slate-600 mx-auto mb-4"/>
-              <p className="text-slate-400 mb-4">No ad data for {getPeriodLabel()}</p>
-              <button onClick={()=>setAdsViewMode('upload')} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white flex items-center gap-2 mx-auto"><Upload className="w-4 h-4"/>Upload Data</button>
+          {/* Report Output */}
+          {adsAiMessages.length > 0 && (
+            <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-5">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                <h3 className="text-white font-semibold text-sm">Report Output</h3>
+                <div className="flex items-center gap-1">
+                  <button onClick={()=>{ const r = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n'); navigator.clipboard.writeText(r).then(()=>setToast({message:'Copied',type:'success'})); }} className="text-slate-500 hover:text-white text-[10px] px-2 py-1 bg-slate-700/40 rounded-lg hover:bg-slate-700">📋 Text</button>
+                  <button onClick={()=>{ const r = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n'); const html = markdownToHtml(r); const blob = new Blob([html], {type:'text/html'}); const item = new ClipboardItem({'text/html': blob, 'text/plain': new Blob([r], {type:'text/plain'})}); navigator.clipboard.write([item]).then(()=>setToast({message:'Copied for Docs',type:'success'})).catch(()=>navigator.clipboard.writeText(r)); }} className="text-slate-500 hover:text-white text-[10px] px-2 py-1 bg-slate-700/40 rounded-lg hover:bg-slate-700">📄 Docs</button>
+                  <button onClick={()=>{ const r = adsAiMessages.map(m=>m.role==='user'?`**PROMPT:** ${m.content}`:m.content).join('\n\n---\n\n'); const h = `# Tallowbourn Advertising Audit\n**${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})}** · ${getModelLabel(aiChatModel)}\n\n---\n\n`; const blob = new Blob([h+r], {type:'text/markdown'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `tallowbourn-audit-${new Date().toISOString().slice(0,10)}.md`; a.click(); URL.revokeObjectURL(url); setToast({message:'Downloaded',type:'success'}); }} className="text-slate-500 hover:text-white text-[10px] px-2 py-1 bg-slate-700/40 rounded-lg hover:bg-slate-700">⬇ .md</button>
+                  <button onClick={()=>{
+                    const report = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n');
+                    const dateStr = new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+                    const modelName = getModelLabel(aiChatModel);
+                    const modeLabel = REPORT_MODES.find(m => m.key === reportMode)?.label || 'All Platforms';
+                    const htmlBody = markdownToHtml(report);
+                    const kpiHtml = amazonAdsInsights.summary ? `<div class="kpi-bar"><div class="kpi"><span class="kpi-label">Ad Spend</span><span class="kpi-value">$${(amazonAdsInsights.summary.totalSpend||0).toLocaleString(undefined,{maximumFractionDigits:0})}</span></div><div class="kpi"><span class="kpi-label">Revenue</span><span class="kpi-value">$${(amazonAdsInsights.summary.totalSales||0).toLocaleString(undefined,{maximumFractionDigits:0})}</span></div><div class="kpi"><span class="kpi-label">ROAS</span><span class="kpi-value">${(amazonAdsInsights.summary.overallRoas||0).toFixed(2)}x</span></div><div class="kpi"><span class="kpi-label">TACOS</span><span class="kpi-value">${(platformInsights.blendedTacos||0).toFixed(1)}%</span></div><div class="kpi"><span class="kpi-label">Days</span><span class="kpi-value">${amazonAdsInsights.summary.daysCount||0}</span></div></div>` : '';
+                    const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tallowbourn ${modeLabel} Audit</title><style>@page{margin:.75in;size:letter}*{box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a2e;line-height:1.65;max-width:100%;padding:0;margin:0;font-size:11pt}.header{background:linear-gradient(135deg,#1a1a2e,#16213e,#0f3460);color:white;padding:32px 40px 20px;margin:-.75in -.75in 0}.header h1{font-size:22pt;margin:0 0 4px;font-weight:800}.header .subtitle{font-size:13pt;opacity:.85;margin-bottom:12px;font-weight:300}.header .meta{font-size:9pt;opacity:.7;display:flex;gap:20px}.kpi-bar{display:flex;gap:0;margin:0 -.75in;padding:16px 40px;background:#0a1628}.kpi{flex:1;text-align:center;border-right:1px solid rgba(255,255,255,.1)}.kpi:last-child{border-right:none}.kpi-label{display:block;font-size:8pt;text-transform:uppercase;letter-spacing:.5px;color:rgba(255,255,255,.5);margin-bottom:2px}.kpi-value{display:block;font-size:14pt;font-weight:700;color:white}.content{padding-top:24px}h2{color:#1a1a2e;border-bottom:3px solid #e94560;padding-bottom:6px;margin-top:32px;font-size:14pt}h3{color:#16213e;margin-top:22px;font-size:12pt;border-left:3px solid #e94560;padding-left:10px}h4{color:#444;margin-top:16px;font-size:11pt}p,li{font-size:11pt;margin-bottom:6px}ul,ol{padding-left:22px}strong{color:#e94560}code{background:#f0f0f0;padding:1px 5px;border-radius:3px;font-size:10pt}hr{border:none;border-top:1px solid #ddd;margin:28px 0}blockquote{border-left:3px solid #e94560;margin:16px 0;padding:8px 16px;background:#fff5f5;font-style:italic}.footer{margin-top:48px;padding-top:16px;border-top:2px solid #1a1a2e;font-size:8pt;color:#888;text-align:center}.confidential{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 16px;margin-bottom:24px;font-size:9pt;color:#856404}@media print{.no-print{display:none!important}.header,.kpi-bar{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><div class="header"><h1>Tallowbourn Advertising Audit</h1><div class="subtitle">${modeLabel} Performance Report</div><div class="meta"><span>${dateStr}</span><span>${modelName}</span><span>${intelDateRange==='all'?'All data':intelDateRange+'d window'}</span></div></div>${kpiHtml}<div class="content"><div class="no-print" style="background:#fff3cd;padding:12px 20px;margin-bottom:20px;border-radius:8px;font-size:10pt;color:#856404">Press Ctrl+P → Save as PDF</div><div class="confidential">CONFIDENTIAL — Proprietary advertising data for Tallowbourn.</div>${htmlBody}</div><div class="footer"><p><strong>Tallowbourn Advertising Command Center</strong></p><p>${modeLabel} Audit · ${dateStr} · ${modelName} · ${Date.now().toString(36).toUpperCase()}</p><p style="margin-top:6px;font-size:7pt">AI-generated analysis. Validate before implementation.</p></div></body></html>`;
+                    const w = window.open('','_blank','width=900,height=700'); w.document.write(printDoc); w.document.close(); setTimeout(()=>w.print(), 500);
+                  }} className="px-3 py-1.5 bg-gradient-to-r from-orange-600/80 to-amber-600/80 rounded-lg text-white text-[10px] font-medium hover:from-orange-500 hover:to-amber-500 flex items-center gap-1">📊 Export PDF</button>
+                </div>
+              </div>
+              <div className="space-y-3 max-h-[600px] overflow-y-auto">
+                {adsAiMessages.map((msg,i)=>(
+                  <div key={i} className={`${msg.role==='user'?'bg-orange-900/15 border border-orange-500/15':'bg-slate-900/40'} rounded-xl p-4 group relative`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-[10px] text-slate-600 mb-1">{msg.role==='user'?'Prompt':'AI Report'}</p>
+                      <button onClick={()=>{ if (msg.role==='user') setAdsAiMessages(prev=>prev.filter((_,j)=>j!==i&&j!==i+1)); else setAdsAiMessages(prev=>prev.filter((_,j)=>j!==i)); }}
+                        className="hidden group-hover:block p-1 rounded hover:bg-rose-900/30 text-slate-700 hover:text-rose-400"><X className="w-3 h-3"/></button>
+                    </div>
+                    <p className="text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                  </div>
+                ))}
+                {adsAiLoading&&<div className="bg-slate-900/40 rounded-xl p-4"><div className="flex gap-1"><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'0ms'}}/><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'150ms'}}/><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'300ms'}}/></div></div>}
+              </div>
             </div>
           )}
         </>)}
 
-        {/* ═══ UPLOAD TAB ═══ */}
+        {/* ════════════════════════════════════════════════════════ */}
+        {/* DATA TAB                                               */}
+        {/* ════════════════════════════════════════════════════════ */}
         {adsViewMode==='upload' && (<>
-          <div className={`rounded-2xl border-2 border-dashed p-8 text-center transition-all mb-6 ${isDragging?'border-violet-400 bg-violet-900/20':'border-slate-600 bg-slate-800/30 hover:border-slate-500'}`}
+          {/* Upload Zone */}
+          <div className={`rounded-xl border-2 border-dashed p-6 text-center transition-all mb-5 ${isDragging?'border-violet-400 bg-violet-900/20':'border-slate-700/60 bg-slate-800/20 hover:border-slate-600'}`}
             onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
             {uploadStatus?.processing ? (
-              <div className="py-4"><Loader2 className="w-12 h-12 text-violet-400 mx-auto mb-4 animate-spin"/><p className="text-white font-medium mb-1">Processing files...</p><p className="text-slate-400 text-sm">Auto-detecting report types</p></div>
+              <div className="py-4"><Loader2 className="w-10 h-10 text-violet-400 mx-auto mb-3 animate-spin"/><p className="text-white font-medium text-sm">Processing...</p></div>
             ) : (<>
-              <Upload className="w-12 h-12 text-slate-400 mx-auto mb-4"/>
-              <h3 className="text-white text-lg font-semibold mb-2">Drop Any Ad Reports Here</h3>
-              <p className="text-slate-400 text-sm mb-4 max-w-lg mx-auto">CSV, XLSX, or ZIP — auto-detects Amazon PPC, Google Ads, Meta Ads, Shopify, and Brand Analytics. Daily KPIs flow everywhere, deep analysis powers AI reports.</p>
-              <button onClick={()=>fileInputRef.current?.click()} className="px-6 py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 rounded-xl text-white font-medium shadow-lg shadow-violet-500/20">
-                <span className="flex items-center gap-2"><FileSpreadsheet className="w-5 h-5"/>Choose Files</span>
+              <Upload className="w-8 h-8 text-slate-500 mx-auto mb-3"/>
+              <h3 className="text-white font-semibold mb-1">Drop Ad Reports Here</h3>
+              <p className="text-slate-500 text-xs mb-3 max-w-md mx-auto">CSV, XLSX, or ZIP — auto-detects Amazon PPC, Google Ads, Meta Ads, Shopify, Brand Analytics</p>
+              <button onClick={()=>fileInputRef.current?.click()} className="px-5 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 rounded-xl text-white text-sm font-medium shadow-lg shadow-violet-500/20">
+                <span className="flex items-center gap-2"><FileSpreadsheet className="w-4 h-4"/>Choose Files</span>
               </button>
               <input ref={fileInputRef} type="file" multiple accept=".csv,.xlsx,.xls,.zip,.tsv" className="hidden" onChange={e=>handleFileDrop(e.target.files)}/>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6 text-xs text-slate-500">
-                <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-full bg-orange-500"/>Amazon PPC</div>
-                <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-full bg-red-500"/>Google Ads</div>
-                <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-full bg-blue-500"/>Meta Ads</div>
-                <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-full bg-emerald-500"/>Shopify / Brand Analytics</div>
+              <div className="flex justify-center gap-4 mt-4 text-[10px] text-slate-600">
+                <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-orange-500"/>Amazon</span>
+                <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-red-500"/>Google</span>
+                <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-blue-500"/>Meta</span>
+                <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>Shopify</span>
               </div>
             </>)}
           </div>
 
+          {/* Upload Results */}
           {uploadStatus?.results && (
-            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
-              <h3 className="text-white font-semibold mb-4 flex items-center gap-2"><Check className="w-5 h-5 text-emerald-400"/>Last Upload Results</h3>
-              <div className="grid grid-cols-3 gap-4 mb-4">
-                <div className="bg-emerald-900/20 rounded-xl border border-emerald-500/30 p-4 text-center"><p className="text-2xl font-bold text-emerald-400">{uploadStatus.results.summary.tier1}</p><p className="text-slate-400 text-xs mt-1">Daily KPIs</p><p className="text-emerald-500/60 text-xs">→ all pages</p></div>
-                <div className="bg-violet-900/20 rounded-xl border border-violet-500/30 p-4 text-center"><p className="text-2xl font-bold text-violet-400">{uploadStatus.results.summary.tier2}</p><p className="text-slate-400 text-xs mt-1">Deep Analysis</p><p className="text-violet-500/60 text-xs">→ AI reports</p></div>
-                <div className={`rounded-xl border p-4 text-center ${uploadStatus.results.summary.unrecognized>0?'bg-amber-900/20 border-amber-500/30':'bg-slate-800/50 border-slate-700'}`}><p className={`text-2xl font-bold ${uploadStatus.results.summary.unrecognized>0?'text-amber-400':'text-slate-500'}`}>{uploadStatus.results.summary.unrecognized}</p><p className="text-slate-400 text-xs mt-1">Unrecognized</p></div>
+            <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4 mb-5">
+              <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400"/>Last Upload</h3>
+              <div className="grid grid-cols-3 gap-3 mb-3">
+                <div className="bg-emerald-900/15 rounded-lg border border-emerald-500/20 p-3 text-center"><p className="text-xl font-bold text-emerald-400">{uploadStatus.results.summary.tier1}</p><p className="text-slate-500 text-[10px]">Daily KPIs</p></div>
+                <div className="bg-violet-900/15 rounded-lg border border-violet-500/20 p-3 text-center"><p className="text-xl font-bold text-violet-400">{uploadStatus.results.summary.tier2}</p><p className="text-slate-500 text-[10px]">Deep Analysis</p></div>
+                <div className={`rounded-lg border p-3 text-center ${uploadStatus.results.summary.unrecognized>0?'bg-amber-900/15 border-amber-500/20':'bg-slate-800/30 border-slate-700/50'}`}><p className={`text-xl font-bold ${uploadStatus.results.summary.unrecognized>0?'text-amber-400':'text-slate-600'}`}>{uploadStatus.results.summary.unrecognized}</p><p className="text-slate-500 text-[10px]">Unrecognized</p></div>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {uploadStatus.results.summary.reportTypes.map((r,i)=>(
-                  <div key={i} className="flex items-center gap-3 p-2 bg-slate-900/50 rounded-lg">
-                    <span className={`w-2 h-2 rounded-full ${r.platform==='amazon'?'bg-orange-500':r.platform==='google'?'bg-red-500':r.platform==='meta'?'bg-blue-500':'bg-emerald-500'}`}/>
-                    <span className="text-white text-sm flex-1">{r.label}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded ${r.tier===1?'bg-emerald-900/30 text-emerald-400':'bg-violet-900/30 text-violet-400'}`}>Tier {r.tier}</span>
-                    <span className="text-slate-500 text-xs truncate max-w-[200px]">{r.fileName}</span>
+                  <div key={i} className="flex items-center gap-2 text-xs bg-slate-900/30 rounded-lg px-3 py-1.5">
+                    <span className={`w-1.5 h-1.5 rounded-full ${r.platform==='amazon'?'bg-orange-500':r.platform==='google'?'bg-red-500':r.platform==='meta'?'bg-blue-500':'bg-emerald-500'}`}/>
+                    <span className="text-white flex-1">{r.label}</span>
+                    <span className="text-slate-600 text-[10px] truncate max-w-[180px]">{r.fileName}</span>
                   </div>
                 ))}
                 {uploadStatus.results.unrecognized.map((r,i)=>(
-                  <div key={`u${i}`} className="flex items-center gap-3 p-2 bg-amber-900/10 rounded-lg">
-                    <AlertTriangle className="w-4 h-4 text-amber-400"/><span className="text-amber-300 text-sm flex-1">{r.fileName}</span><span className="text-xs text-amber-500">Not recognized</span>
+                  <div key={`u${i}`} className="flex items-center gap-2 text-xs bg-amber-900/10 rounded-lg px-3 py-1.5">
+                    <AlertTriangle className="w-3 h-3 text-amber-400"/><span className="text-amber-300 flex-1">{r.fileName}</span>
                   </div>
                 ))}
               </div>
@@ -1373,498 +1195,99 @@ const AdsView = ({
           )}
 
           {/* Data Inventory */}
-          <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-6">
-            <h3 className="text-white font-semibold mb-4 flex items-center gap-2"><Database className="w-5 h-5 text-cyan-400"/>Currently Loaded Data</h3>
-            <div className="mb-6">
-              <h4 className="text-cyan-400 text-sm font-semibold uppercase tracking-wider mb-3">Tier 1 — Daily KPIs</h4>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="bg-slate-900/50 rounded-xl p-4"><div className="flex items-center gap-2 mb-2"><span className="w-3 h-3 rounded-full bg-orange-500"/><span className="text-white text-sm font-medium">Amazon</span></div><p className="text-slate-400 text-xs">{sortedDays.filter(d=>allDaysData[d]?.amazon?.adSpend>0).length} days SP-API</p><p className="text-slate-400 text-xs">{sortedDays.filter(d=>(allDaysData[d]?.amazonAdsMetrics?.spend||0)>0).length} days Ads report</p></div>
-                <div className="bg-slate-900/50 rounded-xl p-4"><div className="flex items-center gap-2 mb-2"><span className="w-3 h-3 rounded-full bg-red-500"/><span className="text-white text-sm font-medium">Google</span></div><p className="text-slate-400 text-xs">{sortedDays.filter(d=>(allDaysData[d]?.shopify?.googleSpend||0)>0).length} days spend</p><p className="text-slate-400 text-xs">{sortedDays.filter(d=>(allDaysData[d]?.shopify?.adsMetrics?.googleImpressions||0)>0).length} days metrics</p></div>
-                <div className="bg-slate-900/50 rounded-xl p-4"><div className="flex items-center gap-2 mb-2"><span className="w-3 h-3 rounded-full bg-blue-500"/><span className="text-white text-sm font-medium">Meta</span></div><p className="text-slate-400 text-xs">{sortedDays.filter(d=>(allDaysData[d]?.shopify?.metaSpend||0)>0).length} days spend</p><p className="text-slate-400 text-xs">{sortedDays.filter(d=>(allDaysData[d]?.shopify?.adsMetrics?.metaImpressions||0)>0).length} days metrics</p></div>
-              </div>
+          <div className="bg-slate-800/20 rounded-xl border border-slate-700/50 p-4">
+            <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Database className="w-4 h-4 text-cyan-400"/>Loaded Data</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+              <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-orange-500"/><span className="text-white text-xs font-medium">Amazon</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d=>allDaysData[d]?.amazon?.adSpend>0).length}d SP-API · {sortedDays.filter(d=>(allDaysData[d]?.amazonAdsMetrics?.spend||0)>0).length}d bulk</p></div>
+              <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-red-500"/><span className="text-white text-xs font-medium">Google</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d=>(allDaysData[d]?.shopify?.googleSpend||0)>0).length}d spend · {sortedDays.filter(d=>(allDaysData[d]?.shopify?.adsMetrics?.googleImpressions||0)>0).length}d metrics</p></div>
+              <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-blue-500"/><span className="text-white text-xs font-medium">Meta</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d=>(allDaysData[d]?.shopify?.metaSpend||0)>0).length}d spend · {sortedDays.filter(d=>(allDaysData[d]?.shopify?.adsMetrics?.metaImpressions||0)>0).length}d metrics</p></div>
             </div>
-            <div>
-              <h4 className="text-violet-400 text-sm font-semibold uppercase tracking-wider mb-3">Tier 2 — Deep Analysis</h4>
-              {tier2Summary.count===0 ? (
-                <div className="bg-slate-900/50 rounded-xl p-6 text-center"><Brain className="w-8 h-8 text-slate-600 mx-auto mb-2"/><p className="text-slate-400 text-sm">No deep analysis data loaded</p><p className="text-slate-500 text-xs mt-1">Upload search terms, placements, campaigns for AI reports</p></div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {deepReportCount > 0 ? (
+              <div>
+                <h4 className="text-violet-400 text-[10px] font-semibold uppercase tracking-wider mb-2">Deep Analysis Reports</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
                   {Object.entries(adsIntelData||{}).map(([platform,reports])=>{
                     if(platform==='lastUpdated'||platform==='reportCount'||typeof reports!=='object') return null;
                     return Object.entries(reports).map(([rt,data])=>{
                       if(!data?.records) return null;
-                      return (<div key={`${platform}-${rt}`} className="bg-slate-900/50 rounded-xl p-3 flex items-center gap-3">
-                        <span className={`w-2 h-2 rounded-full ${platform==='amazon'?'bg-orange-500':platform==='google'?'bg-red-500':platform==='meta'?'bg-blue-500':'bg-emerald-500'}`}/>
-                        <div className="flex-1 min-w-0"><p className="text-white text-sm">{data.meta?.label||rt}</p><p className="text-slate-500 text-xs">{data.records.length} rows • {data.meta?.uploadedAt?.slice(0,10)||'unknown'}</p></div>
+                      return (<div key={`${platform}-${rt}`} className="flex items-center gap-2 bg-slate-900/30 rounded-lg px-3 py-1.5 text-xs">
+                        <span className={`w-1.5 h-1.5 rounded-full ${platform==='amazon'?'bg-orange-500':platform==='google'?'bg-red-500':platform==='meta'?'bg-blue-500':'bg-emerald-500'}`}/>
+                        <span className="text-white flex-1 truncate">{data.meta?.label||rt}</span>
+                        <span className="text-slate-600 text-[10px]">{data.records.length} rows</span>
                       </div>);
                     });
                   })}
                 </div>
-              )}
-            </div>
-          </div>
-        </>)}
-        {/* ═══ DEEP ANALYSIS TAB ═══ */}
-        {adsViewMode==='analysis' && (<>
-          {tier2Summary.count===0 ? (
-            <div className="text-center py-16 bg-slate-800/30 rounded-2xl border border-slate-700">
-              <Search className="w-16 h-16 text-slate-600 mx-auto mb-4"/>
-              <h3 className="text-white text-xl font-semibold mb-2">Upload Deep Analysis Reports</h3>
-              <p className="text-slate-400 max-w-md mx-auto mb-6">Drop search term, placement, campaign, or Brand Analytics reports to unlock keyword analysis, placement optimization, and audience insights.</p>
-              <button onClick={()=>setAdsViewMode('upload')} className="px-6 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl text-white font-medium"><span className="flex items-center gap-2"><Upload className="w-5 h-5"/>Go to Upload</span></button>
-            </div>
-          ) : (<>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Search Terms */}
-              {(adsIntelData?.amazon?.sp_search_terms||adsIntelData?.google?.google_search_terms) && (
-                <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-6">
-                  <h3 className="text-white font-semibold mb-4 flex items-center gap-2"><Search className="w-5 h-5 text-emerald-400"/>Search Terms</h3>
-                  {adsIntelData?.amazon?.sp_search_terms && (()=>{
-                    const recs=adsIntelData.amazon.sp_search_terms.records, hds=adsIntelData.amazon.sp_search_terms.headers;
-                    const spK=hds.find(h=>/^Spend$/i.test(h)), slK=hds.find(h=>/Sales/i.test(h)), srK=hds.find(h=>/Customer Search Term/i.test(h));
-                    const top10=spK?[...recs].sort((a,b)=>Number(b[spK]||0)-Number(a[spK]||0)).slice(0,10):recs.slice(0,10);
-                    return (<div><p className="text-orange-400 text-sm font-medium mb-2">Amazon SP ({recs.length} terms)</p><div className="space-y-1">{top10.map((r,i)=>{
-                      const sp=Number(r[spK]||0),sl=Number(r[slK]||0),roas=sp>0?sl/sp:0;
-                      return (<div key={i} className="flex items-center gap-2 text-xs py-1"><span className="text-slate-400 w-5">{i+1}.</span><span className="text-white flex-1 truncate">{r[srK]||'—'}</span><span className="text-slate-400">{formatCurrency(sp)}</span><span className={`w-14 text-right ${roas>=3?'text-emerald-400':roas>=1?'text-amber-400':sl===0?'text-rose-400':'text-white'}`}>{roas>0?roas.toFixed(1)+'x':'—'}</span></div>);
-                    })}</div></div>);
-                  })()}
-                  {adsIntelData?.google?.google_search_terms && (()=>{
-                    const recs=adsIntelData.google.google_search_terms.records, hds=adsIntelData.google.google_search_terms.headers;
-                    const cK=hds.find(h=>/^Cost$/i.test(h)), tK=hds.find(h=>/Search term/i.test(h)), cvK=hds.find(h=>/^Conversions$/i.test(h));
-                    const top10=cK?[...recs].sort((a,b)=>Number(b[cK]||0)-Number(a[cK]||0)).slice(0,10):recs.slice(0,10);
-                    return (<div className="mt-4 pt-4 border-t border-slate-700"><p className="text-red-400 text-sm font-medium mb-2">Google ({recs.length} terms)</p><div className="space-y-1">{top10.map((r,i)=>(
-                      <div key={i} className="flex items-center gap-2 text-xs py-1"><span className="text-slate-400 w-5">{i+1}.</span><span className="text-white flex-1 truncate">{r[tK]||'—'}</span><span className="text-slate-400">{formatCurrency(Number(r[cK]||0))}</span><span className="text-emerald-400 w-14 text-right">{Number(r[cvK]||0)>0?Number(r[cvK]).toFixed(0)+' conv':'—'}</span></div>
-                    ))}</div></div>);
-                  })()}
-                </div>
-              )}
-
-              {/* Campaigns & Placements */}
-              {(adsIntelData?.google?.google_campaign_perf||adsIntelData?.meta?.meta_campaign_perf) && (
-                <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-6">
-                  <h3 className="text-white font-semibold mb-4 flex items-center gap-2"><Target className="w-5 h-5 text-violet-400"/>Campaigns</h3>
-                  {adsIntelData?.google?.google_campaign_perf && (()=>{
-                    const recs=adsIntelData.google.google_campaign_perf.records;
-                    return (<div><p className="text-red-400 text-sm font-medium mb-2">Google ({recs.length})</p><div className="space-y-1">{recs.slice(0,8).map((r,i)=>(
-                      <div key={i} className="flex items-center gap-2 text-xs py-1"><span className={`w-2 h-2 rounded-full ${r['Campaign state']==='Enabled'?'bg-emerald-500':'bg-slate-500'}`}/><span className="text-white flex-1 truncate">{r['Campaign']||'—'}</span><span className="text-slate-400">{formatCurrency(Number(r['Cost']||0))}</span><span className="text-slate-400">{Number(r['Conversions']||0).toFixed(0)} conv</span></div>
-                    ))}</div></div>);
-                  })()}
-                  {adsIntelData?.meta?.meta_campaign_perf && (()=>{
-                    const recs=adsIntelData.meta.meta_campaign_perf.records;
-                    return (<div className={adsIntelData?.google?.google_campaign_perf?'mt-4 pt-4 border-t border-slate-700':''}><p className="text-blue-400 text-sm font-medium mb-2">Meta ({recs.length})</p><div className="space-y-1">{recs.slice(0,8).map((r,i)=>(
-                      <div key={i} className="flex items-center gap-2 text-xs py-1"><span className={`w-2 h-2 rounded-full ${r['Campaign delivery']==='active'?'bg-emerald-500':'bg-slate-500'}`}/><span className="text-white flex-1 truncate">{r['Campaign name']||'—'}</span><span className="text-slate-400">{formatCurrency(Number(r['Amount spent (USD)']||0))}</span></div>
-                    ))}</div></div>);
-                  })()}
-                </div>
-              )}
-
-              {/* Brand Analytics */}
-              {adsIntelData?.amazon?.search_query_performance && (
-                <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-6 lg:col-span-2">
-                  <h3 className="text-white font-semibold mb-4 flex items-center gap-2"><Trophy className="w-5 h-5 text-amber-400"/>Brand Analytics — Search Query Performance</h3>
-                  {(()=>{
-                    const recs=adsIntelData.amazon.search_query_performance.records;
-                    return (<div className="overflow-x-auto"><table className="w-full text-xs">
-                      <thead><tr className="border-b border-slate-700 text-slate-400"><th className="py-2 text-left">#</th><th className="py-2 text-left">Search Query</th><th className="py-2 text-right">Volume</th><th className="py-2 text-right">Brand Share</th><th className="py-2 text-right">Click Share</th></tr></thead>
-                      <tbody>{recs.slice(0,20).map((r,i)=>(
-                        <tr key={i} className="border-b border-slate-800/50"><td className="py-1.5 text-slate-500">{i+1}</td><td className="py-1.5 text-white">{r['Search Query']||'—'}</td><td className="py-1.5 text-right text-slate-300">{formatNumber(Number(r['Search Query Volume']||0))}</td><td className="py-1.5 text-right text-cyan-400">{Number(r['Impressions: Brand Share %']||0).toFixed(1)}%</td><td className="py-1.5 text-right text-emerald-400">{Number(r['Clicks: Brand Share %']||0).toFixed(1)}%</td></tr>
-                      ))}</tbody>
-                    </table><p className="text-slate-500 text-xs mt-2">{recs.length} total queries</p></div>);
-                  })()}
-                </div>
-              )}
-            </div>
-
-            {tier2Summary.count>0 && (
-              <div className="mt-6 text-center">
-                <button onClick={()=>setAdsViewMode('reports')} className="px-6 py-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-medium shadow-lg shadow-orange-500/20">
-                  <span className="flex items-center gap-2"><Brain className="w-5 h-5"/>Generate AI Audit →</span>
-                </button>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <Brain className="w-6 h-6 text-slate-700 mx-auto mb-1"/><p className="text-slate-600 text-xs">No deep analysis data — upload search terms, placements, or campaigns for AI reports</p>
               </div>
             )}
-          </>)}
-        </>)}
-        {/* ═══ AI REPORTS TAB ═══ */}
-        {adsViewMode==='reports' && (<>
-          <div className="bg-gradient-to-r from-orange-900/20 to-amber-900/20 rounded-2xl border border-orange-500/30 p-6 mb-6">
-            <div className="flex items-center justify-between flex-wrap gap-4 mb-4">
-              <div>
-                <h3 className="text-white text-lg font-semibold flex items-center gap-2"><Brain className="w-6 h-6 text-orange-400"/>AI Comprehensive Ads Audit</h3>
-                <p className="text-slate-400 text-sm mt-1">Generates a full cross-platform audit from ALL available data — search terms, placements, campaigns, daily performance, Brand Analytics.</p>
+
+            {/* Brand Analytics */}
+            {adsIntelData?.amazon?.search_query_performance && (
+              <div className="mt-4 pt-4 border-t border-slate-700/50">
+                <h4 className="text-amber-400 text-[10px] font-semibold uppercase tracking-wider mb-2">Brand Analytics — Search Query Performance</h4>
+                <div className="overflow-x-auto"><table className="w-full text-xs">
+                  <thead><tr className="border-b border-slate-700/50 text-slate-500"><th className="py-1.5 text-left">#</th><th className="py-1.5 text-left">Query</th><th className="py-1.5 text-right">Volume</th><th className="py-1.5 text-right">Brand %</th><th className="py-1.5 text-right">Click %</th></tr></thead>
+                  <tbody>{adsIntelData.amazon.search_query_performance.records.slice(0,15).map((r,i)=>(
+                    <tr key={i} className="border-b border-slate-800/30"><td className="py-1 text-slate-600">{i+1}</td><td className="py-1 text-white">{r['Search Query']||'—'}</td><td className="py-1 text-right text-slate-400">{formatNumber(Number(r['Search Query Volume']||0))}</td><td className="py-1 text-right text-cyan-400">{Number(r['Impressions: Brand Share %']||0).toFixed(1)}%</td><td className="py-1 text-right text-emerald-400">{Number(r['Clicks: Brand Share %']||0).toFixed(1)}%</td></tr>
+                  ))}</tbody>
+                </table></div>
               </div>
-              <select value={aiChatModel} onChange={e => setAiChatModel(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm">
-                {AI_MODEL_OPTIONS.map(m => (
-                  <option key={m.value} value={m.value}>{m.label}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Data Sources Manifest — shows exactly what the AI will analyze */}
-            {(() => {
-              const sources = [];
-              // Tier 1: Daily KPIs
-              if (sortedDays.length > 0) sources.push({ platform: 'Dashboard', type: 'Daily KPIs (SP-API + Shopify)', rows: sortedDays.length, unit: 'days', date: sortedDays[sortedDays.length-1], color: 'violet' });
-              // SP-API campaigns
-              if (hasCampaignData) {
-                const activeCamps = campaigns.filter(c => (c.spend || 0) > 0);
-                const lastUpdated = amazonCampaigns?.lastUpdated;
-                sources.push({ platform: 'Amazon', type: `Campaign CSV (${activeCamps.length} active)`, rows: campaigns.length, unit: 'campaigns', date: lastUpdated ? lastUpdated.slice(0, 10) : 'unknown', color: 'orange' });
-              }
-              // Tier 2 reports
-              if (adsIntelData) {
-                ['amazon','google','meta','shopify'].forEach(plat => {
-                  if (!adsIntelData[plat] || typeof adsIntelData[plat] !== 'object') return;
-                  Object.entries(adsIntelData[plat]).forEach(([reportType, data]) => {
-                    if (!data?.records) return;
-                    const label = data.meta?.label || reportType.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
-                    sources.push({
-                      platform: plat.charAt(0).toUpperCase()+plat.slice(1),
-                      type: label,
-                      rows: data.records.length,
-                      unit: 'rows',
-                      date: data.meta?.uploadedAt?.slice(0,10) || 'unknown',
-                      color: plat==='amazon'?'orange':plat==='google'?'red':plat==='meta'?'blue':'emerald',
-                    });
-                  });
-                });
-              }
-              const totalSources = sources.length;
-              const platformColors = { Amazon:'orange', Google:'red', Meta:'blue', Shopify:'emerald', Dashboard:'violet' };
-              return (
-                <div className="mb-4">
-                  <button onClick={()=>setShowDataSources(p=>!p)} className="flex items-center gap-2 text-sm text-slate-300 hover:text-white mb-2">
-                    <Database className="w-4 h-4"/>
-                    <span className="font-medium">{totalSources} data source{totalSources!==1?'s':''} loaded</span>
-                    <span className="text-slate-500 text-xs">({sources.reduce((s,r)=>s+r.rows,0).toLocaleString()} total records)</span>
-                    <ChevronRight className={`w-3 h-3 transition-transform ${showDataSources?'rotate-90':''}`}/>
-                  </button>
-                  {showDataSources && (
-                    <div className="bg-slate-900/60 rounded-xl border border-slate-700 p-3 space-y-1.5 max-h-[300px] overflow-y-auto">
-                      {totalSources===0 ? (
-                        <p className="text-slate-500 text-xs text-center py-4">No data loaded yet. Upload reports or connect SP-API to populate data sources.</p>
-                      ) : sources.map((s,i) => (
-                        <div key={i} className="flex items-center justify-between text-xs bg-slate-800/60 rounded-lg px-3 py-2">
-                          <div className="flex items-center gap-2">
-                            <span className={`w-2 h-2 rounded-full bg-${s.color}-500`}/>
-                            <span className="text-slate-400 w-16">{s.platform}</span>
-                            <span className="text-white">{s.type}</span>
-                          </div>
-                          <div className="flex items-center gap-3 text-slate-500">
-                            <span>{s.rows.toLocaleString()} {s.unit}</span>
-                            <span className="text-[10px]">{s.date}</span>
-                          </div>
-                        </div>
-                      ))}
-                      {totalSources>0 && (
-                        <p className="text-slate-600 text-[10px] pt-1 text-center">The AI report will analyze all sources listed above. Upload more reports for deeper insights.</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
-            <div className="space-y-4">
-              {/* Platform Mode Selector */}
-              <div>
-                <p className="text-slate-400 text-xs uppercase mb-2 font-medium">Report Scope</p>
-                <div className="flex flex-wrap gap-2">
-                  {REPORT_MODES.map(m => (
-                    <button key={m.key} onClick={() => setReportMode(m.key)}
-                      className={`px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center gap-2 ${reportMode === m.key ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-lg shadow-orange-500/20' : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700 border border-slate-600/50'}`}>
-                      <span>{m.icon}</span>{m.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-slate-500 text-xs mt-1.5">{REPORT_MODES.find(m => m.key === reportMode)?.desc}</p>
-              </div>
-
-              {/* Generate Button */}
-              <button onClick={() => {
-                const prompts = {
-                  all: `Generate a COMPREHENSIVE AGENCY-LEVEL cross-platform advertising audit. This report should be at the quality level of a $15K/month PPC agency deliverable.
-
-REQUIRED SECTIONS:
-## 📊 EXECUTIVE SUMMARY — Ad health score (1-10), total spend/revenue/ROAS per platform, #1 most urgent problem with $ impact, #1 biggest scaling opportunity
-## 🔴 CUT WASTE — For EACH wasteful keyword/campaign: exact name, spend over period, $0 or low sales, SPECIFIC action (pause, negate with match type, reduce bid to $X.XX)
-## 🟢 PROTECT WINNERS — For EACH top performer: name, ROAS, conversion rate, defend strategy (budget floor, bid floor, exact match isolation, keyword harvesting)
-## 🚀 SCALE OPPORTUNITIES — For EACH opportunity: name, current metrics, scaling math ("$X/day at Y ROAS → $Z/day projects $W additional revenue"), step-by-step launch plan
-## 🔄 PLACEMENT OPTIMIZATION — TOS vs Product Pages vs RoS: ROAS comparison, exact bid modifier percentages to set
-## 💰 CROSS-PLATFORM BUDGET REALLOCATION — Current split with $ amounts → Recommended split with rationale. Amazon vs Google vs Meta efficiency comparison.
-## 📈 TREND DIAGNOSIS — MoM trajectory with % changes, TACOS trend, organic share trend, seasonal prep
-## 🎯 THIS WEEK: Top 5 Priority Actions — [Action] → [$ impact] → [minutes to implement] → [exact console click-path]
-
-CITE SPECIFIC: campaign names, search terms, ASINs, dollar amounts, percentages. NO generic advice.`,
-                  amazon: `Generate a DEEP-DIVE AMAZON PPC AUDIT at agency level.
-
-REQUIRED SECTIONS:
-## 📊 AMAZON AD HEALTH — Score 1-10, total spend, ACOS, TACOS, attributed vs organic revenue split
-## 🔍 SEARCH TERM ANALYSIS — Top 10 profitable terms (term, spend, sales, ACOS, orders), Top 10 wasteful terms (term, spend, $0 sales, clicks wasted), exact negative keyword list with match types (phrase vs exact)
-## 📦 CAMPAIGN-LEVEL PERFORMANCE — Every campaign: name, type (SP/SB/SD), state, spend, sales, ROAS, ACOS, orders, clicks, CPC. Flag any with ROAS <1.5x or ACOS >40% as needs attention.
-## 🎯 TARGETING & MATCH TYPE ANALYSIS — Broad vs Phrase vs Exact efficiency, auto vs manual campaign comparison, keyword harvesting recommendations
-## 📍 PLACEMENT OPTIMIZATION — Top of Search vs Product Pages vs Rest of Search: ROAS, CPC, conversion rate for each. Exact bid modifier % recommendations.
-## 💡 SKU-LEVEL AD PERFORMANCE — Which products are profitable to advertise vs which are burning budget? Per-SKU ACOS and recommendation.
-## 🔄 CAMPAIGN STRUCTURE RECOMMENDATIONS — Are campaigns properly segmented? Single-keyword exact match campaigns for top performers? Negative keyword architecture?
-## 🎯 THIS WEEK: Top 5 Amazon Actions — with exact $ impact and implementation steps in Amazon Ads Console`,
-                  dtc: `Generate a COMPREHENSIVE DTC ADVERTISING AUDIT covering Google Ads AND Meta Ads.
-
-REQUIRED SECTIONS:
-## 📊 DTC AD HEALTH — Combined Google+Meta health score, total DTC spend, DTC ROAS, CPA, comparison to Amazon efficiency
-## 🔍 GOOGLE ADS DEEP DIVE — Campaign performance, search term quality, CPC trends, conversion rate by campaign, keyword opportunities, negative keyword suggestions, Quality Score insights if available
-## 📱 META ADS DEEP DIVE — Campaign performance, creative fatigue indicators, audience insights, placement efficiency (Feed vs Stories vs Reels), CPA trends, frequency analysis
-## 💰 GOOGLE vs META COMPARISON — Side-by-side: CPC, CTR, CPA, ROAS, conversion rate. Where is each $ most efficient?
-## 🔄 BUDGET REALLOCATION — Current Google/Meta split → Recommended split with math. Which platform should get more budget and why?
-## 🎯 LANDING PAGE & FUNNEL — Are conversion rates where they should be? Any platform-specific conversion gaps?
-## 🎯 THIS WEEK: Top 5 DTC Actions`,
-                  google: `Generate a DEEP-DIVE GOOGLE ADS AUDIT.
-
-REQUIRED SECTIONS:
-## 📊 GOOGLE ADS HEALTH — Score 1-10, total spend, clicks, CPC, CTR, conversions, conversion rate, cost per conversion
-## 🔍 SEARCH TERM ANALYSIS — Top performing terms, wasteful terms to negate, match type efficiency, Quality Score issues
-## 📋 CAMPAIGN PERFORMANCE — Every campaign with full KPIs, recommendations per campaign (scale/pause/restructure)
-## 💡 KEYWORD OPPORTUNITIES — Missing keywords, competitor gaps, long-tail opportunities with estimated CPC and volume
-## 🎯 BID STRATEGY — Current strategy assessment, recommended changes with specific $ amounts
-## 🎯 THIS WEEK: Top 5 Google Actions`,
-                  meta: `Generate a DEEP-DIVE META ADS AUDIT.
-
-REQUIRED SECTIONS:
-## 📊 META ADS HEALTH — Score 1-10, total spend, impressions, clicks, CTR, CPC, purchases, CPA, ROAS, purchase value
-## 🎨 CREATIVE PERFORMANCE — Which ads/creatives are performing? Creative fatigue indicators? When to refresh?
-## 👥 AUDIENCE ANALYSIS — Which audiences convert best? Lookalike vs interest vs retargeting efficiency? Frequency caps?
-## 📍 PLACEMENT BREAKDOWN — Feed vs Stories vs Reels vs Audience Network: CPC, CTR, CPA for each. Where to allocate?
-## 📈 FUNNEL ANALYSIS — Click-through rate vs landing page conversion vs purchase rate. Where is the funnel leaking?
-## 💰 SCALING PLAN — Which campaigns/ad sets to scale? At what daily budget? Expected CPA at higher spend?
-## 🎯 THIS WEEK: Top 5 Meta Actions`,
-                };
-                setShowAdsAIChat(true);
-                setTimeout(() => sendAdsAIMessage(prompts[reportMode]), 200);
-              }} className="w-full px-6 py-4 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-semibold shadow-lg shadow-orange-500/20 flex items-center justify-center gap-3">
-                <Zap className="w-5 h-5"/>Generate {REPORT_MODES.find(m => m.key === reportMode)?.label} Audit
-              </button>
-
-              {/* Quick Actions */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Give me the top 20 negative keywords I should add TODAY based on my search term data. For each: the exact keyword, match type (phrase or exact), which campaigns to add it to, and how much I'll save per month. Format as a ready-to-implement checklist."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="text-amber-400">🚫</span>Negative Keyword List</button>
-                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("What are my top 10 scaling opportunities right now? For each: the campaign/keyword, current daily spend, current ROAS, recommended new daily spend, projected additional revenue. Show me the math."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="text-emerald-400">📈</span>Scaling Opportunities</button>
-                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Compare organic search query performance with paid campaigns. Where am I paying for clicks I could get organically? Where should I increase paid? Specific keyword recommendations with $ impact."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="text-violet-400">🔄</span>Organic vs Paid Gap</button>
-                <button onClick={()=>{setShowAdsAIChat(true);setTimeout(()=>sendAdsAIMessage("Give me a weekly PPC maintenance checklist based on my data. What should I check every Monday? Include specific bid adjustments, budget checks, and performance thresholds that should trigger action."),200);}} className="px-4 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl text-white text-sm flex items-center gap-2"><span className="text-cyan-400">📋</span>Weekly Maintenance Plan</button>
-              </div>
-            </div>
+            )}
           </div>
-
-          {/* Prior Report History */}
-          {adsAiReportHistory && adsAiReportHistory.length > 0 && (
-            <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-4 mb-6">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-slate-300 font-medium text-sm flex items-center gap-2"><Clock className="w-4 h-4"/>Report History ({adsAiReportHistory.length})</h3>
-                <button onClick={()=>{if(window.confirm('Clear all report history? The AI will lose memory of prior analyses.')){setAdsAiReportHistory([]);}}} className="text-xs text-slate-500 hover:text-red-400">Clear History</button>
-              </div>
-              <div className="space-y-2">
-                {adsAiReportHistory.slice(-5).reverse().map((r,i)=>(
-                  <div key={i} className="flex items-center justify-between bg-slate-900/50 rounded-lg px-3 py-2 text-xs">
-                    <div className="flex items-center gap-3">
-                      <span className="text-slate-400">{r.date}</span>
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${r.model==='Opus'?'bg-violet-900/50 text-violet-300':r.model==='Sonnet'?'bg-blue-900/50 text-blue-300':'bg-slate-700 text-slate-300'}`}>{r.model}</span>
-                      {r.healthScore && <span className={`font-bold ${parseInt(r.healthScore)>=7?'text-emerald-400':parseInt(r.healthScore)>=4?'text-amber-400':'text-red-400'}`}>{r.healthScore}/10</span>}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-slate-500 max-w-[300px] truncate">{r.keyIssues}</span>
-                      <select value={r.actionsTaken||'pending'} onChange={e=>{setAdsAiReportHistory(prev=>prev.map((rr,ri)=>ri===prev.length-1-i?{...rr,actionsTaken:e.target.value}:rr));}} className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-300">
-                        <option value="pending">⏳ Pending</option>
-                        <option value="in-progress">🔄 In Progress</option>
-                        <option value="completed">✅ Completed</option>
-                        <option value="skipped">⏭ Skipped</option>
-                      </select>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {adsAiMessages.length>0 && (
-            <div className="bg-slate-800/30 rounded-2xl border border-slate-700 p-6">
-              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-                <h3 className="text-white font-semibold">Report Output</h3>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {/* Copy plain text */}
-                  <button onClick={()=>{
-                    const report = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n');
-                    navigator.clipboard.writeText(report).then(()=>setToast({message:'Report copied as plain text',type:'success'})).catch(()=>setToast({message:'Copy failed',type:'error'}));
-                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1.5 bg-slate-700/50 rounded-lg hover:bg-slate-700" title="Copy as plain text">📋 Copy Text</button>
-                  
-                  {/* Copy rich HTML for Google Docs */}
-                  <button onClick={()=>{
-                    const report = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n');
-                    const html = markdownToHtml(report);
-                    const blob = new Blob([html], {type:'text/html'});
-                    const item = new ClipboardItem({'text/html': blob, 'text/plain': new Blob([report], {type:'text/plain'})});
-                    navigator.clipboard.write([item]).then(()=>setToast({message:'Copied as rich text — paste into Google Docs, Notion, etc.',type:'success'})).catch(()=>{
-                      navigator.clipboard.writeText(report).then(()=>setToast({message:'Copied as plain text (rich copy not supported in this browser)',type:'success'}));
-                    });
-                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1.5 bg-slate-700/50 rounded-lg hover:bg-slate-700" title="Copy as formatted HTML for Google Docs">📄 Copy for Docs</button>
-                  
-                  {/* Download markdown */}
-                  <button onClick={()=>{
-                    const report = adsAiMessages.map(m=>m.role==='user'?`**PROMPT:** ${m.content}`:m.content).join('\n\n---\n\n');
-                    const header = `# Tallowbourn Advertising Audit Report\n**Generated:** ${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}\n**Model:** ${getModelLabel(aiChatModel)}\n\n---\n\n`;
-                    const blob = new Blob([header + report], {type:'text/markdown'});
-                    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `tallowbourn-ads-audit-${new Date().toISOString().slice(0,10)}.md`; a.click(); URL.revokeObjectURL(url);
-                    setToast({message:'Downloaded as markdown',type:'success'});
-                  }} className="text-slate-400 hover:text-white text-xs flex items-center gap-1 px-2 py-1.5 bg-slate-700/50 rounded-lg hover:bg-slate-700" title="Download markdown file">⬇️ .md</button>
-                  
-                  {/* Export as PDF (styled print window) */}
-                  <button onClick={()=>{
-                    const report = adsAiMessages.filter(m=>m.role==='assistant').map(m=>m.content).join('\n\n---\n\n');
-                    const dateStr = new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
-                    const modelName = getModelLabel(aiChatModel);
-                    const modeLabel = REPORT_MODES.find(m => m.key === reportMode)?.label || 'All Platforms';
-                    const htmlBody = markdownToHtml(report);
-                    // Build KPI summary from computed insights
-                    const kpiHtml = amazonAdsInsights.summary ? `<div class="kpi-bar">
-                      <div class="kpi"><span class="kpi-label">Ad Spend</span><span class="kpi-value">$${(amazonAdsInsights.summary.totalSpend || 0).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</span></div>
-                      <div class="kpi"><span class="kpi-label">Ad Revenue</span><span class="kpi-value">$${(amazonAdsInsights.summary.totalSales || 0).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</span></div>
-                      <div class="kpi"><span class="kpi-label">ROAS</span><span class="kpi-value">${(amazonAdsInsights.summary.overallRoas || 0).toFixed(2)}x</span></div>
-                      <div class="kpi"><span class="kpi-label">Blended TACOS</span><span class="kpi-value">${(platformInsights.blendedTacos || 0).toFixed(1)}%</span></div>
-                      <div class="kpi"><span class="kpi-label">Days Analyzed</span><span class="kpi-value">${amazonAdsInsights.summary.daysCount || 0}</span></div>
-                    </div>` : '';
-                    const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tallowbourn ${modeLabel} Audit - ${dateStr}</title>
-<style>
-  @page { margin: 0.75in; size: letter; }
-  * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #1a1a2e; line-height: 1.65; max-width: 100%; padding: 0; margin: 0; font-size: 11pt; }
-  .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); color: white; padding: 32px 40px 20px; margin: -0.75in -0.75in 0; }
-  .header h1 { font-size: 22pt; margin: 0 0 4px; font-weight: 800; letter-spacing: -0.5px; }
-  .header .subtitle { font-size: 13pt; opacity: 0.85; margin-bottom: 12px; font-weight: 300; }
-  .header .meta { font-size: 9pt; opacity: 0.7; display: flex; gap: 20px; }
-  .kpi-bar { display: flex; gap: 0; margin: 0 -0.75in; padding: 16px 40px; background: #0a1628; }
-  .kpi { flex: 1; text-align: center; border-right: 1px solid rgba(255,255,255,0.1); }
-  .kpi:last-child { border-right: none; }
-  .kpi-label { display: block; font-size: 8pt; text-transform: uppercase; letter-spacing: 0.5px; color: rgba(255,255,255,0.5); margin-bottom: 2px; }
-  .kpi-value { display: block; font-size: 14pt; font-weight: 700; color: white; }
-  .content { padding-top: 24px; }
-  h2 { color: #1a1a2e; border-bottom: 3px solid #e94560; padding-bottom: 6px; margin-top: 32px; font-size: 14pt; page-break-after: avoid; }
-  h3 { color: #16213e; margin-top: 22px; font-size: 12pt; page-break-after: avoid; border-left: 3px solid #e94560; padding-left: 10px; }
-  h4 { color: #444; margin-top: 16px; font-size: 11pt; }
-  p, li { font-size: 11pt; margin-bottom: 6px; }
-  ul, ol { padding-left: 22px; }
-  li { margin-bottom: 5px; }
-  strong { color: #e94560; }
-  code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 10pt; font-family: 'Consolas', monospace; }
-  hr { border: none; border-top: 1px solid #ddd; margin: 28px 0; }
-  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 10pt; }
-  th { background: #1a1a2e; color: white; padding: 8px 10px; text-align: left; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.3px; }
-  td { padding: 7px 10px; border-bottom: 1px solid #eee; }
-  tr:nth-child(even) td { background: #f8f9fa; }
-  blockquote { border-left: 3px solid #e94560; margin: 16px 0; padding: 8px 16px; background: #fff5f5; font-style: italic; }
-  .footer { margin-top: 48px; padding-top: 16px; border-top: 2px solid #1a1a2e; font-size: 8pt; color: #888; text-align: center; }
-  .footer p { margin: 2px 0; }
-  .confidential { background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 10px 16px; margin-bottom: 24px; font-size: 9pt; color: #856404; }
-  @media print { .no-print { display: none !important; } .header, .kpi-bar { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
-</style></head><body>
-<div class="header">
-  <h1>Tallowbourn Advertising Audit</h1>
-  <div class="subtitle">${modeLabel} Performance Report</div>
-  <div class="meta"><span>📅 ${dateStr}</span><span>🤖 ${modelName}</span><span>📁 ${(adsAiMessages.filter(m=>m.role==='assistant').length)} analysis sections</span><span>📊 ${intelDateRange === 'all' ? 'All available data' : intelDateRange + '-day window'}</span></div>
-</div>
-${kpiHtml}
-<div class="content">
-<div class="no-print" style="background:#fff3cd;padding:12px 20px;margin-bottom:20px;border-radius:8px;font-size:10pt;color:#856404;">
-  💡 <strong>To save as PDF:</strong> Press Ctrl+P (or ⌘+P on Mac) → Select "Save as PDF" → Click Save
-</div>
-<div class="confidential">📋 <strong>CONFIDENTIAL</strong> — This report contains proprietary advertising data for Tallowbourn. Do not distribute outside your advertising team.</div>
-${htmlBody}
-</div>
-<div class="footer">
-  <p><strong>Tallowbourn Advertising Command Center</strong></p>
-  <p>${modeLabel} Audit • ${dateStr} • AI Model: ${modelName} • Report ID: ${Date.now().toString(36).toUpperCase()}</p>
-  <p style="margin-top:6px;font-size:7pt;">This report was generated using AI-powered analysis. All recommendations should be validated against current market conditions before implementation.</p>
-</div>
-</body></html>`;
-                    const w = window.open('','_blank','width=900,height=700');
-                    w.document.write(printDoc); w.document.close();
-                    setTimeout(()=>w.print(), 500);
-                  }} className="px-3 py-1.5 bg-gradient-to-r from-orange-600/80 to-amber-600/80 hover:from-orange-500 hover:to-amber-500 rounded-lg text-white text-xs font-medium flex items-center gap-1.5 shadow-sm" title="Export as PDF (opens print dialog)">📑 Export PDF</button>
-                  
-                  {/* Clear */}
-                  <button onClick={()=>{if(adsAiMessages.length>4){if(!window.confirm('Clear report? This will remove all AI output from this session.'))return;}setAdsAiMessages([]);}} className="text-slate-400 hover:text-red-400 text-xs flex items-center gap-1 px-2 py-1.5 bg-slate-700/50 rounded-lg hover:bg-slate-700"><RefreshCw className="w-3 h-3"/>Clear</button>
-                </div>
-              </div>
-              <div className="space-y-4 max-h-[600px] overflow-y-auto">
-                {adsAiMessages.map((msg,i)=>(
-                  <div key={i} className={`${msg.role==='user'?'bg-orange-900/20 border border-orange-500/20':'bg-slate-900/50'} rounded-xl p-4 group relative`}>
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-xs text-slate-500 mb-1">{msg.role==='user'?'📝 Prompt':'🤖 AI Report'}</p>
-                      <div className="hidden group-hover:flex items-center gap-1">
-                        {msg.role==='user' && <button onClick={()=>{
-                          setAdsAiMessages(prev => prev.filter((_,j) => j !== i && j !== i+1));
-                        }} className="p-1 rounded hover:bg-red-900/30 text-slate-600 hover:text-red-400" title="Delete prompt + response"><X className="w-3 h-3"/></button>}
-                        {msg.role==='assistant' && <button onClick={()=>{
-                          setAdsAiMessages(prev => prev.filter((_,j) => j !== i));
-                        }} className="p-1 rounded hover:bg-red-900/30 text-slate-600 hover:text-red-400" title="Delete this response"><X className="w-3 h-3"/></button>}
-                      </div>
-                    </div>
-                    <p className="text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">{msg.content}</p>
-                  </div>
-                ))}
-                {adsAiLoading&&<div className="bg-slate-900/50 rounded-xl p-4"><div className="flex gap-1"><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'0ms'}}/><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'150ms'}}/><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'300ms'}}/></div></div>}
-              </div>
-            </div>
-          )}
         </>)}
-        {/* ═══ FLOATING AI CHAT ═══ */}
+
+        {/* ════════════════════════════════════════════════════════ */}
+        {/* FLOATING AI CHAT                                       */}
+        {/* ════════════════════════════════════════════════════════ */}
         {showAdsAIChat && (
-          <div className="fixed bottom-4 right-4 z-50 w-[560px] max-w-[calc(100vw-2rem)]">
-            <div className="bg-slate-800 rounded-2xl border border-orange-500/50 shadow-2xl overflow-hidden">
-              <div className="bg-gradient-to-r from-orange-600 to-amber-600 p-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center"><Zap className="w-5 h-5 text-white"/></div>
-                  <div><h3 className="text-white font-semibold">AI Ads Analyst</h3><p className="text-white/70 text-xs">{sortedDays.length}d daily{tier2Summary.count>0?` • ${tier2Summary.count} deep reports`:''}</p></div>
+          <div className="fixed bottom-4 right-4 z-50 w-[520px] max-w-[calc(100vw-2rem)]">
+            <div className="bg-slate-800 rounded-2xl border border-orange-500/40 shadow-2xl overflow-hidden">
+              <div className="bg-gradient-to-r from-orange-600 to-amber-600 p-3.5 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center"><Zap className="w-4 h-4 text-white"/></div>
+                  <div><h3 className="text-white font-semibold text-sm">AI Ads Analyst</h3><p className="text-white/60 text-[10px]">{sortedDays.length}d data{deepReportCount > 0 ? ` · ${deepReportCount} reports` : ''}</p></div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <select value={aiChatModel} onChange={e=>setAiChatModel(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-white text-xs">
-                    {AI_MODEL_OPTIONS.map(m => (
-                      <option key={m.value} value={m.value}>{m.label.replace('Claude ', '')}</option>
-                    ))}
+                <div className="flex items-center gap-1.5">
+                  <select value={aiChatModel} onChange={e=>setAiChatModel(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg px-1.5 py-1 text-white text-[10px]">
+                    {AI_MODEL_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label.replace('Claude ', '')}</option>)}
                   </select>
-                  <button onClick={()=>setAdsAiMessages([])} className="p-2 hover:bg-white/20 rounded-lg text-white/70 hover:text-white" title="Clear"><RefreshCw className="w-4 h-4"/></button>
-                  <button onClick={()=>setShowAdsAIChat(false)} className="p-2 hover:bg-white/20 rounded-lg text-white"><X className="w-5 h-5"/></button>
+                  <button onClick={()=>setAdsAiMessages([])} className="p-1.5 hover:bg-white/20 rounded-lg text-white/60 hover:text-white" title="Clear"><RefreshCw className="w-3.5 h-3.5"/></button>
+                  <button onClick={()=>setShowAdsAIChat(false)} className="p-1.5 hover:bg-white/20 rounded-lg text-white"><X className="w-4 h-4"/></button>
                 </div>
               </div>
-              <div className="h-[32rem] overflow-y-auto p-4 space-y-4">
+              <div className="h-[30rem] overflow-y-auto p-4 space-y-3">
                 {adsAiMessages.length===0 && (
-                  <div className="text-center text-slate-400 py-2">
-                    <Zap className="w-10 h-10 mx-auto mb-3 opacity-50"/>
-                    <p className="text-sm mb-4">Ask anything about your ads:</p>
-                    <div className="space-y-2 text-left">
-                      <button onClick={()=>sendAdsAIMessage("Generate my complete cross-platform Ads Action Plan with specific recommendations and dollar amounts.")} className="block w-full px-3 py-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-sm text-white font-semibold shadow-lg shadow-orange-500/20">⚡ Generate Full Action Plan</button>
-                      <button onClick={()=>sendAdsAIMessage("Which campaigns or search terms are wasting money? Give me negative keyword suggestions.")} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">⚠️ Find wasted ad spend</button>
-                      <button onClick={()=>sendAdsAIMessage("What are my best scaling opportunities across all platforms?")} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">🚀 Best scaling opportunities</button>
-                      <button onClick={()=>sendAdsAIMessage("How should I reallocate budget across Amazon, Google, and Meta for max ROAS?")} className="block w-full px-3 py-2.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-sm text-slate-300">💰 Cross-channel budget allocation</button>
+                  <div className="text-center text-slate-500 py-2">
+                    <Zap className="w-8 h-8 mx-auto mb-2 opacity-40"/>
+                    <p className="text-xs mb-3">Ask anything about your ads</p>
+                    <div className="space-y-1.5 text-left">
+                      <button onClick={()=>sendAdsAIMessage("Generate my complete cross-platform Ads Action Plan with specific recommendations and dollar amounts.")} className="block w-full px-3 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-lg text-xs text-white font-semibold shadow-lg shadow-orange-500/20">⚡ Full Action Plan</button>
+                      <button onClick={()=>sendAdsAIMessage("Which campaigns or search terms are wasting money? Give me negative keyword suggestions.")} className="block w-full px-3 py-2 bg-slate-700/40 hover:bg-slate-700 rounded-lg text-xs text-slate-300">⚠️ Find wasted spend</button>
+                      <button onClick={()=>sendAdsAIMessage("What are my best scaling opportunities across all platforms?")} className="block w-full px-3 py-2 bg-slate-700/40 hover:bg-slate-700 rounded-lg text-xs text-slate-300">🚀 Scaling opportunities</button>
+                      <button onClick={()=>sendAdsAIMessage("How should I reallocate budget across Amazon, Google, and Meta?")} className="block w-full px-3 py-2 bg-slate-700/40 hover:bg-slate-700 rounded-lg text-xs text-slate-300">💰 Budget allocation</button>
                     </div>
                   </div>
                 )}
                 {adsAiMessages.map((msg,i)=>(
                   <div key={i} className={`flex ${msg.role==='user'?'justify-end':'justify-start'} group`}>
-                    <div className={`max-w-[90%] rounded-2xl px-4 py-3 relative ${msg.role==='user'?'bg-orange-600 text-white':'bg-slate-700 text-slate-200'}`}>
-                      <button onClick={()=>{
-                        if (msg.role === 'user') {
-                          setAdsAiMessages(prev => prev.filter((_,j) => j !== i && j !== i+1));
-                        } else {
-                          setAdsAiMessages(prev => prev.filter((_,j) => j !== i));
-                        }
-                      }} className={`absolute -top-2 -right-2 hidden group-hover:flex w-5 h-5 items-center justify-center rounded-full text-white shadow-lg ${msg.role==='user'?'bg-red-500 hover:bg-red-400':'bg-slate-500 hover:bg-red-500'}`} title={msg.role==='user'?'Delete prompt + response':'Delete response'}>
-                        <X className="w-3 h-3"/>
+                    <div className={`max-w-[90%] rounded-2xl px-3.5 py-2.5 relative ${msg.role==='user'?'bg-orange-600 text-white':'bg-slate-700 text-slate-200'}`}>
+                      <button onClick={()=>{ if (msg.role==='user') setAdsAiMessages(prev=>prev.filter((_,j)=>j!==i&&j!==i+1)); else setAdsAiMessages(prev=>prev.filter((_,j)=>j!==i)); }}
+                        className={`absolute -top-1.5 -right-1.5 hidden group-hover:flex w-4 h-4 items-center justify-center rounded-full text-white shadow ${msg.role==='user'?'bg-rose-500':'bg-slate-500 hover:bg-rose-500'}`}>
+                        <X className="w-2.5 h-2.5"/>
                       </button>
-                      <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                      <p className="text-xs whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                     </div>
                   </div>
                 ))}
-                {adsAiLoading&&<div className="flex justify-start"><div className="bg-slate-700 rounded-2xl px-4 py-3"><div className="flex gap-1"><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'0ms'}}/><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'150ms'}}/><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'300ms'}}/></div></div></div>}
+                {adsAiLoading&&<div className="flex justify-start"><div className="bg-slate-700 rounded-2xl px-4 py-3"><div className="flex gap-1"><div className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'0ms'}}/><div className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'150ms'}}/><div className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'300ms'}}/></div></div></div>}
               </div>
-              <div className="p-4 border-t border-slate-700"><div className="flex gap-2">
-                <input type="text" value={adsAiInput} onChange={e=>setAdsAiInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();sendAdsAIMessage();}}} placeholder="Ask about campaigns, keywords, ROAS..." className="flex-1 bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-orange-500" autoComplete="off"/>
-                <button onClick={sendAdsAIMessage} disabled={!adsAiInput.trim()||adsAiLoading} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded-xl text-white"><Send className="w-4 h-4"/></button>
+              <div className="p-3 border-t border-slate-700"><div className="flex gap-2">
+                <input type="text" value={adsAiInput} onChange={e=>setAdsAiInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();sendAdsAIMessage();}}} placeholder="Ask about campaigns, ROAS, keywords..." className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-white text-xs focus:outline-none focus:border-orange-500" autoComplete="off"/>
+                <button onClick={sendAdsAIMessage} disabled={!adsAiInput.trim()||adsAiLoading} className="px-3 py-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-40 rounded-xl text-white"><Send className="w-3.5 h-3.5"/></button>
               </div></div>
             </div>
           </div>
