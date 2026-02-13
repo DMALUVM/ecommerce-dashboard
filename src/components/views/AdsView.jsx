@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useCallback } from 'react';
 import {
-  AlertTriangle, BarChart3, Brain, Check, ChevronLeft, ChevronRight, Clock,
-  Database, DollarSign, FileSpreadsheet, Flame, Loader2, RefreshCw, Search,
+  AlertTriangle, BarChart3, Brain, Calendar, Check, ChevronLeft, ChevronRight, Clock,
+  Database, DollarSign, FileSpreadsheet, Flame, Globe, Loader2, RefreshCw, Search,
   Send, ShieldAlert, Sparkles, Target, TrendingDown, TrendingUp, Trophy, Upload, X, Zap
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
@@ -283,6 +283,94 @@ const AdsView = ({
     
     return intel;
   }, [adsIntelData, intelDateRange, sortedDays, allDaysData, hasCampaignData, campaigns]);
+
+  // ═══ MULTI-PLATFORM INTELLIGENCE (Google, Meta, Cross-Platform) ═══
+  const platformInsights = useMemo(() => {
+    const cutoffDate = intelDateRange === 'all' ? null : (() => { const d = new Date(); d.setDate(d.getDate() - intelDateRange); return d.toISOString().slice(0, 10); })();
+    const filteredDays = sortedDays.filter(d => !cutoffDate || d >= cutoffDate);
+    
+    const google = { trend: [], totalSpend: 0, totalClicks: 0, totalImpressions: 0, totalConversions: 0, daysActive: 0 };
+    const meta = { trend: [], totalSpend: 0, totalClicks: 0, totalImpressions: 0, totalPurchases: 0, totalPurchaseValue: 0, daysActive: 0 };
+    const dow = [0,1,2,3,4,5,6].map(() => ({ amzSpend: 0, amzRev: 0, gSpend: 0, mSpend: 0, totalSpend: 0, totalRev: 0, count: 0 }));
+    let totalSpendAll = 0, totalRevAll = 0;
+    
+    filteredDays.forEach(d => {
+      const day = allDaysData[d];
+      if (!day) return;
+      const gAds = day?.shopify?.googleSpend || day?.googleSpend || day?.googleAds || 0;
+      const mAds = day?.shopify?.metaSpend || day?.metaSpend || day?.metaAds || 0;
+      const aAds = day?.amazon?.adSpend || 0;
+      const aRev = day?.amazon?.revenue || 0;
+      const sRev = day?.shopify?.revenue || 0;
+      const am = day?.shopify?.adsMetrics || {};
+      
+      if (gAds > 0) {
+        google.daysActive++;
+        google.totalSpend += gAds;
+        google.totalClicks += am.googleClicks || 0;
+        google.totalImpressions += am.googleImpressions || 0;
+        google.totalConversions += am.googleConversions || 0;
+        google.trend.push({ date: d, spend: gAds, clicks: am.googleClicks || 0, impressions: am.googleImpressions || 0, conversions: am.googleConversions || 0 });
+      }
+      if (mAds > 0) {
+        meta.daysActive++;
+        meta.totalSpend += mAds;
+        meta.totalClicks += am.metaClicks || 0;
+        meta.totalImpressions += am.metaImpressions || 0;
+        meta.totalPurchases += am.metaPurchases || 0;
+        meta.totalPurchaseValue += am.metaPurchaseValue || 0;
+        meta.trend.push({ date: d, spend: mAds, clicks: am.metaClicks || 0, impressions: am.metaImpressions || 0, purchases: am.metaPurchases || 0, value: am.metaPurchaseValue || 0 });
+      }
+      
+      // Day of week analysis
+      const dayOfWeek = new Date(d + 'T12:00:00').getDay();
+      if (!isNaN(dayOfWeek)) {
+        dow[dayOfWeek].amzSpend += aAds;
+        dow[dayOfWeek].amzRev += aRev;
+        dow[dayOfWeek].gSpend += gAds;
+        dow[dayOfWeek].mSpend += mAds;
+        dow[dayOfWeek].totalSpend += aAds + gAds + mAds;
+        dow[dayOfWeek].totalRev += aRev + sRev;
+        dow[dayOfWeek].count++;
+      }
+      totalSpendAll += aAds + gAds + mAds;
+      totalRevAll += aRev + sRev;
+    });
+    
+    // Compute averages for DOW
+    const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const dowData = dow.map((d, i) => ({
+      day: dayNames[i],
+      avgSpend: d.count > 0 ? d.totalSpend / d.count : 0,
+      avgRev: d.count > 0 ? d.totalRev / d.count : 0,
+      roas: d.totalSpend > 0 ? d.totalRev / d.totalSpend : 0,
+      acos: d.totalRev > 0 ? (d.amzSpend / d.amzRev) * 100 : 0,
+      count: d.count
+    }));
+    
+    // Google CPC/CTR/ConvRate
+    google.cpc = google.totalClicks > 0 ? google.totalSpend / google.totalClicks : 0;
+    google.ctr = google.totalImpressions > 0 ? (google.totalClicks / google.totalImpressions) * 100 : 0;
+    google.convRate = google.totalClicks > 0 ? (google.totalConversions / google.totalClicks) * 100 : 0;
+    
+    // Meta CPA/CTR/ROAS
+    meta.cpc = meta.totalClicks > 0 ? meta.totalSpend / meta.totalClicks : 0;
+    meta.ctr = meta.totalImpressions > 0 ? (meta.totalClicks / meta.totalImpressions) * 100 : 0;
+    meta.cpa = meta.totalPurchases > 0 ? meta.totalSpend / meta.totalPurchases : 0;
+    meta.roas = meta.totalSpend > 0 ? meta.totalPurchaseValue / meta.totalSpend : 0;
+    
+    // Blended metrics
+    const blendedRoas = totalSpendAll > 0 ? totalRevAll / totalSpendAll : 0;
+    const blendedTacos = totalRevAll > 0 ? (totalSpendAll / totalRevAll) * 100 : 0;
+    
+    return { google, meta, dowData, blendedRoas, blendedTacos, totalSpendAll, totalRevAll };
+  }, [sortedDays, allDaysData, intelDateRange]);
+
+  // Safe date formatter
+  const fmtDate = (dateStr) => {
+    try { const d = new Date(dateStr + 'T12:00:00'); return isNaN(d.getTime()) ? dateStr : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+    catch { return dateStr || ''; }
+  };
 
   // Period navigation constants
   const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -641,7 +729,7 @@ const AdsView = ({
                             <div className={`w-full rounded-t ${color} opacity-80 hover:opacity-100 transition-opacity cursor-default`} style={{ height: `${h}%`, minHeight: '2px' }}/>
                             <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 pointer-events-none">
                               <div className="bg-slate-900 border border-slate-600 rounded-lg p-2 text-xs whitespace-nowrap shadow-xl">
-                                <p className="text-slate-400">{new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                <p className="text-slate-400">{fmtDate(d.date)}</p>
                                 <p className="text-white">Spend: {formatCurrency(d.spend)}</p>
                                 <p className={`font-bold ${d.acos <= 25 ? 'text-emerald-400' : d.acos <= 40 ? 'text-amber-400' : 'text-rose-400'}`}>ACOS: {d.acos.toFixed(1)}%</p>
                               </div>
@@ -651,13 +739,13 @@ const AdsView = ({
                       })}
                     </div>
                     <div className="flex justify-between text-xs text-slate-600 mt-1">
-                      <span>{new Date(trend[0].date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                      <span>{fmtDate(trend[0].date)}</span>
                       <div className="flex items-center gap-3">
                         <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"/>≤25%</span>
                         <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500"/>≤40%</span>
                         <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500"/>&gt;40%</span>
                       </div>
-                      <span>{new Date(trend[trend.length - 1].date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                      <span>{fmtDate(trend[trend.length - 1].date)}</span>
                     </div>
                   </div>
                 );
@@ -789,11 +877,157 @@ const AdsView = ({
             </div>
           )}
 
+          {/* ═══ CROSS-PLATFORM INTELLIGENCE ═══ */}
+          {(platformInsights.totalSpendAll > 0) && (
+            <div className="mb-6 space-y-4">
+              {/* Cross-Platform Header */}
+              <div className="flex items-center gap-3">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2"><Globe className="w-5 h-5 text-cyan-400"/>Cross-Platform Performance</h2>
+              </div>
+
+              {/* Blended KPIs */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-gradient-to-br from-cyan-900/20 to-slate-800/50 rounded-xl border border-cyan-500/30 p-3">
+                  <p className="text-slate-500 text-xs uppercase">Blended TACOS</p>
+                  <p className={`text-xl font-bold ${platformInsights.blendedTacos <= 15 ? 'text-emerald-400' : platformInsights.blendedTacos <= 25 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.blendedTacos.toFixed(1)}%</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
+                  <p className="text-slate-500 text-xs uppercase">Total Ad Spend</p>
+                  <p className="text-xl font-bold text-white">{formatCurrency(platformInsights.totalSpendAll)}</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
+                  <p className="text-slate-500 text-xs uppercase">Total Revenue</p>
+                  <p className="text-xl font-bold text-emerald-400">{formatCurrency(platformInsights.totalRevAll)}</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-3">
+                  <p className="text-slate-500 text-xs uppercase">Blended ROAS</p>
+                  <p className={`text-xl font-bold ${platformInsights.blendedRoas >= 5 ? 'text-emerald-400' : platformInsights.blendedRoas >= 3 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.blendedRoas.toFixed(2)}x</p>
+                </div>
+              </div>
+
+              {/* Platform Budget Split */}
+              {(platformInsights.google.totalSpend > 0 || platformInsights.meta.totalSpend > 0) && amazonAdsInsights.summary && (
+                <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                  <h3 className="text-white font-semibold text-sm mb-3">Budget Allocation</h3>
+                  <div className="flex rounded-lg overflow-hidden h-6 mb-3">
+                    {[
+                      { label: 'Amazon', value: amazonAdsInsights.summary.totalSpend, color: 'bg-orange-500' },
+                      { label: 'Google', value: platformInsights.google.totalSpend, color: 'bg-red-500' },
+                      { label: 'Meta', value: platformInsights.meta.totalSpend, color: 'bg-blue-500' },
+                    ].filter(p => p.value > 0).map((p, i) => {
+                      const pct = platformInsights.totalSpendAll > 0 ? (p.value / platformInsights.totalSpendAll) * 100 : 0;
+                      return <div key={i} className={`${p.color} opacity-80 hover:opacity-100 transition-opacity relative group`} style={{ width: `${Math.max(pct, 3)}%` }}>
+                        <div className="absolute inset-0 flex items-center justify-center text-white text-xs font-bold">{pct >= 10 ? `${pct.toFixed(0)}%` : ''}</div>
+                      </div>;
+                    })}
+                  </div>
+                  <div className="flex items-center gap-4 text-xs">
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-orange-500"/>Amazon {formatCurrency(amazonAdsInsights.summary.totalSpend)}</span>
+                    {platformInsights.google.totalSpend > 0 && <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-500"/>Google {formatCurrency(platformInsights.google.totalSpend)}</span>}
+                    {platformInsights.meta.totalSpend > 0 && <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-blue-500"/>Meta {formatCurrency(platformInsights.meta.totalSpend)}</span>}
+                  </div>
+                </div>
+              )}
+
+              {/* Day-of-Week Performance */}
+              {platformInsights.dowData.some(d => d.count > 0) && (
+                <div className="bg-slate-800/30 rounded-xl border border-slate-700 p-4">
+                  <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Calendar className="w-4 h-4 text-violet-400"/>Day-of-Week Performance</h3>
+                  <div className="grid grid-cols-7 gap-2">
+                    {platformInsights.dowData.map((d, i) => {
+                      const maxAvg = Math.max(...platformInsights.dowData.map(x => x.avgRev));
+                      const intensity = maxAvg > 0 ? d.avgRev / maxAvg : 0;
+                      const bg = intensity > 0.8 ? 'bg-emerald-600/40 border-emerald-500/40' : intensity > 0.5 ? 'bg-emerald-600/20 border-emerald-500/20' : intensity > 0.2 ? 'bg-slate-700/50 border-slate-600' : 'bg-slate-800/50 border-slate-700';
+                      return (
+                        <div key={i} className={`rounded-lg p-2.5 border text-center ${bg}`}>
+                          <p className="text-slate-400 text-xs font-medium mb-1">{d.day}</p>
+                          <p className="text-white text-sm font-bold">{formatCurrency(d.avgRev)}</p>
+                          <p className="text-slate-500 text-xs">avg rev</p>
+                          <p className={`text-xs font-medium mt-1 ${d.roas >= 5 ? 'text-emerald-400' : d.roas >= 3 ? 'text-amber-400' : 'text-slate-400'}`}>{d.roas > 0 ? d.roas.toFixed(1) + 'x' : '—'}</p>
+                          <p className="text-slate-600 text-xs">{d.count} days</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-slate-500 text-xs mt-2">Brighter = higher average daily revenue. Consider increasing bids on high-performing days.</p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Google Performance */}
+                {platformInsights.google.totalSpend > 0 && (
+                  <div className="bg-gradient-to-br from-red-900/10 to-slate-800/30 rounded-xl border border-red-500/20 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-red-500"/>Google Ads Intelligence</h3>
+                    <div className="grid grid-cols-3 gap-3 mb-3">
+                      <div><p className="text-slate-500 text-xs">Spend</p><p className="text-white font-bold">{formatCurrency(platformInsights.google.totalSpend)}</p></div>
+                      <div><p className="text-slate-500 text-xs">Clicks</p><p className="text-white font-bold">{formatNumber(platformInsights.google.totalClicks)}</p></div>
+                      <div><p className="text-slate-500 text-xs">Conv.</p><p className="text-emerald-400 font-bold">{formatNumber(platformInsights.google.totalConversions)}</p></div>
+                      <div><p className="text-slate-500 text-xs">CPC</p><p className={`font-bold ${platformInsights.google.cpc <= 1 ? 'text-emerald-400' : platformInsights.google.cpc <= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{formatCurrency(platformInsights.google.cpc)}</p></div>
+                      <div><p className="text-slate-500 text-xs">CTR</p><p className={`font-bold ${platformInsights.google.ctr >= 3 ? 'text-emerald-400' : platformInsights.google.ctr >= 1 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.google.ctr.toFixed(2)}%</p></div>
+                      <div><p className="text-slate-500 text-xs">Conv Rate</p><p className={`font-bold ${platformInsights.google.convRate >= 5 ? 'text-emerald-400' : platformInsights.google.convRate >= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.google.convRate.toFixed(1)}%</p></div>
+                    </div>
+                    {platformInsights.google.trend.length > 3 && (
+                      <div className="flex items-end gap-px h-12 mt-2">
+                        {platformInsights.google.trend.slice(-30).map((d, i) => {
+                          const max = Math.max(...platformInsights.google.trend.slice(-30).map(x => x.spend), 1);
+                          return <div key={i} className="flex-1 bg-red-500 opacity-60 hover:opacity-100 rounded-t" style={{ height: `${Math.max((d.spend / max) * 100, 3)}%`, minHeight: '2px' }}/>;
+                        })}
+                      </div>
+                    )}
+                    <p className="text-slate-500 text-xs mt-2">{platformInsights.google.daysActive} active days · Upload Google Ads reports for search term analysis</p>
+                  </div>
+                )}
+
+                {/* Meta Performance */}
+                {platformInsights.meta.totalSpend > 0 && (
+                  <div className="bg-gradient-to-br from-blue-900/10 to-slate-800/30 rounded-xl border border-blue-500/20 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-blue-500"/>Meta Ads Intelligence</h3>
+                    <div className="grid grid-cols-3 gap-3 mb-3">
+                      <div><p className="text-slate-500 text-xs">Spend</p><p className="text-white font-bold">{formatCurrency(platformInsights.meta.totalSpend)}</p></div>
+                      <div><p className="text-slate-500 text-xs">Clicks</p><p className="text-white font-bold">{formatNumber(platformInsights.meta.totalClicks)}</p></div>
+                      <div><p className="text-slate-500 text-xs">Purchases</p><p className="text-emerald-400 font-bold">{formatNumber(Math.round(platformInsights.meta.totalPurchases))}</p></div>
+                      <div><p className="text-slate-500 text-xs">CPC</p><p className={`font-bold ${platformInsights.meta.cpc <= 0.8 ? 'text-emerald-400' : platformInsights.meta.cpc <= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{formatCurrency(platformInsights.meta.cpc)}</p></div>
+                      <div><p className="text-slate-500 text-xs">CTR</p><p className={`font-bold ${platformInsights.meta.ctr >= 2 ? 'text-emerald-400' : platformInsights.meta.ctr >= 1 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.meta.ctr.toFixed(2)}%</p></div>
+                      <div><p className="text-slate-500 text-xs">CPA</p><p className={`font-bold ${platformInsights.meta.cpa > 0 && platformInsights.meta.cpa <= 15 ? 'text-emerald-400' : platformInsights.meta.cpa <= 30 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.meta.cpa > 0 ? formatCurrency(platformInsights.meta.cpa) : '—'}</p></div>
+                    </div>
+                    {platformInsights.meta.roas > 0 && (
+                      <div className="flex items-center gap-2 p-2 bg-blue-900/20 rounded-lg mb-2">
+                        <span className="text-slate-400 text-xs">Meta ROAS:</span>
+                        <span className={`font-bold text-sm ${platformInsights.meta.roas >= 3 ? 'text-emerald-400' : platformInsights.meta.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{platformInsights.meta.roas.toFixed(2)}x</span>
+                        <span className="text-slate-500 text-xs ml-auto">Purchase Value: {formatCurrency(platformInsights.meta.totalPurchaseValue)}</span>
+                      </div>
+                    )}
+                    {platformInsights.meta.trend.length > 3 && (
+                      <div className="flex items-end gap-px h-12 mt-2">
+                        {platformInsights.meta.trend.slice(-30).map((d, i) => {
+                          const max = Math.max(...platformInsights.meta.trend.slice(-30).map(x => x.spend), 1);
+                          return <div key={i} className="flex-1 bg-blue-500 opacity-60 hover:opacity-100 rounded-t" style={{ height: `${Math.max((d.spend / max) * 100, 3)}%`, minHeight: '2px' }}/>;
+                        })}
+                      </div>
+                    )}
+                    <p className="text-slate-500 text-xs mt-2">{platformInsights.meta.daysActive} active days · Upload Meta campaign reports for deeper analysis</p>
+                  </div>
+                )}
+              </div>
+
+              {/* AI Optimization CTA */}
+              <div className="bg-gradient-to-r from-violet-900/20 to-orange-900/20 rounded-xl border border-violet-500/20 p-4 flex items-center gap-4">
+                <div className="p-2 bg-violet-500/20 rounded-lg"><Sparkles className="w-6 h-6 text-violet-400"/></div>
+                <div className="flex-1">
+                  <p className="text-white font-semibold">Get AI-Powered Optimization Recommendations</p>
+                  <p className="text-slate-400 text-sm">Analyze performance across all platforms, identify budget reallocation opportunities, and get actionable next steps.</p>
+                </div>
+                <button onClick={() => { setAdsAiInput(`Analyze my advertising performance across all platforms. Amazon: ${formatCurrency(amazonAdsInsights.summary?.totalSpend || 0)} spend with ${amazonAdsInsights.summary?.overallRoas?.toFixed(1) || 0}x ROAS. Google: ${formatCurrency(platformInsights.google.totalSpend)} spend. Meta: ${formatCurrency(platformInsights.meta.totalSpend)} spend. Blended TACOS: ${platformInsights.blendedTacos.toFixed(1)}%. What should I optimize first? Where should I reallocate budget? Give me specific, actionable recommendations.`); setShowAdsAIChat(true); }}
+                  className="px-4 py-2.5 bg-gradient-to-r from-violet-600 to-orange-600 hover:from-violet-500 hover:to-orange-500 rounded-xl text-white text-sm font-medium whitespace-nowrap shadow-lg">Optimize Now →</button>
+              </div>
+            </div>
+          )}
+
           {/* DETAIL TABLES */}
           {useDailyData && dailyTableData.length>1 && (
             <div className="bg-slate-800/30 rounded-2xl border border-slate-700 overflow-hidden mb-6"><div className="overflow-x-auto"><table className="w-full text-sm">
               <thead><tr className="border-b border-slate-700 text-slate-400 text-xs uppercase"><th className="py-3 px-4 text-left">Date</th><th className="py-3 px-2 text-right">Amazon</th><th className="py-3 px-2 text-right">Google</th><th className="py-3 px-2 text-right">Meta</th><th className="py-3 px-2 text-right">Total</th><th className="py-3 px-2 text-right">Revenue</th><th className="py-3 px-2 text-right">TACOS</th></tr></thead>
-              <tbody>{dailyTableData.map((d,i)=>{const tc=d.totalRev>0?(d.totalAds/d.totalRev)*100:0;return(<tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30"><td className="py-2 px-4 text-slate-300">{new Date(d.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}</td><td className="py-2 px-2 text-right text-orange-400">{d.amazonAds>0?formatCurrency(d.amazonAds):'—'}</td><td className="py-2 px-2 text-right text-red-400">{d.googleAds>0?formatCurrency(d.googleAds):'—'}</td><td className="py-2 px-2 text-right text-blue-400">{d.metaAds>0?formatCurrency(d.metaAds):'—'}</td><td className="py-2 px-2 text-right text-white font-medium">{formatCurrency(d.totalAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(d.totalRev)}</td><td className={`py-2 px-2 text-right font-semibold ${tacosColor(tc)}`}>{tc>0?tc.toFixed(1)+'%':'—'}</td></tr>);})}</tbody>
+              <tbody>{dailyTableData.map((d,i)=>{const tc=d.totalRev>0?(d.totalAds/d.totalRev)*100:0;return(<tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30"><td className="py-2 px-4 text-slate-300">{fmtDate(d.date)}</td><td className="py-2 px-2 text-right text-orange-400">{d.amazonAds>0?formatCurrency(d.amazonAds):'—'}</td><td className="py-2 px-2 text-right text-red-400">{d.googleAds>0?formatCurrency(d.googleAds):'—'}</td><td className="py-2 px-2 text-right text-blue-400">{d.metaAds>0?formatCurrency(d.metaAds):'—'}</td><td className="py-2 px-2 text-right text-white font-medium">{formatCurrency(d.totalAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(d.totalRev)}</td><td className={`py-2 px-2 text-right font-semibold ${tacosColor(tc)}`}>{tc>0?tc.toFixed(1)+'%':'—'}</td></tr>);})}</tbody>
               <tfoot><tr className="border-t-2 border-slate-600 font-semibold"><td className="py-2 px-4 text-white">Total</td><td className="py-2 px-2 text-right text-orange-400">{formatCurrency(dailyTotals.amazonAds)}</td><td className="py-2 px-2 text-right text-red-400">{formatCurrency(dailyTotals.googleAds)}</td><td className="py-2 px-2 text-right text-blue-400">{formatCurrency(dailyTotals.metaAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(dailyTotals.totalAds)}</td><td className="py-2 px-2 text-right text-white">{formatCurrency(dailyTotals.totalRev)}</td><td className={`py-2 px-2 text-right ${tacosColor(totalTacos)}`}>{totalTacos>0?totalTacos.toFixed(1)+'%':'—'}</td></tr></tfoot>
             </table></div></div>
           )}
