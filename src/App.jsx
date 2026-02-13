@@ -4393,6 +4393,8 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
         ...(cred.storeUrl && { storeUrl: cred.storeUrl }),
         ...(cred.realmId && { realmId: cred.realmId }),
         ...(cred.customerId && { customerId: cred.customerId }),
+        ...(cred.sellerId && { sellerId: cred.sellerId }),
+        ...(cred.marketplaceId && { marketplaceId: cred.marketplaceId }),
       };
     }
   });
@@ -4714,11 +4716,41 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages) setAiMessages(cloud.aiMessages);
     if (cloud.bankingData) setBankingData(cloud.bankingData);
     if (cloud.confirmedRecurring) setConfirmedRecurring(cloud.confirmedRecurring);
-    // Load credentials from cloud - only if cloud has real data (don't overwrite localStorage creds with empty defaults)
-    if (cloud.shopifyCredentials && (cloud.shopifyCredentials.connected || cloud.shopifyCredentials.storeUrl || cloud.shopifyCredentials.clientSecret)) setShopifyCredentials(cloud.shopifyCredentials);
-    if (cloud.packiyoCredentials && (cloud.packiyoCredentials.connected || cloud.packiyoCredentials.apiKey)) setPackiyoCredentials(cloud.packiyoCredentials);
-    if (cloud.amazonCredentials && (cloud.amazonCredentials.connected || cloud.amazonCredentials.refreshToken || cloud.amazonCredentials.clientId)) setAmazonCredentials(cloud.amazonCredentials);
-    if (cloud.qboCredentials && (cloud.qboCredentials.connected || cloud.qboCredentials.accessToken || cloud.qboCredentials.clientId)) setQboCredentials(cloud.qboCredentials);
+    // Load credentials from cloud - SEC-003: cloud saves no longer contain secrets
+    // Only merge non-secret metadata (connected, lastSync, storeUrl) into existing state
+    // Actual API keys/tokens stay in memory from localStorage init
+    if (cloud.shopifyCredentials?.connected) {
+      setShopifyCredentials(prev => ({
+        ...prev,
+        connected: cloud.shopifyCredentials.connected,
+        lastSync: cloud.shopifyCredentials.lastSync || prev.lastSync,
+        storeUrl: cloud.shopifyCredentials.storeUrl || prev.storeUrl,
+      }));
+    }
+    if (cloud.packiyoCredentials?.connected) {
+      setPackiyoCredentials(prev => ({
+        ...prev,
+        connected: cloud.packiyoCredentials.connected,
+        lastSync: cloud.packiyoCredentials.lastSync || prev.lastSync,
+      }));
+    }
+    if (cloud.amazonCredentials?.connected) {
+      setAmazonCredentials(prev => ({
+        ...prev,
+        connected: cloud.amazonCredentials.connected,
+        lastSync: cloud.amazonCredentials.lastSync || prev.lastSync,
+        sellerId: cloud.amazonCredentials.sellerId || prev.sellerId,
+        marketplaceId: cloud.amazonCredentials.marketplaceId || prev.marketplaceId,
+      }));
+    }
+    if (cloud.qboCredentials?.connected) {
+      setQboCredentials(prev => ({
+        ...prev,
+        connected: cloud.qboCredentials.connected,
+        lastSync: cloud.qboCredentials.lastSync || prev.lastSync,
+        realmId: cloud.qboCredentials.realmId || prev.realmId,
+      }));
+    }
 
     // Also keep localStorage in sync for offline backup
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
