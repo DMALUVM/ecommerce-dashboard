@@ -4493,7 +4493,7 @@ useEffect(() => {
   if (!session?.user?.id || !supabase) return;
   if (isLoadingDataRef.current) return; // Don't sync during initial load
   queueCloudSave(combinedData);
-}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials, qboCredentials]);
+}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials, qboCredentials, leadTimeSettings, appSettings, widgetConfig, salesTaxConfig, storeName, forecastCorrections]);
 
 // ── Process ads file uploads (Tier 1 daily KPIs + Tier 2 deep analysis) ──
 const processAdsUpload = useCallback(async (fileList) => {
