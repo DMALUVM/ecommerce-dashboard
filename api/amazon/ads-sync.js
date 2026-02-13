@@ -516,6 +516,24 @@ export default async function handler(req, res) {
       totalRows += transformedReports.dailyOverview.length;
     }
 
+    // --- SP Campaigns (per-campaign daily rows for date-filtered analysis) ---
+    if (rawData.spCampaigns) {
+      transformedReports.spCampaigns = rawData.spCampaigns.map(r => ({
+        'Date': r.date,
+        'Campaign Name': r.campaignName || '',
+        'Campaign Id': r.campaignId || '',
+        'Campaign Status': r.campaignStatus || '',
+        'Campaign Budget': parseFloat(r.campaignBudgetAmount) || 0,
+        'Impressions': parseInt(r.impressions) || 0,
+        'Clicks': parseInt(r.clicks) || 0,
+        'Spend': parseFloat(r.cost) || 0,
+        '7 Day Total Sales': getSales(r, '7d'),
+        '7 Day Total Orders (#)': getPurchases(r, '7d'),
+        '7 Day Total Units (#)': getUnits(r, '7d'),
+      }));
+      totalRows += transformedReports.spCampaigns.length;
+    }
+
     // --- SP Advertised Product (SKU/ASIN level) ---
     if (rawData.spAdvertised) {
       transformedReports.spAdvertised = rawData.spAdvertised.map(r => ({

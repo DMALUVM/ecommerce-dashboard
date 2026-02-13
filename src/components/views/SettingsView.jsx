@@ -2368,6 +2368,7 @@ const SettingsView = ({
                             const updated = { ...(prev || {}), lastUpdated: new Date().toISOString(), source: 'amazon-ads-api' };
                             // Store raw rows under _api keys for AI to analyze
                             if (data.reports.dailyOverview) updated._apiDailyOverview = data.reports.dailyOverview;
+                            if (data.reports.spCampaigns) updated._apiSpCampaigns = data.reports.spCampaigns;
                             if (data.reports.spSearchTerms) updated._apiSpSearchTerms = data.reports.spSearchTerms;
                             if (data.reports.spAdvertised) updated._apiSpAdvertised = data.reports.spAdvertised;
                             if (data.reports.spPlacement) updated._apiSpPlacement = data.reports.spPlacement;
@@ -2397,7 +2398,8 @@ const SettingsView = ({
                             if (rpts.spTargeting?.length) updated.amazon.sp_targeting = toIntelFormat(rpts.spTargeting, 'SP Targeting (API)');
                             if (rpts.sbSearchTerms?.length) updated.amazon.sb_search_terms = toIntelFormat(rpts.sbSearchTerms, 'SB Search Terms (API)');
                             if (rpts.sdCampaign?.length) updated.amazon.sd_campaigns = toIntelFormat(rpts.sdCampaign, 'SD Campaigns (API)');
-                            if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
+                            if (rpts.spCampaigns?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.spCampaigns, 'SP Campaigns (API)');
+                            else if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
                             
                             return updated;
                           });

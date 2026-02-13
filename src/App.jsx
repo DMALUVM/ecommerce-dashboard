@@ -11641,6 +11641,7 @@ const savePeriods = async (d) => {
                     const updated = { ...(prev || {}), lastUpdated: new Date().toISOString(), source: 'amazon-ads-api' };
                     // Keep raw API data for AI context
                     if (adsData.reports.dailyOverview) updated._apiDailyOverview = adsData.reports.dailyOverview;
+                    if (adsData.reports.spCampaigns) updated._apiSpCampaigns = adsData.reports.spCampaigns;
                     if (adsData.reports.spSearchTerms) updated._apiSpSearchTerms = adsData.reports.spSearchTerms;
                     if (adsData.reports.spAdvertised) updated._apiSpAdvertised = adsData.reports.spAdvertised;
                     if (adsData.reports.spPlacement) updated._apiSpPlacement = adsData.reports.spPlacement;
@@ -11670,8 +11671,9 @@ const savePeriods = async (d) => {
                     if (rpts.spTargeting?.length) updated.amazon.sp_targeting = toIntelFormat(rpts.spTargeting, 'SP Targeting (API)');
                     if (rpts.sbSearchTerms?.length) updated.amazon.sb_search_terms = toIntelFormat(rpts.sbSearchTerms, 'SB Search Terms (API)');
                     if (rpts.sdCampaign?.length) updated.amazon.sd_campaigns = toIntelFormat(rpts.sdCampaign, 'SD Campaigns (API)');
-                    // SP Campaigns from dailyOverview
-                    if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
+                    // SP Campaigns: prefer per-campaign rows, fall back to daily overview
+                    if (rpts.spCampaigns?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.spCampaigns, 'SP Campaigns (API)');
+                    else if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
                     
                     return updated;
                   });
