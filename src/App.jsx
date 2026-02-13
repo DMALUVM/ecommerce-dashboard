@@ -11602,6 +11602,18 @@ const savePeriods = async (d) => {
                   updated[date].amazon.acos = adDay.acos || 0;
                   updated[date].amazon.adRoas = adDay.roas || 0;
                   
+                  // Write per-SKU ad spend for this date
+                  const skuDay = adsData.skuDailyData?.[date];
+                  if (skuDay && updated[date].amazon.skuData) {
+                    updated[date].amazon.skuData = updated[date].amazon.skuData.map(sk => {
+                      const match = skuDay[sk.sku] || skuDay[sk.asin] || skuDay[(sk.sku || '').toUpperCase()];
+                      if (match) {
+                        return { ...sk, adSpend: match.spend || 0, adRevenue: match.sales || 0, adOrders: match.orders || 0 };
+                      }
+                      return sk;
+                    });
+                  }
+                  
                   // Recalculate netProfit if we have revenue data
                   const rev = updated[date].amazon.revenue || updated[date].amazon.sales || 0;
                   if (rev > 0) {
@@ -11613,14 +11625,32 @@ const savePeriods = async (d) => {
                   adsDaysUpdated++;
                 });
                 
-                console.log(`[AutoSync] Amazon Ads: ${adsDaysUpdated} days updated, $${adsData.summary?.totalSpend?.toFixed(2)} total spend`);
+                console.log(`[AutoSync] Amazon Ads: ${adsDaysUpdated} days updated, $${adsData.summary?.totalSpend?.toFixed(2)} total spend, ${adsData.summary?.skuCount || 0} SKUs`);
                 try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('[AutoSync] Failed to persist ads data to localStorage'); }
                 return updated;
               });
               
+              // Store transformed reports in adsIntelData for AI analysis
+              if (adsData.reports) {
+                setAdsIntelData(prev => {
+                  const updated = { ...(prev || {}), lastUpdated: new Date().toISOString(), source: 'amazon-ads-api' };
+                  if (adsData.reports.dailyOverview) updated._apiDailyOverview = adsData.reports.dailyOverview;
+                  if (adsData.reports.spSearchTerms) updated._apiSpSearchTerms = adsData.reports.spSearchTerms;
+                  if (adsData.reports.spAdvertised) updated._apiSpAdvertised = adsData.reports.spAdvertised;
+                  if (adsData.reports.spPlacement) updated._apiSpPlacement = adsData.reports.spPlacement;
+                  if (adsData.reports.spTargeting) updated._apiSpTargeting = adsData.reports.spTargeting;
+                  if (adsData.reports.sbSearchTerms) updated._apiSbSearchTerms = adsData.reports.sbSearchTerms;
+                  if (adsData.reports.sdCampaign) updated._apiSdCampaign = adsData.reports.sdCampaign;
+                  if (adsData.skuSummary) updated.skuAdPerformance = adsData.skuSummary;
+                  if (adsData.campaigns) updated.campaignSummary = adsData.campaigns;
+                  updated.apiSyncSummary = adsData.summary;
+                  return updated;
+                });
+              }
+              
               queueCloudSave({ ...combinedData });
               setAmazonCredentials(p => ({ ...p, adsLastSync: new Date().toISOString() }));
-              results.push({ service: 'Amazon Ads', success: true, days: adsData.summary?.daysWithData, spend: adsData.summary?.totalSpend, campaigns: adsData.summary?.campaignCount });
+              results.push({ service: 'Amazon Ads', success: true, days: adsData.summary?.daysWithData, spend: adsData.summary?.totalSpend, campaigns: adsData.summary?.campaignCount, skus: adsData.summary?.skuCount });
             } else if (adsData?.status === 'pending') {
               results.push({ service: 'Amazon Ads', success: false, error: 'Reports still generating - will complete on next sync' });
             } else {
@@ -17324,6 +17354,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setAllPeriodsData={setAllPeriodsData}
       setAllWeeksData={setAllWeeksData}
       setAmazonCredentials={setAmazonCredentials}
+      setAdsIntelData={setAdsIntelData}
       setAmazonForecasts={setAmazonForecasts}
       setAmazonInventoryData={setAmazonInventoryData}
       setAmazonInventoryStatus={setAmazonInventoryStatus}

@@ -795,6 +795,105 @@ ${sku.slice(0, 15).map(s => `  ${s.asin} (${s.msku || s.fnsku || '?'}) | Sales $
 `;
   }
 
+  // === API-sourced data (from Amazon Ads API auto-sync) ===
+  // SKU-level ad performance from API
+  if (intelData.skuAdPerformance?.length > 0) {
+    const skus = intelData.skuAdPerformance;
+    const totalSkuSpend = skus.reduce((s, k) => s + k.spend, 0);
+    const totalSkuSales = skus.reduce((s, k) => s + k.sales, 0);
+    context += `\n--- SKU-LEVEL AD PERFORMANCE (${skus.length} SKUs, API-sourced) ---
+Total: Spend $${Math.round(totalSkuSpend)} | Ad Revenue $${Math.round(totalSkuSales)} | ROAS ${totalSkuSpend > 0 ? (totalSkuSales / totalSkuSpend).toFixed(2) : 'N/A'}
+${skus.slice(0, 20).map(s => `  ${s.asin}${s.sku ? ` (${s.sku})` : ''} | Spend $${s.spend.toFixed(2)} | Sales $${s.sales.toFixed(2)} | ACOS ${s.acos.toFixed(1)}% | ROAS ${s.roas.toFixed(2)} | Orders ${s.orders} | CPC $${s.cpc.toFixed(2)} | Conv ${s.convRate.toFixed(1)}% | ${s.days}d active | ${s.campaigns.length} campaigns`).join('\n')}
+`;
+  }
+
+  // Campaign summary from API
+  if (intelData.campaignSummary?.length > 0) {
+    const camps = intelData.campaignSummary;
+    context += `\n--- CAMPAIGN SUMMARY (${camps.length} campaigns, API-sourced) ---
+${camps.slice(0, 25).map(c => `  [${c.type}] ${c.name.substring(0, 55)} | ${c.status} | Spend $${Math.round(c.spend)} | Rev $${Math.round(c.revenue)} | ACOS ${c.acos.toFixed(1)}% | ROAS ${c.roas.toFixed(2)} | CPC $${c.cpc.toFixed(2)} | Conv ${c.convRate.toFixed(1)}% | Budget $${c.budget || '?'}/day | ${c.days}d`).join('\n')}
+`;
+  }
+
+  // API-sourced raw report data (provides granular row-level detail the AI can reference)
+  if (intelData._apiSpSearchTerms?.length > 0) {
+    const terms = intelData._apiSpSearchTerms;
+    // Group by search term and compute totals
+    const byTerm = {};
+    terms.forEach(r => {
+      const t = r['Customer Search Term'] || '';
+      if (!t) return;
+      if (!byTerm[t]) byTerm[t] = { term: t, spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0, matchTypes: new Set() };
+      byTerm[t].spend += r['Spend'] || 0;
+      byTerm[t].sales += r['7 Day Total Sales'] || 0;
+      byTerm[t].clicks += r['Clicks'] || 0;
+      byTerm[t].orders += r['7 Day Total Orders (#)'] || 0;
+      byTerm[t].impressions += r['Impressions'] || 0;
+      if (r['Match Type']) byTerm[t].matchTypes.add(r['Match Type']);
+    });
+    const termArr = Object.values(byTerm).map(t => ({ ...t, roas: t.spend > 0 ? t.sales / t.spend : 0, acos: t.sales > 0 ? (t.spend / t.sales) * 100 : 999 }));
+    const topROAS = termArr.filter(t => t.spend >= 3 && t.sales > 0).sort((a, b) => b.roas - a.roas).slice(0, 15);
+    const wasteful = termArr.filter(t => t.spend >= 3 && t.sales === 0).sort((a, b) => b.spend - a.spend).slice(0, 15);
+    context += `\n--- SP SEARCH TERMS (${Object.keys(byTerm).length} terms, API-sourced from ${terms.length} rows) ---
+TOP CONVERTING: ${topROAS.map(t => `"${t.term}" ROAS ${t.roas.toFixed(1)} $${t.spend.toFixed(0)}→$${t.sales.toFixed(0)}`).join(' | ')}
+WASTED SPEND: ${wasteful.map(t => `"${t.term}" $${t.spend.toFixed(2)} wasted (${t.clicks}cl)`).join(' | ')}
+`;
+  }
+
+  if (intelData._apiSpTargeting?.length > 0) {
+    const targets = intelData._apiSpTargeting;
+    const byTarget = {};
+    targets.forEach(r => {
+      const t = r['Targeting'] || '';
+      if (!t) return;
+      if (!byTarget[t]) byTarget[t] = { target: t, spend: 0, sales: 0, clicks: 0, impressions: 0, tosShares: [] };
+      byTarget[t].spend += r['Spend'] || 0;
+      byTarget[t].sales += r['7 Day Total Sales'] || 0;
+      byTarget[t].clicks += r['Clicks'] || 0;
+      byTarget[t].impressions += r['Impressions'] || 0;
+      const tos = r['Top-of-search Impression Share'];
+      if (tos > 0) byTarget[t].tosShares.push(tos);
+    });
+    const tArr = Object.values(byTarget).map(t => ({ ...t, roas: t.spend > 0 ? t.sales / t.spend : 0, avgTos: t.tosShares.length > 0 ? t.tosShares.reduce((a, b) => a + b, 0) / t.tosShares.length : 0 }));
+    const topT = tArr.filter(t => t.spend >= 3 && t.sales > 0).sort((a, b) => b.roas - a.roas).slice(0, 10);
+    context += `\n--- SP TARGETING (${Object.keys(byTarget).length} targets, API-sourced) ---
+TOP: ${topT.map(t => `"${t.target}" ROAS ${t.roas.toFixed(1)} TOS ${t.avgTos.toFixed(0)}%`).join(' | ')}
+`;
+  }
+
+  if (intelData._apiSpPlacement?.length > 0) {
+    const placements = intelData._apiSpPlacement;
+    const byP = {};
+    placements.forEach(r => {
+      const p = r['Placement'] || 'Other';
+      if (!byP[p]) byP[p] = { placement: p, spend: 0, sales: 0, clicks: 0, impressions: 0 };
+      byP[p].spend += r['Spend'] || 0;
+      byP[p].sales += r['7 Day Total Sales'] || 0;
+      byP[p].clicks += r['Clicks'] || 0;
+      byP[p].impressions += r['Impressions'] || 0;
+    });
+    context += `\n--- PLACEMENT PERFORMANCE (API-sourced) ---
+${Object.values(byP).map(p => `  ${p.placement}: Spend $${Math.round(p.spend)} | Sales $${Math.round(p.sales)} | ROAS ${p.spend > 0 ? (p.sales / p.spend).toFixed(2) : 'N/A'} | CTR ${p.impressions > 0 ? ((p.clicks / p.impressions) * 100).toFixed(2) : 0}%`).join('\n')}
+`;
+  }
+
+  if (intelData._apiSbSearchTerms?.length > 0) {
+    context += `\n--- SB SEARCH TERMS (${intelData._apiSbSearchTerms.length} rows, API-sourced) ---\n`;
+  }
+
+  if (intelData._apiSdCampaign?.length > 0) {
+    context += `\n--- SD CAMPAIGNS (${intelData._apiSdCampaign.length} rows, API-sourced) ---\n`;
+  }
+
+  if (intelData.apiSyncSummary) {
+    const s = intelData.apiSyncSummary;
+    context += `\n--- API SYNC SUMMARY ---
+Date Range: ${s.dateRange?.start} to ${s.dateRange?.end} | ${s.daysWithData} days
+Total: Spend $${Math.round(s.totalSpend || 0)} | Revenue $${Math.round(s.totalRevenue || 0)} | ACOS ${(s.acos || 0).toFixed(1)}% | ROAS ${(s.roas || 0).toFixed(2)}
+Reports: ${s.campaignCount} campaigns | ${s.skuCount || 0} SKUs | ${JSON.stringify(s.reportCounts || {})}
+`;
+  }
+
   return context;
 };
 
@@ -1512,7 +1611,7 @@ const AmazonAdsIntelModal = ({
           {/* Existing data status */}
           {hasExistingData && (
             <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-lg p-3 text-sm">
-              <p className="text-emerald-400 font-medium">✓ Intel loaded · {new Date(adsIntelData.lastUpdated).toLocaleDateString()}</p>
+              <p className="text-emerald-400 font-medium">✓ Intel loaded · {new Date(adsIntelData.lastUpdated).toLocaleDateString()}{adsIntelData.source === 'amazon-ads-api' ? ' (API)' : ''}</p>
               <p className="text-slate-400 text-xs mt-1">
                 {[
                   adsIntelData.dailyOverview && `${adsIntelData.dailyOverview.totalDays}d overview`,
@@ -1526,6 +1625,12 @@ const AmazonAdsIntelModal = ({
                   adsIntelData.businessReport?.length && `${adsIntelData.businessReport.length} biz report ASINs`,
                   adsIntelData.searchQueryPerf?.length && `${adsIntelData.searchQueryPerf.length} queries`,
                   adsIntelData.skuEconomics?.length && `${adsIntelData.skuEconomics.length} SKU econ`,
+                  // API-sourced data
+                  adsIntelData.skuAdPerformance?.length && `${adsIntelData.skuAdPerformance.length} SKU ad perf (API)`,
+                  adsIntelData.campaignSummary?.length && `${adsIntelData.campaignSummary.length} campaigns (API)`,
+                  adsIntelData._apiSpSearchTerms?.length && `${adsIntelData._apiSpSearchTerms.length} SP term rows (API)`,
+                  adsIntelData._apiSpTargeting?.length && `${adsIntelData._apiSpTargeting.length} targeting rows (API)`,
+                  adsIntelData._apiSpPlacement?.length && `placements (API)`,
                 ].filter(Boolean).join(' · ')}
               </p>
               {/* Generate report from existing data */}

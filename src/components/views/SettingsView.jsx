@@ -59,6 +59,7 @@ const SettingsView = ({
   setAllPeriodsData,
   setAllWeeksData,
   setAmazonCredentials,
+  setAdsIntelData,
   setAmazonForecasts,
   setAmazonInventoryData,
   setAmazonInventoryStatus,
@@ -2281,10 +2282,10 @@ const SettingsView = ({
               </div>
               
               {/* Manual Sync Button */}
-              <SettingRow label="Sync Campaign Data" desc="Pull last 30 days of SP/SB/SD daily campaign performance">
+              <SettingRow label="Sync Campaign Data" desc="Pull 30 days of SP/SB/SD campaigns, search terms, SKU-level spend, targeting, placements">
                 <button
                   onClick={async () => {
-                    setToast({ message: 'Syncing Amazon Ads data...', type: 'info' });
+                    setToast({ message: 'Syncing Amazon Ads data (8 report types)...', type: 'info' });
                     try {
                       let data = null;
                       let retries = 0;
@@ -2297,7 +2298,7 @@ const SettingsView = ({
                         adsProfileId: amazonCredentials.adsProfileId,
                       };
 
-                      while (retries < 3) {
+                      while (retries < 5) {
                         const r = await fetch('/api/amazon/ads-sync', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
@@ -2306,22 +2307,22 @@ const SettingsView = ({
                         data = await r.json();
 
                         if (data.status === 'pending' && data.pendingReports) {
+                          setToast({ message: `${data.message || 'Reports generating...'} (retry ${retries + 1})`, type: 'info' });
                           syncBody.pendingReports = data.pendingReports;
                           retries++;
-                          await new Promise(r => setTimeout(r, 5000));
+                          await new Promise(r => setTimeout(r, 8000));
                           continue;
                         }
                         break;
                       }
 
                       if (data?.success && data?.dailyData) {
-                        // Write daily ad spend to allDaysData
+                        // 1. Write daily ad totals + per-SKU ad spend to allDaysData
                         setAllDaysData(prev => {
                           const updated = { ...prev };
                           Object.entries(data.dailyData).forEach(([date, adDay]) => {
                             if (!updated[date]) updated[date] = {};
                             if (!updated[date].amazon) updated[date].amazon = {};
-                            // Write ad metrics (REPLACE — re-sync overwrites)
                             updated[date].amazon.adSpend = adDay.spend || 0;
                             updated[date].amazon.adRevenue = adDay.revenue || 0;
                             updated[date].amazon.adOrders = adDay.orders || 0;
@@ -2329,20 +2330,57 @@ const SettingsView = ({
                             updated[date].amazon.adClicks = adDay.clicks || 0;
                             updated[date].amazon.acos = adDay.acos || 0;
                             updated[date].amazon.adRoas = adDay.roas || 0;
-                            // Preserve existing revenue/units if present (from orders API or SKU Economics)
                             if (!updated[date].amazon.revenue) updated[date].amazon.revenue = 0;
+
+                            // Write per-SKU ad spend for this date
+                            const skuDay = data.skuDailyData?.[date];
+                            if (skuDay && updated[date].amazon.skuData) {
+                              updated[date].amazon.skuData = updated[date].amazon.skuData.map(sk => {
+                                const match = skuDay[sk.sku] || skuDay[sk.asin] || skuDay[(sk.sku || '').toUpperCase()];
+                                if (match) {
+                                  return { ...sk, adSpend: match.spend || 0, adRevenue: match.sales || 0, adOrders: match.orders || 0 };
+                                }
+                                return sk;
+                              });
+                            }
                           });
                           try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch(e) {}
                           return updated;
                         });
 
+                        // 2. Store transformed reports in adsIntelData for AI analysis
+                        //    Uses _api prefix to avoid conflicting with aggregated format from file uploads
+                        //    AI prompt builder reads both aggregated keys and _api keys
+                        if (setAdsIntelData && data.reports) {
+                          setAdsIntelData(prev => {
+                            const updated = { ...(prev || {}), lastUpdated: new Date().toISOString(), source: 'amazon-ads-api' };
+                            // Store raw rows under _api keys for AI to analyze
+                            if (data.reports.dailyOverview) updated._apiDailyOverview = data.reports.dailyOverview;
+                            if (data.reports.spSearchTerms) updated._apiSpSearchTerms = data.reports.spSearchTerms;
+                            if (data.reports.spAdvertised) updated._apiSpAdvertised = data.reports.spAdvertised;
+                            if (data.reports.spPlacement) updated._apiSpPlacement = data.reports.spPlacement;
+                            if (data.reports.spTargeting) updated._apiSpTargeting = data.reports.spTargeting;
+                            if (data.reports.sbSearchTerms) updated._apiSbSearchTerms = data.reports.sbSearchTerms;
+                            if (data.reports.sdCampaign) updated._apiSdCampaign = data.reports.sdCampaign;
+                            // Store pre-computed summaries for direct display
+                            if (data.skuSummary) updated.skuAdPerformance = data.skuSummary;
+                            if (data.campaigns) updated.campaignSummary = data.campaigns;
+                            updated.apiSyncSummary = data.summary;
+                            return updated;
+                          });
+                        }
+
                         setAmazonCredentials(prev => ({ ...prev, adsLastSync: new Date().toISOString() }));
                         if (queueCloudSave) queueCloudSave();
-                        setToast({ message: `Synced ${data.summary.daysWithData} days · $${data.summary.totalSpend.toFixed(0)} spend · ${data.summary.campaignCount} campaigns`, type: 'success' });
-                      } else if (data.status === 'pending') {
+                        
+                        const rc = data.summary.reportCounts || {};
+                        const parts = [`${data.summary.daysWithData} days`, `$${data.summary.totalSpend.toFixed(0)} spend`, `${data.summary.campaignCount} campaigns`, `${data.summary.skuCount || 0} SKUs`];
+                        if (rc.spSearchTerms) parts.push(`${rc.spSearchTerms} search terms`);
+                        setToast({ message: `Synced: ${parts.join(' · ')}`, type: 'success' });
+                      } else if (data?.status === 'pending') {
                         setToast({ message: 'Reports still generating — will complete on next sync', type: 'info' });
                       } else {
-                        setToast({ message: data.error || 'Ads sync failed', type: 'error' });
+                        setToast({ message: data?.error || 'Ads sync failed', type: 'error' });
                       }
                     } catch (err) {
                       setToast({ message: `Ads sync error: ${err.message}`, type: 'error' });

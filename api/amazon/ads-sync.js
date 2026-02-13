@@ -1,16 +1,24 @@
-// Vercel Serverless Function - Amazon Ads API Sync
+// Vercel Serverless Function - Amazon Ads API Sync (Comprehensive)
 // Path: /api/amazon/ads-sync.js
 //
-// Pulls daily campaign performance data from Amazon Advertising API (v3 Reporting)
-// Supports Sponsored Products, Sponsored Brands, and Sponsored Display
-// Uses separate LWA credentials from SP-API (different app registration)
+// Pulls 8 report types from Amazon Advertising API v3:
+//   SP Campaigns (daily)        → daily totals + allDaysData
+//   SP Advertised Product       → SKU/ASIN-level ad spend ← KEY
+//   SP Search Terms             → keyword optimization
+//   SP Targeting                → bid/match type analysis
+//   SP Campaign Placement       → top-of-search vs rest
+//   SB Campaigns (daily)        → brand headline performance
+//   SB Search Terms             → brand keyword insights
+//   SD Campaigns (daily)        → display/retargeting + DPV
 //
-// Endpoints used:
-//   - GET  /v2/profiles                     → List advertising profiles
-//   - POST /reporting/reports               → Create async report
-//   - GET  /reporting/reports/{reportId}     → Poll report status
-//   - GET  {downloadUrl}                    → Download completed report
-//
+// Returns:
+//   dailyData     → daily totals for allDaysData (spend, revenue, ACOS per day)
+//   skuDailyData  → per-SKU ad spend per day (for SKU-level P&L tracking)
+//   reports       → transformed rows matching Seller Central column names
+//                   (feed directly into existing aggregator functions)
+//   campaigns     → campaign-level summary with derived metrics
+//   skuSummary    → SKU-level ad performance totals
+//   summary       → totals, date range, report status
 
 export const config = {
   maxDuration: 120,
@@ -30,15 +38,15 @@ export default async function handler(req, res) {
     adsClientSecret,
     adsRefreshToken,
     adsProfileId,
-    syncType,  // 'test' | 'profiles' | 'campaigns' | 'daily'
+    syncType,        // 'test' | 'profiles' | 'campaigns' | 'daily'
     startDate,
     endDate,
     daysBack,
-    pendingReports, // For polling: [{ reportId, adType }]
+    pendingReports,  // For polling: [{ reportId, reportKey, status, downloadUrl }]
   } = req.body;
 
   if (!adsClientId || !adsClientSecret || !adsRefreshToken) {
-    return res.status(400).json({ error: 'Missing Amazon Ads API credentials (adsClientId, adsClientSecret, adsRefreshToken)' });
+    return res.status(400).json({ error: 'Missing Amazon Ads API credentials' });
   }
 
   const ADS_BASE = 'https://advertising-api.amazon.com';
@@ -55,14 +63,12 @@ export default async function handler(req, res) {
         client_secret: adsClientSecret,
       }).toString(),
     });
-
     const text = await tokenRes.text();
     if (!tokenRes.ok) {
       let detail = text;
       try { detail = JSON.parse(text).error_description || text; } catch (e) {}
       throw new Error(`Ads LWA auth failed (${tokenRes.status}): ${detail}`);
     }
-
     const data = JSON.parse(text);
     if (!data.access_token) throw new Error('No access_token in LWA response');
     return data.access_token;
@@ -75,28 +81,18 @@ export default async function handler(req, res) {
       'Amazon-Advertising-API-ClientId': adsClientId,
       'Content-Type': 'application/json',
     };
-    // Profile scope required for all non-profile endpoints
-    if (adsProfileId) {
-      headers['Amazon-Advertising-API-Scope'] = adsProfileId;
-    }
+    if (adsProfileId) headers['Amazon-Advertising-API-Scope'] = adsProfileId;
 
     const opts = { method, headers };
     if (body) opts.body = JSON.stringify(body);
 
     const response = await fetch(`${ADS_BASE}${endpoint}`, opts);
-
     if (!response.ok) {
       const errText = await response.text();
-      console.error(`[AdsAPI] ${method} ${endpoint} → ${response.status}:`, errText.slice(0, 300));
       throw new Error(`Ads API ${response.status}: ${errText.slice(0, 200)}`);
     }
-
-    // Some endpoints return 207 multi-status; handle gracefully
-    const contentType = response.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      return response.json();
-    }
-    return response.text();
+    const ct = response.headers.get('content-type') || '';
+    return ct.includes('application/json') ? response.json() : response.text();
   };
 
   // ============ TEST CONNECTION ============
@@ -104,15 +100,11 @@ export default async function handler(req, res) {
     try {
       const token = await getAdsToken();
       const profiles = await adsRequest(token, '/v2/profiles');
-
-      const usProfiles = profiles.filter(p =>
-        p.countryCode === 'US' && p.accountInfo?.type === 'seller'
-      );
-
+      const usProfiles = profiles.filter(p => p.countryCode === 'US' && p.accountInfo?.type === 'seller');
       return res.status(200).json({
         success: true,
         profiles: profiles.map(p => ({
-          profileId: p.profileId,
+          profileId: String(p.profileId),
           countryCode: p.countryCode,
           accountType: p.accountInfo?.type,
           name: p.accountInfo?.name || p.accountInfo?.brandName || `Profile ${p.profileId}`,
@@ -121,7 +113,6 @@ export default async function handler(req, res) {
         recommended: usProfiles.length > 0 ? String(usProfiles[0].profileId) : (profiles.length > 0 ? String(profiles[0].profileId) : null),
       });
     } catch (err) {
-      console.error('[AdsSync] Test failed:', err.message);
       return res.status(200).json({ error: err.message });
     }
   }
@@ -146,358 +137,535 @@ export default async function handler(req, res) {
     }
   }
 
-  // Profile ID required for all data endpoints
   if (!adsProfileId) {
     return res.status(400).json({ error: 'Missing adsProfileId. Fetch profiles first.' });
   }
 
   let token;
-  try {
-    token = await getAdsToken();
-  } catch (err) {
-    return res.status(401).json({ error: err.message });
+  try { token = await getAdsToken(); }
+  catch (err) { return res.status(401).json({ error: err.message }); }
+
+  // ============ CAMPAIGN LIST (quick snapshot) ============
+  if (syncType === 'campaigns') {
+    try {
+      const campaigns = { sp: [], sb: [], sd: [] };
+      try {
+        const d = await adsRequest(token, '/sp/campaigns/list', 'POST', { stateFilter: { include: ['ENABLED', 'PAUSED'] }, maxResults: 100 });
+        campaigns.sp = (d.campaigns || []).map(c => ({ id: c.campaignId, name: c.name, state: c.state, budget: c.budget?.budget, budgetType: c.budget?.budgetType, targetingType: c.targetingType }));
+      } catch (e) {}
+      try {
+        const d = await adsRequest(token, '/sb/v4/campaigns/list', 'POST', { stateFilter: { include: ['ENABLED', 'PAUSED'] }, maxResults: 100 });
+        campaigns.sb = (d.campaigns || []).map(c => ({ id: c.campaignId, name: c.name, state: c.state, budget: c.budget?.budget }));
+      } catch (e) {}
+      try {
+        const d = await adsRequest(token, '/sd/campaigns/list', 'POST', { stateFilter: { include: ['ENABLED', 'PAUSED'] }, maxResults: 100 });
+        campaigns.sd = (d.campaigns || []).map(c => ({ id: c.campaignId, name: c.name, state: c.state, budget: c.budget?.budget, tactic: c.tactic }));
+      } catch (e) {}
+      return res.status(200).json({ success: true, syncType: 'campaigns', campaigns, total: campaigns.sp.length + campaigns.sb.length + campaigns.sd.length });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
   }
 
-  // ============ DAILY CAMPAIGN SYNC (Main endpoint) ============
-  // Uses Amazon Ads Reporting API v3 (async reports)
-  // Creates reports for SP, SB, SD campaigns → polls → downloads → aggregates
+  // ============================================================
+  // DAILY SYNC — Pull all 8 report types
+  // ============================================================
   if (syncType === 'daily') {
     try {
-      const endDateObj = endDate ? new Date(endDate) : new Date();
-      // Default 30 days back, max 60
       const days = Math.min(parseInt(daysBack) || 30, 60);
       const startDateObj = startDate ? new Date(startDate) : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-
+      const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+      const endDateObj = endDate ? new Date(endDate) : yesterday;
+      const endFinal = endDateObj > yesterday ? yesterday : endDateObj;
       const startStr = startDateObj.toISOString().split('T')[0];
-      // End date = yesterday (today's data isn't complete)
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const endStr = endDateObj > yesterday ? yesterday.toISOString().split('T')[0] : endDateObj.toISOString().split('T')[0];
+      const endStr = endFinal.toISOString().split('T')[0];
 
-      console.log(`[AdsSync] Daily sync: ${startStr} to ${endStr}`);
+      console.log(`[AdsSync] Comprehensive daily sync: ${startStr} to ${endStr}`);
 
-      // ---- Step 1: If we have pending reports, poll them ----
+      // ---- If polling pending reports ----
       if (pendingReports && pendingReports.length > 0) {
-        return await pollAndDownload(token, pendingReports, res);
+        return await pollDownloadTransform(token, pendingReports, startStr, endStr, res);
       }
 
-      // ---- Step 2: Create reports for each ad type ----
-      const adTypes = [
+      // ---- Create all 8 report types ----
+      const REPORT_SPECS = [
+        // --- SP Reports ---
         {
-          type: 'sp',
-          label: 'Sponsored Products',
+          key: 'spCampaigns',
+          label: 'SP Campaigns',
           reportTypeId: 'spCampaigns',
+          groupBy: ['campaign'],
           columns: ['campaignName', 'campaignId', 'campaignStatus', 'campaignBudgetAmount', 'campaignBudgetType',
             'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSold7d',
             'costPerClick', 'clickThroughRate'],
-          timeUnit: 'DAILY',
         },
         {
-          type: 'sb',
-          label: 'Sponsored Brands',
+          key: 'spAdvertised',
+          label: 'SP Advertised Product',
+          reportTypeId: 'spAdvertisedProduct',
+          groupBy: ['advertiser'],
+          columns: ['campaignName', 'campaignId', 'adGroupName', 'adGroupId',
+            'advertisedAsin', 'advertisedSku',
+            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSold7d',
+            'costPerClick', 'clickThroughRate'],
+        },
+        {
+          key: 'spSearchTerms',
+          label: 'SP Search Terms',
+          reportTypeId: 'spSearchTerm',
+          groupBy: ['searchTerm'],
+          columns: ['campaignName', 'campaignId', 'adGroupName', 'adGroupId',
+            'keyword', 'keywordType', 'searchTerm', 'matchType',
+            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSold7d',
+            'costPerClick', 'clickThroughRate'],
+        },
+        {
+          key: 'spTargeting',
+          label: 'SP Targeting',
+          reportTypeId: 'spTargeting',
+          groupBy: ['targeting'],
+          columns: ['campaignName', 'campaignId', 'adGroupName', 'adGroupId',
+            'targetingExpression', 'targetingType', 'keywordType',
+            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSold7d',
+            'costPerClick', 'clickThroughRate', 'topOfSearchImpressionShare'],
+        },
+        {
+          key: 'spPlacement',
+          label: 'SP Campaign Placement',
+          reportTypeId: 'spCampaigns',
+          groupBy: ['campaignPlacement'],
+          columns: ['campaignName', 'campaignId', 'placementClassification',
+            'date', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d', 'unitsSold7d'],
+        },
+        // --- SB Reports ---
+        {
+          key: 'sbCampaigns',
+          label: 'SB Campaigns',
           reportTypeId: 'sbCampaigns',
+          groupBy: ['campaign'],
           columns: ['campaignName', 'campaignId', 'campaignStatus', 'campaignBudgetAmount',
             'date', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d', 'unitsSold14d',
             'costPerClick', 'clickThroughRate'],
-          timeUnit: 'DAILY',
         },
         {
-          type: 'sd',
-          label: 'Sponsored Display',
+          key: 'sbSearchTerms',
+          label: 'SB Search Terms',
+          reportTypeId: 'sbSearchTerm',
+          groupBy: ['searchTerm'],
+          columns: ['campaignName', 'campaignId',
+            'searchTerm', 'matchType',
+            'date', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d', 'unitsSold14d',
+            'costPerClick', 'clickThroughRate'],
+        },
+        // --- SD Reports ---
+        {
+          key: 'sdCampaigns',
+          label: 'SD Campaigns',
           reportTypeId: 'sdCampaigns',
+          groupBy: ['campaign'],
           columns: ['campaignName', 'campaignId', 'campaignStatus', 'campaignBudgetAmount',
             'date', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d', 'unitsSold14d',
             'dpv14d', 'costPerClick', 'clickThroughRate'],
-          timeUnit: 'DAILY',
         },
       ];
 
       const createdReports = [];
 
-      for (const ad of adTypes) {
+      for (const spec of REPORT_SPECS) {
         try {
-          const reportBody = {
-            reportTypeId: ad.reportTypeId,
-            timeUnit: ad.timeUnit,
+          const body = {
+            reportTypeId: spec.reportTypeId,
+            timeUnit: 'DAILY',
             format: 'GZIP_JSON',
-            groupBy: ['campaign'],
-            columns: ad.columns,
-            reportDate: {
-              startDate: startStr,
-              endDate: endStr,
-            },
+            groupBy: spec.groupBy,
+            columns: spec.columns,
+            reportDate: { startDate: startStr, endDate: endStr },
           };
 
-          console.log(`[AdsSync] Creating ${ad.label} report...`);
-          const created = await adsRequest(token, '/reporting/reports', 'POST', reportBody);
-
+          const created = await adsRequest(token, '/reporting/reports', 'POST', body);
           createdReports.push({
             reportId: created.reportId,
-            adType: ad.type,
-            label: ad.label,
+            reportKey: spec.key,
+            label: spec.label,
             status: created.status || 'PROCESSING',
           });
-
-          console.log(`[AdsSync] ${ad.label} report created: ${created.reportId} (${created.status})`);
-
-          // Rate limit between requests
-          await new Promise(r => setTimeout(r, 500));
+          console.log(`[AdsSync] ${spec.label} report created: ${created.reportId}`);
+          await new Promise(r => setTimeout(r, 300));
         } catch (err) {
-          console.error(`[AdsSync] Failed to create ${ad.label} report:`, err.message);
-          // Non-fatal — some accounts may not have SB or SD
-          if (err.message.includes('404') || err.message.includes('NOT_FOUND') || err.message.includes('401') || err.message.includes('UNAUTHORIZED')) {
-            console.log(`[AdsSync] ${ad.label} not available for this account, skipping`);
+          const msg = err.message || '';
+          // Non-fatal: account may not have SB, SD, etc.
+          if (msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('401') || msg.includes('UNAUTHORIZED') || msg.includes('AccountNotFound')) {
+            console.log(`[AdsSync] ${spec.label} not available, skipping`);
           } else {
-            createdReports.push({ adType: ad.type, label: ad.label, status: 'ERROR', error: err.message });
+            console.error(`[AdsSync] ${spec.label} creation failed:`, msg);
+            createdReports.push({ reportKey: spec.key, label: spec.label, status: 'ERROR', error: msg });
           }
         }
       }
 
       if (createdReports.filter(r => r.reportId).length === 0) {
-        return res.status(200).json({
-          success: false,
-          error: 'No reports could be created. Check that your Ads Profile ID is correct and campaigns exist.',
-          details: createdReports,
-        });
+        return res.status(200).json({ success: false, error: 'No reports could be created. Check your Profile ID and that campaigns exist.', details: createdReports });
       }
 
-      // ---- Step 3: Poll for completion (up to ~90s) ----
-      return await pollAndDownload(token, createdReports, res);
+      return await pollDownloadTransform(token, createdReports, startStr, endStr, res);
 
     } catch (err) {
-      console.error('[AdsSync] Daily sync error:', err);
-      return res.status(500).json({ error: `Ads daily sync failed: ${err.message}` });
-    }
-  }
-
-  // ============ CAMPAIGN SNAPSHOT (quick current state) ============
-  if (syncType === 'campaigns') {
-    try {
-      // Use the lightweight campaign list endpoints (not reports)
-      const campaigns = { sp: [], sb: [], sd: [] };
-
-      // SP Campaigns
-      try {
-        const spData = await adsRequest(token, '/sp/campaigns/list', 'POST', {
-          stateFilter: { include: ['ENABLED', 'PAUSED'] },
-          maxResults: 100,
-        });
-        campaigns.sp = (spData.campaigns || []).map(c => ({
-          id: c.campaignId, name: c.name, state: c.state,
-          budget: c.budget?.budget, budgetType: c.budget?.budgetType,
-          startDate: c.startDate, targetingType: c.targetingType,
-        }));
-      } catch (e) { console.log('[AdsSync] SP campaigns list not available:', e.message); }
-
-      // SB Campaigns
-      try {
-        const sbData = await adsRequest(token, '/sb/v4/campaigns/list', 'POST', {
-          stateFilter: { include: ['ENABLED', 'PAUSED'] },
-          maxResults: 100,
-        });
-        campaigns.sb = (sbData.campaigns || []).map(c => ({
-          id: c.campaignId, name: c.name, state: c.state,
-          budget: c.budget?.budget, budgetType: c.budget?.budgetType,
-          startDate: c.startDate,
-        }));
-      } catch (e) { console.log('[AdsSync] SB campaigns list not available:', e.message); }
-
-      // SD Campaigns
-      try {
-        const sdData = await adsRequest(token, '/sd/campaigns/list', 'POST', {
-          stateFilter: { include: ['ENABLED', 'PAUSED'] },
-          maxResults: 100,
-        });
-        campaigns.sd = (sdData.campaigns || []).map(c => ({
-          id: c.campaignId, name: c.name, state: c.state,
-          budget: c.budget?.budget, budgetType: c.budget?.budgetType,
-          startDate: c.startDate, tactic: c.tactic,
-        }));
-      } catch (e) { console.log('[AdsSync] SD campaigns list not available:', e.message); }
-
-      const total = campaigns.sp.length + campaigns.sb.length + campaigns.sd.length;
-
-      return res.status(200).json({
-        success: true,
-        syncType: 'campaigns',
-        summary: {
-          total,
-          sp: campaigns.sp.length,
-          sb: campaigns.sb.length,
-          sd: campaigns.sd.length,
-        },
-        campaigns,
-      });
-
-    } catch (err) {
-      console.error('[AdsSync] Campaign snapshot error:', err);
-      return res.status(500).json({ error: `Campaign list failed: ${err.message}` });
+      console.error('[AdsSync] Error:', err);
+      return res.status(500).json({ error: `Ads sync failed: ${err.message}` });
     }
   }
 
   return res.status(400).json({ error: 'Invalid syncType. Use: test, profiles, campaigns, daily' });
 
   // ============================================================
-  // HELPER: Poll pending reports, download, aggregate, return
+  // Poll reports → download → transform to Seller Central format
   // ============================================================
-  async function pollAndDownload(token, reports, res) {
-    const pendingReports = reports.filter(r => r.reportId && r.status !== 'COMPLETED' && r.status !== 'ERROR');
-    const completedReports = reports.filter(r => r.status === 'COMPLETED');
-    const errorReports = reports.filter(r => r.status === 'ERROR');
+  async function pollDownloadTransform(token, reports, startStr, endStr, res) {
+    const pending = reports.filter(r => r.reportId && r.status !== 'COMPLETED' && r.status !== 'ERROR');
+    const completed = reports.filter(r => r.status === 'COMPLETED');
+    const errors = reports.filter(r => r.status === 'ERROR');
 
-    // Poll loop — up to ~80 seconds
+    // Poll up to ~80 seconds
     let polls = 0;
-    const maxPolls = 40;
-
-    while (pendingReports.length > 0 && polls < maxPolls) {
+    while (pending.length > 0 && polls < 40) {
       polls++;
       await new Promise(r => setTimeout(r, 2000));
 
-      for (let i = pendingReports.length - 1; i >= 0; i--) {
-        const rpt = pendingReports[i];
+      for (let i = pending.length - 1; i >= 0; i--) {
+        const rpt = pending[i];
         try {
           const status = await adsRequest(token, `/reporting/reports/${rpt.reportId}`);
-
           if (status.status === 'COMPLETED') {
             rpt.status = 'COMPLETED';
             rpt.downloadUrl = status.url;
-            rpt.fileSize = status.fileSize;
-            completedReports.push(rpt);
-            pendingReports.splice(i, 1);
-            console.log(`[AdsSync] ${rpt.label} report COMPLETED (poll ${polls})`);
+            completed.push(rpt);
+            pending.splice(i, 1);
+            console.log(`[AdsSync] ${rpt.label} COMPLETED (poll ${polls})`);
           } else if (status.status === 'FAILURE') {
             rpt.status = 'ERROR';
-            rpt.error = status.statusDetails || 'Report generation failed';
-            errorReports.push(rpt);
-            pendingReports.splice(i, 1);
-            console.error(`[AdsSync] ${rpt.label} report FAILED:`, rpt.error);
+            rpt.error = status.statusDetails || 'Report failed';
+            errors.push(rpt);
+            pending.splice(i, 1);
           }
-          // else still PROCESSING — keep polling
         } catch (err) {
-          console.error(`[AdsSync] Poll error for ${rpt.label}:`, err.message);
+          console.error(`[AdsSync] Poll error ${rpt.label}:`, err.message);
         }
       }
     }
 
-    // If still pending after timeout, return pending state for client retry
-    if (pendingReports.length > 0) {
-      console.log(`[AdsSync] ${pendingReports.length} reports still pending after ${polls * 2}s`);
+    // Return pending state if still waiting
+    if (pending.length > 0) {
       return res.status(200).json({
-        success: true,
-        status: 'pending',
-        message: `${completedReports.length} reports ready, ${pendingReports.length} still generating`,
-        pendingReports: [...pendingReports, ...completedReports].map(r => ({
-          reportId: r.reportId, adType: r.adType, label: r.label, status: r.status,
-          downloadUrl: r.downloadUrl,
+        success: true, status: 'pending',
+        message: `${completed.length} ready, ${pending.length} generating`,
+        pendingReports: [...pending, ...completed].map(r => ({
+          reportId: r.reportId, reportKey: r.reportKey, label: r.label,
+          status: r.status, downloadUrl: r.downloadUrl,
         })),
       });
     }
 
-    // ---- Download and parse all completed reports ----
-    const allDailyData = {};   // date → { spend, revenue, impressions, clicks, orders }
-    const allCampaignData = {}; // campaignName → { type, spend, revenue, ... }
-    let totalRows = 0;
+    // ---- Download all completed reports ----
+    const rawData = {}; // reportKey → array of raw JSON rows
 
-    for (const rpt of completedReports) {
+    for (const rpt of completed) {
       if (!rpt.downloadUrl) continue;
       try {
         const dlRes = await fetch(rpt.downloadUrl);
-        if (!dlRes.ok) throw new Error(`Download failed: ${dlRes.status}`);
+        if (!dlRes.ok) throw new Error(`Download ${dlRes.status}`);
 
         let jsonText;
-        const contentEncoding = dlRes.headers.get('content-encoding');
-        const contentType = dlRes.headers.get('content-type') || '';
-
-        // Reports are GZIP_JSON format
-        if (contentType.includes('gzip') || contentEncoding === 'gzip' || rpt.downloadUrl.includes('.gz')) {
+        const ct = dlRes.headers.get('content-type') || '';
+        const ce = dlRes.headers.get('content-encoding');
+        if (ct.includes('gzip') || ce === 'gzip' || rpt.downloadUrl.includes('.gz')) {
           const { gunzipSync } = await import('zlib');
-          const buffer = await dlRes.arrayBuffer();
-          jsonText = gunzipSync(Buffer.from(buffer)).toString('utf8');
+          const buf = await dlRes.arrayBuffer();
+          jsonText = gunzipSync(Buffer.from(buf)).toString('utf8');
         } else {
           jsonText = await dlRes.text();
         }
 
         let rows;
-        try {
-          rows = JSON.parse(jsonText);
-        } catch (e) {
-          // Sometimes response is already decompressed or has a wrapper
-          console.error(`[AdsSync] JSON parse error for ${rpt.label}, trying line-delimited...`);
+        try { rows = JSON.parse(jsonText); }
+        catch (e) {
           rows = jsonText.split('\n').filter(l => l.trim()).map(l => {
             try { return JSON.parse(l); } catch (e2) { return null; }
           }).filter(Boolean);
         }
+        if (!Array.isArray(rows)) { console.error(`[AdsSync] ${rpt.label}: not an array`); continue; }
 
-        if (!Array.isArray(rows)) {
-          console.error(`[AdsSync] ${rpt.label}: expected array, got ${typeof rows}`);
-          continue;
-        }
-
-        console.log(`[AdsSync] ${rpt.label}: ${rows.length} rows downloaded`);
-        totalRows += rows.length;
-
-        // Parse rows into daily and campaign aggregations
-        for (const row of rows) {
-          const date = row.date; // Format: YYYY-MM-DD
-          if (!date) continue;
-
-          const spend = parseFloat(row.cost) || 0;
-          // SP uses 7d attribution, SB/SD use 14d
-          const revenue = parseFloat(row.sales7d || row.sales14d || 0) || 0;
-          const orders = parseInt(row.purchases7d || row.purchases14d || 0) || 0;
-          const units = parseInt(row.unitsSold7d || row.unitsSold14d || 0) || 0;
-          const impressions = parseInt(row.impressions) || 0;
-          const clicks = parseInt(row.clicks) || 0;
-          const campaignName = row.campaignName || '';
-          const campaignId = row.campaignId || '';
-          const campaignStatus = row.campaignStatus || '';
-          const dpv = parseInt(row.dpv14d || 0) || 0;
-
-          // Daily totals
-          if (!allDailyData[date]) {
-            allDailyData[date] = { spend: 0, revenue: 0, orders: 0, units: 0, impressions: 0, clicks: 0, dpv: 0,
-              spSpend: 0, spRevenue: 0, sbSpend: 0, sbRevenue: 0, sdSpend: 0, sdRevenue: 0 };
-          }
-          allDailyData[date].spend += spend;
-          allDailyData[date].revenue += revenue;
-          allDailyData[date].orders += orders;
-          allDailyData[date].units += units;
-          allDailyData[date].impressions += impressions;
-          allDailyData[date].clicks += clicks;
-          allDailyData[date].dpv += dpv;
-          allDailyData[date][`${rpt.adType}Spend`] += spend;
-          allDailyData[date][`${rpt.adType}Revenue`] += revenue;
-
-          // Campaign aggregation
-          if (campaignName) {
-            const campKey = `${rpt.adType}::${campaignName}`;
-            if (!allCampaignData[campKey]) {
-              allCampaignData[campKey] = {
-                name: campaignName, id: campaignId, type: rpt.adType, status: campaignStatus,
-                spend: 0, revenue: 0, orders: 0, units: 0, impressions: 0, clicks: 0, dpv: 0, days: 0,
-              };
-            }
-            allCampaignData[campKey].spend += spend;
-            allCampaignData[campKey].revenue += revenue;
-            allCampaignData[campKey].orders += orders;
-            allCampaignData[campKey].units += units;
-            allCampaignData[campKey].impressions += impressions;
-            allCampaignData[campKey].clicks += clicks;
-            allCampaignData[campKey].dpv += dpv;
-            allCampaignData[campKey].days++;
-            // Keep most recent status
-            if (campaignStatus) allCampaignData[campKey].status = campaignStatus;
-          }
-        }
+        rawData[rpt.reportKey] = rows;
+        console.log(`[AdsSync] ${rpt.label}: ${rows.length} rows`);
       } catch (err) {
-        console.error(`[AdsSync] Error downloading ${rpt.label} report:`, err.message);
-        errorReports.push({ ...rpt, status: 'DOWNLOAD_ERROR', error: err.message });
+        console.error(`[AdsSync] Download error ${rpt.label}:`, err.message);
+        errors.push({ ...rpt, error: err.message });
       }
     }
 
-    // Compute derived metrics for campaigns
-    const campaigns = Object.values(allCampaignData).map(c => ({
-      ...c,
+    // ============================================================
+    // TRANSFORM: API camelCase → Seller Central column names
+    // This lets the client feed rows directly into existing aggregators
+    // ============================================================
+
+    const transformedReports = {};
+    let totalRows = 0;
+
+    // --- Daily Overview (combine SP+SB+SD campaigns) ---
+    {
+      const dailyMap = {};
+      const processDaily = (rows, attrWindow) => {
+        for (const r of (rows || [])) {
+          const d = r.date;
+          if (!d) continue;
+          if (!dailyMap[d]) dailyMap[d] = { Spend: 0, Revenue: 0, Orders: 0, Impressions: 0, Clicks: 0, Units: 0 };
+          dailyMap[d].Spend += parseFloat(r.cost) || 0;
+          dailyMap[d].Revenue += parseFloat(r[`sales${attrWindow}`]) || 0;
+          dailyMap[d].Orders += parseInt(r[`purchases${attrWindow}`]) || 0;
+          dailyMap[d].Units += parseInt(r[`unitsSold${attrWindow}`]) || 0;
+          dailyMap[d].Impressions += parseInt(r.impressions) || 0;
+          dailyMap[d].Clicks += parseInt(r.clicks) || 0;
+        }
+      };
+      processDaily(rawData.spCampaigns, '7d');
+      processDaily(rawData.sbCampaigns, '14d');
+      processDaily(rawData.sdCampaigns, '14d');
+
+      transformedReports.dailyOverview = Object.entries(dailyMap).map(([date, d]) => ({
+        date, Date: date,
+        Spend: d.Spend, Revenue: d.Revenue, Orders: d.Orders,
+        Impressions: d.Impressions, Clicks: d.Clicks,
+        ROAS: d.Spend > 0 ? d.Revenue / d.Spend : 0,
+        ACOS: d.Revenue > 0 ? (d.Spend / d.Revenue) * 100 : 0,
+        CTR: d.Impressions > 0 ? (d.Clicks / d.Impressions) * 100 : 0,
+        'Avg CPC': d.Clicks > 0 ? d.Spend / d.Clicks : 0,
+        'Conv Rate': d.Clicks > 0 ? (d.Orders / d.Clicks) * 100 : 0,
+        'Total Units Ordered': d.Units,
+        'Total Revenue': d.Revenue,
+      })).sort((a, b) => a.date.localeCompare(b.date));
+      totalRows += transformedReports.dailyOverview.length;
+    }
+
+    // --- SP Advertised Product (SKU/ASIN level) ---
+    if (rawData.spAdvertised) {
+      transformedReports.spAdvertised = rawData.spAdvertised.map(r => ({
+        'Date': r.date,
+        'Campaign Name': r.campaignName || '',
+        'Campaign Id': r.campaignId || '',
+        'Ad Group Name': r.adGroupName || '',
+        'Advertised ASIN': r.advertisedAsin || '',
+        'Advertised SKU': r.advertisedSku || '',
+        'Impressions': parseInt(r.impressions) || 0,
+        'Clicks': parseInt(r.clicks) || 0,
+        'Spend': parseFloat(r.cost) || 0,
+        '7 Day Total Sales': parseFloat(r.sales7d) || 0,
+        '7 Day Total Orders (#)': parseInt(r.purchases7d) || 0,
+        '7 Day Total Units (#)': parseInt(r.unitsSold7d) || 0,
+      }));
+      totalRows += transformedReports.spAdvertised.length;
+    }
+
+    // --- SP Search Terms ---
+    if (rawData.spSearchTerms) {
+      transformedReports.spSearchTerms = rawData.spSearchTerms.map(r => ({
+        'Date': r.date,
+        'Campaign Name': r.campaignName || '',
+        'Ad Group Name': r.adGroupName || '',
+        'Keyword': r.keyword || '',
+        'Customer Search Term': r.searchTerm || '',
+        'Match Type': r.matchType || '',
+        'Impressions': parseInt(r.impressions) || 0,
+        'Clicks': parseInt(r.clicks) || 0,
+        'Spend': parseFloat(r.cost) || 0,
+        '7 Day Total Sales': parseFloat(r.sales7d) || 0,
+        '7 Day Total Orders (#)': parseInt(r.purchases7d) || 0,
+        '7 Day Total Units (#)': parseInt(r.unitsSold7d) || 0,
+      }));
+      totalRows += transformedReports.spSearchTerms.length;
+    }
+
+    // --- SP Targeting ---
+    if (rawData.spTargeting) {
+      transformedReports.spTargeting = rawData.spTargeting.map(r => ({
+        'Date': r.date,
+        'Campaign Name': r.campaignName || '',
+        'Ad Group Name': r.adGroupName || '',
+        'Targeting': r.targetingExpression || '',
+        'Match Type': r.keywordType || r.targetingType || '',
+        'Impressions': parseInt(r.impressions) || 0,
+        'Clicks': parseInt(r.clicks) || 0,
+        'Spend': parseFloat(r.cost) || 0,
+        '7 Day Total Sales': parseFloat(r.sales7d) || 0,
+        '7 Day Total Orders (#)': parseInt(r.purchases7d) || 0,
+        '7 Day Total Units (#)': parseInt(r.unitsSold7d) || 0,
+        'Top-of-search Impression Share': parseFloat(r.topOfSearchImpressionShare) || 0,
+      }));
+      totalRows += transformedReports.spTargeting.length;
+    }
+
+    // --- SP Placement ---
+    if (rawData.spPlacement) {
+      transformedReports.spPlacement = rawData.spPlacement.map(r => ({
+        'Date': r.date,
+        'Campaign Name': r.campaignName || '',
+        'Placement': r.placementClassification || 'Other',
+        'Impressions': parseInt(r.impressions) || 0,
+        'Clicks': parseInt(r.clicks) || 0,
+        'Spend': parseFloat(r.cost) || 0,
+        '7 Day Total Sales': parseFloat(r.sales7d) || 0,
+        '7 Day Total Orders (#)': parseInt(r.purchases7d) || 0,
+        '7 Day Total Units (#)': parseInt(r.unitsSold7d) || 0,
+      }));
+      totalRows += transformedReports.spPlacement.length;
+    }
+
+    // --- SB Search Terms ---
+    if (rawData.sbSearchTerms) {
+      transformedReports.sbSearchTerms = rawData.sbSearchTerms.map(r => ({
+        'Date': r.date,
+        'Campaign Name': r.campaignName || '',
+        'Customer Search Term': r.searchTerm || '',
+        'Match Type': r.matchType || '',
+        'Impressions': parseInt(r.impressions) || 0,
+        'Clicks': parseInt(r.clicks) || 0,
+        'Spend': parseFloat(r.cost) || 0,
+        '14 Day Total Sales': parseFloat(r.sales14d) || 0,
+        '14 Day Total Orders (#)': parseInt(r.purchases14d) || 0,
+      }));
+      totalRows += transformedReports.sbSearchTerms.length;
+    }
+
+    // --- SD Campaign ---
+    if (rawData.sdCampaigns) {
+      transformedReports.sdCampaign = rawData.sdCampaigns.map(r => ({
+        'Date': r.date,
+        'Campaign Name': r.campaignName || '',
+        'Status': r.campaignStatus || '',
+        'Impressions': parseInt(r.impressions) || 0,
+        'Clicks': parseInt(r.clicks) || 0,
+        'Spend': parseFloat(r.cost) || 0,
+        '14 Day Total Sales': parseFloat(r.sales14d) || 0,
+        '14 Day Total Orders (#)': parseInt(r.purchases14d) || 0,
+        '14 Day Detail Page Views (DPV)': parseInt(r.dpv14d) || 0,
+        '14 Day New-to-brand Orders (#)': 0,
+        '14 Day New-to-brand Sales': 0,
+      }));
+      totalRows += transformedReports.sdCampaign.length;
+    }
+
+    // ============================================================
+    // Build daily totals for allDaysData
+    // ============================================================
+    const dailyData = {};
+    for (const row of (transformedReports.dailyOverview || [])) {
+      dailyData[row.date] = {
+        spend: row.Spend, revenue: row.Revenue, orders: row.Orders,
+        units: row['Total Units Ordered'],
+        impressions: row.Impressions, clicks: row.Clicks,
+        acos: row.ACOS, roas: row.ROAS,
+        cpc: row['Avg CPC'], ctr: row.CTR,
+      };
+    }
+
+    // ============================================================
+    // Build SKU-level daily data from SP Advertised Product
+    // ============================================================
+    const skuDailyData = {}; // date → { sku → { spend, sales, orders, ... } }
+    const skuTotals = {};     // sku → aggregate totals
+
+    for (const row of (transformedReports.spAdvertised || [])) {
+      const date = row['Date'];
+      const sku = row['Advertised SKU'] || '';
+      const asin = row['Advertised ASIN'] || '';
+      const key = sku || asin;
+      if (!key || !date) continue;
+
+      const spend = row['Spend'] || 0;
+      const sales = row['7 Day Total Sales'] || 0;
+      const orders = row['7 Day Total Orders (#)'] || 0;
+      const units = row['7 Day Total Units (#)'] || 0;
+      const clicks = row['Clicks'] || 0;
+      const impressions = row['Impressions'] || 0;
+      const campaign = row['Campaign Name'] || '';
+      const adGroup = row['Ad Group Name'] || '';
+
+      // Per-day per-SKU
+      if (!skuDailyData[date]) skuDailyData[date] = {};
+      if (!skuDailyData[date][key]) {
+        skuDailyData[date][key] = { sku, asin, spend: 0, sales: 0, orders: 0, units: 0, clicks: 0, impressions: 0, campaigns: [] };
+      }
+      skuDailyData[date][key].spend += spend;
+      skuDailyData[date][key].sales += sales;
+      skuDailyData[date][key].orders += orders;
+      skuDailyData[date][key].units += units;
+      skuDailyData[date][key].clicks += clicks;
+      skuDailyData[date][key].impressions += impressions;
+      if (campaign && !skuDailyData[date][key].campaigns.includes(campaign)) {
+        skuDailyData[date][key].campaigns.push(campaign);
+      }
+
+      // Running totals per SKU
+      if (!skuTotals[key]) {
+        skuTotals[key] = { sku, asin, spend: 0, sales: 0, orders: 0, units: 0, clicks: 0, impressions: 0, daysActive: new Set(), campaigns: new Set(), adGroups: new Set() };
+      }
+      skuTotals[key].spend += spend;
+      skuTotals[key].sales += sales;
+      skuTotals[key].orders += orders;
+      skuTotals[key].units += units;
+      skuTotals[key].clicks += clicks;
+      skuTotals[key].impressions += impressions;
+      skuTotals[key].daysActive.add(date);
+      if (campaign) skuTotals[key].campaigns.add(campaign);
+      if (adGroup) skuTotals[key].adGroups.add(adGroup);
+    }
+
+    // Derive metrics for SKU totals
+    const skuSummary = Object.values(skuTotals).map(s => ({
+      sku: s.sku, asin: s.asin,
+      spend: s.spend, sales: s.sales, orders: s.orders, units: s.units,
+      clicks: s.clicks, impressions: s.impressions,
+      days: s.daysActive.size,
+      campaigns: [...s.campaigns],
+      adGroups: [...s.adGroups],
+      acos: s.sales > 0 ? (s.spend / s.sales) * 100 : (s.spend > 0 ? 999 : 0),
+      roas: s.spend > 0 ? s.sales / s.spend : 0,
+      cpc: s.clicks > 0 ? s.spend / s.clicks : 0,
+      ctr: s.impressions > 0 ? (s.clicks / s.impressions) * 100 : 0,
+      convRate: s.clicks > 0 ? (s.orders / s.clicks) * 100 : 0,
+      avgDailySpend: s.daysActive.size > 0 ? s.spend / s.daysActive.size : 0,
+    })).sort((a, b) => b.spend - a.spend);
+
+    // ============================================================
+    // Build campaign summary (all ad types combined)
+    // ============================================================
+    const campMap = {};
+    const addCampaigns = (rows, adType, attrWindow) => {
+      for (const r of (rows || [])) {
+        const name = r.campaignName;
+        if (!name) continue;
+        const key = `${adType}::${name}`;
+        if (!campMap[key]) {
+          campMap[key] = { name, id: r.campaignId || '', type: adType, status: r.campaignStatus || '', budget: parseFloat(r.campaignBudgetAmount) || 0, spend: 0, revenue: 0, orders: 0, units: 0, impressions: 0, clicks: 0, dpv: 0, days: new Set() };
+        }
+        campMap[key].spend += parseFloat(r.cost) || 0;
+        campMap[key].revenue += parseFloat(r[`sales${attrWindow}`]) || 0;
+        campMap[key].orders += parseInt(r[`purchases${attrWindow}`]) || 0;
+        campMap[key].units += parseInt(r[`unitsSold${attrWindow}`]) || 0;
+        campMap[key].impressions += parseInt(r.impressions) || 0;
+        campMap[key].clicks += parseInt(r.clicks) || 0;
+        campMap[key].dpv += parseInt(r.dpv14d || 0) || 0;
+        if (r.date) campMap[key].days.add(r.date);
+        if (r.campaignStatus) campMap[key].status = r.campaignStatus;
+      }
+    };
+    addCampaigns(rawData.spCampaigns, 'SP', '7d');
+    addCampaigns(rawData.sbCampaigns, 'SB', '14d');
+    addCampaigns(rawData.sdCampaigns, 'SD', '14d');
+
+    const campaigns = Object.values(campMap).map(c => ({
+      name: c.name, id: c.id, type: c.type, status: c.status, budget: c.budget,
+      spend: c.spend, revenue: c.revenue, orders: c.orders, units: c.units,
+      impressions: c.impressions, clicks: c.clicks, dpv: c.dpv,
+      days: c.days.size,
       acos: c.revenue > 0 ? (c.spend / c.revenue) * 100 : (c.spend > 0 ? 999 : 0),
       roas: c.spend > 0 ? c.revenue / c.spend : 0,
       cpc: c.clicks > 0 ? c.spend / c.clicks : 0,
@@ -505,36 +673,29 @@ export default async function handler(req, res) {
       convRate: c.clicks > 0 ? (c.orders / c.clicks) * 100 : 0,
     })).sort((a, b) => b.spend - a.spend);
 
-    // Compute daily derived metrics
-    const dailyData = {};
-    for (const [date, d] of Object.entries(allDailyData)) {
-      dailyData[date] = {
-        ...d,
-        acos: d.revenue > 0 ? (d.spend / d.revenue) * 100 : 0,
-        roas: d.spend > 0 ? d.revenue / d.spend : 0,
-        cpc: d.clicks > 0 ? d.spend / d.clicks : 0,
-        ctr: d.impressions > 0 ? (d.clicks / d.impressions) * 100 : 0,
-      };
-    }
-
-    // Summary stats
+    // ============================================================
+    // Summary
+    // ============================================================
     const dates = Object.keys(dailyData).sort();
-    const totals = Object.values(allDailyData).reduce((acc, d) => ({
-      spend: acc.spend + d.spend,
-      revenue: acc.revenue + d.revenue,
-      orders: acc.orders + d.orders,
-      impressions: acc.impressions + d.impressions,
+    const totals = Object.values(dailyData).reduce((acc, d) => ({
+      spend: acc.spend + d.spend, revenue: acc.revenue + d.revenue,
+      orders: acc.orders + d.orders, impressions: acc.impressions + d.impressions,
       clicks: acc.clicks + d.clicks,
     }), { spend: 0, revenue: 0, orders: 0, impressions: 0, clicks: 0 });
 
-    console.log(`[AdsSync] Complete: ${dates.length} days, ${totalRows} rows, ${campaigns.length} campaigns, $${totals.spend.toFixed(2)} total spend`);
+    const reportCounts = {};
+    for (const [key, rows] of Object.entries(transformedReports)) {
+      reportCounts[key] = Array.isArray(rows) ? rows.length : 0;
+    }
+
+    console.log(`[AdsSync] Complete: ${dates.length} days, ${totalRows} rows, ${campaigns.length} campaigns, ${skuSummary.length} SKUs, $${totals.spend.toFixed(2)} spend`);
 
     return res.status(200).json({
       success: true,
       syncType: 'daily',
       status: 'complete',
       summary: {
-        dateRange: { start: dates[0], end: dates[dates.length - 1] },
+        dateRange: { start: dates[0] || startStr, end: dates[dates.length - 1] || endStr },
         daysWithData: dates.length,
         totalRows,
         totalSpend: totals.spend,
@@ -543,12 +704,17 @@ export default async function handler(req, res) {
         acos: totals.revenue > 0 ? (totals.spend / totals.revenue) * 100 : 0,
         roas: totals.spend > 0 ? totals.revenue / totals.spend : 0,
         campaignCount: campaigns.length,
-        reportsCompleted: completedReports.length,
-        reportsFailed: errorReports.length,
+        skuCount: skuSummary.length,
+        reportCounts,
+        reportsCompleted: completed.length,
+        reportsFailed: errors.length,
       },
       dailyData,
+      skuDailyData,
+      skuSummary,
       campaigns,
-      errors: errorReports.length > 0 ? errorReports.map(r => ({ type: r.adType, error: r.error })) : undefined,
+      reports: transformedReports,
+      errors: errors.length > 0 ? errors.map(r => ({ type: r.reportKey, label: r.label, error: r.error })) : undefined,
     });
   }
 }
