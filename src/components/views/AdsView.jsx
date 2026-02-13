@@ -1784,8 +1784,18 @@ ${htmlBody}
               </div>
               <div className="space-y-4 max-h-[600px] overflow-y-auto">
                 {adsAiMessages.map((msg,i)=>(
-                  <div key={i} className={`${msg.role==='user'?'bg-orange-900/20 border border-orange-500/20':'bg-slate-900/50'} rounded-xl p-4`}>
-                    <p className="text-xs text-slate-500 mb-1">{msg.role==='user'?'📝 Prompt':'🤖 AI Report'}</p>
+                  <div key={i} className={`${msg.role==='user'?'bg-orange-900/20 border border-orange-500/20':'bg-slate-900/50'} rounded-xl p-4 group relative`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-xs text-slate-500 mb-1">{msg.role==='user'?'📝 Prompt':'🤖 AI Report'}</p>
+                      <div className="hidden group-hover:flex items-center gap-1">
+                        {msg.role==='user' && <button onClick={()=>{
+                          setAdsAiMessages(prev => prev.filter((_,j) => j !== i && j !== i+1));
+                        }} className="p-1 rounded hover:bg-red-900/30 text-slate-600 hover:text-red-400" title="Delete prompt + response"><X className="w-3 h-3"/></button>}
+                        {msg.role==='assistant' && <button onClick={()=>{
+                          setAdsAiMessages(prev => prev.filter((_,j) => j !== i));
+                        }} className="p-1 rounded hover:bg-red-900/30 text-slate-600 hover:text-red-400" title="Delete this response"><X className="w-3 h-3"/></button>}
+                      </div>
+                    </div>
                     <p className="text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                   </div>
                 ))}
@@ -1827,8 +1837,17 @@ ${htmlBody}
                   </div>
                 )}
                 {adsAiMessages.map((msg,i)=>(
-                  <div key={i} className={`flex ${msg.role==='user'?'justify-end':'justify-start'}`}>
-                    <div className={`max-w-[90%] rounded-2xl px-4 py-3 ${msg.role==='user'?'bg-orange-600 text-white':'bg-slate-700 text-slate-200'}`}>
+                  <div key={i} className={`flex ${msg.role==='user'?'justify-end':'justify-start'} group`}>
+                    <div className={`max-w-[90%] rounded-2xl px-4 py-3 relative ${msg.role==='user'?'bg-orange-600 text-white':'bg-slate-700 text-slate-200'}`}>
+                      <button onClick={()=>{
+                        if (msg.role === 'user') {
+                          setAdsAiMessages(prev => prev.filter((_,j) => j !== i && j !== i+1));
+                        } else {
+                          setAdsAiMessages(prev => prev.filter((_,j) => j !== i));
+                        }
+                      }} className={`absolute -top-2 -right-2 hidden group-hover:flex w-5 h-5 items-center justify-center rounded-full text-white shadow-lg ${msg.role==='user'?'bg-red-500 hover:bg-red-400':'bg-slate-500 hover:bg-red-500'}`} title={msg.role==='user'?'Delete prompt + response':'Delete response'}>
+                        <X className="w-3 h-3"/>
+                      </button>
                       <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                     </div>
                   </div>
