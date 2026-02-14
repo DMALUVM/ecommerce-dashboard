@@ -9,6 +9,8 @@ const MetricCard = ({ label, value, sub, icon: Icon, color = 'slate', trend, onC
     violet: 'from-violet-500/20 to-violet-600/5 border-violet-500/30 hover:border-violet-400/50', 
     orange: 'from-orange-500/20 to-orange-600/5 border-orange-500/30 hover:border-orange-400/50', 
     cyan: 'from-cyan-500/20 to-cyan-600/5 border-cyan-500/30 hover:border-cyan-400/50',
+    teal: 'from-teal-500/20 to-teal-600/5 border-teal-500/30 hover:border-teal-400/50',
+    sky: 'from-sky-500/20 to-sky-600/5 border-sky-500/30 hover:border-sky-400/50',
     slate: 'from-slate-500/20 to-slate-600/5 border-slate-500/30 hover:border-slate-400/50',
   };
   const iconC = { 
@@ -19,6 +21,8 @@ const MetricCard = ({ label, value, sub, icon: Icon, color = 'slate', trend, onC
     violet: 'text-violet-400 bg-violet-500/20', 
     orange: 'text-orange-400 bg-orange-500/20', 
     cyan: 'text-cyan-400 bg-cyan-500/20',
+    teal: 'text-teal-400 bg-teal-500/20',
+    sky: 'text-sky-400 bg-sky-500/20',
     slate: 'text-slate-400 bg-slate-500/20',
   };
   
