@@ -180,7 +180,7 @@ export default async function handler(req, res) {
   // ============================================================
   if (syncType === 'daily') {
     try {
-      const days = Math.min(parseInt(daysBack) || 30, 90);
+      const days = Math.min(parseInt(daysBack) || 30, 30); // Amazon API max: 31 days
       const startDateObj = startDate ? new Date(startDate) : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
       const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
       const endDateObj = endDate ? new Date(endDate) : yesterday;
