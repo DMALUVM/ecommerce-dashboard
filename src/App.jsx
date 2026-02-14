@@ -12438,6 +12438,45 @@ const savePeriods = async (d) => {
                       };
                     });
                     
+                    // Add home-only SKUs not already in snapshot (e.g. Shopify-only products)
+                    if (freshHomeInvData) {
+                      const existingSkus = new Set(updatedItems.map(i => (i.sku || '').replace(/shop$/i, '').toUpperCase()));
+                      const cogsLookup = getCogsLookup();
+                      Object.entries(freshHomeInvData).forEach(([normSku, homeItem]) => {
+                        if (existingSkus.has(normSku)) return;
+                        const cost = homeItem.cost || cogsLookup[normSku] || cogsLookup[normSku.toLowerCase()] || cogsLookup[normSku + 'Shop'] || 0;
+                        if (cost === 0) return; // Skip SKUs without COGS
+                        const velData = getAutoVelocity(normSku);
+                        const shopVel = velData.shopify || 0;
+                        const totalVel = shopVel + (velData.amazon || 0);
+                        const correctedVel = velData.corrected > 0 ? velData.corrected : totalVel;
+                        const dos = correctedVel > 0 ? Math.round((homeItem.homeQty / correctedVel) * 7) : 999;
+                        let health = 'unknown';
+                        if (totalVel > 0) {
+                          if (dos < liveCriticalThreshold) health = 'critical';
+                          else if (dos < liveLowThreshold) health = 'low';
+                          else if (dos <= liveOverstockThreshold) health = 'healthy';
+                          else health = 'overstock';
+                        }
+                        const stockoutDate = correctedVel > 0 ? new Date(Date.now() + dos * 86400000).toISOString().split('T')[0] : null;
+                        updatedItems.push({
+                          sku: normSku + 'Shop',
+                          name: homeItem.name || normSku,
+                          asin: '',
+                          amazonQty: 0, threeplQty: 0, homeQty: homeItem.homeQty,
+                          awdQty: 0, awdInbound: 0, amazonInbound: 0, threeplInbound: 0,
+                          totalQty: homeItem.homeQty, cost,
+                          totalValue: homeItem.homeQty * cost,
+                          weeklyVel: totalVel, correctedVel, amzWeeklyVel: velData.amazon || 0,
+                          shopWeeklyVel: shopVel, daysOfSupply: dos, health, stockoutDate,
+                          reorderByDate: null, daysUntilMustOrder: null, suggestedOrderQty: 0,
+                          leadTimeDays: leadTimeSettings.defaultLeadTimeDays || 14,
+                          category: '', safetyStock: 0, reorderPoint: 0,
+                          seasonalFactor: 1, seasonalVel: totalVel, cv: 0, demandClass: 'unknown',
+                        });
+                      });
+                    }
+                    
                     updatedItems.sort((a, b) => b.totalValue - a.totalValue);
                     
                     // Recalculate supply chain KPIs from updated items
@@ -12582,18 +12621,23 @@ const savePeriods = async (d) => {
             const updatedItems = currentSnapshot.items.map(item => {
               const normalizedItemSku2 = (item.sku || '').toUpperCase();
               const freshAmz = freshAmazonFbaData[item.sku] || freshAmazonFbaData[normalizedItemSku2] || freshAmazonFbaData[(item.sku || '').toLowerCase()] || null;
-              if (!freshAmz) return item; // No fresh FBA data for this SKU, keep as-is
-              
-              const newAmazonQty = freshAmz.total;
-              const newAmazonInbound = freshAmz.inbound;
-              const newAwdQty = freshAmz.awdQty || 0;
-              const newAwdInbound = freshAmz.awdInbound || 0;
               const normalizedSku3 = (item.sku || '').replace(/shop$/i, '').toUpperCase();
               const freshHome2 = freshHomeInvData?.[normalizedSku3] || freshHomeInvData?.[(item.sku || '').toUpperCase()] || null;
+              
+              // Even without fresh Amazon data, still update home inventory + velocity
+              const hasAnyFreshData = freshAmz || freshHome2;
+              const velocityData = getStandaloneVelocity(item.sku);
+              const hasNewVelocity = velocityData.amazon > 0 || velocityData.shopify > 0;
+              
+              if (!hasAnyFreshData && !hasNewVelocity) return item; // Truly nothing new for this SKU
+              
+              const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
+              const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
+              const newAwdQty = freshAmz ? (freshAmz.awdQty || 0) : (item.awdQty || 0);
+              const newAwdInbound = freshAmz ? (freshAmz.awdInbound || 0) : (item.awdInbound || 0);
               const newHomeQty2 = freshHome2 ? freshHome2.homeQty : (item.homeQty || 0);
               const newTotalQty = newAmazonQty + (item.threeplQty || 0) + newHomeQty2 + newAwdQty + newAmazonInbound + newAwdInbound + (item.threeplInbound || 0);
               
-              const velocityData = getStandaloneVelocity(item.sku);
               const amzWeeklyVel = velocityData.amazon > 0 ? velocityData.amazon : (item.amzWeeklyVel || 0);
               const shopWeeklyVel = velocityData.shopify > 0 ? velocityData.shopify : (item.shopWeeklyVel || 0);
               const rawWeeklyVel = amzWeeklyVel + shopWeeklyVel;
@@ -12645,6 +12689,45 @@ const savePeriods = async (d) => {
                 health,
               };
             });
+            
+            // Add home-only SKUs not already in snapshot (e.g. Shopify-only products)
+            if (freshHomeInvData) {
+              const existingSkus2 = new Set(updatedItems.map(i => (i.sku || '').replace(/shop$/i, '').toUpperCase()));
+              const cogsLookup2 = getCogsLookup();
+              Object.entries(freshHomeInvData).forEach(([normSku, homeItem]) => {
+                if (existingSkus2.has(normSku)) return;
+                const cost = homeItem.cost || cogsLookup2[normSku] || cogsLookup2[normSku.toLowerCase()] || cogsLookup2[normSku + 'Shop'] || 0;
+                if (cost === 0) return;
+                const velData = getStandaloneVelocity(normSku);
+                const shopVel = velData.shopify || 0;
+                const totalVel = shopVel + (velData.amazon || 0);
+                const correctedVel = velData.corrected > 0 ? velData.corrected : totalVel;
+                const dos = correctedVel > 0 ? Math.round((homeItem.homeQty / correctedVel) * 7) : 999;
+                let health = 'unknown';
+                if (totalVel > 0) {
+                  if (dos < liveCriticalThreshold) health = 'critical';
+                  else if (dos < liveLowThreshold) health = 'low';
+                  else if (dos <= liveOverstockThreshold) health = 'healthy';
+                  else health = 'overstock';
+                }
+                const stockoutDate = correctedVel > 0 ? new Date(Date.now() + dos * 86400000).toISOString().split('T')[0] : null;
+                updatedItems.push({
+                  sku: normSku + 'Shop',
+                  name: homeItem.name || normSku,
+                  asin: '',
+                  amazonQty: 0, threeplQty: 0, homeQty: homeItem.homeQty,
+                  awdQty: 0, awdInbound: 0, amazonInbound: 0, threeplInbound: 0,
+                  totalQty: homeItem.homeQty, cost,
+                  totalValue: homeItem.homeQty * cost,
+                  weeklyVel: totalVel, correctedVel, amzWeeklyVel: velData.amazon || 0,
+                  shopWeeklyVel: shopVel, daysOfSupply: dos, health, stockoutDate,
+                  reorderByDate: null, daysUntilMustOrder: null, suggestedOrderQty: 0,
+                  leadTimeDays: liveLeadTimeDays,
+                  category: '', safetyStock: 0, reorderPoint: 0,
+                  seasonalFactor: 1, seasonalVel: totalVel, cv: 0, demandClass: 'unknown',
+                });
+              });
+            }
             
             // Recalculate summary
             let critical = 0, low = 0, healthy = 0, overstock = 0;
@@ -12741,6 +12824,27 @@ const savePeriods = async (d) => {
               });
             });
             
+            // Also add home-only SKUs (Shopify-only products not on Amazon)
+            if (freshHomeInvData) {
+              const existingSkus3 = new Set(newItems.map(i => (i.sku || '').replace(/shop$/i, '').toUpperCase()));
+              Object.entries(freshHomeInvData).forEach(([normSku, homeItem]) => {
+                if (existingSkus3.has(normSku)) return;
+                const cost = homeItem.cost || cogsLookup[normSku] || cogsLookup[normSku.toLowerCase()] || 0;
+                if (cost === 0) return;
+                newItems.push({
+                  sku: normSku + 'Shop', name: homeItem.name || normSku, asin: '',
+                  amazonQty: 0, threeplQty: 0, homeQty: homeItem.homeQty,
+                  awdQty: 0, awdInbound: 0, amazonInbound: 0, threeplInbound: 0,
+                  totalQty: homeItem.homeQty, cost, totalValue: homeItem.homeQty * cost,
+                  weeklyVel: 0, correctedVel: 0, amzWeeklyVel: 0, shopWeeklyVel: 0,
+                  daysOfSupply: 999, health: 'unknown',
+                  stockoutDate: null, reorderByDate: null, daysUntilMustOrder: null,
+                  suggestedOrderQty: 0, leadTimeDays: leadTimeSettings.defaultLeadTimeDays || 14,
+                  safetyStock: 0, reorderPoint: 0,
+                });
+              });
+            }
+            
             if (newItems.length > 0) {
               const snapshot = {
                 items: newItems,
@@ -12773,6 +12877,128 @@ const savePeriods = async (d) => {
           }
         } catch (e) {
           devWarn('[AutoSync] Standalone FBA+AWD merge failed:', e.message);
+        }
+      }
+      
+      // ========== STANDALONE HOME INVENTORY MERGE (when neither Packiyo nor FBA merged) ==========
+      // If we have fresh home inventory but no other merge path ran, update home quantities + velocities
+      if (freshHomeInvData && !fbaDataMergedIntoSnapshot) {
+        try {
+          const todayStr3 = new Date().toISOString().split('T')[0];
+          const targetDate3 = invHistory[todayStr3] ? todayStr3 :
+            (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
+            Object.keys(invHistory).sort().reverse()[0];
+          
+          if (targetDate3 && invHistory[targetDate3]) {
+            const currentSnapshot = invHistory[targetDate3];
+            const existingSkus4 = new Set(currentSnapshot.items.map(i => (i.sku || '').replace(/shop$/i, '').toUpperCase()));
+            const cogsLookup4 = getCogsLookup();
+            const liveLeadTimeDays4 = leadTimeSettings.defaultLeadTimeDays || 14;
+            const reorderTriggerDays4 = leadTimeSettings.reorderTriggerDays || 60;
+            const minOrderWeeks4 = leadTimeSettings.minOrderWeeks || 22;
+            const liveOverstockThreshold4 = Math.max(90, (minOrderWeeks4 * 7) + reorderTriggerDays4 + liveLeadTimeDays4);
+            const liveLowThreshold4 = Math.max(30, liveLeadTimeDays4 + 14);
+            const liveCriticalThreshold4 = Math.max(14, liveLeadTimeDays4);
+            
+            // Update existing items with fresh home qty + velocity
+            const updatedItems = currentSnapshot.items.map(item => {
+              const normSku = (item.sku || '').replace(/shop$/i, '').toUpperCase();
+              const freshHome = freshHomeInvData[normSku] || freshHomeInvData[(item.sku || '').toUpperCase()] || null;
+              
+              // Check for fresh velocity
+              const velAmazon = autoAmazonVelLookup[normSku] || autoAmazonVelLookup[normSku.toLowerCase()] || 0;
+              const velShopify = autoShopifyVelLookup[normSku] || autoShopifyVelLookup[normSku.toLowerCase()] || 0;
+              const hasNewVel = velAmazon > 0 || velShopify > 0;
+              
+              if (!freshHome && !hasNewVel) return item;
+              
+              const newHomeQty = freshHome ? freshHome.homeQty : (item.homeQty || 0);
+              const newTotalQty = (item.amazonQty || 0) + (item.threeplQty || 0) + newHomeQty + (item.awdQty || 0) + (item.amazonInbound || 0) + (item.awdInbound || 0) + (item.threeplInbound || 0);
+              const amzVel = hasNewVel && velAmazon > 0 ? velAmazon : (item.amzWeeklyVel || 0);
+              const shopVel = hasNewVel && velShopify > 0 ? velShopify : (item.shopWeeklyVel || 0);
+              const totalVel = amzVel + shopVel;
+              const correctedVel = totalVel; // No correction data in this path
+              const dos = correctedVel > 0 ? Math.round((newTotalQty / correctedVel) * 7) : 999;
+              let health = item.health || 'unknown';
+              if (totalVel > 0) {
+                if (dos < liveCriticalThreshold4) health = 'critical';
+                else if (dos < liveLowThreshold4) health = 'low';
+                else if (dos <= liveOverstockThreshold4) health = 'healthy';
+                else health = 'overstock';
+              }
+              const stockoutDate = correctedVel > 0 ? new Date(Date.now() + dos * 86400000).toISOString().split('T')[0] : (item.stockoutDate || null);
+              
+              return {
+                ...item,
+                homeQty: newHomeQty,
+                totalQty: newTotalQty,
+                totalValue: newTotalQty * (item.cost || 0),
+                amzWeeklyVel: amzVel,
+                shopWeeklyVel: shopVel,
+                weeklyVel: totalVel,
+                correctedVel,
+                daysOfSupply: dos,
+                health,
+                stockoutDate,
+              };
+            });
+            
+            // Add home-only SKUs not in snapshot
+            Object.entries(freshHomeInvData).forEach(([normSku, homeItem]) => {
+              if (existingSkus4.has(normSku)) return;
+              const cost = homeItem.cost || cogsLookup4[normSku] || cogsLookup4[normSku.toLowerCase()] || 0;
+              if (cost === 0) return;
+              const shopVel = autoShopifyVelLookup[normSku] || autoShopifyVelLookup[normSku.toLowerCase()] || 0;
+              const dos = shopVel > 0 ? Math.round((homeItem.homeQty / shopVel) * 7) : 999;
+              let health = 'unknown';
+              if (shopVel > 0) {
+                if (dos < liveCriticalThreshold4) health = 'critical';
+                else if (dos < liveLowThreshold4) health = 'low';
+                else if (dos <= liveOverstockThreshold4) health = 'healthy';
+                else health = 'overstock';
+              }
+              updatedItems.push({
+                sku: normSku + 'Shop', name: homeItem.name || normSku, asin: '',
+                amazonQty: 0, threeplQty: 0, homeQty: homeItem.homeQty,
+                awdQty: 0, awdInbound: 0, amazonInbound: 0, threeplInbound: 0,
+                totalQty: homeItem.homeQty, cost, totalValue: homeItem.homeQty * cost,
+                weeklyVel: shopVel, correctedVel: shopVel, amzWeeklyVel: 0,
+                shopWeeklyVel: shopVel, daysOfSupply: dos, health,
+                stockoutDate: shopVel > 0 ? new Date(Date.now() + dos * 86400000).toISOString().split('T')[0] : null,
+                reorderByDate: null, daysUntilMustOrder: null, suggestedOrderQty: 0,
+                leadTimeDays: liveLeadTimeDays4, category: '', safetyStock: 0, reorderPoint: 0,
+                seasonalFactor: 1, seasonalVel: shopVel, cv: 0, demandClass: 'unknown',
+              });
+            });
+            
+            const newHomeTotal = updatedItems.reduce((s, i) => s + (i.homeQty || 0), 0);
+            const newHomeValue = updatedItems.reduce((s, i) => s + ((i.homeQty || 0) * (i.cost || 0)), 0);
+            
+            const updatedSnapshot = {
+              ...currentSnapshot,
+              items: updatedItems,
+              summary: {
+                ...currentSnapshot.summary,
+                homeUnits: newHomeTotal,
+                homeValue: newHomeValue,
+                totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + (currentSnapshot.summary?.threeplUnits || 0) + newHomeTotal + (currentSnapshot.summary?.awdUnits || 0) + (currentSnapshot.summary?.amazonInbound || 0),
+                totalValue: (currentSnapshot.summary?.amazonValue || 0) + (currentSnapshot.summary?.threeplValue || 0) + newHomeValue + (currentSnapshot.summary?.awdValue || 0),
+              },
+              sources: {
+                ...currentSnapshot.sources,
+                lastHomeSync: new Date().toISOString(),
+                homeSource: 'shopify-auto-sync',
+              },
+            };
+            
+            const updatedHistory = { ...invHistory, [targetDate3]: updatedSnapshot };
+            setInvHistory(updatedHistory);
+            setSelectedInvDate(targetDate3);
+            saveInv(updatedHistory);
+            console.log('[AutoSync] Home inventory + velocity updated independently:', updatedItems.length, 'SKUs');
+          }
+        } catch (e) {
+          devWarn('[AutoSync] Standalone home inventory merge failed:', e.message);
         }
       }
       
