@@ -11996,6 +11996,43 @@ const savePeriods = async (d) => {
         }
       }
       
+      // ========== SHOPIFY HOME INVENTORY (Wormans Mill) ==========
+      // Separate from sales sync — fetches current inventory levels for home location
+      let freshHomeInvData = null;
+      if (appSettings.autoSync?.shopify !== false && shopifyCredentials.connected && (shopifyToken || shopifyCredentials.clientSecret)) {
+        try {
+          const token = shopifyToken || shopifyCredentials.clientSecret;
+          const url = shopifyUrl || shopifyCredentials.storeUrl;
+          const invRes = await fetch('/api/shopify/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              storeUrl: url,
+              accessToken: token,
+              clientId: shopifyCredentials.clientId,
+              clientSecret: token,
+              syncType: 'inventory',
+            }),
+          });
+          const invData = await invRes.json();
+          if (invData.success && invData.items) {
+            freshHomeInvData = {};
+            const cogsLookup = getCogsLookup();
+            invData.items.forEach(item => {
+              if (!item.sku) return;
+              const homeQty = item.homeQty || item.totalQty || 0;
+              if (homeQty <= 0) return;
+              const key = item.sku.replace(/shop$/i, '').toUpperCase();
+              const cost = item.cost || cogsLookup[item.sku] || cogsLookup[key] || cogsLookup[key.toLowerCase()] || 0;
+              freshHomeInvData[key] = { homeQty, cost, name: item.name || item.sku };
+            });
+            console.log(`[AutoSync] Shopify Home Inventory: ${Object.keys(freshHomeInvData).length} SKUs with stock`);
+          }
+        } catch (err) {
+          devWarn('[AutoSync] Shopify inventory sync error:', err.message);
+        }
+      }
+      
       // Fetch fresh Amazon FBA+AWD inventory for snapshot updates
       let freshAmazonFbaData = null;
       let fbaDataMergedIntoSnapshot = false;
@@ -12311,7 +12348,10 @@ const savePeriods = async (d) => {
                       const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
                       const newAwdQty = freshAmz ? (freshAmz.awdQty || 0) : (item.awdQty || 0);
                       const newAwdInbound = freshAmz ? (freshAmz.awdInbound || 0) : (item.awdInbound || 0);
-                      const newTotalQty = newAmazonQty + newTplQty + (item.homeQty || 0) + newAwdQty + newAmazonInbound + newAwdInbound + newTplInbound;
+                      // Use fresh home inventory if available
+                      const freshHome = freshHomeInvData?.[normalizedItemSku2] || freshHomeInvData?.[(item.sku || '').replace(/shop$/i, '').toUpperCase()] || null;
+                      const newHomeQty = freshHome ? freshHome.homeQty : (item.homeQty || 0);
+                      const newTotalQty = newAmazonQty + newTplQty + newHomeQty + newAwdQty + newAmazonInbound + newAwdInbound + newTplInbound;
                       
                       // Get velocity with corrections
                       const velocityData = getAutoVelocity(item.sku);
@@ -12373,6 +12413,7 @@ const savePeriods = async (d) => {
                         awdInbound: newAwdInbound,
                         threeplQty: newTplQty,
                         threeplInbound: newTplInbound,
+                        homeQty: newHomeQty,
                         totalQty: newTotalQty,
                         totalValue: newTotalQty * (item.cost || 0),
                         weeklyVel,
@@ -12426,8 +12467,8 @@ const savePeriods = async (d) => {
                     const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
                     const newAwdTotal = updatedItems.reduce((s, i) => s + (i.awdQty || 0), 0);
                     const newAwdValue = updatedItems.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
-                    const homeUnits = currentSnapshot.summary?.homeUnits || 0;
-                    const homeValue = currentSnapshot.summary?.homeValue || 0;
+                    const homeUnits = updatedItems.reduce((s, i) => s + (i.homeQty || 0), 0);
+                    const homeValue = updatedItems.reduce((s, i) => s + ((i.homeQty || 0) * (i.cost || 0)), 0);
                     
                     const updatedSnapshot = {
                       ...currentSnapshot,
@@ -12441,6 +12482,8 @@ const savePeriods = async (d) => {
                         awdValue: newAwdValue,
                         threeplUnits: newTplTotal,
                         threeplValue: newTplValue,
+                        homeUnits,
+                        homeValue,
                         totalUnits: newAmzTotal + newTplTotal + homeUnits + newAwdTotal + newAmzInbound,
                         totalValue: newAmzValue + newTplValue + homeValue + newAwdValue,
                         skuCount: updatedItems.length,
@@ -12460,6 +12503,7 @@ const savePeriods = async (d) => {
                         threepl: 'packiyo-auto-sync',
                         packiyoConnected: true,
                         lastPackiyoSync: new Date().toISOString(),
+                        ...(freshHomeInvData && { lastHomeSync: new Date().toISOString(), homeSource: 'shopify-auto-sync' }),
                         amazon: freshAmazonFbaData ? 'amazon-fba-auto-sync' : (currentSnapshot.sources?.amazon || 'unknown'),
                         lastAmazonFbaSync: freshAmazonFbaData ? new Date().toISOString() : (currentSnapshot.sources?.lastAmazonFbaSync || null),
                       },
@@ -12544,7 +12588,10 @@ const savePeriods = async (d) => {
               const newAmazonInbound = freshAmz.inbound;
               const newAwdQty = freshAmz.awdQty || 0;
               const newAwdInbound = freshAmz.awdInbound || 0;
-              const newTotalQty = newAmazonQty + (item.threeplQty || 0) + (item.homeQty || 0) + newAwdQty + newAmazonInbound + newAwdInbound + (item.threeplInbound || 0);
+              const normalizedSku3 = (item.sku || '').replace(/shop$/i, '').toUpperCase();
+              const freshHome2 = freshHomeInvData?.[normalizedSku3] || freshHomeInvData?.[(item.sku || '').toUpperCase()] || null;
+              const newHomeQty2 = freshHome2 ? freshHome2.homeQty : (item.homeQty || 0);
+              const newTotalQty = newAmazonQty + (item.threeplQty || 0) + newHomeQty2 + newAwdQty + newAmazonInbound + newAwdInbound + (item.threeplInbound || 0);
               
               const velocityData = getStandaloneVelocity(item.sku);
               const amzWeeklyVel = velocityData.amazon > 0 ? velocityData.amazon : (item.amzWeeklyVel || 0);
@@ -12584,6 +12631,7 @@ const savePeriods = async (d) => {
                 amazonInbound: newAmazonInbound,
                 awdQty: newAwdQty,
                 awdInbound: newAwdInbound,
+                homeQty: newHomeQty2,
                 totalQty: newTotalQty,
                 totalValue: newTotalQty * (item.cost || 0),
                 weeklyVel: rawWeeklyVel,
@@ -12612,6 +12660,8 @@ const savePeriods = async (d) => {
             const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
             const newAwdTotal = updatedItems.reduce((s, i) => s + (i.awdQty || 0), 0);
             const newAwdValue = updatedItems.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
+            const newHomeTotal = updatedItems.reduce((s, i) => s + (i.homeQty || 0), 0);
+            const newHomeValue = updatedItems.reduce((s, i) => s + ((i.homeQty || 0) * (i.cost || 0)), 0);
             
             const updatedSnapshot = {
               ...currentSnapshot,
@@ -12623,14 +12673,17 @@ const savePeriods = async (d) => {
                 amazonInbound: newAmzInbound,
                 awdUnits: newAwdTotal,
                 awdValue: newAwdValue,
-                totalUnits: newAmzTotal + (currentSnapshot.summary?.threeplUnits || 0) + (currentSnapshot.summary?.homeUnits || 0) + newAwdTotal + newAmzInbound,
-                totalValue: newAmzValue + (currentSnapshot.summary?.threeplValue || 0) + (currentSnapshot.summary?.homeValue || 0) + newAwdValue,
+                homeUnits: newHomeTotal,
+                homeValue: newHomeValue,
+                totalUnits: newAmzTotal + (currentSnapshot.summary?.threeplUnits || 0) + newHomeTotal + newAwdTotal + newAmzInbound,
+                totalValue: newAmzValue + (currentSnapshot.summary?.threeplValue || 0) + newHomeValue + newAwdValue,
                 critical, low, healthy, overstock,
               },
               sources: {
                 ...currentSnapshot.sources,
                 amazon: 'amazon-fba-auto-sync',
                 lastAmazonFbaSync: new Date().toISOString(),
+                ...(freshHomeInvData && { lastHomeSync: new Date().toISOString(), homeSource: 'shopify-auto-sync' }),
               },
             };
             
@@ -12656,18 +12709,20 @@ const savePeriods = async (d) => {
               if (cost === 0) return; // Skip SKUs without COGS
               
               const totalQty = (entry.total || 0) + (entry.awdQty || 0) + (entry.inbound || 0) + (entry.awdInbound || 0);
+              const freshHome3 = freshHomeInvData?.[normalizedSku] || null;
+              const homeQty3 = freshHome3 ? freshHome3.homeQty : 0;
               newItems.push({
                 sku: normalizedSku + 'Shop',
-                name: normalizedSku,
+                name: freshHome3?.name || normalizedSku,
                 asin: entry.asin || '',
                 amazonQty: entry.total || 0,
                 threeplQty: 0,
-                homeQty: 0,
+                homeQty: homeQty3,
                 awdQty: entry.awdQty || 0,
                 awdInbound: entry.awdInbound || 0,
                 amazonInbound: entry.inbound || 0,
                 threeplInbound: 0,
-                totalQty,
+                totalQty: totalQty + homeQty3,
                 cost,
                 totalValue: totalQty * cost,
                 weeklyVel: 0,
@@ -12698,9 +12753,15 @@ const savePeriods = async (d) => {
                   awdUnits: newItems.reduce((s, i) => s + (i.awdQty || 0), 0),
                   awdValue: newItems.reduce((s, i) => s + ((i.awdQty || 0) * i.cost), 0),
                   threeplUnits: 0, threeplValue: 0,
+                  homeUnits: newItems.reduce((s, i) => s + (i.homeQty || 0), 0),
+                  homeValue: newItems.reduce((s, i) => s + ((i.homeQty || 0) * i.cost), 0),
                   critical: 0, low: 0, healthy: 0, overstock: 0,
                 },
-                sources: { amazon: 'amazon-fba-auto-sync', lastAmazonFbaSync: new Date().toISOString() },
+                sources: {
+                  amazon: 'amazon-fba-auto-sync',
+                  lastAmazonFbaSync: new Date().toISOString(),
+                  ...(freshHomeInvData && { lastHomeSync: new Date().toISOString(), homeSource: 'shopify-auto-sync' }),
+                },
               };
               const updatedHistory = { ...invHistory, [todayStr2]: snapshot };
               setInvHistory(updatedHistory);
