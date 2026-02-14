@@ -11695,14 +11695,26 @@ const savePeriods = async (d) => {
       }
       
       // Check Shopify Sales - use /api/shopify/sync endpoint
-      if (appSettings.autoSync?.shopify !== false && shopifyCredentials.connected && shopifyCredentials.storeUrl && (shopifyCredentials.clientSecret || shopifyCredentials.accessToken)) {
+      // SEC-003 race fix: cloud load may set connected=true before localStorage restores the secret
+      let shopifyToken = shopifyCredentials.clientSecret || shopifyCredentials.accessToken;
+      let shopifyUrl = shopifyCredentials.storeUrl;
+      if (shopifyCredentials.connected && !shopifyToken) {
+        try {
+          const ls = JSON.parse(lsGet('ecommerce_shopify_creds_v1') || '{}');
+          if (ls.clientSecret || ls.accessToken) {
+            shopifyToken = ls.clientSecret || ls.accessToken;
+            shopifyUrl = ls.storeUrl || shopifyUrl;
+            setShopifyCredentials(p => ({ ...p, clientSecret: ls.clientSecret || p.clientSecret, accessToken: ls.accessToken || p.accessToken, storeUrl: ls.storeUrl || p.storeUrl }));
+          }
+        } catch (e) {}
+      }
+      if (appSettings.autoSync?.shopify !== false && shopifyCredentials.connected && shopifyUrl && shopifyToken) {
         const shopifyStale = isServiceStale(shopifyCredentials.lastSync, threshold);
         
         if (shopifyStale || force) {
           try {
             // Validate we have real credentials before calling API
-            const shopToken = shopifyCredentials.accessToken || shopifyCredentials.clientSecret;
-            if (!shopToken || shopToken.length < 5) {
+            if (!shopifyToken || shopifyToken.length < 5) {
               devWarn('[AutoSync] Shopify: credentials exist but token is too short, skipping');
             } else {
             // Sync last 30 days of orders (matches Amazon daysBack for velocity calc)
@@ -11713,10 +11725,10 @@ const savePeriods = async (d) => {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                storeUrl: shopifyCredentials.storeUrl,
-                accessToken: shopifyCredentials.clientSecret,
+                storeUrl: shopifyUrl,
+                accessToken: shopifyToken,
                 clientId: shopifyCredentials.clientId,
-                clientSecret: shopifyCredentials.clientSecret,
+                clientSecret: shopifyToken,
                 startDate,
                 endDate,
                 preview: false,
@@ -12105,7 +12117,22 @@ const savePeriods = async (d) => {
       }
       
       // Check Packiyo - use /api/packiyo/sync endpoint
-      if (appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected && packiyoCredentials.apiKey && packiyoCredentials.customerId) {
+      // SEC-003 race fix: cloud load may set connected=true before localStorage restores the apiKey
+      let packiyoKey = packiyoCredentials.apiKey;
+      let packiyoCustId = packiyoCredentials.customerId;
+      let packiyoBase = packiyoCredentials.baseUrl;
+      if (packiyoCredentials.connected && !packiyoKey) {
+        try {
+          const ls = JSON.parse(lsGet('ecommerce_packiyo_creds_v1') || '{}');
+          if (ls.apiKey) {
+            packiyoKey = ls.apiKey;
+            packiyoCustId = ls.customerId || packiyoCustId;
+            packiyoBase = ls.baseUrl || packiyoBase;
+            setPackiyoCredentials(p => ({ ...p, apiKey: ls.apiKey, customerId: ls.customerId || p.customerId, baseUrl: ls.baseUrl || p.baseUrl }));
+          }
+        } catch (e) {}
+      }
+      if (appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected && packiyoKey && packiyoCustId) {
         const packiyoStale = isServiceStale(packiyoCredentials.lastSync, threshold);
         
         if (packiyoStale || force) {
@@ -12115,9 +12142,9 @@ const savePeriods = async (d) => {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 syncType: 'inventory', // Use inventory for auto-sync
-                apiKey: packiyoCredentials.apiKey,
-                customerId: packiyoCredentials.customerId,
-                baseUrl: packiyoCredentials.baseUrl,
+                apiKey: packiyoKey,
+                customerId: packiyoCustId,
+                baseUrl: packiyoBase,
               }),
             });
             const data = await res.json();
