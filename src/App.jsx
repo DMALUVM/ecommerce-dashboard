@@ -11690,6 +11690,9 @@ const savePeriods = async (d) => {
                   });
                   
                   console.log(`[AutoSync] Amazon Ads: ${adsDaysUpdated} days updated, $${adsData.summary?.totalSpend?.toFixed(2)} total spend, ${adsData.summary?.skuCount || 0} SKUs`);
+                  // DIAGNOSTIC: Log per-day spend from API response (remove after debugging)
+                  const apiDailySpend = Object.entries(adsData.dailyData).sort(([a],[b]) => a.localeCompare(b)).slice(-14).map(([d, v]) => `${d}:$${(v.spend || 0).toFixed(0)}`);
+                  console.log(`[AutoSync DIAG] API daily spend (last 14d):`, apiDailySpend.join(', '));
                   try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('[AutoSync] Failed to persist ads data to localStorage'); }
                   return updated;
                 });
@@ -15637,9 +15640,18 @@ Analyze the data and respond with ONLY this JSON:
         forecastCorrections, alertsSummary, notesData,
       });
 
+      const rawHistory = aiMessages.slice(-10).map(m => ({ role: m.role, content: m.content }));
+      // Sanitize: merge consecutive same-role messages (can happen after message deletion)
+      const cleanHistory = rawHistory.reduce((acc, msg) => {
+        if (acc.length > 0 && acc[acc.length - 1].role === msg.role) {
+          acc[acc.length - 1] = { role: msg.role, content: acc[acc.length - 1].content + '\n\n' + msg.content };
+        } else { acc.push(msg); }
+        return acc;
+      }, []);
+
       const aiResponse = await callAI({
         system: systemPrompt,
-        messages: [...aiMessages.slice(-10).map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage }],
+        messages: [...cleanHistory, { role: 'user', content: userMessage }],
       }, '', aiChatModel);
       
       setAiMessages(prev => [...prev, { role: 'assistant', content: aiResponse || 'Sorry, I could not process that.' }]);
@@ -15814,9 +15826,22 @@ Reference the full data from the prior analysis. Be concise but still specific w
             ...adsAiMessages.slice(-6).map(m => ({ role: m.role, content: m.content })),
           ];
       
+      // Sanitize: Anthropic API requires alternating user/assistant roles
+      // Message deletion can create consecutive same-role messages
+      const sanitizedHistory = trimmedHistory.reduce((acc, msg) => {
+        if (acc.length === 0) return [msg];
+        if (acc[acc.length - 1].role === msg.role) {
+          // Merge consecutive same-role messages
+          acc[acc.length - 1] = { role: msg.role, content: acc[acc.length - 1].content + '\n\n' + msg.content };
+        } else {
+          acc.push(msg);
+        }
+        return acc;
+      }, []);
+      
       const aiResponse = await callAI({
         system: systemPrompt,
-        messages: [...trimmedHistory, { role: 'user', content: userContent }],
+        messages: [...sanitizedHistory, { role: 'user', content: userContent }],
       }, '', aiChatModel, tokenBudget);
       
       const responseText = aiResponse || 'Sorry, I could not process that.';

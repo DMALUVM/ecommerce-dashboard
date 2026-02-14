@@ -27,6 +27,14 @@ export const buildChatSystemPrompt = (ctx, deps) => {
     }
   };
 
+  // Safe number formatter — prevents "Cannot read properties of undefined (reading 'toFixed')"
+  const f = (v, d = 2) => (Number(v) || 0).toFixed(d);
+
+  // Ensure critical nested objects exist to prevent crashes in template literals
+  if (!ctx.insights) ctx.insights = {};
+  if (!ctx.insights.recentVsPrior) ctx.insights.recentVsPrior = {};
+  if (!ctx.dataRange) ctx.dataRange = {};
+
   return `
 You are an expert e-commerce analyst and business advisor for "${ctx.storeName}". You have access to ALL uploaded sales data and can answer questions about any aspect of the business.
 
@@ -99,20 +107,20 @@ STORE: ${ctx.storeName}
 DATA RANGE: ${ctx.dataRange.weeksTracked} weeks tracked (${ctx.dataRange.oldestWeek || 'N/A'} to ${ctx.dataRange.newestWeek || 'N/A'})
 
 === KEY METRICS (All Time) ===
-- Total Revenue: $${ctx.insights.allTimeRevenue.toFixed(2)}
-- Total Profit: $${ctx.insights.allTimeProfit.toFixed(2)}
-- Total Units Sold: ${ctx.insights.allTimeUnits}
-- Overall Margin: ${ctx.insights.overallMargin.toFixed(1)}%
-- Avg Profit/Unit: $${ctx.insights.overallProfitPerUnit.toFixed(2)}
-- Avg Weekly Revenue: $${ctx.insights.avgWeeklyRevenue.toFixed(2)}
-- Avg Weekly Profit: $${ctx.insights.avgWeeklyProfit.toFixed(2)}
-- Avg Daily Revenue: $${ctx.insights.avgDailyRevenue?.toFixed(2) || 0}
-- Avg Daily Profit: $${ctx.insights.avgDailyProfit?.toFixed(2) || 0}
+- Total Revenue: $${f(ctx.insights.allTimeRevenue)}
+- Total Profit: $${f(ctx.insights.allTimeProfit)}
+- Total Units Sold: ${ctx.insights.allTimeUnits || 0}
+- Overall Margin: ${f(ctx.insights.overallMargin, 1)}%
+- Avg Profit/Unit: $${f(ctx.insights.overallProfitPerUnit)}
+- Avg Weekly Revenue: $${f(ctx.insights.avgWeeklyRevenue)}
+- Avg Weekly Profit: $${f(ctx.insights.avgWeeklyProfit)}
+- Avg Daily Revenue: $${f(ctx.insights.avgDailyRevenue)}
+- Avg Daily Profit: $${f(ctx.insights.avgDailyProfit)}
 
 === DAILY DATA (Last 14 days for granular analysis) ===
 ${ctx.dailyData?.length > 0 ? `
 Days tracked: ${ctx.dataRange.daysTracked}
-Recent daily trend (last 7 days vs prior 7 days): ${ctx.dailyTrend?.toFixed(1) || 0}%
+Recent daily trend (last 7 days vs prior 7 days): ${f(ctx.dailyTrend, 1)}%
 ${JSON.stringify(ctx.dailyData)}
 ` : 'No daily data uploaded yet'}
 
@@ -124,19 +132,19 @@ Use this to identify optimal days for promotions, ad spend, and inventory planni
 ` : 'Not enough daily data for day-of-week analysis'}
 
 === RECENT TREND (Last 4 weeks vs Prior 4 weeks) ===
-- Recent Revenue: $${ctx.insights.recentVsPrior.recentRevenue.toFixed(2)}
-- Prior Revenue: $${ctx.insights.recentVsPrior.priorRevenue.toFixed(2)}
-- Revenue Change: ${ctx.insights.recentVsPrior.revenueChange.toFixed(1)}%
-- Recent Profit: $${ctx.insights.recentVsPrior.recentProfit.toFixed(2)}
-- Prior Profit: $${ctx.insights.recentVsPrior.priorProfit.toFixed(2)}
-- Profit Change: ${ctx.insights.recentVsPrior.profitChange.toFixed(1)}%
+- Recent Revenue: $${f(ctx.insights.recentVsPrior.recentRevenue)}
+- Prior Revenue: $${f(ctx.insights.recentVsPrior.priorRevenue)}
+- Revenue Change: ${f(ctx.insights.recentVsPrior.revenueChange, 1)}%
+- Recent Profit: $${f(ctx.insights.recentVsPrior.recentProfit)}
+- Prior Profit: $${f(ctx.insights.recentVsPrior.priorProfit)}
+- Profit Change: ${f(ctx.insights.recentVsPrior.profitChange, 1)}%
 
 === FORECAST (Next 4 Weeks Projection) ===
 ${forecastData ? `
-- Projected Monthly Revenue: $${forecastData.nextMonth.revenue.toFixed(2)}
-- Projected Monthly Profit: $${forecastData.nextMonth.profit.toFixed(2)}
-- Projected Monthly Units: ${forecastData.nextMonth.units}
-- Trend Direction: ${forecastData.trend.revenue} (${forecastData.trend.revenueChange.toFixed(1)}% per week)
+- Projected Monthly Revenue: $${f(forecastData.nextMonth?.revenue)}
+- Projected Monthly Profit: $${f(forecastData.nextMonth?.profit)}
+- Projected Monthly Units: ${forecastData.nextMonth?.units || 0}
+- Trend Direction: ${forecastData.trend?.revenue || 'unknown'} (${f(forecastData.trend?.revenueChange, 1)}% per week)
 - Forecast Confidence: ${forecastData.confidence}%
 - Weekly Projections: ${JSON.stringify(forecastData.weekly)}
 ` : 'Not enough data for forecast (need 4+ weeks)'}
