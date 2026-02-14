@@ -11457,6 +11457,7 @@ const savePeriods = async (d) => {
   // ============ AUTO-SYNC EFFECT ============
   // Automatically sync Amazon, Shopify, and Packiyo data when stale
   const [autoSyncStatus, setAutoSyncStatus] = useState({ running: false, lastCheck: null, results: [] });
+  const autoSyncLockRef = useRef(false); // Synchronous lock to prevent double-fire
   
   // Check if a service is stale (needs sync)
   const isServiceStale = useCallback((lastSync, thresholdHours = 4) => {
@@ -11470,7 +11471,9 @@ const savePeriods = async (d) => {
   // Auto-sync function
   const runAutoSync = useCallback(async (force = false) => {
     if (!appSettings.autoSync?.enabled && !force) return;
-    if (autoSyncStatus.running) return;
+    // Synchronous ref lock prevents double-fire (React state is async/batched)
+    if (autoSyncLockRef.current) return;
+    autoSyncLockRef.current = true;
     
     const threshold = appSettings.autoSync?.staleThresholdHours || 4;
     const results = [];
@@ -12858,6 +12861,7 @@ const savePeriods = async (d) => {
     } finally {
       audit('auto_sync', `${results.length} services: ${results.map(r => `${r.service}:${r.success ? 'ok' : 'fail'}`).join(', ')}`);
       setAutoSyncStatus(prev => ({ ...prev, running: false, results }));
+      autoSyncLockRef.current = false; // Release synchronous lock
       
       // CRITICAL: Force a cloud push AFTER all React state updates settle.
       // The debounced queueCloudSave from saveInv() can get cancelled by other state change
@@ -12881,7 +12885,7 @@ const savePeriods = async (d) => {
         }
       }, 2000);
     }
-  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, qboCredentials, isServiceStale, autoSyncStatus.running, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs, getCogsLookup, queueCloudSave, combinedData]);
+  }, [appSettings.autoSync, amazonCredentials, shopifyCredentials, packiyoCredentials, qboCredentials, isServiceStale, allDaysData, allWeeksData, forecastCorrections, invHistory, selectedInvDate, leadTimeSettings, savedCogs, getCogsLookup, queueCloudSave, combinedData]);
   
   // Run auto-sync on app load (if enabled)
   const runAutoSyncRef = useRef(runAutoSync);
@@ -17490,6 +17494,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       savedCogs={savedCogs}
       savedProductNames={savedProductNames}
       saveInv={saveInv}
+      saveSettings={saveSettings}
       selectedInvDate={selectedInvDate}
       session={session}
       setAllDaysData={setAllDaysData}

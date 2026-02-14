@@ -54,6 +54,7 @@ const SettingsView = ({
   savedCogs,
   savedProductNames,
   saveInv,
+  saveSettings,
   selectedInvDate,
   session,
   setAllDaysData,
