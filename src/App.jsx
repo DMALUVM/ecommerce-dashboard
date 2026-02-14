@@ -12205,6 +12205,7 @@ const savePeriods = async (d) => {
         const packiyoStale = isServiceStale(packiyoCredentials.lastSync, threshold);
         
         if (packiyoStale || force) {
+          console.log('[AutoSync] Packiyo: starting sync...');
           try {
             const res = await fetch('/api/packiyo/sync', {
               method: 'POST',
@@ -12223,6 +12224,7 @@ const savePeriods = async (d) => {
               }
               setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               results.push({ service: 'Packiyo', success: true, skus: data.summary?.skuCount || data.products?.length || 0 });
+              console.log(`[AutoSync] Packiyo: ${data.summary?.skuCount || data.products?.length || 0} SKUs synced`);
               
               // ========== AUTO-SYNC: INVENTORY UPDATE ==========
               // Velocity lookups are now built at parent scope (before Packiyo)
@@ -12718,6 +12720,7 @@ const savePeriods = async (d) => {
         const qboStale = isServiceStale(qboCredentials.lastSync, threshold);
         
         if (qboStale || force) {
+          console.log('[AutoSync] QBO: starting sync...');
           try {
             let currentAccessToken = qboCredentials.accessToken;
             
@@ -12812,6 +12815,7 @@ const savePeriods = async (d) => {
               setQboCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               const txnCount = data.transactions?.length || 0;
               results.push({ service: 'QuickBooks', success: true, transactions: txnCount });
+              console.log(`[AutoSync] QBO: ${txnCount} transactions synced`);
             } else {
               results.push({ service: 'QuickBooks', success: false, error: `HTTP ${res.status}` });
               devWarn('QBO auto-sync failed:', res.status);
