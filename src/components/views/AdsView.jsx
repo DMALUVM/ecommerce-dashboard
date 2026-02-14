@@ -132,6 +132,7 @@ const AdsView = ({
     const inRange = (r) => { if (!cutoffDate) return true; return (r['Date'] || r['date'] || '') >= cutoffDate; };
 
     // PRIMARY: Build from allDaysData (always available)
+    let totalSpend = 0, totalRev = 0;
     const daysWithAds = sortedDays.filter(d => {
       if (cutoffDate && d < cutoffDate) return false;
       const day = allDaysData[d];
@@ -140,7 +141,6 @@ const AdsView = ({
 
     if (daysWithAds.length >= 1) {
       intel.hasData = true;
-      let totalSpend = 0, totalRev = 0;
       daysWithAds.forEach(d => {
         const day = allDaysData[d];
         const spend = day?.amazon?.adSpend || day?.amazonAdsMetrics?.spend || 0;
