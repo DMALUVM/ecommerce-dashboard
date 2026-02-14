@@ -130,12 +130,13 @@ const AdsView = ({
           gConv = 0, mPurch = 0, amzConv = 0, mPurchVal = 0;
       dayList.forEach(d => {
         const day = allDaysData[d]; if (!day) return;
-        const aS = day.amazon?.adSpend || day.amazonAdsMetrics?.spend || 0;
-        const gS = day.shopify?.googleSpend || day.googleSpend || day.googleAds || 0;
-        const mS = day.shopify?.metaSpend || day.metaSpend || day.metaAds || 0;
+        // Use ?? (nullish coalescing) so legitimate $0 API values don't fall through to stale CSV data
+        const aS = (day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend) ?? 0;
+        const gS = (day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds) ?? 0;
+        const mS = (day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds) ?? 0;
         const aR = day.amazon?.revenue || 0;
         const sR = day.shopify?.revenue || 0;
-        const aAR = day.amazon?.adRevenue || day.amazonAdsMetrics?.totalRevenue || 0;
+        const aAR = (day.amazon?.adRevenue ?? day.amazonAdsMetrics?.totalRevenue) ?? 0;
         const am = day.shopify?.adsMetrics || {};
         const amzM = day.amazonAdsMetrics || {};
         amzSpend += aS; gSpend += gS; mSpend += mS;
@@ -180,9 +181,9 @@ const AdsView = ({
     // Trend data for charts
     const trend = days.map(d => {
       const day = allDaysData[d]; if (!day) return null;
-      const aS = day.amazon?.adSpend || day.amazonAdsMetrics?.spend || 0;
-      const gS = day.shopify?.googleSpend || day.googleSpend || day.googleAds || 0;
-      const mS = day.shopify?.metaSpend || day.metaSpend || day.metaAds || 0;
+      const aS = (day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend) ?? 0;
+      const gS = (day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds) ?? 0;
+      const mS = (day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds) ?? 0;
       const s = aS + gS + mS;
       const aR = day.amazon?.revenue || 0; const sR = day.shopify?.revenue || 0; const r = aR + sR;
       return { date: d, spend: s, rev: r, amzSpend: aS, gSpend: gS, mSpend: mS,
@@ -194,9 +195,9 @@ const AdsView = ({
     days.forEach(d => {
       const day = allDaysData[d]; if (!day) return;
       const dayOfWeek = new Date(d + 'T12:00:00').getDay(); if (isNaN(dayOfWeek)) return;
-      const aS = day.amazon?.adSpend || 0;
-      const gS = day.shopify?.googleSpend || day.googleSpend || day.googleAds || 0;
-      const mS = day.shopify?.metaSpend || day.metaSpend || day.metaAds || 0;
+      const aS = (day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend) ?? 0;
+      const gS = (day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds) ?? 0;
+      const mS = (day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds) ?? 0;
       const r = (day.amazon?.revenue || 0) + (day.shopify?.revenue || 0);
       dowBuckets[dayOfWeek].spend += aS + gS + mS; dowBuckets[dayOfWeek].rev += r; dowBuckets[dayOfWeek].count++;
     });
@@ -208,16 +209,16 @@ const AdsView = ({
     const budgetSplit = budgetTotal > 0 ? { amazon: (cur.amzSpend / budgetTotal) * 100, google: (cur.gSpend / budgetTotal) * 100, meta: (cur.mSpend / budgetTotal) * 100 } : { amazon: 0, google: 0, meta: 0 };
 
     // Platform sparklines
-    const aTrend = days.map(d => allDaysData[d]?.amazon?.adSpend || allDaysData[d]?.amazonAdsMetrics?.spend || 0);
-    const gTrend = days.map(d => allDaysData[d]?.shopify?.googleSpend || allDaysData[d]?.googleSpend || allDaysData[d]?.googleAds || 0);
-    const mTrend = days.map(d => allDaysData[d]?.shopify?.metaSpend || allDaysData[d]?.metaSpend || allDaysData[d]?.metaAds || 0);
+    const aTrend = days.map(d => (allDaysData[d]?.amazon?.adSpend ?? allDaysData[d]?.amazonAdsMetrics?.spend) ?? 0);
+    const gTrend = days.map(d => (allDaysData[d]?.shopify?.googleSpend ?? allDaysData[d]?.googleSpend ?? allDaysData[d]?.googleAds) ?? 0);
+    const mTrend = days.map(d => (allDaysData[d]?.shopify?.metaSpend ?? allDaysData[d]?.metaSpend ?? allDaysData[d]?.metaAds) ?? 0);
 
     // Daily table rows
     const tableRows = days.map(d => {
       const day = allDaysData[d]; if (!day) return null;
-      const aAds = day.amazon?.adSpend || day.amazonAdsMetrics?.spend || 0;
-      const gAds = day.shopify?.googleSpend || day.googleSpend || day.googleAds || 0;
-      const mAds = day.shopify?.metaSpend || day.metaSpend || day.metaAds || 0;
+      const aAds = (day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend) ?? 0;
+      const gAds = (day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds) ?? 0;
+      const mAds = (day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds) ?? 0;
       const aR = day.amazon?.revenue || 0; const sR = day.shopify?.revenue || 0;
       const totalAds = aAds + gAds + mAds; const totalRev = aR + sR;
       return { date: d, amazonAds: aAds, googleAds: gAds, metaAds: mAds, totalAds, amazonRev: aR, shopifyRev: sR, totalRev, tacos: totalRev > 0 ? (totalAds / totalRev) * 100 : 0 };
@@ -264,11 +265,11 @@ const AdsView = ({
     // ACTIONABLE: Zero-sale days & ACOS spikes (last 14d of selected range)
     periodData.days.slice(-14).forEach(d => {
       const day = allDaysData[d]; if (!day) return;
-      const spend = day?.amazon?.adSpend || 0;
-      const rev = day?.amazon?.adRevenue || day?.amazon?.revenue || 0;
+      const spend = (day?.amazon?.adSpend ?? day?.amazonAdsMetrics?.spend) ?? 0;
+      const rev = (day?.amazon?.adRevenue ?? day?.amazon?.revenue) ?? 0;
       if (spend > 5 && rev === 0) intel.zeroSaleDays.push({ date: d, spend, platform: 'Amazon' });
-      const gS = day?.shopify?.googleSpend || day?.googleSpend || 0;
-      const mS = day?.shopify?.metaSpend || day?.metaSpend || 0;
+      const gS = (day?.shopify?.googleSpend ?? day?.googleSpend) ?? 0;
+      const mS = (day?.shopify?.metaSpend ?? day?.metaSpend) ?? 0;
       const sR = day?.shopify?.revenue || 0;
       if (gS > 5 && sR === 0) intel.zeroSaleDays.push({ date: d, spend: gS, platform: 'Google' });
       if (mS > 5 && sR === 0) intel.zeroSaleDays.push({ date: d, spend: mS, platform: 'Meta' });
@@ -1042,7 +1043,7 @@ const AdsView = ({
           <div className="bg-slate-800/20 rounded-xl border border-slate-700/50 p-4">
             <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Database className="w-4 h-4 text-cyan-400"/>Loaded Data</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-              <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-orange-500"/><span className="text-white text-xs font-medium">Amazon</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d => allDaysData[d]?.amazon?.adSpend > 0).length}d SP-API · {sortedDays.filter(d => (allDaysData[d]?.amazonAdsMetrics?.spend || 0) > 0).length}d bulk</p></div>
+              <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-orange-500"/><span className="text-white text-xs font-medium">Amazon</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d => allDaysData[d]?.amazon?.adSpend > 0).length}d daily · {sortedDays.filter(d => (allDaysData[d]?.amazonAdsMetrics?.spend || 0) > 0).length}d bulk</p></div>
               <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-red-500"/><span className="text-white text-xs font-medium">Google</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d => (allDaysData[d]?.shopify?.googleSpend || 0) > 0).length}d spend · {sortedDays.filter(d => (allDaysData[d]?.shopify?.adsMetrics?.googleImpressions || 0) > 0).length}d metrics</p></div>
               <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-blue-500"/><span className="text-white text-xs font-medium">Meta</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d => (allDaysData[d]?.shopify?.metaSpend || 0) > 0).length}d spend · {sortedDays.filter(d => (allDaysData[d]?.shopify?.adsMetrics?.metaImpressions || 0) > 0).length}d metrics</p></div>
             </div>

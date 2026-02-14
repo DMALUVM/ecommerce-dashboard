@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, ChevronDown, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, AlertCircle, CheckCircle, Clock, Boxes, RefreshCw, Layers, CalendarRange, Settings, ArrowUpRight, ArrowDownRight, Minus, GitCompare, Trophy, Target, PieChart, Zap, Star, Eye, ShoppingBag, Award, Flame, Snowflake, Truck, FileText, MessageSquare, Send, X, Move, EyeOff, Bell, BellOff, Calculator, StickyNote, Sun, Moon, Palette, FileDown, GitCompareArrows, Smartphone, Cloud, Plus, Store, Loader2, HelpCircle, Brain, Landmark, Wallet, CreditCard, Building, ArrowUp, ArrowDown, User, Lightbulb, MoreHorizontal, LineChart, Sparkles, Keyboard, Globe } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, Package, ShoppingCart, BarChart3, Download, Calendar, ChevronLeft, ChevronRight, Trash2, FileSpreadsheet, Check, Database, AlertTriangle, Clock, Layers, CalendarRange, Settings, Target, PieChart, Star, FileText, MessageSquare, Send, X, Move, Calculator, Sun, Cloud, Store, Loader2, User, Sparkles, Keyboard } from 'lucide-react';
 // Extracted utilities (keep App.jsx lean)
 import { loadXLSX } from './utils/xlsx';
 import { parseCSV, parseCSVLine } from './utils/csv';
@@ -8,7 +8,7 @@ import { formatCurrency, formatPercent, formatNumber } from './utils/format';
 import { devWarn, devError, audit, getAuditLog } from './utils/logger';
 import { hasDailySalesData, formatDateKey, getSunday } from './utils/date';
 import { deriveWeeksFromDays, mergeWeekData } from './utils/weekly';
-import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from './utils/ads';
+import { getShopifyAdsForDay } from './utils/ads';
 import { processUploadedFiles, mergeTier1IntoDailySales, mergeTier2IntoIntelData, buildComprehensiveAdsPrompt } from './utils/adsReportParser';
 import { withShippingSkuRow, sumSkuRows } from './utils/reconcile';
 import {
@@ -17,10 +17,8 @@ import {
   WEEKLY_REPORTS_KEY, FORECAST_ACCURACY_KEY, FORECAST_CORRECTIONS_KEY,
   LZCompress, COMPRESSED_KEYS, lsGet, lsSet, trimIntelData
 } from './utils/storage';
-import { AI_MODELS, AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, AI_MODEL_OPTIONS, getModelTier, getModelLabel } from './utils/config';
+import { AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, AI_MODEL_OPTIONS, getModelTier, getModelLabel } from './utils/config';
 import { callAI } from './utils/ai';
-import { sanitizeHtml } from './utils/sanitize';
-import { validateSaveData, checkConflict, upsertCloudData } from './utils/cloudSync';
 import { prepareDataContext } from './utils/aiContextBuilder';
 import { buildChatSystemPrompt } from './utils/aiPromptBuilder';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -30,15 +28,10 @@ import NotificationCenter from './components/ui/NotificationCenter';
 import EmptyState from './components/ui/EmptyState';
 import KeyboardShortcuts from './components/ui/KeyboardShortcuts';
 import AuditLog from './components/ui/AuditLog';
-import { PrintButton, printProfitability, printInventory, printSalesTax, printDailySummary } from './components/ui/PrintView';
+import { PrintButton, printProfitability, printInventory, printDailySummary } from './components/ui/PrintView';
 import MetricCard from './components/ui/MetricCard';
-import HealthBadge from './components/ui/HealthBadge';
-import SettingSection from './components/ui/SettingSection';
-import SettingRow from './components/ui/SettingRow';
-import Toggle from './components/ui/Toggle';
 import AIChatPanel from './components/ui/AIChatPanel';
 import WeeklyReportModal from './components/ui/WeeklyReportModal';
-import NumberInput from './components/ui/NumberInput';
 import Toast from './components/ui/Toast';
 import ValidationModal from './components/ui/ValidationModal';
 import GoalsModal from './components/ui/GoalsModal';
@@ -62,8 +55,6 @@ import AmazonAdsIntelModal, { buildAdsIntelContext } from './components/ui/Amazo
 import DtcAdsIntelModal, { buildDtcIntelContext } from './components/ui/DtcAdsIntelModal';
 import ChannelCard from './components/ui/ChannelCard';
 import GoalsCard from './components/ui/GoalsCard';
-import StateConfigModal from './components/ui/StateConfigModal';
-import FilingDetailModal from './components/ui/FilingDetailModal';
 import NavTabs from './components/ui/NavTabs';
 import SettingsView from './components/views/SettingsView';
 import BankingView from './components/views/BankingView';
@@ -81,7 +72,6 @@ import WeeklyView from './components/views/WeeklyView';
 import DailyView from './components/views/DailyView';
 import YoYView from './components/views/YoYView';
 import PeriodDetailView from './components/views/PeriodDetailView';
-import PnLView from './PnLView';
 import ReportsAndActionsView from './ReportHistory';
 
 // Dashboard widget configuration - defined at module level for consistent access
@@ -17523,13 +17513,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       showAdsAIChat={showAdsAIChat}
       setView={setView}
       view={view}
-      best={best}
-      breakdown={breakdown}
-      data={data}
-      status={status}
-      t={t}
-      totalOrders={totalOrders}
-      updated={updated}
       save={save}
     />);
   }
